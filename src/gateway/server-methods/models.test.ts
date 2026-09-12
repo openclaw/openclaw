@@ -384,6 +384,40 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it.each(["claude-fable-5-1", "Claude Gateway/claude-fable-5-1"])(
+    "publishes the native Fable effort ladder for %s on a custom Messages provider",
+    async (id) => {
+      const { request, respond } = requestModelsList({
+        view: "all",
+        loadGatewayModelCatalog: vi.fn(async () => [
+          {
+            id,
+            name: "Pooled Fable",
+            provider: "proxy",
+            api: "anthropic-messages",
+            reasoning: true,
+          },
+        ]),
+      });
+
+      await request;
+
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        models: [
+          {
+            id,
+            provider: "proxy",
+            thinkingLevels: ["low", "medium", "high", "xhigh", "max"].map((level) => ({
+              id: level,
+              label: level,
+            })),
+            thinkingDefault: "medium",
+          },
+        ],
+      });
+    },
+  );
+
   it("loads the requested agent catalog", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => [
       { id: "writer-model", name: "Writer Model", provider: "test" },

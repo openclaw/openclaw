@@ -278,7 +278,7 @@ async function noteSessionSqliteMigrationHealth(params: {
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
     resolvedSkillsReport = repairCanonicalSessionResolvedSkills(repairParams);
     // Import may create the first durable SQLite row for a colliding legacy key.
-    reservedKeyReport = repairReservedIncognitoSessionKeys(repairParams);
+    reservedKeyReport = await repairReservedIncognitoSessionKeys(repairParams);
     deliveryReport = repairCanonicalSessionDeliveryStates(repairParams);
     repairLegacySessionExecPolicy(repairParams);
     if (params.postSessionPluginMigrationPlanBound && !params.postSessionPluginMigration) {

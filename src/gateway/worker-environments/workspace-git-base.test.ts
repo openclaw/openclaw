@@ -31,7 +31,7 @@ describe("prepared worker projects", () => {
       prepareWorkerProjectSnapshot({ localPath, namespace });
     const original = await prepare(repository);
     expect(original).toBeDefined();
-    expect(await prepare(worktree)).toEqual({ ...original, root: worktree, label: "linked" });
+    expect(await prepare(worktree)).toEqual({ ...original, label: "linked" });
 
     await fs.writeFile(path.join(worktree, "input.txt"), "next commit\n");
     await requireGit(worktree, ["commit", "--quiet", "-am", "next"]);
@@ -46,7 +46,7 @@ describe("prepared worker projects", () => {
         namespace: "gateway-one",
         baseCommit: original!.baseCommit,
       }),
-    ).toEqual({ ...original, root: worktree, label: "linked" });
+    ).toEqual({ ...original, label: "linked" });
     await expect(
       prepareWorkerProjectSnapshot({
         localPath: worktree,
@@ -59,6 +59,55 @@ describe("prepared worker projects", () => {
     await createRepository(unrelated);
     expect((await prepare(unrelated))?.key).not.toBe(original?.key);
   });
+
+  it.each(["checkout", "unborn", "bare"] as const)(
+    "reopens the admitted linked commit from its %s donor after removing the seed checkout",
+    async (shape) => {
+      const root = await fs.realpath(tempDirs.make("worker-project-donor-"));
+      const repository = path.join(root, "repository");
+      await createRepository(repository);
+      const donor = shape === "bare" ? path.join(root, "bare.git") : repository;
+      if (shape === "bare") {
+        await requireGit(root, ["clone", "--bare", repository, donor]);
+        await requireGit(donor, ["config", "user.name", "Project Test"]);
+        await requireGit(donor, ["config", "user.email", "project@example.invalid"]);
+        expect(
+          await prepareWorkerProjectSnapshot({ localPath: donor, namespace: "gateway" }),
+        ).toMatchObject({
+          root: donor,
+          baseCommit: await requireGit(donor, ["rev-parse", "HEAD"]),
+        });
+      }
+      await requireGit(donor, ["config", "commit.gpgsign", "false"]);
+      const worktree = path.join(root, "seed");
+      await requireGit(donor, ["worktree", "add", "--detach", worktree, "HEAD"]);
+      await fs.writeFile(path.join(worktree, "input.txt"), "linked-only commit\n");
+      await requireGit(worktree, ["commit", "--quiet", "-am", "session commit"]);
+      const project = await prepareWorkerProjectSnapshot({
+        localPath: worktree,
+        namespace: "gateway",
+      });
+      expect(project).toBeDefined();
+      expect(project?.baseCommit).not.toBe(await requireGit(donor, ["rev-parse", "HEAD"]));
+      await requireGit(donor, ["worktree", "remove", worktree]);
+      if (shape === "unborn") {
+        await requireGit(donor, ["symbolic-ref", "HEAD", "refs/heads/unborn"]);
+      }
+      const reopened = await prepareWorkerProjectSnapshot({
+        localPath: project!.root,
+        baseCommit: project!.baseCommit,
+        namespace: "gateway",
+      });
+      expect(reopened).toMatchObject({
+        key: project!.key,
+        baseCommit: project!.baseCommit,
+        root: donor,
+      });
+      expect(await requireGit(reopened!.root, ["show", `${reopened!.baseCommit}:input.txt`])).toBe(
+        "linked-only commit",
+      );
+    },
+  );
 
   it("labels snapshots from the normalized origin, falling back to the project directory", async () => {
     const root = await fs.realpath(tempDirs.make("worker-project-label-"));

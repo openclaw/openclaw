@@ -1,5 +1,21 @@
 [
   {
+    "source": "Radius",
+    "target": "Radius"
+  },
+  {
+    "source": "Radius plugin reference",
+    "target": "Radius 插件参考"
+  },
+  {
+    "source": "radius",
+    "target": "radius"
+  },
+  {
+    "source": "Omarchy",
+    "target": "Omarchy"
+  },
+  {
     "source": "OpenClaw",
     "target": "OpenClaw"
   },

@@ -1,6 +1,7 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { readPackageVersion, resolveNodeRunner, UpdatePreMutationError } from "./shared.js";
@@ -36,6 +37,7 @@ export async function finishAlreadyCurrentUpdate(
     | "opts"
     | "result"
     | "root"
+    | "previousInstallRoot"
     | "requestedChannel"
     | "storedChannel"
     | "channel"
@@ -95,13 +97,20 @@ export async function finishAlreadyCurrentUpdate(
     }
     const packageUpdateNodeRunner = runtime.value.nodeRunner;
     const context = admission.contexts.at(-1)!;
-    await preflightConfiguredNpmPluginTargets({
+    const pluginWarnings = await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
       env: context.env,
       targetVersion: result.after.version,
       channel: params.channel,
       timeoutMs: params.updateStepTimeoutMs,
     });
+    for (const warning of pluginWarnings) {
+      if (params.opts.json) {
+        defaultRuntime.error(warning.message);
+      } else {
+        defaultRuntime.log(warning.message);
+      }
+    }
     await inspectUpdateDatabaseContexts({ ...inspection, expectedServices: admission.services });
     await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
     let stopState;

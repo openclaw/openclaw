@@ -79,6 +79,7 @@ describe("tool-catalog", () => {
       "terminal",
       "portal",
       "automations",
+      "gateway",
       "get_goal",
       "create_goal",
       "update_goal",
@@ -110,10 +111,11 @@ describe("tool-catalog", () => {
       "subagents",
       "session_status",
       "message",
+      "gateway",
       "ask_user",
       "bundle-mcp",
     ]);
-    expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);
+    expect(requirePolicyAllow("minimal")).toEqual(["session_status", "gateway"]);
   });
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {

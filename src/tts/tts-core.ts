@@ -205,7 +205,7 @@ export async function summarizeText(
       (manifestPlugins) => resolveSummaryModelSelection(cfg, config, manifestPlugins),
     );
     if (!("error" in prepared)) {
-      onAcquired(prepared);
+      onAcquired({ release: async () => await prepared[Symbol.asyncDispose]() });
     }
     return await completeSummary(prepared, prepared.selection?.provider, resolvedDeps);
   });

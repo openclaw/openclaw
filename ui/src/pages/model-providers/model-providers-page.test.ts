@@ -183,7 +183,7 @@ describe("ModelProvidersPage agent scope", () => {
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
     deferNextAuthStatus();
-    void page.refresh({ force: true });
+    void page.refresh("forced");
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(2));
 
     source.publish({ ...snapshot, phase: "reconnecting" });
@@ -251,14 +251,14 @@ describe("ModelProvidersPage agent scope", () => {
     expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
   });
 
-  it("opens model setup from the Configure Models action", async () => {
+  it("opens model setup from the Model setup action", async () => {
     const { context } = createHarness("main");
     const page = appendPage(context);
     await page.updateComplete;
 
     const action = [
       ...page.querySelectorAll<HTMLButtonElement>(".page-header-actions button"),
-    ].find((button) => button.textContent?.includes("Configure Models"));
+    ].find((button) => button.textContent?.includes("Model setup"));
     expect(action?.querySelector("svg")).not.toBeNull();
     action?.click();
     expect(context.navigate).toHaveBeenCalledWith("model-setup");

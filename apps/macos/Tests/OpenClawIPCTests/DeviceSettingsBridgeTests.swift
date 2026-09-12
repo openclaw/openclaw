@@ -21,6 +21,7 @@ struct DeviceSettingsBridgeTests {
         ("capabilities.canvasEnabled", .canvasEnabled),
         ("capabilities.cameraEnabled", .cameraEnabled),
         ("capabilities.computerControlEnabled", .computerControlEnabled),
+        ("capabilities.unattendedDesktopEnabled", .unattendedDesktopEnabled),
         ("capabilities.peekabooBridgeEnabled", .peekabooBridgeEnabled),
         ("capabilities.activeComputerPresenceEnabled", .activeComputerPresenceEnabled),
         ("browser.cookieSync.enabled", .cookieSyncEnabled),

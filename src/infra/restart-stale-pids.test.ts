@@ -853,6 +853,34 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(killSpy).not.toHaveBeenCalled();
     });
 
+    it.each(["after inspection", "before escalation"] as const)(
+      "rechecks signal authority %s",
+      (boundary) => {
+        const stalePid = process.pid + 100;
+        installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));
+        let current = boundary !== "after inspection";
+        const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+          if (signal === "SIGTERM") {
+            current = false;
+          }
+          return true;
+        });
+        cleanStaleGatewayProcessesSync(18789, {
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("update owner revoked");
+            }
+          },
+        });
+        expect(killSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        if (boundary === "after inspection") {
+          expect(killSpy).not.toHaveBeenCalled();
+        } else {
+          expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        }
+      },
+    );
+
     it("sends SIGTERM to stale pids and returns them", () => {
       const stalePid = process.pid + 100;
       installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));

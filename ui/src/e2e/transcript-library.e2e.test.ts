@@ -113,6 +113,7 @@ suite.define(() => {
         const markdown = "# Design review\n\nAvery: Keep the reader quiet and readable.\n";
         const gateway = await installMockGateway(page, {
           featureMethods: methods,
+          deferredMethods: ["transcripts.list"],
           methodResponses: {
             "config.get": {
               config,
@@ -156,8 +157,12 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}meetings`);
         const library = page.locator(".transcripts-library");
+        await library.getByRole("status").getByText("Loading meetings…").waitFor();
+        expect(await library.getAttribute("aria-busy")).toBe("true");
+        await gateway.resolveDeferred("transcripts.list");
         await library.getByRole("link", { name: /Design review/ }).waitFor();
-        await library.getByRole("searchbox", { name: "Title or source ID" }).fill("design");
+        expect(await library.getAttribute("aria-busy")).toBe("false");
+        await library.getByRole("searchbox", { name: "Search meetings" }).fill("design");
         await library.getByRole("button", { name: "Filter", exact: true }).click();
         await expect
           .poll(async () => (await gateway.getRequests("transcripts.list")).at(-1)?.params)
@@ -166,8 +171,14 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("transcripts.list")).at(-1)?.params)
           .toMatchObject({ cursor: "list-next", query: "design" });
+        await gateway.deferNext("transcripts.get", { selector: meetingEntry.selector });
         await library.getByRole("link", { name: /Design review/ }).click();
         const reader = page.getByRole("article", { name: "Transcript reader" });
+        await reader.getByRole("status").getByText("Loading summary…").waitFor();
+        expect(await reader.getAttribute("aria-busy")).toBe("true");
+        await gateway.resolveDeferred("transcripts.get");
+        await reader.getByText("Reader layout discussed.", { exact: true }).waitFor();
+        expect(await reader.getAttribute("aria-busy")).toBe("false");
         await reader.getByRole("tab", { name: "Transcript", exact: true }).click();
         await reader.getByText("Keep the reader quiet and readable.", { exact: true }).waitFor();
         await reader.getByRole("button", { name: "Load more" }).click();
@@ -239,6 +250,8 @@ suite.define(() => {
           { ...source, title: "Weekly design review" },
         ]);
         await capture.getByRole("button", { name: /Transcript library/ }).click();
+        await library.getByRole("status").getByText("Loading meetings…").waitFor();
+        await gateway.resolveDeferred("transcripts.list");
         await library.getByRole("link", { name: /Design review/ }).waitFor();
         expect(
           (await gateway.getRequests()).some((request) => request.method === "sessions.search"),

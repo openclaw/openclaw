@@ -410,6 +410,10 @@ export interface CronRunReceipts {
   store_key: string;
 }
 
+export interface CronRunTriggerStateRetirements {
+  receipt_id: string;
+}
+
 export interface CurrentConversationBindings {
   account_id: string;
   binding_id: string;
@@ -1754,6 +1758,7 @@ export interface DB {
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   cron_run_receipts: CronRunReceipts;
+  cron_run_trigger_state_retirements: CronRunTriggerStateRetirements;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;

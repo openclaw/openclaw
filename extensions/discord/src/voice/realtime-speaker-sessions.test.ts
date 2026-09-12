@@ -15,6 +15,7 @@ defineDiscordVoiceTests(
     emitFinalRealtimeUserTranscript,
     lastAgentCommandArgs,
     lastRealtimeBridge,
+    loggerWarnMock,
     sentUserMessages,
     createClient,
     startTranscripts,
@@ -276,6 +277,43 @@ defineDiscordVoiceTests(
         await pending;
         await manager.destroy();
       }
+    });
+
+    it("waits for every speaker to drain when another speaker's cleanup rejects", async () => {
+      const { entry, manager } = await createJoinedAgentProxyFixture();
+      beginSpeakerTurn(entry, { userId: "owner" }).close();
+      beginSpeakerTurn(entry, { userId: "guest", senderIsOwner: false }).close();
+      const pendingProvider = lastRealtimeBridge().session;
+      const pending = createDeferred<void>();
+      const { DiscordRealtimeSpeakerSession } = await import("./realtime-speaker-session.js");
+      const close = vi.spyOn(DiscordRealtimeSpeakerSession.prototype, "close");
+      const conversationClosed = vi.spyOn(entry.conversations, "close");
+      let leaving: ReturnType<typeof manager.leave> | undefined;
+      try {
+        pendingProvider.close.mockReturnValueOnce(pending.promise);
+        close.mockImplementationOnce(
+          function (this: InstanceType<typeof DiscordRealtimeSpeakerSession>) {
+            close.mockRestore();
+            return Promise.resolve(this.close()).then(() => {
+              throw new Error("Speaker cleanup failed");
+            });
+          },
+        );
+        leaving = manager.leave({ guildId: entry.guildId });
+        await vi.waitFor(() =>
+          expect(loggerWarnMock).toHaveBeenCalledWith(
+            expect.stringContaining("Speaker cleanup failed"),
+          ),
+        );
+        expect(pendingProvider.close).toHaveBeenCalledOnce();
+        expect(conversationClosed).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve();
+        close.mockRestore();
+        await leaving;
+        await manager.destroy();
+      }
+      expect(conversationClosed).toHaveBeenCalledOnce();
     });
 
     it("keeps a healthy speaker connected when another speaker's provider connection fails", async () => {

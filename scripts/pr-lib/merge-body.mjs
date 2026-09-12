@@ -71,6 +71,9 @@ const MACHINE_CREDIT_EMAILS = new Set([
   "309084314+roboclaw-bot@users.noreply.github.com",
 ]);
 const GITHUB_APP_BOT_EMAIL = /^(?:\d+\+)?[^@\s]*\[bot\]@users\.noreply\.github\.com$/;
+const LOCAL_CREDIT_EMAIL =
+  /@(?:[^@]*\.)?(?:local|localhost|internal|lan|home|test|invalid|example)\.?$/;
+const NOREPLY_EMAIL = /(?:^|[.@])(?:no-?reply)(?:[.@]|$)/;
 
 function isCredit(line) {
   return /^Co-authored-by:/i.test(line);
@@ -104,7 +107,7 @@ function splitLines(text) {
 // including an indented key line or a trailer folded onto indented
 // continuation lines. The identity is checked at every unfolding step so
 // indented text after a complete trailer cannot hide it.
-function machineCreditLines(lines) {
+function machineCreditLines(lines, isExcludedCredit) {
   const indexes = new Set();
   for (let index = 0; index < lines.length; index += 1) {
     let unfolded = lines[index].trim();
@@ -112,7 +115,7 @@ function machineCreditLines(lines) {
       continue;
     }
     for (let end = index; ; end += 1) {
-      if (isMachineCredit(unfolded)) {
+      if (isExcludedCredit(unfolded)) {
         for (let line = index; line <= end; line += 1) {
           indexes.add(line);
         }
@@ -171,29 +174,50 @@ function prunePreview(lines, unsupported, machineIndexes) {
   return body;
 }
 
-function compose({ preview, source, authors, captured, queue }) {
+function compose({ preview, source, authors, prAuthor, captured, queue }) {
   const explicit = captured !== "";
   const sourceTrailers = source.split("\n").filter(Boolean);
-  const eligibleEmails = new Set(
-    authors
-      .split("\n")
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  const eligibleEmails = new Set();
+  const unverifiedEmails = new Set();
+  for (const { name, email, user } of authors) {
+    const normalized = email.trim().toLowerCase();
+    const linkedHuman = user?.type === "User" && Boolean(user.login);
+    const prAuthorMatch =
+      user === null &&
+      prAuthor?.__typename === "User" &&
+      name.trim().toLowerCase() === prAuthor.login.toLowerCase() &&
+      !NOREPLY_EMAIL.test(normalized);
+    if (linkedHuman || prAuthorMatch) {
+      eligibleEmails.add(normalized);
+    } else {
+      unverifiedEmails.add(normalized);
+    }
+  }
+  const dropped = new Set();
+  const isExcludedCredit = (line) => {
+    const email = creditEmail(line);
+    const excluded =
+      email !== undefined &&
+      (isMachineCredit(line) || LOCAL_CREDIT_EMAIL.test(email) || unverifiedEmails.has(email));
+    if (excluded) {
+      dropped.add(line);
+    }
+    return excluded;
+  };
   for (const line of sourceTrailers) {
-    if (isCredit(line) && !isMachineCredit(line)) {
+    if (isCredit(line) && !isExcludedCredit(line)) {
       eligibleEmails.add(coauthorEmail(line));
     }
   }
   const previewCredits = trailers(preview).filter(isCredit);
   const unsupportedPreviewCredits = previewCredits.filter(
-    (line) => !isMachineCredit(line) && !eligibleEmails.has(coauthorEmail(line)),
+    (line) => !isExcludedCredit(line) && !eligibleEmails.has(coauthorEmail(line)),
   );
   const retainedPreviewCredits = previewCredits.filter(
-    (line) => !isMachineCredit(line) && eligibleEmails.has(coauthorEmail(line)),
+    (line) => !isExcludedCredit(line) && eligibleEmails.has(coauthorEmail(line)),
   );
   const previewLines = splitLines(preview);
-  const previewMachineLines = machineCreditLines(previewLines);
+  const previewMachineLines = machineCreditLines(previewLines, isExcludedCredit);
   // Queue admission cannot override GitHub's message, so a preview that needs
   // editing must stop here instead of merging with the wrong credit.
   if (queue && (unsupportedPreviewCredits.length > 0 || previewMachineLines.size > 0)) {
@@ -210,21 +234,21 @@ function compose({ preview, source, authors, captured, queue }) {
     // Reviewed bytes are never rewritten, so machine credit anywhere in them,
     // not only in the parsed terminal block, is the operator's to remove.
     body = Buffer.from(JSON.parse(captured).base64, "base64").toString("utf8");
-    if (machineCreditLines(splitLines(body)).size > 0) {
+    if (machineCreditLines(splitLines(body), isExcludedCredit).size > 0) {
       throw machineCreditError();
     }
   } else {
     body = prunePreview(previewLines, unsupportedPreviewCredits, previewMachineLines);
   }
   const original = trailers(body);
-  if (original.some(isMachineCredit)) {
+  if (original.some(isExcludedCredit)) {
     throw machineCreditError();
   }
   const required = [
     ...original,
     ...(explicit ? retainedPreviewCredits : []),
     ...sourceTrailers,
-  ].filter((line) => !isMachineCredit(line));
+  ].filter((line) => !isExcludedCredit(line));
   const missing = [...new Set(required)].filter((line) => !original.includes(line));
   if (queue && missing.length > 0) {
     throw new Error("Cannot queue a squash message that omits required co-author credit.");
@@ -233,7 +257,7 @@ function compose({ preview, source, authors, captured, queue }) {
   // credit before that suffix so all parsed trailers remain one terminal block.
   const suffix = explicit ? (body.match(/(?:\r?\n[ \t]*)+$/)?.[0] ?? "") : "\n";
   if (explicit && missing.length === 0) {
-    return body;
+    return { body, dropped: [...dropped] };
   }
   body = explicit
     ? body.slice(0, body.length - suffix.length)
@@ -255,14 +279,18 @@ function compose({ preview, source, authors, captured, queue }) {
   ) {
     throw new Error("Cannot remove unsupported squash preview credit.");
   }
-  return body;
+  return { body, dropped: [...dropped] };
 }
 
 try {
   if (process.argv[2] === "read") {
     process.stdout.write(JSON.stringify(snapshot(process.argv[3])));
   } else if (process.argv[2] === "compose") {
-    process.stdout.write(compose(JSON.parse(readFileSync(0, "utf8"))));
+    const { body, dropped } = compose(JSON.parse(readFileSync(0, "utf8")));
+    if (dropped.length > 0) {
+      console.error(`Dropped squash co-author credit: ${JSON.stringify(dropped)}`);
+    }
+    process.stdout.write(body);
   } else {
     throw new Error("Expected read or compose.");
   }

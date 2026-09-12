@@ -9,6 +9,11 @@ import {
   replaceTranscriptEvents,
   type SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "../config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -57,10 +62,7 @@ afterEach(() => {
   envSnapshot.restore();
 });
 
-async function writeTranscript(
-  sessionId: string,
-  events: unknown[],
-): Promise<SessionTranscriptReadScope> {
+async function writeTranscript(sessionId: string, events: unknown[]) {
   const scope = {
     agentId: "main",
     sessionId,
@@ -165,6 +167,68 @@ function boundedTitleEventReadCount(): number {
 }
 
 describe("session transcript title hydration", () => {
+  test("keeps cold transcripts archived while reading mixed title rows and heals after restoration", async () => {
+    const cold = await writeTranscript("reader-title-archived", [
+      { type: "session", version: 3, id: "reader-title-archived" },
+      {
+        type: "message",
+        id: "user",
+        parentId: null,
+        message: { role: "user", content: "Archived prompt" },
+      },
+      {
+        type: "message",
+        id: "reply",
+        parentId: "user",
+        message: { role: "assistant", content: "Archived reply" },
+      },
+    ]);
+    await sessionAccessor.replaceSessionEntry(cold, {
+      sessionId: cold.sessionId,
+      updatedAt: Date.now(),
+    });
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: database.path });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 40 * 24 * 60 * 60 * 1000);
+    try {
+      await expect(
+        runSessionColdStorageMaintenance({
+          config: {
+            agents: { list: [{ id: "main" }] },
+            session: {
+              store: storePath,
+              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ archivedTranscripts: 1 });
+    } finally {
+      clock.mockRestore();
+    }
+    const archive = readSessionColdTranscript(database.db, cold.sessionId);
+    expect(archive).toBeDefined();
+    const hot = await writeSqliteMessages("reader-title-hot", [
+      { role: "user", content: "Hot prompt" },
+      { role: "assistant", content: "Hot reply" },
+    ]);
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    expect(readSessionTitleFieldsFromTranscript(cold)).toEqual(empty);
+    expect(readSessionTitleFieldsFromTranscriptBatch([hot, cold])).toEqual([
+      { firstUserMessage: "Hot prompt", lastMessagePreview: "Hot reply" },
+      empty,
+    ]);
+    expect(readSessionColdTranscript(database.db, cold.sessionId)).toEqual(archive);
+
+    await restoreSessionColdTranscript(cold);
+    expect(readSessionTitleFieldsFromTranscriptBatch([hot, cold])).toEqual([
+      { firstUserMessage: "Hot prompt", lastMessagePreview: "Hot reply" },
+      { firstUserMessage: "Archived prompt", lastMessagePreview: "Archived reply" },
+    ]);
+  });
+
   test("keeps bounded title fields at full-scan parity", async () => {
     const scope = await writeSqliteMessages(
       "reader-title-parity",

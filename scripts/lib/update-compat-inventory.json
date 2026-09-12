@@ -310,7 +310,7 @@
             {
               "exported": "markPluginRegistryRetired",
               "origin": {
-                "module": "src/plugins/loader-cache-state.ts",
+                "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
               }
             }
@@ -712,7 +712,7 @@
             {
               "exported": "markPluginRegistryRetired",
               "origin": {
-                "module": "src/plugins/loader-cache-state.ts",
+                "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
               }
             }
@@ -1072,7 +1072,7 @@
             {
               "exported": "markPluginRegistryRetired",
               "origin": {
-                "module": "src/plugins/loader-cache-state.ts",
+                "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
               }
             }
@@ -1568,7 +1568,7 @@
             {
               "exported": "markPluginRegistryRetired",
               "origin": {
-                "module": "src/plugins/loader-cache-state.ts",
+                "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
               }
             }

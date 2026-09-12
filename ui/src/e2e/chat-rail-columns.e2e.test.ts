@@ -229,9 +229,9 @@ function sidePanelBody(page: Page): Locator {
   return page.locator('.sidebar-region [data-region="side"]:not([hidden])');
 }
 
-// Scope tab queries to the panel's own header: Terminal and Browser render the
-// same strip inside the panel body, so an unscoped descendant match would also
-// collect their inner rails. Match descendants of that header rather than a
+// Scope tab queries to the panel's own header: Terminal renders the same strip
+// inside the panel body, so an unscoped descendant match would also collect its
+// inner rail. Match descendants of that header rather than a
 // direct child, so header layout wrappers can change without silently emptying
 // every tab assertion.
 const sidePanelTabLabelSelector = '[data-region-header="side"] .tabstrip-tab__label';

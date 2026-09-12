@@ -6,10 +6,18 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic, type GatewayAgentOwnership } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
+import {
+  evaluateAgentDatabaseAdmissions,
+  hasAgentDatabaseAdmissions,
+  recordAgentDatabaseAdmissions,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { readStatusSessionStores } from "../status/session-stores.js";
 
 export type AgentLocalStatus = {
   id: string;
+  status?: "degraded";
+  admissionRefusal?: AgentDatabaseAdmissionRefusal;
   name?: string;
   workspaceDir: string | null;
   bootstrapPending: boolean | null;
@@ -32,6 +40,9 @@ type AgentLocalStatusesResult = {
 export async function getAgentLocalStatuses(
   cfg: OpenClawConfig,
 ): Promise<AgentLocalStatusesResult> {
+  if (!hasAgentDatabaseAdmissions()) {
+    recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
+  }
   const agentList = listGatewayAgentsBasic(cfg);
   const now = Date.now();
 
@@ -57,6 +68,9 @@ export async function getAgentLocalStatuses(
 
     statuses.push({
       id: agentId,
+      ...(agent.admissionRefusal
+        ? { status: agent.status, admissionRefusal: agent.admissionRefusal }
+        : {}),
       name: agent.name,
       workspaceDir,
       bootstrapPending,

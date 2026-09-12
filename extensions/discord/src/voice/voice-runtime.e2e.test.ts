@@ -722,10 +722,11 @@ defineDiscordVoiceTests(
       const connect = session.connect();
       await vi.waitFor(() => expect(realtimeSessionMock.connect).toHaveBeenCalledOnce());
       const provider = lastRealtimeBridgeParams();
-      session.close();
+      const closed = session.close();
       expect(provider.audioSink.isOpen?.()).toBe(false);
       resolveConnect();
       await connect;
+      await closed;
 
       provider.onReady?.();
       expect(provider.audioSink.isOpen?.()).toBe(false);

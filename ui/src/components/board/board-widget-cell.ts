@@ -454,7 +454,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
         );
     const exactHeightStyle =
-      exactHeightPx === undefined ? "" : ` height: ${exactHeightPx}px; align-self: start;`;
+      exactHeightPx === undefined
+        ? ""
+        : ` height: calc(${exactHeightPx}px - var(--board-widget-height-trim, 0px)); align-self: start;`;
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}

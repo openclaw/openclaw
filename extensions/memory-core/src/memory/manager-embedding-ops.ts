@@ -18,8 +18,6 @@ import {
   hashText,
   isFileMissingError,
   MEMORY_EMBEDDING_CACHE_TABLE,
-  MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   remapChunkLines,
   retryTransientMemoryRead,
@@ -37,11 +35,11 @@ import {
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
-import { hasMemorySessionTombstone } from "../memory-entry-origins.js";
+import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
-import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
+import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { readMemoryDatabaseRevision } from "./manager-db.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
@@ -71,11 +69,8 @@ import {
   type MemorySyncProviderGeneration,
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
-import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
-const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_CACHE_PRUNE_BATCH_SIZE = 100;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
@@ -921,18 +916,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  private upsertFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
-    this.db
-      .prepare(
-        `INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(path, source) DO UPDATE SET
-           hash=excluded.hash,
-           mtime=excluded.mtime,
-           size=excluded.size`,
-      )
-      .run(entry.path, source, entry.hash, entry.mtimeMs, entry.size);
-  }
-
   private async writeChunks(
     { entry, source, chunks }: PreparedMemoryIndexEntry,
     generation: MemorySyncProviderGeneration | null,
@@ -959,55 +942,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }
         const now = Date.now();
         const model = generation?.provider?.model ?? "fts-only";
-        const needsVectorRebuild =
-          !vectorReady && embeddings.some((embedding) => embedding.length > 0);
         return () => {
-          if (source === "sessions") {
-            const sessionId = expectDefined(entry.sessionId, "memory index session identity");
-            // Embedding and vector setup may await while a purge completes. Read the
-            // live owner, never the shadow index, immediately before publishing.
-            if (
-              hasMemorySessionTombstone(generation?.database.db ?? this.db, this.agentId, sessionId)
-            ) {
-              this.markFailedFullReindexRetry({ memory: false, sessions: true });
-              throw new Error(
-                "A session was forgotten while memory indexing was running; retry the memory index.",
-              );
-            }
-          }
-          this.clearIndexedFileData(entry.path, source);
-          const writeChunk = createMemoryChunkWriter(this.db, {
-            path: entry.path,
-            source,
-            model,
-            now,
-          });
-          for (const [i, chunk] of chunks.entries()) {
-            const embedding = embeddings[i] ?? [];
-            const id = hashText(
-              `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+          const result = this.database.sourceIndex.replace(
+            {
+              entry,
+              chunks,
+              embeddings,
+              model,
+              now,
+              vectorReady,
+              ...(source === "sessions"
+                ? {
+                    source,
+                    agentId: this.agentId,
+                    sessionId: expectDefined(entry.sessionId, "memory index session identity"),
+                  }
+                : { source }),
+            },
+            (generation?.database ?? this.database).sourceIndex,
+          );
+          if (result === "forgotten") {
+            this.markFailedFullReindexRetry({ memory: false, sessions: true });
+            throw new Error(
+              "A session was forgotten while memory indexing was running; retry the memory index.",
             );
-            writeChunk(id, chunk, embedding);
-            if (vectorReady && embedding.length > 0) {
-              replaceMemoryVectorRow({
-                db: this.db,
-                tableName: VECTOR_TABLE,
-                id,
-                embedding,
-              });
-            }
-            if (this.fts.enabled && this.fts.available) {
-              this.db
-                .prepare(
-                  `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-                    ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
-            }
-          }
-          this.upsertFileRecord(entry, source);
-          if (needsVectorRebuild) {
-            this.markVectorRebuildRequired();
           }
           return true;
         };

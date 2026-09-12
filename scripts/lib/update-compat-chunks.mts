@@ -13,6 +13,43 @@ export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
 const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup\.ts$)/;
 
+// These verified releases coalesced lifecycle declarations under the cache module's region.
+// Keep this provenance correction only while those releases remain in the supported upgrade window.
+const COALESCED_REGISTRY_RELEASES = [
+  {
+    version: "2026.9.1",
+    buildId: "2026.9.1-release-ad6fe23aecb9-2026-09-03T15-04-19.382Z",
+    commit: "ad6fe23aecb9b833d68139b0ddc9f239b894d2f1",
+    integrity:
+      "sha512-0Ve0631CdgkJDwd4NNG1BawIdF5yCL2sO+Tts8amStw+H6vKURTj0K4rOa4+hFpJk1Dnw5LyKl5twzwX1VtA2w==",
+    chunk: "registry-lifecycle-CzoxN0g_.js",
+  },
+  {
+    version: "2026.9.2",
+    buildId: "2026.9.2-release-3928bad9badf-2026-09-05T15-22-41.651Z",
+    commit: "3928bad9badfcb6c7d140530435e806fb8092190",
+    integrity:
+      "sha512-M6C7UsnX815nv26qBJFYGe6aGzv+ftZLRzV6S9oRXUtXg2Yn67eVntpssT94kgkquKVSeUxerUg0j1ONp4WYQg==",
+    chunk: "registry-lifecycle-D1ErazNK.js",
+  },
+  {
+    version: "2026.9.3",
+    buildId: "2026.9.3-release-1391f7cd2d40-2026-09-08T07-46-00.264Z",
+    commit: "1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7",
+    integrity:
+      "sha512-CzDHMeHdnjlIZ76ZyBb1lvLO4H/yBIMYXupFGGBN87x0853y3hg5nLAnKfxSKqLzqhbUKqy9ebDRAWWV4t8aew==",
+    chunk: "registry-lifecycle-BxSg6w0a.mjs",
+  },
+  {
+    version: "2026.9.4",
+    buildId: "2026.9.4-release-3a9d69db306c-2026-09-10T22-53-16.719Z",
+    commit: "3a9d69db306cd7f081e06254cb89c4bcc14a7107",
+    integrity:
+      "sha512-lTQpEEe1Xm3u2PCHaPEr+vP8paGk1vLdHuzdItsNToaLI6hAqRVvgJYg+GxukJhETJp4tPy/S1Gftl4KuB8n7A==",
+    chunk: "registry-lifecycle-Dbi3yP7o.mjs",
+  },
+];
+
 type UpdateCompatibilityOrigin = { module: string; symbol: string };
 type UpdateCompatibilityChunk = {
   path: string;
@@ -352,6 +389,13 @@ export function recordUpdateCompatibilityRelease(params: {
       "Update compatibility inventory requires an OpenClaw release build and npm SHA-512 integrity",
     );
   }
+  const historicalRegistryChunk = COALESCED_REGISTRY_RELEASES.find(
+    (release) =>
+      release.version === packageJson.version &&
+      release.buildId === build.buildId &&
+      release.commit === build.commit &&
+      release.integrity === params.integrity,
+  )?.chunk;
   const graph = new ModuleGraph();
   const chunks = new Map<string, UpdateCompatibilityChunk>();
   for (const file of moduleFiles(distDir)) {
@@ -391,11 +435,19 @@ export function recordUpdateCompatibilityRelease(params: {
               if (chunk.exports.some((entry) => entry.exported === exported)) {
                 continue;
               }
-              const origin = graph.origin(target, exported);
+              let origin = graph.origin(target, exported);
               if (!origin) {
                 throw new Error(
                   `Cannot trace ${relative} export ${exported} to its release source`,
                 );
+              }
+              if (
+                relative === historicalRegistryChunk &&
+                exported === "markPluginRegistryRetired" &&
+                origin.module === "src/plugins/loader-cache-state.ts" &&
+                origin.symbol === "markPluginRegistryRetired"
+              ) {
+                origin = { module: "src/plugins/registry-lifecycle.ts", symbol: origin.symbol };
               }
               chunk.exports.push({ exported, origin });
             }

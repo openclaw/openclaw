@@ -18,6 +18,37 @@ import {
 const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
 const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
 
+async function withRunningNodeHost(runTest: () => Promise<void>): Promise<void> {
+  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+    ready: true,
+    aborted: false,
+    elapsedMs: 0,
+  });
+  const processOnceSpy = vi.spyOn(process, "once");
+  const previousExitCode = process.exitCode;
+  const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+  try {
+    await vi.waitFor(() =>
+      expect(processOnceSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function)),
+    );
+    await runTest();
+  } finally {
+    const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+    try {
+      onSigterm?.("SIGTERM");
+      await running;
+    } finally {
+      for (const [event, listener] of processOnceSpy.mock.calls) {
+        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
+          process.off(event, listener);
+        }
+      }
+      process.exitCode = previousExitCode;
+      processOnceSpy.mockRestore();
+    }
+  }
+}
+
 describe("runNodeHost", () => {
   beforeEach(resetRunnerTestState);
 
@@ -179,103 +210,149 @@ describe("runNodeHost", () => {
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true, capacity: 5 } },
     } as never);
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-    const options = mocks.capturedGatewayClientOptions[0];
-    const client = mocks.capturedGatewayClients[0];
+    await withRunningNodeHost(async () => {
+      const options = mocks.capturedGatewayClientOptions[0];
+      const client = mocks.capturedGatewayClients[0];
 
-    options?.onHelloOk?.({
-      protocol: 4,
-      features: { methods: [], events: [] },
-    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 
-    expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-      workerHost: {
-        enabled: true,
-        capacity: { total: 5, available: 5 },
-        bundlePrewarm: 1,
-      },
+      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: {
+          enabled: true,
+          capacity: { total: 5, available: 5 },
+          bundlePrewarm: 1,
+        },
+      });
     });
   });
 
   it("publishes each exact worker slot transition without reconnecting", async () => {
     mocks.useFakeRuntime = true;
     mocks.fakeRuntimeWorkerHosting = true;
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-    const options = mocks.capturedGatewayClientOptions[0];
-    const client = mocks.capturedGatewayClients[0];
-    expect(options?.workerRuns).toBeUndefined();
+    await withRunningNodeHost(async () => {
+      const options = mocks.capturedGatewayClientOptions[0];
+      const client = mocks.capturedGatewayClients[0];
+      expect(options?.workerRuns).toBeUndefined();
 
-    mocks.runnerCapacityChanged?.({ total: 2, available: 2 });
-    options?.onHelloOk?.({
-      protocol: 4,
-      features: {
-        methods: [],
-        events: [],
-        capabilities: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION],
-      },
-    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-    await vi.waitFor(() => {
-      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: { total: 2, available: 2 },
-          bundlePrewarm: 1,
-          bundleRetention: 1,
+      mocks.runnerCapacityChanged?.({ total: 2, available: 2 });
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: {
+          methods: [],
+          events: [],
+          capabilities: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION],
         },
-      });
-    });
-
-    const negotiatedWorkerHost = {
-      enabled: true,
-      capacity: { total: 2, available: 2 },
-      bundlePrewarm: 1,
-      bundleRetention: 1,
-      bundleStatus: 1,
-      portalStream: 1,
-      environmentSession: 1,
-    };
-    options?.onHelloOk?.({
-      protocol: 4,
-      features: {
-        methods: [],
-        events: [],
-        capabilities: [
-          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
-          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
-          GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
-          GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
-        ],
-      },
-    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-    await vi.waitFor(() => {
-      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: negotiatedWorkerHost,
-      });
-    });
-
-    const expectPublishedSlots = async (available: number) => {
-      mocks.runnerCapacityChanged?.({ total: 2, available });
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
       await vi.waitFor(() => {
-        expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+        expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
           workerHost: {
-            ...negotiatedWorkerHost,
-            capacity: { total: 2, available },
+            enabled: true,
+            capacity: { total: 2, available: 2 },
+            bundlePrewarm: 1,
+            bundleRetention: 1,
           },
         });
       });
-    };
-    for (const available of [1, 0, 2]) {
-      await expectPublishedSlots(available);
-    }
-    expect(client?.updateNodeManifest).not.toHaveBeenCalled();
+
+      const negotiatedWorkerHost = {
+        enabled: true,
+        capacity: { total: 2, available: 2 },
+        bundlePrewarm: 1,
+        bundleRetention: 1,
+        bundleStatus: 1,
+        portalStream: 1,
+        environmentSession: 1,
+      };
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: {
+          methods: [],
+          events: [],
+          capabilities: [
+            GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+            GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+            GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+            GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
+          ],
+        },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await vi.waitFor(() => {
+        expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: negotiatedWorkerHost,
+        });
+      });
+
+      const expectPublishedSlots = async (available: number) => {
+        mocks.runnerCapacityChanged?.({ total: 2, available });
+        await vi.waitFor(() => {
+          expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+            workerHost: {
+              ...negotiatedWorkerHost,
+              capacity: { total: 2, available },
+            },
+          });
+        });
+      };
+      for (const available of [1, 0, 2]) {
+        await expectPublishedSlots(available);
+      }
+      expect(client?.updateNodeManifest).not.toHaveBeenCalled();
+    });
+  });
+
+  it("republishes current worker facts after this node's surface approval without cancelling invokes", async () => {
+    mocks.useFakeRuntime = true;
+    mocks.fakeRuntimeWorkerHosting = true;
+    await withRunningNodeHost(async () => {
+      const options = mocks.capturedGatewayClientOptions[0]!;
+      const client = mocks.capturedGatewayClients[0]!;
+      mocks.runnerCapacityChanged?.({ total: 2, available: 1 });
+      options.onHelloOk?.({
+        protocol: 4,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await vi.waitFor(() =>
+        expect(client.request).toHaveBeenCalledWith(
+          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          expect.objectContaining({
+            workerHost: expect.objectContaining({ capacity: { total: 2, available: 1 } }),
+          }),
+        ),
+      );
+      const publications = () =>
+        client.request.mock.calls.filter(
+          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+        );
+      const before = publications().length;
+      const cancelsBefore = mocks.activeRuntime.cancelAll.mock.calls.length;
+      for (const payload of [
+        { nodeId: "another-node", decision: "approved" },
+        { nodeId: "device-test", decision: "rejected" },
+        { nodeId: "node-test", decision: "approved" },
+      ]) {
+        options.onEvent?.({ type: "event", event: "node.pair.resolved", payload });
+      }
+      await Promise.resolve();
+      expect(publications()).toHaveLength(before);
+      options.onEvent?.({
+        type: "event",
+        event: "node.pair.resolved",
+        payload: { nodeId: "device-test", decision: "approved", requestId: "approval-1", ts: 1 },
+      });
+      await vi.waitFor(() => expect(publications()).toHaveLength(before + 1));
+      expect(publications().at(-1)?.[1]).toMatchObject({
+        workerHost: { enabled: true, capacity: { total: 2, available: 1 } },
+      });
+      expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledTimes(cancelsBefore);
+      expect(client.updateNodeManifest).not.toHaveBeenCalled();
+    });
   });
 
   it("clears gateway plugin tools when the final node-hosted tool disappears", async () => {

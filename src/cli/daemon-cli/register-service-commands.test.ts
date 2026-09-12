@@ -1,8 +1,12 @@
 // Register service command tests cover daemon service subcommand registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isVerbose, setVerbose } from "../../globals.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
+import { ensureConfigReady } from "../program/config-guard.js";
+import { registerPreActionHooks } from "../program/preaction.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 import { registerDaemonCli } from "./register.js";
 
@@ -12,6 +16,8 @@ const runDaemonStart = vi.fn(async (_opts: unknown) => {});
 const runDaemonStatus = vi.fn(async (_opts: unknown) => {});
 const runDaemonStop = vi.fn(async (_opts: unknown) => {});
 const runDaemonUninstall = vi.fn(async (_opts: unknown) => {});
+
+vi.mock("../program/config-guard.js", () => ({ ensureConfigReady: vi.fn(async () => {}) }));
 
 const RESTART_ROUTE_ENV_KEYS = [
   "OPENCLAW_SERVICE_MARKER",
@@ -46,6 +52,7 @@ function createGatewayParentLikeCommand(program?: Command) {
   gateway.option("--token <token>", "Gateway token");
   gateway.option("--password <password>", "Gateway password");
   gateway.option("--force", "Gateway run --force", false);
+  gateway.option("--allow-unconfigured", "Gateway run without local mode", false);
   addGatewayServiceCommands(gateway);
   return gateway;
 }
@@ -82,12 +89,51 @@ describe("addGatewayServiceCommands", () => {
     runDaemonStatus.mockClear();
     runDaemonStop.mockClear();
     runDaemonUninstall.mockClear();
+    vi.mocked(ensureConfigReady).mockClear();
   });
 
   afterEach(() => {
     restartRouteEnvSnapshot.restore();
     vi.restoreAllMocks();
   });
+
+  it.each(
+    ["gateway", "daemon"].flatMap((parent) =>
+      ["install", "restart", "stop"].map((action) => ({ parent, action })),
+    ),
+  )(
+    "probes $parent $action update custody without startup mutation or invoking the action",
+    async ({ parent, action }) => {
+      const program = new Command().name("openclaw").enablePositionalOptions();
+      addGatewayServiceCommands(program.command(parent));
+      registerPreActionHooks(program, "9.9.9-test");
+      const previousArgv = process.argv;
+      const previousTitle = process.title;
+      const previousVerbose = isVerbose();
+      const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
+      process.argv = ["node", "openclaw", parent, action, "--update-executor", "check"];
+      const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      try {
+        await withConsoleLogsRoutedToStderrForJson(
+          process.argv,
+          () => program.parseAsync(process.argv),
+          { restoreChanges: true },
+        );
+      } finally {
+        process.argv = previousArgv;
+        process.title = previousTitle;
+        setVerbose(previousVerbose);
+        startupEnv.restore();
+      }
+      expect(output.mock.calls.map(([chunk]) => String(chunk)).join("")).toBe(
+        JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }),
+      );
+      expect(ensureConfigReady).not.toHaveBeenCalled();
+      expect(runDaemonInstall).not.toHaveBeenCalled();
+      expect(runDaemonRestart).not.toHaveBeenCalled();
+      expect(runDaemonStop).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -99,6 +145,31 @@ describe("addGatewayServiceCommands", () => {
         expect(opts.port).toBe("19000");
         expect(opts.token).toBe("tok_test");
         expect(opts.runtime).toBe("bun");
+      },
+    },
+    {
+      name: "preserves an omitted service start-mode override during updater reinstall",
+      argv: ["install", "--force", "--json"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
+          force: true,
+          json: true,
+          allowUnconfigured: undefined,
+        });
+      },
+    },
+    {
+      name: "forwards an explicit service start-mode override",
+      argv: ["install", "--allow-unconfigured"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
+      },
+    },
+    {
+      name: "inherits the parent service start-mode override",
+      argv: ["--allow-unconfigured", "install"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
       },
     },
     {

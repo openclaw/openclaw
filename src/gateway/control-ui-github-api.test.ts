@@ -7,6 +7,7 @@ import {
   fetchGitHubApi,
   fetchGitHubJson,
   formatControlUiGitHubPreviewError,
+  readGitHubGraphQLResponse,
   readGitHubJsonResponse,
 } from "./control-ui-github-api.js";
 
@@ -110,15 +111,22 @@ describe("Control UI GitHub failures", () => {
       sibling: "/search/code?q=second",
       independent: "/search/repositories",
     },
+    ...[403, 200].map((status) => ({
+      resource: "graphql",
+      limited: "/graphql",
+      sibling: "/graphql",
+      independent: "/repos/owner/repo",
+      status,
+    })),
   ])(
     "shares $resource quota cooldown without blocking other buckets or credentials",
-    async ({ resource, limited, sibling, independent }) => {
+    async ({ resource, limited, sibling, independent, ...options }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockResolvedValueOnce(
-          new Response(null, {
-            status: 403,
+          new Response(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }), {
+            status: "status" in options ? options.status : 403,
             headers: {
               "x-ratelimit-resource": resource,
               "x-ratelimit-remaining": "0",
@@ -127,10 +135,21 @@ describe("Control UI GitHub failures", () => {
           }),
         )
         .mockImplementation(async () => new Response("{}"));
-      const request = async (path: string, token = "quota-token") =>
-        readGitHubJsonResponse(
-          await fetchGitHubApi(`https://api.github.com${path}`, fetchMock, token),
+      const request = async (path: string, token = "quota-token") => {
+        const response = await fetchGitHubApi(
+          `https://api.github.com${path}`,
+          fetchMock,
+          token,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          path === "/graphql" ? { query: "query { viewer { login } }", variables: {} } : undefined,
         );
+        return path === "/graphql"
+          ? readGitHubGraphQLResponse(response, fetchMock, token)
+          : readGitHubJsonResponse(response);
+      };
       await expect(request(limited)).rejects.toMatchObject({
         statusCode: 429,
         retryAfterMs: 90_000,
@@ -175,11 +194,49 @@ describe("Control UI GitHub failures", () => {
         fetchGitHubJson("https://api.github.com/user/1", fetchMock),
       ).rejects.toMatchObject({ statusCode: 429 });
       expect(fetchMock).toHaveBeenCalledOnce();
+      await expect(
+        fetchGitHubApi("https://api.github.com/graphql", fetchMock, undefined),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(fetchMock).toHaveBeenCalledOnce();
       clock.mockReturnValue(1_800_000_000_000 + delay);
       await expect(
         fetchGitHubJson("https://api.github.com/user/1", fetchMock),
       ).rejects.toMatchObject({ statusCode: 429 });
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([undefined, "42"])(
+    "retains a GraphQL HTTP 403 quota error with remaining=%s across REST reads",
+    async (remaining) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const fetchMock = vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({ errors: [{ type: "RATE_LIMITED", message: "private-diagnostic" }] }),
+            { status: 403, headers: remaining ? { "x-ratelimit-remaining": remaining } : {} },
+          ),
+      );
+      const response = await fetchGitHubApi(
+        "https://api.github.com/graphql",
+        fetchMock,
+        "quota-token",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { query: "query { viewer { login } }", variables: {} },
+      );
+      await expect(
+        readGitHubGraphQLResponse(response, fetchMock, "quota-token"),
+      ).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 60_000,
+      });
+      await expect(
+        fetchGitHubApi("https://api.github.com/repos/owner/repo", fetchMock, "quota-token"),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(fetchMock).toHaveBeenCalledOnce();
     },
   );
 

@@ -9,6 +9,7 @@ fn main() {
         "discover_gateways",
         "gateway_action",
         "install_cli",
+        "native_browser_request",
         "open_release_page",
         "relaunch",
         "updater_ready",

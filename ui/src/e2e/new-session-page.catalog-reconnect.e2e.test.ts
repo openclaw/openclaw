@@ -403,15 +403,17 @@ suite.define(() => {
       expect(methods.indexOf("worktrees.create")).toBeLessThan(
         methods.indexOf("sessions.catalog.startTerminal"),
       );
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
-      const panel = page.locator("openclaw-terminal-panel");
+      await page.waitForURL(`${suite.server.baseUrl}terminal/terminal-cli-1`);
+      const panel = page.locator("openclaw-terminal-page openclaw-terminal-panel");
       await panel.locator(".tabstrip-tab.is-live").waitFor();
       await panel.locator(".tp-host canvas").waitFor({ state: "visible" });
+      expect(await page.locator(".new-session-page__message").count()).toBe(0);
       await expect
         .poll(() => panel.locator(".tabstrip-tab.is-live").getAttribute("title"))
         .toContain(worktreePath);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
 
+      await navigateInApp(page, "new-session", "?agent=research&catalog=claude");
       await expect
         .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
         .toBe(true);
@@ -432,7 +434,7 @@ suite.define(() => {
         catalogId: "claude",
         agentId: "research",
         hostId: "gateway:local",
-        cwd: worktreePath,
+        cwd: WORKSPACE,
       });
     } finally {
       await context.close();
@@ -542,8 +544,9 @@ suite.define(() => {
         expect(await page.locator(".new-session-page__starting").count()).toBe(0);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await gateway.resolveDeferred("sessions.catalog.startTerminal");
-        await expect.poll(() => message.inputValue()).toBe("");
-        await page.locator("openclaw-terminal-panel .tabstrip-tab.is-live").waitFor();
+        await page.waitForURL(`${suite.server.baseUrl}terminal/native-cli`);
+        await expect.poll(() => message.count()).toBe(0);
+        await page.locator("openclaw-terminal-page .tabstrip-tab.is-live").waitFor();
         expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       } finally {

@@ -12,8 +12,13 @@ read_when:
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs
 first. It looks for the newest prior green full validation with the same release
 profile, coverage policy, effective soak setting, and validation inputs. Exact-target reruns use
-`exact-target-full-validation-v1`. A descendant whose complete delta is exactly
-`CHANGELOG.md` uses `changelog-only-release-v1`; every product lane is skipped
+`exact-target-full-validation-v1`. A descendant whose complete delta includes
+the selected `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its matching
+`CHANGELOG/records/YYYY.M.PATCH.md`, and root `CHANGELOG.md` uses
+`split-changelog-release-v1`. Entry/record additions or modifications and index
+modifications are allowed; renames, deletions, other releases, and docs source
+edits are rejected. Historical root-only receipts retain
+`changelog-only-release-v1`. Under either changelog policy, every product lane is skipped
 and the verifier independently rechecks the GitHub commit comparison, immutable
 parent artifact, child runs, and dispatch logs. Any other target change requires
 a fresh Code SHA validation. Pass `reuse_evidence=false` to force a fresh full

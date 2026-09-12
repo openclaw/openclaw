@@ -863,7 +863,7 @@ describe("CronService failure alerts", () => {
 
         const alert = alertCallArg(sendCronFailureAlert);
         expect(alert.text).toContain("Cause: auth_permanent");
-        expect(alert.text).toContain("/login");
+        expect(alert.text).toContain("Send `/login openai`");
         expect(alert.presentation).toEqual({
           blocks: [
             {
@@ -871,7 +871,7 @@ describe("CronService failure alerts", () => {
               buttons: [
                 {
                   label: "Sign in",
-                  action: { type: "command", command: "/login" },
+                  action: { type: "command", command: "/login openai" },
                 },
               ],
             },

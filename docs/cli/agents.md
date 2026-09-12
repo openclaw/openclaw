@@ -34,6 +34,8 @@ Options: `--json`, `--bindings` (include full routing rules, not only per-agent 
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
 
+An agent whose database belongs to another agent appears as **degraded**, with the refusal reason and repair guidance. The Gateway can continue serving healthy agents when a secondary agent is refused. Follow [Doctor's database recovery guidance](/gateway/doctor/state-and-sessions), then restart the Gateway after repairing the files.
+
 Provider rows summarize local account status for the displayed binding scopes.
 A wildcard includes each locally known account once; message routing still applies
 peer and account precedence. Stored bindings with an omitted or blank account id

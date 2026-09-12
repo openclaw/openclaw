@@ -21,14 +21,15 @@ import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
 import type { MessageActionDeniedError } from "./message-action-denial.js";
+import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type MessageActionGateway = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
+export type MessageActionGateway = Omit<
+  OutboundMessageGatewayOptionsInput,
+  "resolveAgentRuntimeIdentityToken"
+> & {
   resolveAgentRuntimeIdentityToken?: (context?: {
     sourceReplyFinal?: boolean;
     sourceReplyToolCallId?: string;

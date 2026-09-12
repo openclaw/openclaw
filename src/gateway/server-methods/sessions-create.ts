@@ -62,6 +62,7 @@ import {
   validateSessionProjectPreparation,
 } from "./session-create-project.js";
 import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
+import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -579,15 +580,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       allowExistingModelSelection,
       parentSessionKey,
       spawnDepth: p.spawnDepth,
-      spawnToolPolicy:
-        sessionCreation.via === "spawn" && sessionCreation.inheritedToolPolicy
-          ? {
-              ...sessionCreation.inheritedToolPolicy,
-              ...(sessionCreation.completionOwnerSessionKey
-                ? { completionOwnerSessionKey: sessionCreation.completionOwnerSessionKey }
-                : {}),
-            }
-          : undefined,
       spawnedCwd: p.worktree === true ? undefined : sessionCwd,
       sessionRoot: p.worktree === true ? undefined : sessionRoot,
       permissionMode: p.permissionMode,
@@ -604,6 +596,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       clearSpawnedCwd: p.worktree !== true && !sessionCwd,
       fork: p.fork,
       forkFrom: p.forkFrom,
+      ...resolveSessionCreateSpawnContext({
+        client,
+        creation: sessionCreation,
+        agentId: sessionAgentId,
+        parentSessionKey,
+        fork: p.fork,
+        forkFrom: p.forkFrom,
+        emitCommandHooks: p.emitCommandHooks,
+        assertRuntimeCurrent: authority.commitGuard,
+      }),
       succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,

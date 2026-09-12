@@ -1913,6 +1913,7 @@ class NodeForegroundServiceTest {
     val runtime = app.ensureBackgroundRuntime()
     runtime.disconnect()
     val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+    val gatewayLifecycleIntentLock = ReflectionHelpers.getField<Any>(runtime, "gatewayLifecycleIntentLock")
     val scheduler = TestCoroutineScheduler()
     val viewModel = MainViewModel(app, app.prefs, SavedStateHandle())
     val viewModels = ViewModelStore().apply { put("admission-deadline", viewModel) }
@@ -1988,7 +1989,14 @@ class NodeForegroundServiceTest {
       )
       drainWithMainLooper {
         withTimeout(10_000) {
-          while (ReflectionHelpers.getField<Any?>(runtime, "gatewayConnectionOperation") == null) delay(10)
+          // Operation publication precedes timer registration inside this owner lock.
+          while (
+            synchronized(gatewayLifecycleIntentLock) {
+              ReflectionHelpers.getField<Any?>(runtime, "gatewayConnectionOperation")
+            } == null
+          ) {
+            delay(10)
+          }
           if (block == GatewayAdmissionBlock.AuthReset) cleanupStarted.await()
         }
       }

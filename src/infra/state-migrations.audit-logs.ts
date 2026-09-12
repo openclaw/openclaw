@@ -56,6 +56,13 @@ function legacyAuditClaimPathForArchive(sourcePath: string, sanitizedArchivePath
 
 export { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
 
+type AuditLogMigrationResult = Pick<MigrationMessages, "changes" | "warnings"> & {
+  outcome: "completed" | "skipped" | "refused";
+};
+
+const AUDIT_SKIP_RECOVERY_GUIDANCE =
+  "Preserve the legacy source and any sanitized companion for recovery; see https://docs.openclaw.ai/cli/update/repair-and-recovery#skipped-legacy-audit-recovery. Other repairs can continue; this warning repeats until the archive is resolved.";
+
 type AuditArchiveRelativePaths = {
   sanitized: string;
   raw: string;
@@ -244,10 +251,14 @@ async function migrateLegacyAuditLogSource(params: {
   source: LegacyAuditLogSource;
   stateDir: string;
   recreatedSourceScheduled?: boolean;
-}): Promise<MigrationMessages & { completed: boolean }> {
+}): Promise<AuditLogMigrationResult> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  const result = (completed: boolean) => ({ changes, warnings, completed });
+  const sourceResult: AuditLogMigrationResult = { changes, warnings, outcome: "refused" };
+  const result = (outcome: AuditLogMigrationResult["outcome"]) => {
+    sourceResult.outcome = outcome;
+    return sourceResult;
+  };
   const root = await createFsSafeRoot(params.stateDir, {
     hardlinks: "reject",
     // Doctor previously accepted the complete legacy log; keep that migration
@@ -302,14 +313,14 @@ async function migrateLegacyAuditLogSource(params: {
         warnings,
       }))
     ) {
-      return result(false);
+      return result("refused");
     }
     const rawArchiveRelativePath = archivePaths?.raw ?? detectedRelativePath;
     if (!hasLegacyAuditRawCheckpointCapacity(params.stateDir, rawArchiveRelativePath)) {
       warnings.push(
-        `Skipped ${params.source.label} migration because durable raw-archive checkpoint capacity is exhausted; left the legacy source in place`,
+        `Skipped ${params.source.label} migration because durable raw-archive checkpoint capacity is exhausted; left the legacy source in place. ${AUDIT_SKIP_RECOVERY_GUIDANCE}`,
       );
-      return result(false);
+      return result("skipped");
     }
     if (
       !(await restoreInterruptedAuditRecoveryArchive({
@@ -319,7 +330,7 @@ async function migrateLegacyAuditLogSource(params: {
         warnings,
       }))
     ) {
-      return result(false);
+      return result("refused");
     }
     const snapshot = await readLegacyAuditSourceSnapshot(root, claimRelativePath);
     const sourceGeneration = legacyAuditSourceGenerationKey(rawArchiveRelativePath);
@@ -340,9 +351,9 @@ async function migrateLegacyAuditLogSource(params: {
       );
       if (snapshot.rawBytes.length > 0 && firstContentByte !== 0) {
         warnings.push(
-          `Skipped ${params.source.label} recovery because its checkpointless raw archive begins with ambiguous whitespace; left the archive in place`,
+          `Skipped ${params.source.label} recovery because its checkpointless raw archive begins with ambiguous whitespace; left the archive in place. ${AUDIT_SKIP_RECOVERY_GUIDANCE}`,
         );
-        return result(false);
+        return result("skipped");
       }
     }
     const prepared = prepareLegacyAuditRecords(
@@ -353,7 +364,7 @@ async function migrateLegacyAuditLogSource(params: {
     );
     if (!prepared.ok) {
       warnings.push(...prepared.warnings);
-      return result(false);
+      return result("refused");
     }
     const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
     const maxEntries =
@@ -375,9 +386,9 @@ async function migrateLegacyAuditLogSource(params: {
         });
         if (!appendedRecords) {
           warnings.push(
-            `Skipped ${params.source.label} recovery because ${params.source.sourcePath} changed other than by append; left the raw archive in place`,
+            `Skipped ${params.source.label} recovery because ${params.source.sourcePath} changed other than by append; left the raw archive in place. ${AUDIT_SKIP_RECOVERY_GUIDANCE}`,
           );
-          return result(false);
+          return result("skipped");
         }
         candidateRecords = appendedRecords;
       }
@@ -418,7 +429,7 @@ async function migrateLegacyAuditLogSource(params: {
           warnings,
         }))
       ) {
-        return result(false);
+        return result("refused");
       }
       // Checkpoint the unscrubbed append before hardening/scrubbing. A retry can
       // then prove the sanitized tail was already written instead of duplicating it.
@@ -439,7 +450,7 @@ async function migrateLegacyAuditLogSource(params: {
             warnings,
           }))
         ) {
-          return result(false);
+          return result("refused");
         }
       }
       if (
@@ -450,7 +461,7 @@ async function migrateLegacyAuditLogSource(params: {
           warnings,
         }))
       ) {
-        return result(false);
+        return result("refused");
       }
       if (missing.length > 0) {
         changes.push(
@@ -465,7 +476,7 @@ async function migrateLegacyAuditLogSource(params: {
         warnings,
       });
       if (!scrubbedSnapshot) {
-        return result(false);
+        return result("refused");
       }
       const scrubbedRecords = prepareLegacyAuditRecords(
         params.source,
@@ -477,13 +488,13 @@ async function migrateLegacyAuditLogSource(params: {
         warnings.push(
           `Retained uncheckpointed ${params.source.label} recovery archive; rerun openclaw doctor --fix`,
         );
-        return result(false);
+        return result("refused");
       }
       if (scrubbedRecords.records.length !== 0) {
         warnings.push(
           `A legacy ${params.source.label} writer appended during recovery; rerun openclaw doctor --fix to import the retained rows`,
         );
-        return result(false);
+        return result("refused");
       }
       const checkpointed = await recordLegacyAuditRawCheckpoint({
         stateDir: params.stateDir,
@@ -508,7 +519,7 @@ async function migrateLegacyAuditLogSource(params: {
           },
         );
       }
-      return result(checkpointed);
+      return result(checkpointed ? "completed" : "refused");
     }
     if (!archivePaths) {
       throw new Error(`Missing archive generation for ${params.source.sourcePath}`);
@@ -529,10 +540,10 @@ async function migrateLegacyAuditLogSource(params: {
     claimFinalized = archived.moved;
     if (!archived.moved || !archived.rawRelativePath) {
       changes.pop();
-      return result(false);
+      return result("refused");
     }
     if (!archived.scrubbedSnapshot) {
-      return result(false);
+      return result("refused");
     }
     const scrubbedRecords = prepareLegacyAuditRecords(
       params.source,
@@ -544,13 +555,13 @@ async function migrateLegacyAuditLogSource(params: {
       warnings.push(
         `Retained uncheckpointed ${params.source.label} recovery archive; rerun openclaw doctor --fix`,
       );
-      return result(false);
+      return result("refused");
     }
     if (scrubbedRecords.records.length !== 0) {
       warnings.push(
         `A legacy ${params.source.label} writer appended during migration; rerun openclaw doctor --fix to import the retained rows`,
       );
-      return result(false);
+      return result("refused");
     }
     const rawPath = path.join(params.stateDir, archived.rawRelativePath);
     const checkpointed = await recordLegacyAuditRawCheckpoint({
@@ -580,9 +591,10 @@ async function migrateLegacyAuditLogSource(params: {
         `An old writer recreated ${params.source.label} at ${params.source.logicalSourcePath}; rerun openclaw doctor --fix to import the retained rows`,
       );
     }
-    return result(checkpointed);
+    return result(checkpointed ? "completed" : "refused");
   } finally {
     if (!claimFinalized && params.source.storage === "active" && archivePaths) {
+      const warningCount = warnings.length;
       await restoreOrPreserveLegacyAuditClaim({
         source: params.source,
         claimRelativePath,
@@ -591,6 +603,10 @@ async function migrateLegacyAuditLogSource(params: {
         root,
         warnings,
       });
+      if (warnings.length > warningCount) {
+        // A skip is safe only if restoring the claimed source also succeeded.
+        sourceResult.outcome = "refused";
+      }
     }
   }
 }
@@ -601,6 +617,7 @@ export async function migrateLegacyAuditLogs(params: {
 }): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  let hasRefusal = false;
   if (params.detected.sources.length === 0) {
     return { changes, warnings };
   }
@@ -651,21 +668,38 @@ export async function migrateLegacyAuditLogs(params: {
           });
           changes.push(...result.changes);
           warnings.push(...result.warnings);
-          if (!result.completed) {
+          if (
+            result.outcome === "refused" ||
+            (result.outcome === "completed" && result.warnings.length > 0)
+          ) {
+            hasRefusal = true;
+          }
+          if (result.outcome !== "completed") {
             // Generations encode append order. A later archive must not overtake
             // an older source that still needs repair or durable checkpointing.
             blockedLogicalSources.add(source.logicalSourcePath);
           }
         } catch (error) {
+          hasRefusal = true;
           warnings.push(`Failed migrating ${source.label}: ${String(error)}`);
           blockedLogicalSources.add(source.logicalSourcePath);
         }
       }
     });
   } catch (error) {
+    hasRefusal = true;
     warnings.push(`Skipped legacy audit migration because coordination failed: ${String(error)}`);
   } finally {
     await lock.release();
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && !hasRefusal
+      ? {
+          warningDisposition: "recoverable" as const,
+          ...(changes.length === 0 ? { outcome: "skipped" as const } : {}),
+        }
+      : {}),
+  };
 }

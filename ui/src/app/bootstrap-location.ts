@@ -1,7 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
 import { routeIdFromPath } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
@@ -24,11 +24,12 @@ type ReleasedSessionQuery = {
   sessionKey: string;
 };
 
-// Saved selection only fills an implicit landing. Agent paths remain explicit,
-// even when first-run setup is eligible to run on that same path.
+// Saved selection only fills an implicit landing. Agent paths and plugin slug
+// candidates remain explicit, even before Gateway hello registers plugin tabs.
 function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
   return (
     !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    !pluginSlugCandidate(location.pathname, basePath) &&
     (routeIdFromPath(location.pathname, basePath) === null ||
       /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
   );

@@ -9,6 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
+import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
@@ -313,6 +315,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     };
     const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-credential-"));
     const stagingAgentDir = path.join(stagingRoot, "agents", "setup", "agent");
+    let savedProfileId: string | undefined;
     try {
       await fs.mkdir(stagingAgentDir, { recursive: true });
       result = await withAuthProfileStoreAgentDir(stagingAgentDir, stagingRoot, async () => {
@@ -369,7 +372,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
             "Provider setup did not save a replacement credential. Your connection is unchanged.",
           );
         }
-        await saveSetupCredential({
+        const saved = await saveSetupCredential({
           profile,
           config: projectProviderResult(prepared.config),
           baseConfig: params.baseConfig,
@@ -378,7 +381,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
           authChoice: trustedManifestMatch?.choiceId ?? providerChoice.wizard?.choiceId,
           pluginId: providerChoice.provider.pluginId,
         });
-        result = null;
+        savedProfileId = saved.profile.profileId;
       }
     } finally {
       clearRuntimeAuthProfileStoreSnapshot(stagingAgentDir);
@@ -386,9 +389,9 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       closeOpenClawAgentDatabases(stagingRoot);
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
-    if (!result) {
+    if (savedProfileId) {
       return reject(
-        "Replacement credential saved but inactive. Your connection is unchanged. Open Model Setup to test and activate the saved sign-in.",
+        `Replacement credential saved but inactive. Your connection is unchanged. Test and activate it with:\n${formatCliCommand(`openclaw models auth activate ${quoteCliArg(savedProfileId)} --agent ${quoteCliArg(params.target.agentId)}`)}`,
       );
     }
   } else {

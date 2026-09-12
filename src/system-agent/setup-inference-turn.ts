@@ -23,7 +23,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createPluginCache, withPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -313,6 +313,7 @@ type RevalidationDeps = SystemAgentVerifiedInferenceDeps & {
 
 /** Setup owns fresh package facts without replacing the Gateway's startup generation. */
 export function loadSetupInferencePluginGeneration(params: {
+  cache: PluginCache;
   config: OpenClawConfig;
   workspaceDir: string;
   selection: AgentHarnessPluginSelection;
@@ -326,7 +327,7 @@ export function loadSetupInferencePluginGeneration(params: {
   )?.preferBuiltPluginArtifacts;
   // The install lease may have cached absence before writing the package.
   // This post-mutation owner must capture new facts without retiring that lease's cache.
-  return withPluginCache(createPluginCache(), () => {
+  return withPluginCache(params.cache, () => {
     const index = params.pendingPluginInstalls
       ? loadInstalledPluginIndex({
           config: params.config,
@@ -398,7 +399,9 @@ async function revalidateSetupInferenceOwner(params: {
       params.route.agentId,
       process.env,
     );
+    await using cache = createPluginCache();
     const generation = loadSetupInferencePluginGeneration({
+      cache,
       config: params.route.runConfig,
       workspaceDir,
       selection: {

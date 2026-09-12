@@ -32,7 +32,7 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 const preparedModel = {
-  release: vi.fn(),
+  async [Symbol.asyncDispose]() {},
   selection: {
     provider: "openai",
     modelId: "gpt-5.5",

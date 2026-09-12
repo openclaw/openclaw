@@ -8,6 +8,7 @@ import { t } from "../../i18n/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   deferred,
+  emitCatalogChanged,
   setPageGateway,
   snapshot,
   type TestAgentsPage,
@@ -69,7 +70,7 @@ describe("agent model catalog recovery", () => {
       page.agentsSelectedId = "main";
       page.loadActivePanelData();
       await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
-      page.ensureModelCatalog({ refresh: true });
+      emitCatalogChanged(page.context.gateway);
       if (!lateFailure) {
         pending.reject(error);
         await waitForFast(() =>

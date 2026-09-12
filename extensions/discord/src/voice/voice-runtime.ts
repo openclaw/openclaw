@@ -13,6 +13,7 @@ import {
 } from "./participant-context.js";
 import {
   logVoiceVerbose,
+  type VoiceGuildLifecycle,
   type VoiceJoinOptions,
   type VoiceOperationResult,
   type VoiceSessionEntry,
@@ -48,17 +49,6 @@ function isFatalAutoJoinFailure(message: string): boolean {
     normalized.includes(pattern),
   );
 }
-
-type VoiceGuildLifecycle =
-  | { status: "inactive"; generation: number }
-  | {
-      status: "starting";
-      generation: number;
-      cancelled: boolean;
-      instance: { guildId: string; channelId: string; captureOnly: boolean };
-    }
-  | { status: "active"; generation: number; instance: VoiceSessionEntry }
-  | { status: "stopped"; generation: number; reason: string };
 
 type CaptureJoinOrigin = {
   isCurrent: () => boolean;
@@ -269,6 +259,7 @@ export class DiscordVoiceManager {
   status(): VoiceOperationResult[] {
     return Array.from(this.guildLifecycles.values())
       .filter((lifecycle) => lifecycle.status === "active")
+      .filter(({ instance }) => this.isEntryCurrent(instance))
       .map(({ instance: session }) => ({
         ok: true,
         message: `connected: guild ${session.guildId} channel ${session.channelId}`,
@@ -492,7 +483,7 @@ export class DiscordVoiceManager {
       ) {
         // Stop only this attempt's transport; cancellation or failed promotion can leave no owner.
         if (entry?.generation === generation) {
-          entry.stop("voice join ended without an owner");
+          await entry.stop("voice join ended without an owner");
         }
         if (this.guildLifecycles.get(guildId) === starting) {
           this.guildLifecycles.set(guildId, { status: "inactive", generation });
@@ -605,7 +596,7 @@ export class DiscordVoiceManager {
     this.occupancyWatchers.clear();
     this.following.destroy();
     for (const entry of this.sessions.values()) {
-      entry.stop();
+      void entry.stop();
     }
     for (const [guildId, lifecycle] of this.guildLifecycles) {
       this.guildLifecycles.set(guildId, {
@@ -614,8 +605,8 @@ export class DiscordVoiceManager {
         reason: "manager destroyed",
       });
     }
-    this.sessions.clear();
     this.receive.daveRecoveryAttempts.clear();
+    await this.voiceSessions.waitForStops();
   }
 
   private isEntryCurrent(entry: VoiceSessionEntry): boolean {

@@ -1,9 +1,14 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
@@ -94,7 +99,6 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import { abortable } from "./abortable.js";
 import {
   runEmbeddedAttemptPromptPhase,
   type EmbeddedAttemptPromptState,
@@ -319,7 +323,9 @@ function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) 
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
   mocks.applyPromptToolsAllow.mockReturnValue({
     activeToolNames: ["read"],
     effectiveTools: [{ name: "read" }],
@@ -776,6 +782,40 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
   });
 
+  it("withholds prompt hooks and submission after its owner retires during context lookup", async () => {
+    const fixture = createFixture();
+    const admission = prepareSystemAgentRunAdmission({}, "prompt-owner", "main", "prompt-session");
+    try {
+      const admitted = await admission.admit("embedded");
+      const prepareAssembly = mocks.preparePromptAssembly.getMockImplementation()!;
+      mocks.preparePromptAssembly.mockImplementationOnce(async (...args) => ({
+        ...(await prepareAssembly(...args)),
+        assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
+      }));
+      const context = mocks.preparePromptContext.getMockImplementation()!();
+      const lookup = createDeferred<typeof context>();
+      const entered = createDeferred();
+      mocks.preparePromptContext.mockImplementationOnce(() => {
+        entered.resolve();
+        return lookup.promise;
+      });
+      const pending = runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+      await entered.promise;
+      admission.close();
+      lookup.resolve(context);
+      await pending;
+      expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
+      expect(mocks.submitPrompt).not.toHaveBeenCalled();
+      expect(mocks.handlePromptError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({ message: "admitted run authority is no longer active" }),
+        }),
+      );
+    } finally {
+      admission.close();
+    }
+  });
+
   it("skips before_agent_run for settled-turn finalization", async () => {
     const fixture = createFixture();
     fixture.input.attempt.operation = "settled-tool-finalization";
@@ -894,17 +934,13 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     const fixture = createFixture();
     fixture.input.state.terminal = { kind: "timeout", phase: "prompt", source: "run_budget" };
     fixture.input.runAbortController.abort(new Error("request timed out"));
-    const timeoutAbort = await abortable(
-      fixture.input.runAbortController.signal,
-      Promise.resolve(),
-    ).catch((error: unknown) => error);
-    mocks.submitPrompt.mockRejectedValueOnce(timeoutAbort);
-    mocks.handlePromptError.mockResolvedValueOnce({
-      promptFailure: { error: timeoutAbort, source: "prompt" },
-    });
+    mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => ({
+      promptFailure: { error: input.error, source: "prompt" },
+    }));
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
     expect(fixture.readState().promptError).toBeNull();
     expect(fixture.readState().promptErrorSource).toBeNull();
   });

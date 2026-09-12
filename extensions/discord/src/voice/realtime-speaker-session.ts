@@ -28,6 +28,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { discordRealtimeVoiceSecretOwnerId } from "../secret-config-contract.js";
+import { buildProviderConfigs, buildProviderConfigOverrides } from "./config.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
@@ -130,7 +131,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   private readonly consults: DiscordRealtimeConsults;
   private readonly recording: DiscordRealtimeRecording;
   private lifecycle: {
-    status: "inactive" | "starting" | "active" | "stopped";
+    status: "inactive" | "starting" | "active" | "closing" | "stopped";
     generation: number;
   } = { status: "inactive", generation: 0 };
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
@@ -143,6 +144,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   private providerContinuityEpoch = 0;
   private readonly captures = new Set<VoiceRealtimeSpeakerTurn>();
   private inputOpen = true;
+  private closeCompletion: Promise<void> | undefined;
   private activeOperations = 0;
   private lastActivityAt = Date.now();
   private lastRealtimeError:
@@ -382,7 +384,13 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         },
       },
       onTranscript: (role, text, isFinal) => {
-        if (this.isStopped()) {
+        if (this.lifecycle.status === "stopped") {
+          return;
+        }
+        if (this.lifecycle.status === "closing") {
+          if (role === "user" && isFinal && text.trim()) {
+            this.recording.transcript(text.trim());
+          }
           return;
         }
         this.markProviderGenerationObserved();
@@ -453,7 +461,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     });
     // createBridge may close synchronously, before its returned bridge can be disposed.
     if (this.isStopped()) {
-      this.close();
+      await this.close();
       return;
     }
     const resolvedModel =
@@ -465,7 +473,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     );
     await this.bridge.connect();
     if (!this.markLifecycleReady(lifecycleGeneration)) {
-      this.bridge?.close();
+      await this.close();
       return;
     }
     this.markProviderGenerationObserved();
@@ -475,19 +483,46 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     );
   }
 
-  close(): void {
-    this.lifecycle.status = "stopped";
-    this.recording.close();
+  close(): void | Promise<void> {
+    if (this.lifecycle.status === "closing" || (!this.bridge && !this.inputOpen)) {
+      return this.closeCompletion;
+    }
+    // Closing admits only final transcripts; provider completion owns their recording frontier.
+    this.lifecycle.status = "closing";
     this.drain();
-    this.providerContinuityEpoch += 1;
     this.flushSuppressedRealtimeErrors();
     this.consults.close();
-    this.harness.close();
-    this.turns.clear();
     this.playback.close();
-    this.bridge?.close();
-    this.bridge = null;
-    this.realtimeProviderId = undefined;
+    const finish = () => {
+      const dispose = () => {
+        this.lifecycle.status = "stopped";
+        this.providerContinuityEpoch += 1;
+        this.harness.close();
+        this.turns.clear();
+        this.bridge = null;
+        this.realtimeProviderId = undefined;
+      };
+      const recordingCompletion = this.recording.finish();
+      if (recordingCompletion) {
+        return recordingCompletion.finally(dispose);
+      }
+      dispose();
+      return undefined;
+    };
+    let completion: void | Promise<void> = undefined;
+    try {
+      completion = this.bridge?.close();
+    } catch (error) {
+      this.logRealtimeError(formatErrorMessage(error));
+    }
+    if (completion) {
+      this.closeCompletion = completion
+        .catch((error: unknown) => this.logRealtimeError(formatErrorMessage(error)))
+        .then(finish);
+    } else {
+      this.closeCompletion = finish();
+    }
+    return this.closeCompletion;
   }
 
   beginSpeakerTurn(
@@ -591,7 +626,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   }
 
   private isStopped(): boolean {
-    return this.lifecycle.status === "stopped";
+    return this.lifecycle.status === "closing" || this.lifecycle.status === "stopped";
   }
 
   private isReady(): boolean {
@@ -670,7 +705,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     const epoch = this.providerContinuityEpoch;
     return new DiscordRealtimeRecording({
       entry: this.params.entry,
-      isCurrent: () => !this.isStopped() && this.providerContinuityEpoch === epoch,
+      isCurrent: () =>
+        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === epoch,
       warn: (message) => logger.warn(message),
     });
   }
@@ -698,28 +734,4 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     );
     this.lastRealtimeError.suppressed = 0;
   }
-}
-
-function buildProviderConfigs(
-  realtimeConfig: DiscordRealtimeVoiceConfig,
-): Record<string, RealtimeVoiceProviderConfig | undefined> | undefined {
-  const configs = realtimeConfig?.providers;
-  return configs && Object.keys(configs).length > 0 ? { ...configs } : undefined;
-}
-
-function buildProviderConfigOverrides(
-  realtimeConfig: DiscordRealtimeVoiceConfig,
-): RealtimeVoiceProviderConfig | undefined {
-  const overrides = {
-    ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
-    ...(realtimeConfig?.speakerVoice
-      ? { voice: realtimeConfig.speakerVoice }
-      : realtimeConfig?.speakerVoiceId
-        ? { voice: realtimeConfig.speakerVoiceId }
-        : {}),
-    ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
-      ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
-      : {}),
-  };
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }

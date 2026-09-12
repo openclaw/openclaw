@@ -1537,6 +1537,11 @@ openclaw-session-discussion {
   min-height: 0;
 }
 
+.sidebar-attachment-preview__markdown {
+  min-width: 0;
+  margin-top: 16px;
+}
+
 .sidebar-attachment-preview__text {
   min-width: 0;
   margin: 16px 0 0;

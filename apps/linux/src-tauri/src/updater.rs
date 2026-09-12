@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Webview};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -530,11 +530,11 @@ fn install_kind_from_appimage_env(appimage: Option<OsString>, platform: Platform
     }
 }
 
-fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
-    app.get_webview_window("main")
+fn main_window(app: &AppHandle) -> Option<Webview> {
+    app.get_webview("main")
 }
 
-fn main_content_is_remote(app: &AppHandle, window: Option<&WebviewWindow>) -> bool {
+fn main_content_is_remote(app: &AppHandle, window: Option<&Webview>) -> bool {
     !window.is_some_and(|window| {
         app.state::<crate::DesktopState>()
             .main_window_has_local_content(window)
@@ -586,7 +586,7 @@ fn deliver_result<S: Serialize + Clone>(
         ResultDestination::Notification => true,
         ResultDestination::WebviewAndNotificationWhenUnfocused => window
             .as_ref()
-            .is_some_and(|window| matches!(window.is_focused(), Ok(false))),
+            .is_some_and(|view| matches!(view.window().is_focused(), Ok(false))),
     };
     if notify {
         crate::notify::notify(app, "OpenClaw", notification_body);

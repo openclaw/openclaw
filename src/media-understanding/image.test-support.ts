@@ -36,7 +36,7 @@ const imageRuntimeMocks = vi.hoisted(() => ({
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
   prepareProviderRuntimeAuthMock: vi.fn(),
   acquireAgentRunPreparedModelRuntimeMock: vi.fn(),
-  releasePreparedModelRuntimeMock: vi.fn(),
+  releasePreparedModelRuntimeMock: vi.fn(async () => {}),
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
@@ -190,7 +190,7 @@ export function installImageRuntimeTestHooks({
               modelRegistry: {},
             }),
           },
-          release: releasePreparedModelRuntimeMock,
+          [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
         };
       },
     );

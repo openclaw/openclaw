@@ -3,6 +3,7 @@ import { buildWidgetDocument } from "../../../../src/canvas/wrap.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import "../../styles/base.css";
+import "../../styles/chat/board.css";
 import "./board-view.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
@@ -42,13 +43,16 @@ const source: BoardSnapshot = {
   ],
 };
 
-async function mount(applyOps = vi.fn(async () => undefined)): Promise<OpenClawBoardView> {
+async function mount(
+  applyOps = vi.fn(async () => undefined),
+  parent: HTMLElement = document.body,
+): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
   view.snapshot = structuredClone(source);
   view.activeTabId = "main";
   view.widgetFrameUrl = () => "about:blank";
   view.callbacks = { applyOps, grant: vi.fn(async () => undefined), selectTab: vi.fn() };
-  document.body.append(view);
+  parent.append(view);
   await view.updateComplete;
   await Promise.all(
     [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
@@ -430,13 +434,30 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
 
-  it.each(["card", "full-bleed", "frameless"] as const)(
-    "keeps a %s widget stable when its content fills the iframe viewport",
-    async (presentation) => {
-      const view = await mount();
+  it.each(
+    (["card", "full-bleed", "frameless"] as const).flatMap((presentation) => [
+      { presentation, surface: "grid" },
+      { presentation, surface: "focused singleton" },
+    ]),
+  )(
+    "keeps a $presentation widget stable in a $surface when its content fills the iframe viewport",
+    async ({ presentation, surface }) => {
+      const focused = surface === "focused singleton";
+      const host = document.createElement("div");
+      const parent = document.createElement("div");
+      if (focused) {
+        host.className = "sidebar-region sidebar-region--open sidebar-region--expanded";
+        host.style.width = "1200px";
+        parent.className = "board-session-surface__board";
+        parent.style.height = "500px";
+        host.append(parent);
+        document.body.append(host);
+      }
+      const view = await mount(undefined, focused ? parent : document.body);
       view.snapshot = {
         ...structuredClone(source),
-        widgets: [{ ...source.widgets[0]!, presentation }],
+        ...(focused ? { tabs: [source.tabs[0]!] } : {}),
+        widgets: [{ ...source.widgets[0]!, presentation, ...(focused ? { sizeW: 12 } : {}) }],
       };
       await view.updateComplete;
       const cell = view.querySelector("openclaw-board-widget-cell")!;
@@ -456,15 +477,38 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
           "<style>body{min-height:100vh}</style><main>Dashboard content</main>",
         );
         await vi.waitFor(() => expect(reports.length).toBeGreaterThan(0));
-        // Each host resize can trigger another content report; allow repeated
-        // layout cycles so a missing border cannot silently shrink the frame.
-        for (let index = 0; index < 12; index += 1) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
+        for (const expanded of focused ? [true, false, true] : [false]) {
+          if (focused) {
+            host.classList.toggle("sidebar-region--expanded", expanded);
+          }
+          // Each host resize can trigger another content report; allow repeated
+          // layout cycles so changing the shell cannot shrink or grow the frame.
+          for (let index = 0; index < 12; index += 1) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+          }
+          expect(frame.getBoundingClientRect().height).toBeCloseTo(initialHeight, 0);
+          expect(reports.every((height) => height === initialHeight)).toBe(true);
+          expect(view.querySelector("iframe")).toBe(frame);
+          if (focused) {
+            const widget = cell.querySelector<HTMLElement>(".board-widget")!;
+            const body = cell.querySelector<HTMLElement>(".board-widget__body")!;
+            expect(getComputedStyle(widget).borderTopWidth).toBe(expanded ? "0px" : "1px");
+            expect(getComputedStyle(body).paddingTop).toBe(
+              !expanded && presentation === "card" ? "12px" : "0px",
+            );
+            if (expanded) {
+              expect(getComputedStyle(widget).borderRadius).toBe("0px");
+              expect(getComputedStyle(body).borderRadius).toBe("0px");
+              const bounds = frame.getBoundingClientRect();
+              const available = parent.getBoundingClientRect();
+              expect(bounds.left).toBeCloseTo(available.left, 0);
+              expect(bounds.top).toBeCloseTo(available.top, 0);
+              expect(bounds.right).toBeCloseTo(available.right, 0);
+            }
+          }
         }
-        expect(frame.getBoundingClientRect().height).toBeCloseTo(initialHeight, 0);
-        expect(reports.every((height) => height === initialHeight)).toBe(true);
       } finally {
         window.removeEventListener("message", recordSize);
       }

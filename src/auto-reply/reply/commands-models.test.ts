@@ -1,13 +1,22 @@
-// Tests model command output, catalog loading, and provider auth status rendering.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  setPreparedModelRuntimeAuthStore,
+} from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { buildPreparedModelsProviderData, handleModelsCommand } from "./commands-models.js";
+// Tests model command output, catalog loading, and provider auth status rendering.
+import { modelProviderAuthMocks } from "./commands-models-auth.test-support.js";
+import {
+  buildPreparedModelsProviderData,
+  formatModelsAvailableHeader,
+  handleModelsCommand,
+} from "./commands-models.js";
 import {
   createModelsTestRegistry,
   createModelsTestOwner,
@@ -26,58 +35,6 @@ const modelCatalogMocks = vi.hoisted(() => ({
 const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
 }));
-const modelProviderAuthMocks = vi.hoisted(() => {
-  const state = {
-    authenticatedProviders: new Set(["anthropic", "google", "openai"]),
-    createProviderAuthChecker: vi.fn(),
-    runtimeChoices: new Map<string, string[] | undefined>(),
-    selectedRoute: undefined as
-      | {
-          api: "openai-responses" | "openai-chatgpt-responses";
-          baseUrl: string;
-          authRequirement: "api-key" | "subscription";
-          requestTransportOverrides: "none" | "present";
-        }
-      | undefined,
-  };
-  state.createProviderAuthChecker.mockImplementation(() => {
-    type AuthRef = {
-      api?: string | null;
-      baseUrl?: unknown;
-      observedRoutes?: readonly { api?: string | null; baseUrl?: unknown }[];
-    };
-    const hasConflictingRoute = (ref?: AuthRef) => {
-      const routes = ref?.observedRoutes ?? [];
-      return [ref, ...routes].some(
-        (route) =>
-          route?.api === "openai-chatgpt-responses" &&
-          route.baseUrl === "https://api.openai.com/v1",
-      );
-    };
-    const checker = vi.fn((provider: string, ref?: AuthRef) => {
-      return state.authenticatedProviders.has(provider) && !hasConflictingRoute(ref);
-    });
-    return Object.assign(checker, {
-      evaluateModelAuth: vi.fn(async (provider: string, ref?: AuthRef) => {
-        const incompatible = hasConflictingRoute(ref);
-        return {
-          availability: checker(provider, ref),
-          routeResolution: incompatible
-            ? {
-                kind: "incompatible" as const,
-                code: "conflicting-route-facts",
-                message: "Conflicting OpenAI route facts.",
-              }
-            : state.selectedRoute
-              ? { kind: "routes" as const, routes: [state.selectedRoute] as const }
-              : null,
-          ...(state.selectedRoute ? { selectedRoute: state.selectedRoute } : {}),
-        };
-      }),
-    });
-  });
-  return state;
-});
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 const pluginMetadataMocks = vi.hoisted(() => ({
   getCurrent: vi.fn(),
@@ -87,36 +44,6 @@ const MODELS_ADD_DEPRECATED_TEXT =
 
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
-}));
-
-vi.mock("../../agents/model-provider-auth.js", () => ({
-  createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
-}));
-
-vi.mock("../../agents/model-catalog-decisions.js", () => ({
-  createModelCatalogDecisions: (
-    params: import("../../agents/model-catalog-decisions.js").ModelCatalogDecisionParams,
-  ) => {
-    const checker = modelProviderAuthMocks.createProviderAuthChecker({
-      ...params,
-      allowPreparedRuntimeAuth: true,
-      allowPluginSyntheticAuth: false,
-      discoverExternalCliAuth: false,
-    });
-    return {
-      snapshot: params.snapshot,
-      authStore: params.preparedAuthStore,
-      evaluateEntry: (entry: ModelCatalogEntry, variants: ModelCatalogEntry[] = [entry]) =>
-        checker.evaluateModelAuth(entry.provider, {
-          modelId: entry.id,
-          observedRoutes: variants.map(({ api, baseUrl }) => ({ api, baseUrl })),
-        }),
-      evaluateNative: (_entry: ModelCatalogEntry, host: unknown) => host,
-      runtimeChoices: async (entry: ModelCatalogEntry) =>
-        modelProviderAuthMocks.runtimeChoices.get(entry.provider + "/" + entry.id),
-      isCurrent: params.isCurrent,
-    };
-  },
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -136,7 +63,31 @@ beforeEach(() => {
         throw new Error("The browse fixture requires its captured config");
       }
       const entries = modelCatalogMocks.loadModelCatalog(params);
-      return createModelsTestOwner(params.config, entries, params);
+      const baseOwner = createModelsTestOwner(params.config, entries, params);
+      const owner = {
+        ...baseOwner,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: ["anthropic", "xai", "refresh", "access", "cancel", "choice"].map((id) => ({
+            id,
+            providerAuthChoices: [
+              {
+                provider: id,
+                method: "device-code",
+                choiceId: `${id}-device-code`,
+                choiceLabel: id,
+                appGuidedAuth: "device-code",
+                credentialOnly: true,
+                channelLogin: {},
+              },
+            ],
+          })),
+        }),
+      };
+      setPreparedModelRuntimeAuthStore(
+        owner,
+        expectDefined(getPreparedModelRuntimeAuthStore(baseOwner), "prepared model auth store"),
+      );
+      return owner;
     },
   );
   setFastModelsCliBackendDeps();
@@ -153,6 +104,8 @@ beforeEach(() => {
   normalizeProviderModelIdWithRuntimeMock.mockReset();
   pluginMetadataMocks.getCurrent.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
+  modelProviderAuthMocks.availabilityUnknown = false;
+  modelProviderAuthMocks.unavailableReason = "missing-auth";
   modelProviderAuthMocks.selectedRoute = undefined;
   modelProviderAuthMocks.runtimeChoices.clear();
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
@@ -325,6 +278,157 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
+  });
+
+  describe.each(["anthropic", "refresh", "access", "cancel", "choice"])(
+    "model login guidance for %s",
+    (provider) => {
+      const model = { primary: `${provider}/claude-opus-4-5` };
+      const command = provider === "anthropic" ? "/login anthropic" : "/login";
+      it.each([
+        {
+          reason: "missing-auth",
+          catalog: "known",
+          label: "Sign-in needed",
+          recovery: `Connect with ${command}.`,
+        },
+        {
+          reason: "missing-auth",
+          catalog: "missing",
+          label: "Sign-in needed",
+          recovery: `Connect with ${command}.`,
+        },
+        {
+          reason: "auth-failed",
+          catalog: "known",
+          label: "Sign-in failed",
+          recovery: `Sign in again with ${command}.`,
+        },
+        {
+          reason: "cooldown",
+          catalog: "known",
+          label: "Temporarily unavailable",
+          recovery: "Try again later or choose another model.",
+        },
+      ] as const)(
+        "explains a retained primary with $reason and $catalog catalog entry",
+        async ({ reason, catalog, label, recovery }) => {
+          modelProviderAuthMocks.authenticatedProviders.delete(provider);
+          modelProviderAuthMocks.unavailableReason = reason;
+          const entry = { provider, id: "claude-opus-4-5", name: "Claude Opus" };
+          modelCatalogMocks.loadModelCatalog.mockReturnValue(catalog === "missing" ? [] : [entry]);
+          const params = buildParams("/models", { agents: { defaults: { model } } });
+          params.ctx.Surface = "telegram";
+          params.command.channel = "telegram";
+          params.command.surface = "telegram";
+
+          const menu = await handleModelsCommand(params, true);
+          expect(menu?.reply?.text).toContain(`${provider}: ${label}. ${recovery}`);
+          expect(menu?.reply?.channelData).toMatchObject({
+            telegram: {
+              buttons: expect.arrayContaining([
+                [{ text: provider, callback_data: `models:${provider}` }],
+              ]),
+            },
+          });
+
+          params.command.commandBodyNormalized = `/models ${provider}`;
+          const page = await handleModelsCommand(params, true);
+          expect(page?.reply?.text).toContain(
+            `${label} — ${catalog === "known" ? "Claude Opus" : "claude-opus-4-5"}`,
+          );
+          expect(page?.reply?.text).toContain(recovery);
+          if (reason === "cooldown") {
+            expect(page?.reply?.text).not.toContain("/login");
+          }
+        },
+      );
+
+      it("offers a connection action when first-run readiness is unconfirmed", async () => {
+        modelProviderAuthMocks.authenticatedProviders.clear();
+        modelProviderAuthMocks.availabilityUnknown = true;
+        const params = buildParams(`/models ${provider}`, { agents: { defaults: { model } } });
+        const result = await handleModelsCommand(params, true);
+        expect(result?.reply?.text).toContain("Connection not confirmed");
+        expect(result?.reply?.text).toContain(`Connect with ${command}, or choose another model.`);
+        expect(result?.reply?.text).not.toContain("Sign-in failed");
+      });
+    },
+  );
+
+  it.each([
+    { reason: "missing-auth", label: "Sign-in needed" },
+    { reason: "auth-failed", label: "Sign-in failed" },
+    { reason: undefined, label: "Connection not confirmed" },
+  ] as const)(
+    "offers supported setup for custom routes with $reason readiness",
+    async ({ reason, label }) => {
+      modelProviderAuthMocks.authenticatedProviders.clear();
+      modelProviderAuthMocks.unavailableReason = reason;
+      modelProviderAuthMocks.availabilityUnknown = reason === undefined;
+      modelCatalogMocks.loadModelCatalog.mockReturnValue([
+        { provider: "custom-route", id: "chat", name: "Custom chat" },
+      ]);
+      const params = buildParams("/models custom-route", {
+        agents: { defaults: { model: { primary: "custom-route/chat" } } },
+        models: {
+          providers: {
+            "custom-route": {
+              baseUrl: "https://custom-route.example/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "chat",
+                  name: "Custom chat",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1024,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const result = await handleModelsCommand(params, true);
+
+      expect(result?.reply?.text).toContain(`custom-route: ${label}.`);
+      expect(result?.reply?.text).toContain(
+        "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers",
+      );
+      expect(result?.reply?.text).not.toContain("/login custom-route");
+    },
+  );
+
+  it.each([true, false])(
+    "respects xAI login metadata when its plugin is enabled=%s",
+    async (enabled) => {
+      modelProviderAuthMocks.authenticatedProviders.clear();
+      modelCatalogMocks.loadModelCatalog.mockReturnValue([
+        { provider: "xai", id: "grok-4", name: "Grok 4" },
+      ]);
+      const result = await handleModelsCommand(
+        buildParams("/models xai", {
+          agents: { defaults: { model: { primary: "xai/grok-4" } } },
+          plugins: { entries: { xai: { enabled } } },
+        }),
+        true,
+      );
+
+      expect(result?.reply?.text).toContain(
+        enabled ? "Connect with /login xai." : "custom-provider guide",
+      );
+      if (!enabled) {
+        expect(result?.reply?.text).not.toContain("/login xai");
+      }
+    },
+  );
+
+  it("preserves header output without a prepared menu", () => {
+    expect(formatModelsAvailableHeader({ provider: "anthropic", total: 1, cfg: {} })).toBe(
+      "Models (anthropic) — 1 available",
+    );
   });
 
   it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {

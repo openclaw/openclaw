@@ -108,6 +108,9 @@ the same batch.
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
 
+Pass exactly one config path. Extra arguments, including an empty quoted argument (`""`),
+are rejected; they do not suppress validation of later options.
+
 A schema-valid but unset path explains that the runtime default applies; an unknown path suggests
 `openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
 on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
@@ -555,6 +558,11 @@ Effective changes to `plugins.entries` (or any subpath) require a restart, since
 ## Write safety
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+
+If the file is saved but later processing fails, the error names the written file
+and reports whether the write was rolled back. This can name an included file
+when that file owns the edited setting. If rollback did not happen or could not
+be confirmed, inspect the named file and the active config before retrying.
 
 OpenClaw-owned writes that change config reserialize JSON5 as standard JSON. When the source contains comments, the writer warns immediately before removing them; use a direct editor when preserving comments matters.
 

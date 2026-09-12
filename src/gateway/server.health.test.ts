@@ -317,6 +317,7 @@ describe("gateway server health/presence", () => {
       scopes,
       client: {
         id: GATEWAY_CLIENT_NAMES.FINGERPRINT,
+        displayName: "Custom client display name",
         version: "9.9.9",
         platform: "test",
         deviceFamily: "iPad",
@@ -348,9 +349,10 @@ describe("gateway server health/presence", () => {
         ? ((presencePayload as { presence: Array<Record<string, unknown>> }).presence ?? [])
         : [];
     const clientEntry = entries.find(
-      (e) => e.host === GATEWAY_CLIENT_NAMES.FINGERPRINT && e.version === "9.9.9",
+      (e) => e.host === "Custom client display name" && e.version === "9.9.9",
     );
-    expect(clientEntry?.host).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
+    expect(clientEntry?.host).toBe("Custom client display name");
+    expect(clientEntry?.clientId).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
     expect(clientEntry?.version).toBe("9.9.9");
     expect(clientEntry?.mode).toBe("ui");
     expect(clientEntry?.deviceFamily).toBe("iPad");

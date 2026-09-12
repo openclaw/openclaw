@@ -70,5 +70,25 @@ Only an explicit field `isSecret: true` or Codex question
 at a time through the warned ephemeral text-reply path and never create durable
 Gateway question records. OpenClaw does not infer secrecy from field names.
 
+## Async questions
+
+When the selected Codex model advertises `request_user_input_async`, Codex can
+ask structured questions while continuing work. The tool returns immediately.
+OpenClaw preserves the questions on the async assistant message, and the Control
+UI shows suggested answers and a free-text field. Selecting a suggestion does
+not send it; the user must explicitly submit an answer.
+
+Answers use normal chat delivery: they steer an active turn or start a new turn
+in the same conversation after it finishes. The question is quoted alongside
+the answer so Codex can identify which question it addresses. Async questions
+do not create a waiting tool call or use the blocking question queue above.
+They follow the same tool and message-delivery restrictions as other native
+async messages. Silence and preselected answers never grant approval.
+
+Channels receive Codex's readable question text and choices and accept normal
+replies. The Control UI supports up to 12 questions per message and four choices
+per question, with titles up to 4,096 characters and choices up to 256 characters.
+Unsupported structured payloads retain the complete plain-text question.
+
 For the general plugin approval flow that carries these prompts, see
 [Plugin permission requests](/plugins/plugin-permission-requests).

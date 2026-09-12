@@ -5,10 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  tryFastAbortFromMessage,
-  stopSubagentsForRequester,
-} from "../../../auto-reply/reply/abort.js";
+import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
+import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {

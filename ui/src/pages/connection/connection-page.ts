@@ -8,7 +8,6 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
-  loadGatewaySessionSelection,
   loadSettings,
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
@@ -37,11 +36,11 @@ export class ConnectionPage extends OpenClawLightDomElement {
   @state() private gatewaySecretVisible = false;
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
+  @state() private systemInfoLoading = false;
 
-  // Distinguishes an operator-edited session key from the stored selection so
-  // Connect only overrides the per-gateway selection after an explicit edit.
-  private sessionKeyDirty = false;
-  private systemInfoLoading = false;
+  private sessionKeyBaseline = "";
+  private sessionGatewayUrl = "";
+  @state() private sessionSaved = false;
 
   private readonly systemInfoPolling = new PollController(
     this,
@@ -77,7 +76,14 @@ export class ConnectionPage extends OpenClawLightDomElement {
     clientChanged,
   }: GatewayPageChange) {
     if (initial || sourceChanged || clientChanged) {
-      this.resetDraft(this.context.gateway);
+      this.resetConnectionDraft();
+      if (
+        initial ||
+        sourceChanged ||
+        this.sessionGatewayUrl !== this.context.gateway.connection.gatewayUrl
+      ) {
+        this.resetSessionDraft();
+      }
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
     } else if (snapshot.phase !== "connected") {
@@ -95,6 +101,10 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.systemInfo = null;
       }
     }
+    if (this.settings.sessionKey === this.sessionKeyBaseline) {
+      this.settings = { ...this.settings, sessionKey: snapshot.sessionKey };
+    }
+    this.sessionKeyBaseline = snapshot.sessionKey;
     this.syncSystemInfoPolling();
   }
 
@@ -150,35 +160,31 @@ export class ConnectionPage extends OpenClawLightDomElement {
     }
   }
 
-  private resetDraft(gateway: ApplicationContext["gateway"]) {
-    const sessionKey = gateway.snapshot.sessionKey;
-    const { gatewayUrl, token, password } = gateway.connection;
-    this.settings = {
-      ...loadSettings(),
-      gatewayUrl,
-      token,
-      sessionKey,
-      lastActiveSessionKey: sessionKey,
-    };
+  private resetConnectionDraft() {
+    const { gatewayUrl, token, password } = this.context.gateway.connection;
+    this.settings = { ...this.settings, gatewayUrl, token };
     this.password = password;
-    this.sessionKeyDirty = false;
     this.resetSensitiveUi();
   }
 
+  private resetSessionDraft() {
+    this.sessionGatewayUrl = this.context.gateway.connection.gatewayUrl;
+    this.sessionKeyBaseline = this.context.gateway.snapshot.sessionKey;
+    this.settings = { ...this.settings, sessionKey: this.sessionKeyBaseline };
+    this.sessionSaved = false;
+  }
+
+  private saveSession() {
+    this.context.gateway.setSessionKey(this.settings.sessionKey);
+    this.resetSessionDraft();
+    this.sessionSaved = true;
+  }
+
   private connect() {
-    const session = this.sessionKeyDirty
-      ? {
-          sessionKey: this.settings.sessionKey,
-          lastActiveSessionKey: this.settings.sessionKey,
-        }
-      : loadGatewaySessionSelection(this.settings.gatewayUrl);
-    this.settings = { ...this.settings, ...session };
-    this.sessionKeyDirty = false;
     this.context.gateway.connect({
       gatewayUrl: this.settings.gatewayUrl,
       token: this.settings.token,
       password: this.password,
-      sessionKey: session.sessionKey,
     });
   }
 
@@ -200,20 +206,22 @@ export class ConnectionPage extends OpenClawLightDomElement {
     const gateway = this.context.gateway.snapshot;
     const live = this.context.gateway.connection;
     const dirty =
-      this.sessionKeyDirty ||
       this.settings.gatewayUrl !== live.gatewayUrl ||
       this.settings.token !== live.token ||
       this.password !== live.password;
     const body = renderConnection({
-      connected: gateway.phase === "connected",
+      phase: gateway.phase,
       hello: gateway.hello,
       settings: this.settings,
       liveGatewayUrl: live.gatewayUrl,
       secret: this.settings.token || this.password,
       lastError: gateway.lastError,
       systemInfo: this.systemInfo,
+      systemInfoLoading: this.systemInfoLoading,
       systemInfoUnavailable: this.systemInfoUnavailable,
       dirty,
+      sessionDirty: this.settings.sessionKey.trim() !== gateway.sessionKey,
+      sessionSaved: this.sessionSaved,
       showGatewaySecret: this.gatewaySecretVisible,
       onConnectionChange: (patch) => this.updateConnection(patch),
       onSecretChange: (token) => {
@@ -221,17 +229,20 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.updateConnection({ token });
       },
       onSessionKeyChange: (sessionKey) => {
-        this.sessionKeyDirty = true;
+        this.sessionSaved = false;
         this.settings = {
           ...this.settings,
           sessionKey,
-          lastActiveSessionKey: sessionKey,
         };
       },
       onToggleGatewaySecretVisibility: () => {
         this.gatewaySecretVisible = !this.gatewaySecretVisible;
       },
       onConnect: () => this.connect(),
+      onDiscardConnection: () => this.resetConnectionDraft(),
+      onReconnect: () => this.context.gateway.connect(),
+      onSaveSession: () => this.saveSession(),
+      onDiscardSession: () => this.resetSessionDraft(),
     });
     return html`
       <section class="content-header">

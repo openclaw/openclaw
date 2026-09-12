@@ -9,7 +9,7 @@ export type OpenAIRealtimeSession = {
   closing?: Promise<void>;
   initialRetirement?: Promise<void>;
   detach?: () => void;
-  retire?: (error?: Error) => void;
+  retire?: (error?: Error) => void | Promise<void>;
   dispose?: () => Promise<void> | void;
   retryTimer?: NodeJS.Timeout;
   retryIndex?: number;
@@ -79,6 +79,7 @@ export function createOpenAIRealtimeSessionLease(params: {
       // Retirement removes admission before callbacks; the cleanup capability and
       // reservation remain owned until the remote operation actually settles.
       session.closing = closing;
+      let retirement: void | Promise<void> = undefined;
       if (activeSessions.delete(session.token)) {
         session.initialRetirement = closing;
         retiringSessions.set(session.token, session);
@@ -86,7 +87,7 @@ export function createOpenAIRealtimeSessionLease(params: {
           if (disposition === "detach") {
             session.detach?.();
           }
-          session.retire?.(error);
+          retirement = session.retire?.(error);
         } catch {
           params.logger.warn("OpenAI realtime local retirement failed; attempting remote cleanup");
         }
@@ -116,15 +117,25 @@ export function createOpenAIRealtimeSessionLease(params: {
         }
         reject(failure);
       };
-      try {
-        const disposal = session.dispose?.();
-        if (disposal) {
-          void Promise.resolve(disposal).then(complete, failed);
-        } else {
-          complete();
+      const dispose = () => {
+        try {
+          const disposal = session.dispose?.();
+          if (disposal) {
+            void Promise.resolve(disposal).then(complete, failed);
+          } else {
+            complete();
+          }
+        } catch (failure) {
+          failed(failure);
         }
-      } catch (failure) {
-        failed(failure);
+      };
+      if (retirement) {
+        void retirement.then(dispose, () => {
+          params.logger.warn("OpenAI realtime local retirement failed; attempting remote cleanup");
+          dispose();
+        });
+      } else {
+        dispose();
       }
       return closing;
     },

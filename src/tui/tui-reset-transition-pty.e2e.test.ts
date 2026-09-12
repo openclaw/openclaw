@@ -10,7 +10,7 @@ import {
   waitForSynchronizedFrameRows,
   writeTuiPtyFixtureScript,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { startPty } from "./tui-pty-test-support.js";
+import { startRuntimePty } from "./tui-pty-test-support.js";
 
 const STARTUP_TIMEOUT_MS = 20_000;
 const OUTPUT_TIMEOUT_MS = 2_000;
@@ -79,7 +79,7 @@ describe.each([
         ? Array.from({ length: 11 }, (_, index) => `line-${index}`).join("\n")
         : "newer suffix";
       const preservedDraft = `overlap during reset\n${newerDraft}`;
-      const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
+      const run = await startRuntimePty(process.execPath, ["--import", "tsx", scriptPath], {
         cwd: process.cwd(),
         env: {
           OPENCLAW_THEME: "dark",

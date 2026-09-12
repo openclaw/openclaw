@@ -618,10 +618,10 @@ export async function migrateLegacyMediaPersistence(
               : undefined,
             pathname,
           });
+          maintenance.assertOwned();
+          // A prior attempt may have committed the schema before publishing its registration.
+          registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
           const schemaAdvanced = result.finalVersion > result.initialVersion;
-          if (entry.source !== "registry" || schemaAdvanced) {
-            registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
-          }
           if (schemaAdvanced) {
             changes.push(
               `Upgraded agent database schema in ${pathname}: v${result.initialVersion} -> v${result.finalVersion}.`,

@@ -827,6 +827,9 @@ export function createWorkerEnvironmentStore(
     return result;
   };
   write((db) => reconcileAttachedSessionOwners(db, now()));
+  // Listeners observe permanent credential revocations that must fence live transfers.
+  // Rotation-style revocations (device reconcile re-mints) intentionally do not notify.
+  const credentialRevocationListeners = new Set<(environmentId: string) => void>();
   const writeCredential = (
     input: CredentialInput & {
       environmentId: string;
@@ -1009,8 +1012,21 @@ export function createWorkerEnvironmentStore(
     getCredential: (environmentId: string) => findCredential(read(), required(environmentId, "id")),
     getTransferOwner: (environmentId: string) =>
       findTransferOwner(read(), required(environmentId, "id")),
-    revokeEnvironmentCredential(environmentId: string): void {
-      return write((db) => revokeCredential(db, required(environmentId, "id")));
+    onCredentialRevoked(listener: (environmentId: string) => void): () => void {
+      credentialRevocationListeners.add(listener);
+      return () => credentialRevocationListeners.delete(listener);
+    },
+    revokeEnvironmentCredential(
+      environmentId: string,
+      opts: { fenceWorkspaceTransfers?: boolean } = {},
+    ): void {
+      const result = write((db) => revokeCredential(db, required(environmentId, "id")));
+      if (opts.fenceWorkspaceTransfers) {
+        for (const listener of credentialRevocationListeners) {
+          listener(environmentId);
+        }
+      }
+      return result;
     },
     findCredentialByHash: (credentialHash: string) =>
       findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),

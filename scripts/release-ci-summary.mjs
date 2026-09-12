@@ -18,6 +18,9 @@ import {
   formatReleaseStateOutcome,
   isReleaseCheckJobAdvisory,
   isReleaseGhArtifactMissingError,
+  isSplitChangelogEvidenceDelta,
+  classifyReleaseChangelogEvidenceComparison,
+  SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
@@ -159,6 +162,7 @@ const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 const EVIDENCE_REUSE_POLICIES = new Set([
   EXACT_TARGET_EVIDENCE_REUSE_POLICY,
   CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
+  SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
 ]);
 
 const RERUN_GROUP_CHILD_KEYS = new Map([
@@ -1093,10 +1097,18 @@ export function validateEvidenceReuseChain(
     if (reuse.changedPaths.length !== 0 || currentManifest.targetSha !== reuse.evidenceSha) {
       throw new Error("exact-target release evidence reuse requires no changed paths");
     }
-  } else if (reuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY) {
+  } else if (
+    reuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY ||
+    reuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY
+  ) {
+    const split = reuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY;
+    const version =
+      currentManifest.candidateBinding?.package?.version ??
+      currentManifest.validationInputs?.targetVersion;
     if (
-      reuse.changedPaths.length !== 1 ||
-      reuse.changedPaths[0] !== "CHANGELOG.md" ||
+      (split
+        ? !isSplitChangelogEvidenceDelta(reuse.changedPaths, version)
+        : reuse.changedPaths.length !== 1 || reuse.changedPaths[0] !== "CHANGELOG.md") ||
       currentManifest.targetSha === reuse.evidenceSha
     ) {
       throw new Error("changelog-only release evidence reuse has an invalid target delta");
@@ -1105,15 +1117,14 @@ export function validateEvidenceReuseChain(
       throw new Error("changelog-only release evidence reuse requires commit comparison");
     }
     const comparison = compareCommits(reuse.evidenceSha, currentManifest.targetSha);
-    const changedFiles = Array.isArray(comparison?.files) ? comparison.files : [];
-    const changelog = changedFiles[0];
+    const verified = classifyReleaseChangelogEvidenceComparison(comparison, {
+      baseSha: reuse.evidenceSha,
+      version,
+    });
     if (
-      comparison?.status !== "ahead" ||
-      comparison?.merge_base_commit?.sha !== reuse.evidenceSha ||
-      changedFiles.length !== 1 ||
-      changelog?.filename !== "CHANGELOG.md" ||
-      changelog?.status !== "modified" ||
-      changelog?.previous_filename
+      verified.policy !== reuse.policy ||
+      verified.changedPaths.length !== reuse.changedPaths.length ||
+      verified.changedPaths.some((name) => !reuse.changedPaths.includes(name))
     ) {
       throw new Error("changelog-only release evidence reuse failed commit comparison");
     }
@@ -2258,21 +2269,29 @@ export async function validateReleaseRunEvidence(
       );
     }
     const exactTarget = manifest.targetSha === reuseRequest.targetSha;
+    const comparison = exactTarget
+      ? null
+      : evidenceClient.compareCommits(manifest.targetSha, reuseRequest.targetSha);
+    const delta = exactTarget
+      ? { changedPaths: [], policy: EXACT_TARGET_EVIDENCE_REUSE_POLICY }
+      : classifyReleaseChangelogEvidenceComparison(comparison, {
+          baseSha: manifest.targetSha,
+          version:
+            manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
+        });
     validateRequestedEvidenceReuse(
       manifest,
       manifest,
       manifest,
       {
-        expectedChangedPaths: exactTarget ? [] : ["CHANGELOG.md"],
-        expectedEvidencePolicy: exactTarget
-          ? EXACT_TARGET_EVIDENCE_REUSE_POLICY
-          : CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
+        expectedChangedPaths: delta.changedPaths,
+        expectedEvidencePolicy: delta.policy,
         expectedEvidenceSha: manifest.targetSha,
         expectedRootRunId: manifest.runId,
         expectedSelectedRunId: manifest.runId,
         expectedTargetSha: reuseRequest.targetSha,
       },
-      (base, head) => evidenceClient.compareCommits(base, head),
+      () => comparison,
     );
   }
   const producerIdentities = new Map([

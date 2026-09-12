@@ -209,6 +209,26 @@ class WorkerProvisionCleanupError extends AggregateError {
   }
 }
 
+/** Provision failed after allocation and the provider confirmed cleanup completed. */
+class WorkerProvisionCleanupCompleteError extends Error {
+  readonly code = "cleanup_complete";
+  readonly leaseId: string;
+
+  constructor(
+    leaseId: string,
+    readonly provisionError: unknown,
+  ) {
+    super(provisionError instanceof Error ? provisionError.message : String(provisionError), {
+      cause: provisionError,
+    });
+    this.name = "WorkerProvisionCleanupCompleteError";
+    this.leaseId = leaseId.trim();
+    if (!this.leaseId) {
+      throw new TypeError("Worker provision cleanup lease id must be non-empty");
+    }
+  }
+}
+
 /** Permanent provider rejection recorded as a terminal worker failure. */
 export class WorkerProviderError extends Error {
   readonly code = "invalid_profile";
@@ -216,6 +236,17 @@ export class WorkerProviderError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkerProviderError";
+  }
+
+  static cleanupComplete(
+    leaseId: string,
+    provisionError: unknown,
+  ): WorkerProvisionCleanupCompleteError {
+    return new WorkerProvisionCleanupCompleteError(leaseId, provisionError);
+  }
+
+  static isCleanupComplete(error: unknown): error is WorkerProvisionCleanupCompleteError {
+    return error instanceof WorkerProvisionCleanupCompleteError;
   }
 
   static cleanupIndeterminate(
@@ -234,6 +265,8 @@ export class WorkerProviderError extends Error {
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
+  /** Safe to request virtual desktop resizing; the RFB server still negotiates support. */
+  allowsDesktopResize?: boolean;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
   listOperatingSystems?: (profile: WorkerProfile) => Promise<readonly WorkerOperatingSystem[]>;

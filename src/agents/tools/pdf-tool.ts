@@ -164,7 +164,7 @@ async function runPdfPrompt(params: {
   getExtractions: () => Promise<PdfExtractedContent[]>;
   signal?: AbortSignal;
   work: AsyncWorkScope;
-  onAcquired: (release: () => void) => void;
+  onAcquired: (resource: AsyncDisposable) => void;
   assertResourcesOpen?: () => void;
 }): Promise<{
   text: string;
@@ -178,14 +178,17 @@ async function runPdfPrompt(params: {
   let preparedRuntime = params.preparedModelRuntime;
   if (!preparedRuntime) {
     const acquireRuntime = params.work.track(async () => {
-      const lease = await acquireAgentRunPreparedModelRuntime({
-        agentDir: params.agentDir,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        config: requestedCfg ?? {},
-        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      });
+      const lease = await acquireAgentRunPreparedModelRuntime(
+        {
+          agentDir: params.agentDir,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          config: requestedCfg ?? {},
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        },
+        { abortSignal: params.signal },
+      );
       // The execution owns even a late acquisition before setup can admit cleanup work.
-      params.onAcquired(lease.release);
+      params.onAcquired(lease);
       return lease.snapshot;
     });
     preparedRuntime = params.signal
@@ -434,7 +437,7 @@ export function createPdfTool(options?: {
     args: unknown,
     signal: AbortSignal | undefined,
     work: AsyncWorkScope,
-    onAcquired: (release: () => void) => void,
+    onAcquired: (resource: AsyncDisposable) => void,
     assertResourcesOpen: (() => void) | undefined,
   ): Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>> => {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -664,20 +667,22 @@ export function createPdfTool(options?: {
         if (parentSignal?.aborted) {
           closeWork();
         }
-        let releaseRuntime: (() => void) | undefined;
+        let runtimeResources: AsyncDisposable | undefined;
         try {
           const suppliedClaim = options?.preparedModelRuntime
             ? retainPreparedModelRuntimeSnapshotResources(options.preparedModelRuntime)
             : undefined;
-          releaseRuntime = suppliedClaim?.release;
+          runtimeResources = suppliedClaim
+            ? { [Symbol.asyncDispose]: () => suppliedClaim.release() }
+            : undefined;
           reported.resolve(
             await work.track(() =>
               executePdf(
                 args,
                 signal,
                 work,
-                (release) => {
-                  releaseRuntime = release;
+                (resource) => {
+                  runtimeResources = resource;
                 },
                 suppliedClaim?.assertOpen,
               ),
@@ -689,7 +694,7 @@ export function createPdfTool(options?: {
           await work.runWhenIdle(() => undefined);
           await runInScope(() => work.drain());
           parentSignal?.removeEventListener("abort", closeWork);
-          releaseRuntime?.();
+          await runtimeResources?.[Symbol.asyncDispose]();
         }
       }).catch((error: unknown) => reported.reject(error));
       return await reported.promise;

@@ -1009,7 +1009,7 @@ export const en: TranslationMap & {
     browse: "Browse folders",
     browseRequiresAdmin:
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-    connectMachine: "Connect a machine",
+    connectMachine: "Connect a device",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
     browserEmpty: "No subfolders",
@@ -1174,6 +1174,8 @@ export const en: TranslationMap & {
     transcriptSearchError: "Transcript search failed",
     transcriptSearchIndexing:
       "The transcript index is still updating. Retry to include recent messages.",
+    transcriptSearchArchivedExcluded:
+      "{count} archived transcripts excluded; open a session to restore its searchable history.",
     transcriptSearchEmpty: "No transcript messages match that search.",
     transcriptSearchMatches: "Transcript matches: {count}",
     transcriptSearchTruncated: "Showing the first 25 matches.",
@@ -1266,6 +1268,7 @@ export const en: TranslationMap & {
     space: "Space",
     sessionId: "Session ID",
     activeRun: "Active run",
+    subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",
     childSessions: "Child sessions",
@@ -2210,6 +2213,16 @@ export const en: TranslationMap & {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
+    gateway: {
+      sectionLabel: "Gateway",
+      menuLabel: "Gateway: {gateway}",
+      primaryTag: "primary",
+      setPrimary: "Set as primary…",
+      openSettings: "Gateway settings…",
+      connected: "Connected",
+      unreachable: "Unreachable",
+      unknown: "Unknown status",
+    },
     owner: "Owner",
     back: "Back",
     forward: "Forward",
@@ -2264,7 +2277,6 @@ export const en: TranslationMap & {
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
     startCancelled: "Terminal start was cancelled. Try again.",
-    panelUnavailable: "Terminal panel is unavailable. Reconnect and try again.",
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
     refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
@@ -2288,7 +2300,7 @@ export const en: TranslationMap & {
     uploadInvalidNativePath: "Cannot safely insert the uploaded native file path",
   },
   browser: {
-    nativeTab: "Mac tab",
+    nativeTab: "App tab",
     remoteTab: "Agent browser tab",
     stop: "Stop loading",
     profile: "Browser profile: {profile}",
@@ -2487,12 +2499,13 @@ export const en: TranslationMap & {
   },
   modelSetup: {
     missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
+    commandHint: "Try /models or /help.",
     heading: "Connect a verified AI model",
     intro:
       "OpenClaw discovers AI access on this Gateway. Choose a provider to begin; nothing is selected, tested, installed, or saved automatically.",
     required: {
       title: "No AI provider configured",
-      body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+      body: "Connect a provider and choose a model to send messages.",
       action: "Connect an AI provider",
     },
     loading: "Checking this Gateway for available AI access…",
@@ -3281,10 +3294,10 @@ export const en: TranslationMap & {
       description:
         "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
+
     swarm: {
       title: "Swarm",
       groupTitle: "Parallel tasks",
-      description: "Coordinate parallel subagents and collect their results.",
       defaultPhase: "Unphased",
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed",
@@ -3300,21 +3313,7 @@ export const en: TranslationMap & {
       description:
         "Local models use Tool Search automatically. Enable this override to defer tool schemas for all models; turning it off restores each model's default.",
     },
-    loopDetection: {
-      title: "Tool-loop detection",
-      description:
-        "Enable rolling-history guards that warn or block repeated tool calls when an agent stops making progress.",
-    },
-    localModelLean: {
-      title: "Lean tools for local models",
-      description:
-        "Remove optional tools such as browser and automations. Leave this off to keep those capabilities available through Tool Search.",
-    },
-    cliAgents: {
-      title: "CLI agents",
-      description:
-        "Show external CLI session engines in the new-session model picker when their plugins support creating sessions.",
-    },
+
     customPluginUi: {
       title: "Custom plugin UI",
       description:
@@ -3322,11 +3321,7 @@ export const en: TranslationMap & {
       restartRequired:
         "Restart the Gateway and reload this browser tab after changing this setting.",
     },
-    auditMessages: {
-      title: "Message audit metadata",
-      description:
-        "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
-    },
+
     hostDesktop: {
       title: "Host Desktop",
       description:
@@ -3455,8 +3450,9 @@ export const en: TranslationMap & {
       sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
-      controlUi: "Control UI",
+      web: "Web",
       cli: "Command line",
+      terminal: "Terminal",
       app: "App",
     },
   },
@@ -4698,15 +4694,15 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
       retryStatus: "Status unavailable · Retry",
       viewDetails: "View details",
     },
     modelAccounts: {
-      label: "Account for this chat",
+      section: "Account",
       automatic: "Automatic (new-chat default)",
       manage: "Manage saved accounts…",
-      draftHint: "Applies only to this session. Your new-chat default is unchanged.",
     },
     mentions: {
       menu: "Mention a person",
@@ -4727,6 +4723,21 @@ export const en: TranslationMap & {
     errorDetails: "Error details",
     details: "Details",
     copyError: "Copy error",
+    providerAccessRemoved:
+      "This reply stopped because the provider was signed out. Sign in again or choose another model.",
+    providerPolicy: {
+      bufferingTitle: "Cyber safety review",
+      bufferingBody: "OpenAI is reviewing this response for cyber safety.",
+      blockedTitle: "Cyber policy block",
+      blockedBody: "OpenAI blocked this response under its cyber policy.",
+      fallbackTitle: "Provider changed the model",
+      fallbackBody: "OpenAI routed this response to {model}.",
+      fallbackUnknownBody: "OpenAI routed this response to another model.",
+      escalatedTitle: "Retried on Daybreak",
+      escalatedBody: "OpenAI declined this request; retried on {model}.",
+      unavailableTitle: "Daybreak unavailable",
+      unavailableBody: "OpenAI declined this request; {model} is not authorized.",
+    },
     diskSpace: {
       warningTitle: "Cloud session disk space is low",
       criticalTitle: "Cloud session disk space is critically low",
@@ -4957,15 +4968,6 @@ export const en: TranslationMap & {
       oneMessage: "{count} message",
       messages: "{count} messages",
       activeBranch: "Active branch",
-      gatewayPicker: {
-        menuLabel: "Gateway: {gateway}",
-        primaryTag: "primary",
-        setPrimary: "Set as primary…",
-        openSettings: "Gateway settings…",
-        connected: "Connected",
-        unreachable: "Unreachable",
-        unknown: "Unknown status",
-      },
     },
     board: {
       faceLabel: "Session face",
@@ -5001,6 +5003,9 @@ export const en: TranslationMap & {
     taskSuggestions: {
       eyebrow: "Suggested task · in {repo}",
       startSession: "Start in a new session",
+      startOptions: "Choose where to start the task",
+      startWorktree: "Start in a new worktree",
+      startCurrentSession: "Start in this session",
       copyPrompt: "Copy prompt",
       copyPromptFailed: "Couldn't copy the prompt to the clipboard",
       promptCopied: "Copied",
@@ -5139,15 +5144,16 @@ export const en: TranslationMap & {
       description: "The earlier conversation was cleared.",
     },
     outboxRecoveryTitle: "Saved messages need a destination",
+    outboxRecoveryFailedTitle: "Saved messages could not be loaded",
     outboxRecoveryDescription:
-      "An older browser version did not preserve every destination. These drafts and queued messages have not been sent by recovery. Open an empty non-Incognito conversation, then restore an entry here for review. Attachment drafts may appear separately.",
+      "These saved drafts and queued messages need a conversation. Open an empty non-Incognito conversation, then restore an entry for review. Nothing is sent automatically. Attachment drafts may appear separately.",
     outboxRecoveryConfirm:
       "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
     outboxRecoveryRestore: "Restore here for review",
     outboxRecoveryConflict:
       "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
     outboxRecoveryStorageFailed:
-      "Browser storage could not complete recovery. The original saved data has been retained. Free browser storage and reload to try again.",
+      "Your saved data has been kept. Reload to try again. If the problem continues, check that browser storage is available. Do not clear site data while you have messages to recover.",
     outboxRecoveryFull:
       "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
     outboxRecoveryMessages: "Queued messages: {count}",
@@ -5255,6 +5261,9 @@ export const en: TranslationMap & {
       sortBy: "Sort by",
       sortCreated: "Created",
       sortSessions: "Filter & sort",
+      showOnlyPerson: "Show only {name}",
+      showEveryone: "Show everyone",
+      showAllSessions: "Show all sessions",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
@@ -5341,6 +5350,9 @@ export const en: TranslationMap & {
       clearChip: "Clear",
       showDetails: "Show goal details",
       hideDetails: "Hide goal details",
+    },
+    asyncQuestions: {
+      sendFailed: "Could not send your answer. Your draft is preserved.",
     },
     questions: {
       other: "Type your own answer here",
@@ -5436,6 +5448,8 @@ export const en: TranslationMap & {
       closeVideoPreview: "Close video preview",
     },
     modelControls: {
+      subscription: "Subscription",
+      api: "API",
       default: "Default",
       effort: "Effort",
       faster: "Faster",
@@ -5450,8 +5464,6 @@ export const en: TranslationMap & {
       selectionScopeSession: "Selecting a model changes only this session.",
       selectionScopeAgent: "Selecting a model updates this agent's default.",
       selectionScopeGlobal: "Selecting a model updates the global default.",
-      resetSessionModel: "Reset session model",
-      useDefaultModel: "Use default ({model}) for this session",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",
@@ -5626,6 +5638,7 @@ export const en: TranslationMap & {
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
+      waitingForAgent: "Queued · waiting for the agent",
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
@@ -5888,6 +5901,7 @@ export const en: TranslationMap & {
       running: "Running",
       completed: "Completed",
       exitCode: "Exit code {code}",
+      failureCount: "{count} failed",
       noOutputFailed: "No output — tool failed.",
       noOutputSucceeded: "No output — tool completed successfully.",
       noResult: "No result available.",

@@ -586,7 +586,7 @@ export class DraftPlaceState {
     this.browser.close();
   }
 
-  selectDevice(deviceId: string, autoDevice = false, options: { keepPickerOpen?: boolean } = {}) {
+  selectDevice(deviceId: string, autoDevice = false) {
     const snapshot = this.read();
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
@@ -626,9 +626,7 @@ export class DraftPlaceState {
       folder: this.folderValue,
       worktree: Boolean(deviceId || autoDevice) || this.worktree,
     });
-    if (!options.keepPickerOpen) {
-      this.browser.close();
-    }
+    this.browser.close();
     this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }
@@ -658,7 +656,6 @@ export class DraftPlaceState {
       projectId: this.browser.projectId,
       worktree: true,
     });
-    this.browser.close();
     this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }

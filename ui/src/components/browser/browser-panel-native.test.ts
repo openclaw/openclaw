@@ -8,6 +8,7 @@ import type {
 import { startNativeLinkRouting } from "../../app/native-link-routing.ts";
 import { acquireNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { promoteToPopoverTopLayer } from "../menu-surface.ts";
 import {
   createBrowserClient,
   createInspectedNode,
@@ -698,6 +699,41 @@ describe("native Browser panel ownership", () => {
     expect(controller.activeTargetId).toBeNull();
     expect(controller.tabs).toEqual([]);
     expect(controller.urlDraft).toBe("");
+  });
+
+  it("keeps a native tab visible beside a hovercard and tracks overlap as either surface moves", async () => {
+    const native = fakeNativeBrowser([nativeTab("mac-one")]);
+    const { host, controller } = controllerFixture();
+    const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+    let stageRect = new DOMRect(600, 100, 500, 600);
+    vi.spyOn(stage, "getBoundingClientRect").mockImplementation(() => stageRect);
+    flushFrames();
+    native.postMessage.mockClear();
+    const card = document.createElement("div");
+    let cardRect = new DOMRect(200, 200, 300, 200);
+    vi.spyOn(card, "getBoundingClientRect").mockImplementation(() => cardRect);
+    document.body.append(card);
+    promoteToPopoverTopLayer(card);
+    flushFrames();
+    expect(native.postMessage).not.toHaveBeenCalled();
+
+    // Only the edge overlaps; center-point hit testing alone cannot catch it.
+    cardRect = new DOMRect(400, 200, 300, 200);
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
+    stageRect = new DOMRect(700, 100, 500, 600);
+    controller.hostUpdated();
+    flushFrames();
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: true });
+
+    cardRect = new DOMRect(650, 200, 300, 200);
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
+    card.remove();
+    await Promise.resolve();
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: true });
   });
 
   it("deduplicates presentations, hides a covered stage, and restores only after every occluder closes", () => {

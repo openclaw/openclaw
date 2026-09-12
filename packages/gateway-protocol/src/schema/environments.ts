@@ -18,6 +18,13 @@ const EnvironmentTrustSchema = Type.String({
   enum: ["persistent", "disposable"],
 });
 
+/** Operational desktop state reported by the current native node connection. */
+export const DesktopAvailabilitySchema = closedObject({
+  state: Type.Union([Type.Literal("locked"), Type.Literal("unlocked"), Type.Literal("unknown")]),
+});
+
+export type DesktopAvailability = Static<typeof DesktopAvailabilitySchema>;
+
 /** Durable lifecycle states for plugin-provisioned worker environments. */
 export const WorkerEnvironmentStateSchema = Type.Union([
   Type.Literal("requested"),
@@ -123,6 +130,7 @@ function createEnvironmentSummaryProperties() {
       }),
     ),
     desktop: Type.Optional(Type.Boolean()),
+    desktopAvailability: Type.Optional(DesktopAvailabilitySchema),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
     preparation: Type.Optional(
@@ -250,6 +258,8 @@ export const WorkerDesktopObserveResultSchema = closedObject({
   wsPath: NonEmptyString,
   expiresAtMs: Type.Integer({ minimum: 0 }),
   control: Type.Boolean(),
+  // Permission to request resizing, not proof that the RFB server supports it.
+  canResize: Type.Optional(Type.Boolean()),
   vncPassword: Type.Optional(NonEmptyString),
 });
 

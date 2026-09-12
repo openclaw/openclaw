@@ -45,7 +45,7 @@ describe("registerMcpServerConnectionResolver ownership", () => {
     expect(pluginRegistry.registry.mcpServerConnectionResolvers).toHaveLength(1);
     expect(pluginRegistry.registry.mcpServerConnectionResolvers[0]).toMatchObject({
       pluginId: "plugin-a",
-      resolver: { serverName: "user-mail", resolve: firstResolve },
+      resolver: { serverName: "user-mail" },
     });
     expect(pluginRegistry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
@@ -69,10 +69,11 @@ describe("registerMcpServerConnectionResolver ownership", () => {
   it("lets the owning plugin replace its own resolver", async () => {
     const { pluginRegistry, apiFor } = createRegistryHarness();
     const api = apiFor("plugin-a");
+    const original = vi.fn(async () => ({ url: "https://mcp.example.test/original" }));
     const replacement = vi.fn(async () => ({ url: "https://mcp.example.test/replacement" }));
     api.registerMcpServerConnectionResolver({
       serverName: "user-mail",
-      resolve: async () => null,
+      resolve: original,
     });
     api.registerMcpServerConnectionResolver({
       serverName: "user-mail",
@@ -80,9 +81,6 @@ describe("registerMcpServerConnectionResolver ownership", () => {
     });
 
     expect(pluginRegistry.registry.mcpServerConnectionResolvers).toHaveLength(1);
-    expect(pluginRegistry.registry.mcpServerConnectionResolvers[0]?.resolver.resolve).toBe(
-      replacement,
-    );
     expect(
       pluginRegistry.registry.diagnostics.filter((diagnostic) => diagnostic.level === "error"),
     ).toEqual([]);
@@ -95,6 +93,7 @@ describe("registerMcpServerConnectionResolver ownership", () => {
       ).resolves.toEqual(new Map([["user-mail", { url: "https://mcp.example.test/replacement" }]]));
     });
     expect(replacement).toHaveBeenCalledOnce();
+    expect(original).not.toHaveBeenCalled();
   });
 });
 

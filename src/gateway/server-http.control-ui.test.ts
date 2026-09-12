@@ -188,7 +188,12 @@ it("serves marketplace browser reads while preserving plugin HTTP boundaries", a
         isStartupPluginRuntimeReady: () => true,
       },
       run: async (server) => {
-        const documentPaths = ["/plugins", "/plugins/ch_bWF0cml4", "/plugins/local_bWVtb3J5"];
+        const documentPaths = [
+          "/plugins",
+          "/plugins/",
+          "/plugins/ch_bWF0cml4",
+          "/plugins/local_bWVtb3J5",
+        ];
         for (const pathname of documentPaths) {
           for (const method of ["GET", "HEAD"]) {
             const { res, getBody } = await sendRequest(server, {
@@ -225,6 +230,13 @@ it("serves marketplace browser reads while preserving plugin HTTP boundaries", a
         });
         expect(plugin.res.statusCode).toBe(202);
         expect(plugin.getBody()).toBe("plugin response");
+        const pluginManager = await sendRequest(server, {
+          path: "/settings/plugins",
+          method: "GET",
+          headers: { accept: "text/html" },
+        });
+        expect(pluginManager.res.statusCode).toBe(200);
+        expect(pluginManager.getBody()).toContain("spa fallback");
       },
     });
   });

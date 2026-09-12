@@ -72,6 +72,7 @@ public final class GatewayDiscoveryModel {
     public var statusText: String = GatewayDiscoveryStatusText.idle
 
     private let browserSession = GatewayDiscoveryBrowserSession()
+    private var generation: UInt64 = 0
     private var resultsByDomain: [String: Set<NWBrowser.Result>] = [:]
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
     private var localIdentity: LocalIdentity
@@ -80,9 +81,9 @@ public final class GatewayDiscoveryModel {
     private var resolvedServiceByID: [String: ResolvedGatewayService] = [:]
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var wideAreaFallbackTask: Task<Void, Never>?
-    private var wideAreaFallbackGateways: [DiscoveredGateway] = []
+    private var wideAreaFallback: (domain: String, beacons: [WideAreaGatewayBeacon])?
     private var tailscaleServeFallbackTask: Task<Void, Never>?
-    private var tailscaleServeFallbackGateways: [DiscoveredGateway] = []
+    private var tailscaleServeFallbackBeacons: [TailscaleServeGatewayBeacon] = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway-discovery")
 
     public init(
@@ -121,24 +122,28 @@ public final class GatewayDiscoveryModel {
 
     public func refreshWideAreaFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
+        self.wideAreaFallbackTask?.cancel()
+        let generation = self.generation
+        self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
+            guard !Task.isCancelled else { return }
             let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
             await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
+                guard let self, self.generation == generation, !Task.isCancelled else { return }
+                self.wideAreaFallback = (domain, beacons)
                 self.recomputeGateways()
             }
         }
     }
 
     public func refreshTailscaleServeFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
+        self.tailscaleServeFallbackTask?.cancel()
+        let generation = self.generation
+        self.tailscaleServeFallbackTask = Task.detached(priority: .utility) { [weak self] in
+            guard !Task.isCancelled else { return }
             let beacons = await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
             await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.tailscaleServeFallbackGateways = self.mapTailscaleServeBeacons(beacons)
+                guard let self, self.generation == generation, !Task.isCancelled else { return }
+                self.tailscaleServeFallbackBeacons = beacons
                 self.recomputeGateways()
             }
         }
@@ -150,6 +155,7 @@ public final class GatewayDiscoveryModel {
     }
 
     public func stop() {
+        self.generation &+= 1
         self.localIdentityTask?.cancel()
         self.localIdentityTask = nil
         self.browserSession.stop()
@@ -160,12 +166,21 @@ public final class GatewayDiscoveryModel {
         self.pendingServiceResolvers = [:]
         self.wideAreaFallbackTask?.cancel()
         self.wideAreaFallbackTask = nil
-        self.wideAreaFallbackGateways = []
+        self.wideAreaFallback = nil
         self.tailscaleServeFallbackTask?.cancel()
         self.tailscaleServeFallbackTask = nil
-        self.tailscaleServeFallbackGateways = []
+        self.tailscaleServeFallbackBeacons = []
         self.gateways = []
         self.statusText = GatewayDiscoveryStatusText.stopped
+    }
+
+    private var wideAreaFallbackGateways: [DiscoveredGateway] {
+        guard let fallback = self.wideAreaFallback else { return [] }
+        return self.mapWideAreaBeacons(fallback.beacons, domain: fallback.domain)
+    }
+
+    private var tailscaleServeFallbackGateways: [DiscoveredGateway] {
+        self.mapTailscaleServeBeacons(self.tailscaleServeFallbackBeacons)
     }
 
     private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
@@ -300,7 +315,7 @@ public final class GatewayDiscoveryModel {
            domain == wideAreaDomain,
            self.hasUsableWideAreaResults
         {
-            self.wideAreaFallbackGateways = []
+            self.wideAreaFallback = nil
         }
     }
 
@@ -308,6 +323,7 @@ public final class GatewayDiscoveryModel {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
         if Self.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
+        let generation = self.generation
         self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             var attempt = 0
@@ -323,8 +339,8 @@ public final class GatewayDiscoveryModel {
                 let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
                 if !beacons.isEmpty {
                     await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
+                        guard let self, self.generation == generation, !Task.isCancelled else { return }
+                        self.wideAreaFallback = (domain, beacons)
                         self.recomputeGateways()
                     }
                     return
@@ -340,6 +356,7 @@ public final class GatewayDiscoveryModel {
     private func scheduleTailscaleServeFallback() {
         if Self.isRunningTests { return }
         guard self.tailscaleServeFallbackTask == nil else { return }
+        let generation = self.generation
         self.tailscaleServeFallbackTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             var attempt = 0
@@ -355,8 +372,8 @@ public final class GatewayDiscoveryModel {
                 let beacons = await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4)
                 if !beacons.isEmpty {
                     await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.tailscaleServeFallbackGateways = self.mapTailscaleServeBeacons(beacons)
+                        guard let self, self.generation == generation, !Task.isCancelled else { return }
+                        self.tailscaleServeFallbackBeacons = beacons
                         self.recomputeGateways()
                     }
                     return
@@ -484,6 +501,7 @@ public final class GatewayDiscoveryModel {
     {
         guard self.resolvedServiceByID[stableID] == nil else { return }
         guard self.pendingServiceResolvers[stableID] == nil else { return }
+        let generation = self.generation
 
         let resolver = GatewayServiceResolver(
             name: serviceName,
@@ -492,7 +510,7 @@ public final class GatewayDiscoveryModel {
             logger: self.logger)
         { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.generation == generation else { return }
                 self.pendingServiceResolvers[stableID] = nil
                 switch result {
                 case let .success(resolved):
@@ -571,6 +589,7 @@ public final class GatewayDiscoveryModel {
                 guard !Task.isCancelled, let self else { return }
                 guard self.localIdentity != merged else { return }
                 self.localIdentity = merged
+                self.updateGatewaysForAllDomains()
                 self.recomputeGateways()
             }
         }

@@ -12,6 +12,12 @@ export type GatewayRestartWaitOutcome =
   | "stopped-free"
   | "timeout";
 
+export type UnavailablePluginHealthSummary = {
+  id: string;
+  reason: string;
+  detail: string;
+};
+
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
   portUsage: PortUsage;
@@ -22,6 +28,7 @@ export type GatewayRestartSnapshot = {
   gatewayBuildId?: string | null;
   probeError?: string;
   activatedPluginErrors?: PluginHealthErrorSummary[];
+  unavailablePlugins?: UnavailablePluginHealthSummary[];
   channelProbeErrors?: Array<{ id: string; error: string }>;
   expectedVersion?: string;
   versionMismatch?: {
@@ -35,6 +42,7 @@ export type GatewayRestartSnapshot = {
   };
   waitOutcome?: GatewayRestartWaitOutcome;
   elapsedMs?: number;
+  startupPhase?: string;
 };
 
 export type GatewayPortHealthSnapshot = {

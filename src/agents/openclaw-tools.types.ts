@@ -70,6 +70,8 @@ export type OpenClawToolsOptions = {
   pinnedWidgetAuthoring?: boolean;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
+  /** Prepared profile authority for the gateway tool's configuration-read actions. */
+  gatewayConfigReadAllowed?: boolean;
   runtimeToolAllowlist?: string[];
   /** Host-prepared proof that this exact session can request Gateway publication. */
   githubPublicationAvailable?: boolean;

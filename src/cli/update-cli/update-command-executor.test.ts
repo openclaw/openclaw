@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,7 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
@@ -41,6 +44,19 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+// The installed parent prepares the database before a sealed actor can acquire a lease.
+function prepareStagedLeaseFixture() {
+  const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
+  const existingIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+  );
+  stageManagedHandoffRuntime(root);
+  return {
+    runtimeEntry: path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY),
+    options: { databasePath, serviceManagerEnv: resolveServiceManagerEnv(), existingIdentity },
+  };
+}
 
 function replaceOwner(installationRoot = root) {
   const db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
@@ -168,12 +184,7 @@ describe("live update executor", () => {
   });
 
   it("reclaims a dead direct executor through the existing process-liveness owner", async () => {
-    stageManagedHandoffRuntime(root);
-    const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-    const options = {
-      databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-      serviceManagerEnv: resolveServiceManagerEnv(),
-    };
+    const { runtimeEntry, options } = prepareStagedLeaseFixture();
     const result = spawnSync(
       process.execPath,
       [
@@ -196,8 +207,7 @@ describe("live update executor", () => {
   });
 
   it("borrows only a live helper's exact assigned executor and leaves release to that helper", async () => {
-    stageManagedHandoffRuntime(root);
-    const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
+    const { runtimeEntry, options } = prepareStagedLeaseFixture();
     const runId = randomUUID();
     const owner = randomUUID();
     const metadata = path.join(root, "handoff.json");
@@ -207,10 +217,6 @@ describe("live update executor", () => {
     );
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
     vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metadata);
-    const options = {
-      databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-      serviceManagerEnv: resolveServiceManagerEnv(),
-    };
     const child = spawn(
       process.execPath,
       [
@@ -356,6 +362,70 @@ describe("live update executor", () => {
 
 describe("candidate executor delegation", () => {
   const moduleUrl = new URL("./update-command-executor.ts", import.meta.url).href;
+  it("refuses a revoked requester before delegated Doctor changes operator config", async () => {
+    const configPath = path.join(root, "openclaw.json");
+    const original = JSON.stringify({
+      commands: { ownerAllowFrom: ["replacement"] },
+      plugins: { enabled: false },
+    });
+    fs.writeFileSync(configPath, original);
+    const workerUrl = new URL("../../infra/update-migrated-finalize.worker.ts", import.meta.url);
+    const resultUrl = new URL("../../infra/update-doctor-result.ts", import.meta.url);
+    const childProgram = `
+      import fs from "node:fs";
+      import {createUpdatePostInstallDoctorResultPath, UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV} from ${JSON.stringify(resultUrl.href)};
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV] = resultPath;
+      process.argv[2] = "--doctor";
+      process.once("exit", () => {
+        if (fs.existsSync(resultPath)) {
+          process.stdout.write(fs.readFileSync(resultPath, "utf8"));
+          fs.rmSync(resultPath);
+        }
+      });
+      await import(${JSON.stringify(workerUrl.href)});
+    `;
+    const runId = randomUUID();
+    await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root);
+      const result = await withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
+        runUtf8CommandWithTimeout(
+          [
+            process.execPath,
+            "--import",
+            path.resolve("scripts/tsx.mjs"),
+            "--input-type=module",
+            "-e",
+            childProgram,
+          ],
+          {
+            input: JSON.stringify({
+              executor: grant,
+              runId,
+              root,
+              configInputHash: createHash("sha256").update(original).digest("hex"),
+              requester: { channel: "synthetic", senderId: "owner" },
+              repair: true,
+            }),
+            beforeInput,
+            env: { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
+            timeoutMs: 15_000,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          },
+        ),
+      );
+      expect(result.code).toBe(1);
+      expect(result.stdout, result.stderr).toContain('"reason":"requester-revoked"');
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        status: "error",
+        configWriteRefusal: { reason: "requester-revoked", keys: [] },
+      });
+      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+      fence.assertCurrent();
+    });
+  });
+
   const program = `
     import fs from "node:fs";
     import {spawn} from "node:child_process";
@@ -450,9 +520,9 @@ describe("candidate executor delegation", () => {
       });
       if (revoked) {
         await expect(work).rejects.toThrow(/ownership|release/);
-        // The shipped worker owns the activated generation; the parent still
-        // refuses completion if its independent recovery owner was replaced.
-        expect(fs.existsSync(output)).toBe(revoked === "original");
+        // The current receiver also retains the original recovery owner after
+        // activation: changing either owner must refuse the child effect.
+        expect(fs.existsSync(output)).toBe(false);
         expect(
           createManagedHandoffLeaseStore().read(revoked === "original" ? root : candidateRoot),
         ).toMatchObject({
@@ -644,12 +714,7 @@ describe("candidate executor delegation", () => {
   it.skipIf(process.platform === "win32")(
     "retains a candidate group after both the updater and its direct child exit",
     async () => {
-      stageManagedHandoffRuntime(root);
-      const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-      const options = {
-        databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-        serviceManagerEnv: resolveServiceManagerEnv(),
-      };
+      const { runtimeEntry, options } = prepareStagedLeaseFixture();
       const command = `
         const {spawn}=require('node:child_process');
         process.stdin.once('data',()=>{
@@ -700,12 +765,7 @@ describe("candidate executor delegation", () => {
   );
 
   it("does not reclaim a dead parent while its delegated child is alive", async () => {
-    stageManagedHandoffRuntime(root);
-    const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-    const options = {
-      databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-      serviceManagerEnv: resolveServiceManagerEnv(),
-    };
+    const { runtimeEntry, options } = prepareStagedLeaseFixture();
     const parent = spawnSync(
       process.execPath,
       [

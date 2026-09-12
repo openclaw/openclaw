@@ -9,7 +9,10 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 const mocks = vi.hoisted(() => ({
   listManagedPluginNpmRoots: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
-  repairMissingConfiguredPluginInstalls: vi.fn(),
+  repairMissingConfiguredPluginInstalls:
+    vi.fn<
+      typeof import("./missing-configured-plugin-install.js").repairMissingConfiguredPluginInstalls
+    >(),
   relinkOpenClawPeerDependenciesInManagedNpmRoot: vi.fn(),
   runPluginPayloadSmokeCheck: vi.fn(),
 }));
@@ -123,6 +126,7 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
+      onWarning: expect.any(Function),
     });
     expect(
       expectDefined(
@@ -171,6 +175,7 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
+      onWarning: expect.any(Function),
     });
   });
 
@@ -187,12 +192,14 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.7.2-beta.7",
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
+      onWarning: expect.any(Function),
     });
   });
 
   it("returns ok when no warnings/failures and includes repair changes", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ['Repaired missing configured plugin "discord".'],
+      repairedPluginIds: ["discord"],
       warnings: [],
       records: { discord: { source: "npm", installPath: "/p/discord" } },
     });
@@ -204,6 +211,7 @@ describe("runPostCorePluginConvergence", () => {
     });
     expect(result.errored).toBe(false);
     expect(result.changes).toEqual(['Repaired missing configured plugin "discord".']);
+    expect(result.repairedPluginIds).toEqual(["discord"]);
     expect(result.warnings).toEqual([]);
   });
 
@@ -355,6 +363,7 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
       baselineRecords: baseline,
+      onWarning: expect.any(Function),
     });
   });
 
@@ -405,6 +414,7 @@ describe("runPostCorePluginConvergence", () => {
       baselineRecords: {
         brave: baseline.brave,
       },
+      onWarning: expect.any(Function),
     });
     expect(result.changes).toEqual([
       'Removed stale local bundled plugin install record "discord".',
@@ -412,13 +422,18 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
-  it("keeps repair warnings nonblocking with actionable guidance", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [
-        'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
-      ],
-      records: {},
+  it("preserves repair attribution and leaves unclassified warnings unowned", async () => {
+    const message =
+      'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.';
+    const unclassifiedMessage = 'Failed to read plugin "discord" inventory.';
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
+      onWarning?.({ message, pluginId: "discord" });
+      onWarning?.({ message: unclassifiedMessage });
+      return {
+        changes: [],
+        warnings: [message, unclassifiedMessage],
+        records: {},
+      };
     });
     const result = await runPostCorePluginConvergence({
       cfg: {
@@ -429,23 +444,31 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.errored).toBe(false);
     expect(result.warnings).toStrictEqual([
       {
-        reason:
-          'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
-        message:
-          'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+        kind: "repair",
+        pluginId: "discord",
+        reason: message,
+        message,
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
+      },
+      {
+        reason: unclassifiedMessage,
+        message: unclassifiedMessage,
         guidance: ["Run `openclaw update repair` to retry plugin repair."],
       },
     ]);
   });
 
   it("keeps failed configured-plugin repair fetches nonblocking", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [
-        'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
-      ],
-      failedPluginIds: ["matrix"],
-      records: {},
+    const message =
+      'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.';
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
+      onWarning?.({ message, pluginId: "matrix" });
+      return {
+        changes: [],
+        warnings: [message],
+        failedPluginIds: ["matrix"],
+        records: {},
+      };
     });
     const result = await runPostCorePluginConvergence({
       cfg: {
@@ -457,10 +480,10 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.outcomes).toBeUndefined();
     expect(result.warnings).toStrictEqual([
       {
-        reason:
-          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
-        message:
-          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
+        kind: "repair",
+        pluginId: "matrix",
+        reason: message,
+        message,
         guidance: ["Run `openclaw update repair` to retry plugin repair."],
       },
     ]);
@@ -471,19 +494,23 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("blocks convergence when a missing plugin cannot activate without capability consent", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: ['Plugin "consent-fixture" requires capability consent.'],
-      failedPluginIds: ["consent-fixture"],
-      outcomes: [
-        {
-          pluginId: "consent-fixture",
-          status: "error",
-          code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-          message: 'Plugin "consent-fixture" requires capability consent.',
-        },
-      ],
-      records: {},
+    const message = 'Plugin "consent-fixture" requires capability consent.';
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
+      onWarning?.({ message, pluginId: "consent-fixture" });
+      return {
+        changes: [],
+        warnings: [message],
+        failedPluginIds: ["consent-fixture"],
+        outcomes: [
+          {
+            pluginId: "consent-fixture",
+            status: "error",
+            code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+            message,
+          },
+        ],
+        records: {},
+      };
     });
 
     const result = await runPostCorePluginConvergence({
@@ -500,19 +527,22 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("keeps inactive repair failures nonblocking", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [
-        'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
-      ],
-      failedPluginIds: ["discord"],
-      records: {
-        discord: {
-          source: "npm",
-          spec: "@acme/discord",
-          installPath: "/p/discord",
+    const message =
+      'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.';
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
+      onWarning?.({ message, pluginId: "discord" });
+      return {
+        changes: [],
+        warnings: [message],
+        failedPluginIds: ["discord"],
+        records: {
+          discord: {
+            source: "npm",
+            spec: "@acme/discord",
+            installPath: "/p/discord",
+          },
         },
-      },
+      };
     });
     const result = await runPostCorePluginConvergence({
       cfg: {
@@ -587,6 +617,7 @@ describe("runPostCorePluginConvergence", () => {
         pluginId: "brave",
         reason:
           'missing-main-entry: Plugin main entry "dist/index.js" not found at /p/brave/dist/index.js',
+        kind: "load",
         message:
           'Plugin "brave" failed post-core payload smoke check (missing-main-entry): Plugin main entry "dist/index.js" not found at /p/brave/dist/index.js',
         guidance: [
@@ -624,6 +655,7 @@ describe("runPostCorePluginConvergence", () => {
       {
         pluginId: "brave",
         reason: "missing-install-path: Install path is missing from the plugin install record.",
+        kind: "load",
         message:
           'Plugin "brave" failed post-core payload smoke check (missing-install-path): Install path is missing from the plugin install record.',
         guidance: [
@@ -670,6 +702,7 @@ describe("runPostCorePluginConvergence", () => {
         pluginId: "brave",
         reason:
           "unreadable-package-json: Could not read package.json at /p/brave/package.json: EACCES: permission denied",
+        kind: "load",
         message,
         guidance,
       },
@@ -830,7 +863,7 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {
-    const records = { brave: { source: "npm" as const, installPath: "/p/brave" } };
+    const records = { external: { source: "npm" as const, installPath: "/p/external" } };
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ["Repaired"],
       warnings: [],
@@ -838,7 +871,7 @@ describe("runPostCorePluginConvergence", () => {
     });
     await runPostCorePluginConvergence({
       cfg: {
-        plugins: { entries: { brave: { enabled: true } } },
+        plugins: { entries: { external: { enabled: true } } },
       } as unknown as OpenClawConfig,
       env: {},
     });
@@ -946,6 +979,7 @@ describe("filterRecordsToActive", () => {
       },
     };
     const filtered = filterRecordsToActive({
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
       cfg: {
         plugins: {
           enabled: true,

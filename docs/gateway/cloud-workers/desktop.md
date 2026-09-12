@@ -21,3 +21,17 @@ The desktop never gains public ingress. The node reads `/var/lib/crabbox/vnc.pas
 The Gateway sends WebSocket keepalives on desktop observer and node desktop or portal streams while idle, so an unchanged screen or quiet preview does not go silent behind a proxy. Backpressure may delay pong replies without revoking the stream; the owning session and control connection still govern teardown.
 
 When another operator takes control, your viewer reconnects in view-only mode. The notice identifies the new controller by their authenticated profile name, or their authenticated user ID when no profile name is set. Connections without an authenticated user identity show a generic takeover notice.
+
+## Desktop size
+
+The **Desktop size** menu is available in the panel and the standalone desktop view:
+
+- **Fit** is the default. It scales the existing framebuffer to the viewer without changing the worker's display resolution.
+- **Actual** shows the framebuffer without local scaling or remote resizing.
+- **Match** requests the viewer's dimensions as the worker's display resolution. It also scales locally while the request is pending or unsupported.
+
+Match appears only after a controlling connection authenticates and the worker provider permits virtual-display resizing. View-only connections cannot request resizing. Direct host desktops do not gain this permission.
+
+The Crabbox plugin permits requests for its dedicated Linux XFCE desktop. This permission does not prove server support. Match requires a VNC server that negotiates desktop resizing, such as Crabbox's dynamic TigerVNC desktop. Older fixed-size Xvfb/x11vnc workers remain usable with Fit and Actual. To resize those workers, update Crabbox to a build with dynamic XFCE support and reprovision the desktop worker. Changing the menu alone does not upgrade an existing worker.
+
+A controlled reconnect to the same source retains the sizing choice. Changing sources resets it to Fit. Losing control or resize permission also resets Match to Fit.

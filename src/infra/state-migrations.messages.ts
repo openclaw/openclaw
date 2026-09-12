@@ -68,13 +68,18 @@ export function createLegacyStateMigrationStepReceipt(
     ...step,
     outcome: refused
       ? "refused"
-      : result.warnings.length > 0
-        ? "warning"
-        : result.changes.length > 0
-          ? "completed"
-          : "skipped",
+      : result.outcome === "skipped"
+        ? "skipped"
+        : result.warnings.length > 0
+          ? "warning"
+          : result.changes.length > 0
+            ? "completed"
+            : "skipped",
     changes: result.changes,
     warnings: result.warnings,
+    ...(result.refusedAgentDatabasePaths?.length
+      ? { refusedAgentDatabasePaths: result.refusedAgentDatabasePaths }
+      : {}),
     ...(result.notices?.length ? { notices: result.notices } : {}),
     ...(refused
       ? {

@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
@@ -54,50 +55,70 @@ import {
 import { prepareCustomSetupCredentials } from "./setup-inference-custom.js";
 import { projectSetupInferenceConfig } from "./setup-model-selection.js";
 
-export async function loadProviderAuthMethod(params: {
-  cfg: OpenClawConfig;
-  workspace: string;
-  choice: ProviderAuthChoiceMetadata;
-  deps: Pick<ActivateSetupInferenceDeps, "resolvePluginProviders">;
-  activation?: ActivateSetupInferenceParams;
-  beforePersistentEffect?: () => Promise<void>;
-}): Promise<
-  { config: OpenClawConfig; provider: ProviderPlugin; method: ProviderAuthMethod } | StageFailure
-> {
+type SetupProviderAuthMethod = {
+  config: OpenClawConfig;
+  provider: ProviderPlugin;
+  method: ProviderAuthMethod;
+};
+
+/** Import under the mutation lease; keep provider callbacks owned through their materialization. */
+export async function withSetupProviderAuthMethod<T>(
+  params: {
+    cfg: OpenClawConfig;
+    workspace: string;
+    choice: ProviderAuthChoiceMetadata;
+    deps: Pick<ActivateSetupInferenceDeps, "resolvePluginProviders">;
+    activation?: ActivateSetupInferenceParams;
+    beforePersistentEffect?: () => Promise<void>;
+    signal?: AbortSignal;
+  },
+  consume: (loaded: SetupProviderAuthMethod) => T | Promise<T>,
+): Promise<T | StageFailure> {
+  await using cache = createPluginCache();
   const activation = params.activation;
-  return await withPluginLifecycleLease({ signal: params.activation?.signal }, async () => {
-    const enabled = await enablePluginWithCapabilityConsent(params.cfg, params.choice.pluginId, {
-      workspaceDir: params.workspace,
-      beforePersistentEffect: params.beforePersistentEffect,
-      onCapabilityConsent: activation?.prompter
-        ? createPluginCapabilityConsentPrompter(activation.prompter, () =>
-            throwIfSetupInferenceCancelled(activation),
-          )
-        : undefined,
-    });
-    if (!enabled.enabled) {
-      return {
-        error: `${params.choice.choiceLabel} is disabled (${enabled.reason ?? "blocked"}).`,
-      };
-    }
-    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-      config: enabled.config,
-      workspaceDir: params.workspace,
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-      onlyPluginIds: [params.choice.pluginId],
-    });
-    const provider = providers.find(
-      (entry) =>
-        entry.pluginId === params.choice.pluginId &&
-        normalizeProviderId(entry.id) === normalizeProviderId(params.choice.providerId),
-    );
-    const method = provider?.auth.find((entry) => entry.id === params.choice.methodId);
-    if (!provider || !method || !supportsSetupTextInference(method.wizard?.onboardingScopes)) {
-      return { error: "That provider setup is not available on this Gateway." };
-    }
-    return { config: enabled.config, provider, method };
-  });
+  const loaded = await withPluginLifecycleLease(
+    { signal: params.signal ?? activation?.signal },
+    async () =>
+      withPluginCache(cache, async (): Promise<SetupProviderAuthMethod | StageFailure> => {
+        const enabled = await enablePluginWithCapabilityConsent(
+          params.cfg,
+          params.choice.pluginId,
+          {
+            workspaceDir: params.workspace,
+            beforePersistentEffect: params.beforePersistentEffect,
+            onCapabilityConsent: activation?.prompter
+              ? createPluginCapabilityConsentPrompter(activation.prompter, () =>
+                  throwIfSetupInferenceCancelled(activation),
+                )
+              : undefined,
+          },
+        );
+        if (!enabled.enabled) {
+          return {
+            error: `${params.choice.choiceLabel} is disabled (${enabled.reason ?? "blocked"}).`,
+          };
+        }
+        const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+          config: enabled.config,
+          workspaceDir: params.workspace,
+          mode: "setup",
+          cache: true,
+          includeUntrustedWorkspacePlugins: false,
+          onlyPluginIds: [params.choice.pluginId],
+        });
+        const provider = providers.find(
+          (entry) =>
+            entry.pluginId === params.choice.pluginId &&
+            normalizeProviderId(entry.id) === normalizeProviderId(params.choice.providerId),
+        );
+        const method = provider?.auth.find((entry) => entry.id === params.choice.methodId);
+        if (!provider || !method || !supportsSetupTextInference(method.wizard?.onboardingScopes)) {
+          return { error: "That provider setup is not available on this Gateway." };
+        }
+        return { config: enabled.config, provider, method };
+      }),
+  );
+  return "error" in loaded ? loaded : await withPluginCache(cache, () => consume(loaded));
 }
 
 export function selectSetupCredential(
@@ -162,9 +183,7 @@ export async function saveSetupCredential(params: {
   const candidate = {
     ...params.profile,
     profileId: `${normalizeProviderId(params.profile.credential.provider)}:setup-${randomUUID()}`,
-    credential: {
-      ...params.profile.credential,
-    },
+    credential: { ...params.profile.credential },
   };
   const prepared = applyProviderPluginAuthMethodResultConfig({
     config: params.config,
@@ -300,7 +319,7 @@ async function stagePreparedCandidate(
     profile = saved.profile;
     preparedConfig = saved.config;
   }
-  const projection = {
+  const config = projectSetupInferenceConfig({
     base: ctx.cfg,
     prepared: preparedConfig,
     modelRef,
@@ -309,9 +328,8 @@ async function stagePreparedCandidate(
     profileId: profile?.profileId,
     credential: profile?.credential,
     pluginId,
-  };
-  const config = projectSetupInferenceConfig(projection);
-  const candidate: StagedCandidate = {
+  });
+  return {
     modelRef,
     config,
     agentRuntimeId:
@@ -327,7 +345,6 @@ async function stagePreparedCandidate(
     pluginId,
     pendingPluginInstalls: params.pendingPluginInstalls,
   };
-  return candidate;
 }
 
 export async function stageSavedAuthCandidate(
@@ -360,51 +377,52 @@ export async function stageSavedAuthCandidate(
       error: "The saved sign-in's provider is no longer available. Review installed providers.",
     };
   }
-  const loaded = choice
-    ? await loadProviderAuthMethod({ ...ctx, choice, activation: ctx.params })
-    : undefined;
-  if (loaded && "error" in loaded) {
-    return loaded;
-  }
-  if (!saved && !loaded) {
-    return {
-      error:
-        "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
-    };
-  }
-  const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
-  const { validateConfigObjectRaw } = await import("../config/validation-core.js");
-  const storedConfig = saved
-    ? validateConfigObjectRaw(applyMergePatch(ctx.cfg, JSON.parse(saved.configJson)))
-    : undefined;
-  if (storedConfig && !storedConfig.ok) {
-    return {
-      error:
-        "The saved connection settings are no longer valid. Choose the provider settings again.",
-    };
-  }
-  const config = applyProviderPluginAuthMethodResultConfig({
-    config: storedConfig?.ok ? storedConfig.config : (loaded?.config ?? ctx.cfg),
-    result: { profiles: [{ profileId, credential }] },
-  });
-  if (saved?.apiKeyHeader && credential.type === "api_key") {
-    const providerConfig = config.models?.providers?.[parseInferenceRef(saved.modelRef).provider];
-    const key = credential.keyRef ?? credential.key;
-    if (providerConfig && key) {
-      (providerConfig.headers ??= {})["api-key"] = key;
+  const materialize = async (
+    loaded?: SetupProviderAuthMethod,
+  ): Promise<StagedCandidate | StageFailure> => {
+    if (!saved && !loaded) {
+      return {
+        error:
+          "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
+      };
     }
-  }
-  ctx.credentialsSaved = true;
-  return await stagePreparedCandidate(ctx, {
-    result: { profiles: [{ profileId, credential }], defaultModel: modelRef },
-    config,
-    credentialState: "saved",
-    choice,
-    provider: loaded?.provider,
-    pluginId: saved?.pluginId,
-    agentRuntimeId: saved?.agentRuntimeId,
-    pendingPluginInstalls: config.plugins?.installs,
-  });
+    const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
+    const { validateConfigObjectRaw } = await import("../config/validation-core.js");
+    const storedConfig = saved
+      ? validateConfigObjectRaw(applyMergePatch(ctx.cfg, JSON.parse(saved.configJson)))
+      : undefined;
+    if (storedConfig && !storedConfig.ok) {
+      return {
+        error:
+          "The saved connection settings are no longer valid. Choose the provider settings again.",
+      };
+    }
+    const config = applyProviderPluginAuthMethodResultConfig({
+      config: storedConfig?.ok ? storedConfig.config : (loaded?.config ?? ctx.cfg),
+      result: { profiles: [{ profileId, credential }] },
+    });
+    if (saved?.apiKeyHeader && credential.type === "api_key") {
+      const providerConfig = config.models?.providers?.[parseInferenceRef(saved.modelRef).provider];
+      const key = credential.keyRef ?? credential.key;
+      if (providerConfig && key) {
+        (providerConfig.headers ??= {})["api-key"] = key;
+      }
+    }
+    ctx.credentialsSaved = true;
+    return await stagePreparedCandidate(ctx, {
+      result: { profiles: [{ profileId, credential }], defaultModel: modelRef },
+      config,
+      credentialState: "saved",
+      choice,
+      provider: loaded?.provider,
+      pluginId: saved?.pluginId,
+      agentRuntimeId: saved?.agentRuntimeId,
+      pendingPluginInstalls: config.plugins?.installs,
+    });
+  };
+  return choice
+    ? withSetupProviderAuthMethod({ ...ctx, choice, activation: ctx.params }, materialize)
+    : materialize();
 }
 
 export async function stageProviderAutoCandidate(
@@ -427,38 +445,38 @@ export async function stageProviderAutoCandidate(
   ) {
     return { error: "That detected provider is no longer available on this Gateway." };
   }
-  const loaded = await loadProviderAuthMethod({ ...ctx, choice, activation: ctx.params });
-  if ("error" in loaded) {
-    return loaded;
-  }
-  const guidedSetup = loaded.method.appGuidedSetup;
-  const modelRef = ctx.params.modelRef?.trim();
-  if (!guidedSetup || !modelRef) {
-    return { error: "The detected provider model is missing. Run detection again." };
-  }
-  const prepared = await guidedSetup.prepare({
-    config: loaded.config,
-    env: process.env,
-    workspaceDir: ctx.workspace,
-    modelRef,
-    ...(ctx.params.signal ? { signal: ctx.params.signal } : {}),
-  });
-  if (!prepared || normalizeAgentModelRefForConfig(prepared.defaultModel ?? "") !== modelRef) {
-    return {
-      error: `${choice.choiceLabel} could not prepare the detected model. Run detection again.`,
-    };
-  }
-  const config = applyProviderPluginAuthMethodResultConfig({
-    config: loaded.config,
-    result: prepared,
-  });
-  return await stagePreparedCandidate(ctx, {
-    result: prepared,
-    config,
-    choice,
-    modelRef,
-    credentialState: "new",
-  });
+  return await withSetupProviderAuthMethod(
+    { ...ctx, choice, activation: ctx.params },
+    async (loaded) => {
+      const guidedSetup = loaded.method.appGuidedSetup;
+      const modelRef = ctx.params.modelRef?.trim();
+      if (!guidedSetup || !modelRef) {
+        return { error: "The detected provider model is missing. Run detection again." };
+      }
+      const prepared = await guidedSetup.prepare({
+        config: loaded.config,
+        env: process.env,
+        workspaceDir: ctx.workspace,
+        modelRef,
+        ...(ctx.params.signal ? { signal: ctx.params.signal } : {}),
+      });
+      if (!prepared || normalizeAgentModelRefForConfig(prepared.defaultModel ?? "") !== modelRef) {
+        return {
+          error: `${choice.choiceLabel} could not prepare the detected model. Run detection again.`,
+        };
+      }
+      return await stagePreparedCandidate(ctx, {
+        result: prepared,
+        config: applyProviderPluginAuthMethodResultConfig({
+          config: loaded.config,
+          result: prepared,
+        }),
+        choice,
+        modelRef,
+        credentialState: "new",
+      });
+    },
+  );
 }
 
 export async function stageProviderAuthCandidate(
@@ -532,36 +550,40 @@ export async function stageProviderAuthCandidate(
     if (!params.prompter) {
       return { error: "Installing this provider requires an interactive setup session." };
     }
-    const prepared = await prepareAuthChoiceLoadedPluginProvider({
-      authChoice,
-      config: ctx.cfg,
-      runtime: params.runtime,
-      prompter: params.prompter,
-      agentDir: ctx.agentDir,
-      agentId: ctx.routeAgentId,
-      workspaceDir: ctx.workspace,
-      setDefaultModel: false,
-      preserveExistingDefaultModel: true,
-      signal: params.signal,
-      isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
-      beforePersistentEffect: ctx.beforePersistentEffect,
-    });
-    throwIfSetupInferenceCancelled(params);
-    if (!prepared || prepared.retrySelection || !prepared.agentModelOverride?.trim()) {
-      return {
-        error:
-          prepared?.installError ||
-          `${managedWizardChoice.label} was not installed and configured. Review the installer details and try again.`,
-      };
-    }
-    return await stagePreparedCandidate(ctx, {
-      result: { profiles: prepared.authProfiles, defaultModel: prepared.agentModelOverride },
-      config: prepared.config,
-      credentialState: "new",
-      choice,
-      provider: prepared.provider,
-      pendingPluginInstalls: prepared.pendingPluginInstalls,
-    });
+    return await prepareAuthChoiceLoadedPluginProvider(
+      {
+        authChoice,
+        config: ctx.cfg,
+        runtime: params.runtime,
+        prompter: params.prompter,
+        agentDir: ctx.agentDir,
+        agentId: ctx.routeAgentId,
+        workspaceDir: ctx.workspace,
+        setDefaultModel: false,
+        preserveExistingDefaultModel: true,
+        signal: params.signal,
+        isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
+        beforePersistentEffect: ctx.beforePersistentEffect,
+      },
+      async (prepared, provider) => {
+        throwIfSetupInferenceCancelled(params);
+        if (!prepared || prepared.retrySelection || !prepared.agentModelOverride?.trim()) {
+          return {
+            error:
+              prepared?.installError ||
+              `${managedWizardChoice.label} was not installed and configured. Review the installer details and try again.`,
+          };
+        }
+        return await stagePreparedCandidate(ctx, {
+          result: { profiles: prepared.authProfiles, defaultModel: prepared.agentModelOverride },
+          config: prepared.config,
+          credentialState: "new",
+          choice,
+          provider,
+          pendingPluginInstalls: prepared.pendingPluginInstalls,
+        });
+      },
+    );
   }
   const unavailable = interactive
     ? "That provider setup is not available on this Gateway."
@@ -576,114 +598,115 @@ export async function stageProviderAuthCandidate(
   ) {
     return { error: unavailable };
   }
-  const loaded = await loadProviderAuthMethod({ ...ctx, choice, activation: params });
-  if ("error" in loaded) {
-    return loaded;
-  }
-  const { method } = loaded;
-  if (
-    interactive &&
-    choice.appGuidedDiscovery !== true &&
-    method.kind !== "oauth" &&
-    method.kind !== "device_code"
-  ) {
-    return { error: unavailable };
-  }
-  try {
-    if (interactive && !params.prompter) {
-      return { error: "This provider login requires an interactive setup session." };
-    }
-    throwIfSetupInferenceCancelled(params);
-    let result = await waitForProviderAuth(
-      runProviderPluginAuthMethodUnpersisted({
-        config: loaded.config,
-        runtime: params.runtime,
-        method,
-        agentDir: ctx.agentDir,
-        workspaceDir: ctx.workspace,
-        prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
-        signal: params.signal,
-        assertCurrent: () => throwIfSetupInferenceCancelled(params),
-        isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
-        ...(!interactive
-          ? {
-              secretInputMode: "plaintext" as const,
-              allowSecretRefPrompt: false,
-              opts: {
-                token: apiKey!,
-                tokenProvider: loaded.provider.id,
-                ...(choice.optionKey ? { [choice.optionKey]: apiKey } : {}),
-                ...(params.modelRef
-                  ? { customModelId: parseInferenceRef(params.modelRef).model }
-                  : {}),
-              },
-            }
-          : {}),
-      }),
-      params.signal,
-    );
-    throwIfSetupInferenceCancelled(params);
-    let config = applyProviderPluginAuthMethodResultConfig({ config: loaded.config, result });
-    if (interactive && choice.appGuidedDiscovery === true) {
-      const guided = method.appGuidedSetup;
-      if (!guided) {
+  return await withSetupProviderAuthMethod(
+    { ...ctx, choice, activation: params },
+    async (loaded) => {
+      const { method } = loaded;
+      if (
+        interactive &&
+        choice.appGuidedDiscovery !== true &&
+        method.kind !== "oauth" &&
+        method.kind !== "device_code"
+      ) {
         return { error: unavailable };
       }
-      const selectedModel = params.modelRef?.trim() || result.defaultModel;
-      const selected = selectedModel
-        ? { modelRef: selectedModel }
-        : await guided.detect({
+      try {
+        if (interactive && !params.prompter) {
+          return { error: "This provider login requires an interactive setup session." };
+        }
+        throwIfSetupInferenceCancelled(params);
+        let result = await waitForProviderAuth(
+          runProviderPluginAuthMethodUnpersisted({
+            config: loaded.config,
+            runtime: params.runtime,
+            method,
+            agentDir: ctx.agentDir,
+            workspaceDir: ctx.workspace,
+            prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
+            signal: params.signal,
+            assertCurrent: () => throwIfSetupInferenceCancelled(params),
+            isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
+            ...(!interactive
+              ? {
+                  secretInputMode: "plaintext" as const,
+                  allowSecretRefPrompt: false,
+                  opts: {
+                    token: apiKey!,
+                    tokenProvider: loaded.provider.id,
+                    ...(choice.optionKey ? { [choice.optionKey]: apiKey } : {}),
+                    ...(params.modelRef
+                      ? { customModelId: parseInferenceRef(params.modelRef).model }
+                      : {}),
+                  },
+                }
+              : {}),
+          }),
+          params.signal,
+        );
+        throwIfSetupInferenceCancelled(params);
+        let config = applyProviderPluginAuthMethodResultConfig({ config: loaded.config, result });
+        if (interactive && choice.appGuidedDiscovery === true) {
+          const guided = method.appGuidedSetup;
+          if (!guided) {
+            return { error: unavailable };
+          }
+          const selectedModel = params.modelRef?.trim() || result.defaultModel;
+          const selected = selectedModel
+            ? { modelRef: selectedModel }
+            : await guided.detect({
+                config,
+                env: process.env,
+                workspaceDir: ctx.workspace,
+                signal: params.signal,
+              });
+          if (!selected) {
+            return {
+              error: `${loaded.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
+            };
+          }
+          const prepared = await guided.prepare({
             config,
             env: process.env,
             workspaceDir: ctx.workspace,
+            modelRef: selected.modelRef,
             signal: params.signal,
           });
-      if (!selected) {
+          if (
+            !prepared ||
+            normalizeAgentModelRefForConfig(prepared.defaultModel ?? "") !== selected.modelRef
+          ) {
+            return {
+              error: `${loaded.provider.label} could not prepare its detected model. Try setup again.`,
+            };
+          }
+          config = applyProviderPluginAuthMethodResultConfig({ config, result: prepared });
+          result = {
+            ...prepared,
+            profiles: [
+              ...new Map(
+                [...result.profiles, ...prepared.profiles].map((profile) => [
+                  profile.profileId,
+                  profile,
+                ]),
+              ).values(),
+            ],
+          };
+        }
+        return await stagePreparedCandidate(ctx, {
+          result,
+          config,
+          choice,
+          credentialState: "new",
+          ...(choice.appGuidedDiscovery ? {} : { provider: loaded.provider }),
+        });
+      } catch (error) {
+        if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
+          return { error: "Provider login was cancelled." };
+        }
         return {
-          error: `${loaded.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
+          error: `${loaded.provider.label} could not prepare this ${interactive ? "login" : "credential"} for app-guided setup: ${formatErrorMessage(error)}`,
         };
       }
-      const prepared = await guided.prepare({
-        config,
-        env: process.env,
-        workspaceDir: ctx.workspace,
-        modelRef: selected.modelRef,
-        signal: params.signal,
-      });
-      if (
-        !prepared ||
-        normalizeAgentModelRefForConfig(prepared.defaultModel ?? "") !== selected.modelRef
-      ) {
-        return {
-          error: `${loaded.provider.label} could not prepare its detected model. Try setup again.`,
-        };
-      }
-      config = applyProviderPluginAuthMethodResultConfig({ config, result: prepared });
-      result = {
-        ...prepared,
-        profiles: [
-          ...new Map(
-            [...result.profiles, ...prepared.profiles].map((profile) => [
-              profile.profileId,
-              profile,
-            ]),
-          ).values(),
-        ],
-      };
-    }
-    return await stagePreparedCandidate(ctx, {
-      result,
-      config,
-      choice,
-      credentialState: "new",
-      ...(choice.appGuidedDiscovery ? {} : { provider: loaded.provider }),
-    });
-  } catch (error) {
-    if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
-      return { error: "Provider login was cancelled." };
-    }
-    return {
-      error: `${loaded.provider.label} could not prepare this ${interactive ? "login" : "credential"} for app-guided setup: ${formatErrorMessage(error)}`,
-    };
-  }
+    },
+  );
 }

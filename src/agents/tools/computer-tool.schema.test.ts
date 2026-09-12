@@ -102,6 +102,19 @@ describe("createComputerTool schema", () => {
     }
   });
 
+  it("does not describe held-key input when the selected session only supports taps", () => {
+    const tool = createComputerTool({
+      transport: {
+        computerUse: v2Descriptor(["screenshot", "key"]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
+    });
+    expect(JSON.stringify(tool.parameters)).not.toContain("hold_key");
+    expect(readActionEnum(tool)).toContain("wait");
+    expect(JSON.stringify(createComputerTool().parameters)).toContain("hold_key");
+  });
+
   it("publishes Codex-compatible fixed-size coordinate arrays", () => {
     const properties = (
       createComputerTool().parameters as {

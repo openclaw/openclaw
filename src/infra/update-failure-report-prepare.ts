@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { valid as validSemver } from "semver";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
@@ -13,10 +14,12 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 const UPDATE_REPORT_BODY_MAX_BYTES = 16_000;
 const UPDATE_REPORT_FIELD_MAX_BYTES = 512;
+const REPORTABLE_RECORDED_PHASES = new Set<string>([...UPDATE_RUN_PHASES, "package rollback"]);
 
 export type PreparedUpdateFailureReport = PreparedGithubIssue & {
   attemptId: string;
@@ -29,6 +32,8 @@ export type UpdateFailureReportInput = {
   attemptId: string;
   error?: string;
   result: UpdateRunResult;
+  /** Durable run history can retain failure phases that a handoff result omitted. */
+  recordedRun?: Pick<UpdateRunRecord, "steps">;
   target?: string;
 };
 
@@ -78,21 +83,62 @@ function sanitizeReportField(
   return truncateUtf8Prefix(redacted.trim(), maxBytes);
 }
 
-function resolveFailedSteps(result: UpdateRunResult) {
-  return result.steps.filter(
-    (step) =>
-      !step.advisory &&
-      (step.exitCode !== 0 || step.killed === true || step.termination === "timeout"),
+type ReportedFailedStep = {
+  name: string;
+  exitCode: number | null;
+  termination?: UpdateRunResult["steps"][number]["termination"];
+};
+
+function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep[] {
+  const direct = input.result.steps
+    .filter(
+      (step) =>
+        !step.advisory &&
+        (step.exitCode !== 0 || step.killed === true || step.termination === "timeout"),
+    )
+    .map((step) => {
+      const reported: ReportedFailedStep = { name: step.name, exitCode: step.exitCode };
+      if (step.termination) {
+        reported.termination = step.termination;
+      }
+      return reported;
+    });
+  const recordedFailures = (input.recordedRun?.steps ?? []).filter(
+    (step) => step.status === "failed",
   );
+  const recordedNames = new Set(recordedFailures.map((step) => step.step));
+  const recorded = recordedFailures.flatMap((step) => {
+    const measured = direct.filter((entry) => entry.name === step.step);
+    if (measured.length > 0) {
+      return measured;
+    }
+    // Ledger step names are structured labels, not executable commands. A
+    // compact slug keeps known lifecycle phases reportable without weakening
+    // the command-shaped diagnostic redaction used for other step names.
+    const reported: ReportedFailedStep = {
+      name: REPORTABLE_RECORDED_PHASES.has(step.step)
+        ? step.step.trim().replace(/\s+/gu, "-")
+        : step.step,
+      exitCode: null,
+    };
+    return [reported];
+  });
+  // The durable run orders lifecycle failures, including recovery after the
+  // immediate error. Enrich those rows in place so an earlier ledger-only
+  // failure cannot become the reported final phase.
+  return [...direct.filter((step) => !recordedNames.has(step.name)), ...recorded];
 }
 
-function resolveFailedPhase(result: UpdateRunResult, context: UpdateFailureReportContext): string {
-  const failed = resolveFailedSteps(result).at(-1);
-  const phase = sanitizeReportField(failed?.name ?? result.reason ?? "unknown", context);
+function resolveFailedPhase(
+  input: UpdateFailureReportInput,
+  context: UpdateFailureReportContext,
+): string {
+  const failed = resolveFailedSteps(input).at(-1);
+  const phase = sanitizeReportField(failed?.name ?? input.result.reason ?? "unknown", context);
   // Some updater labels are executable text (for example, the Doctor step).
   // Keep the structured failure code visible without publishing that command.
   return phase === "[redacted-command]" || phase === "[redacted-path]"
-    ? sanitizeReportField(result.reason ?? "unknown", context)
+    ? sanitizeReportField(input.result.reason ?? "unknown", context)
     : phase;
 }
 
@@ -122,11 +168,14 @@ function resolveUpdateTarget(
   );
 }
 
-function resolveRollbackOutcome(
+function resolveRecoveryOutcome(
   result: UpdateRunResult,
   context: UpdateFailureReportContext,
 ): string {
   if (result.recovery?.serviceRestartSafe === true) {
+    if (result.recovery.service === "failed") {
+      return "runtime files verified; Gateway restart failed. Run `openclaw gateway status --deep` before restarting manually.";
+    }
     return "verified safe to restart";
   }
   if (result.recovery?.serviceRestartSafe === false) {
@@ -168,7 +217,7 @@ function renderBoundedDiagnostics(
   if (input.result.after?.buildId) {
     diagnostics.push(`After build: ${sanitizeReportField(input.result.after.buildId, context)}`);
   }
-  for (const step of resolveFailedSteps(input.result).slice(-3)) {
+  for (const step of resolveFailedSteps(input).slice(-3)) {
     const phase = sanitizeReportField(step.name, context);
     const termination = step.termination ? `, termination ${step.termination}` : "";
     diagnostics.push(`Failed phase ${phase}: exit ${step.exitCode ?? "unknown"}${termination}`);
@@ -208,8 +257,8 @@ export async function prepareUpdateFailureReport(
   const version = sanitizeReportField(VERSION, context);
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
   const target = resolveUpdateTarget(input, context);
-  const phase = resolveFailedPhase(input.result, context);
-  const rollback = resolveRollbackOutcome(input.result, context);
+  const phase = resolveFailedPhase(input, context);
+  const recovery = resolveRecoveryOutcome(input.result, context);
   const bodyWithoutMarker = [
     "# OpenClaw update failure report",
     "",
@@ -220,7 +269,7 @@ export async function prepareUpdateFailureReport(
     `- Node version: ${sanitizeReportField(process.versions.node ?? "unknown", context)}`,
     `- Update target: ${target}`,
     `- Failed phase: ${phase}`,
-    `- Rollback outcome: ${rollback}`,
+    `- Recovery outcome: ${recovery}`,
     "",
     "## Bounded diagnostics",
     "",

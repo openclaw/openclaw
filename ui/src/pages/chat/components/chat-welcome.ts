@@ -192,9 +192,13 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
         ${renderWelcomeClawd()}
         <h2>${t("modelSetup.required.title")}</h2>
         <p class="agent-chat__hint">${t("modelSetup.required.body")}</p>
-        <button class="btn primary" type="button" @click=${props.onModelSetup}>
-          ${t("modelSetup.required.action")}
-        </button>
+        ${
+          props.onModelSetup
+            ? html`<button class="btn primary" type="button" @click=${props.onModelSetup}>
+                ${t("modelSetup.required.action")}
+              </button>`
+            : nothing
+        }
       </div>
     `;
   }

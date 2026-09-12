@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../api/types.ts";
-import { loadModelAuthStatus } from "./model-auth.ts";
+import { listEffectiveModelAuthProviders, loadModelAuthStatus } from "./model-auth.ts";
 
 const status = (ts: number): ModelAuthStatusResult => ({ ts, providers: [] });
 
@@ -162,4 +162,25 @@ describe("model auth status reads", () => {
       expect(request).toHaveBeenCalledTimes(6);
     },
   );
+});
+
+describe("listEffectiveModelAuthProviders", () => {
+  it("keeps an alias's API key when the worst-status record lacks one", () => {
+    const [merged] = listEffectiveModelAuthProviders([
+      {
+        provider: "google",
+        displayName: "Google",
+        status: "static",
+        profiles: [],
+        apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
+      },
+      {
+        provider: "google-gemini-cli",
+        displayName: "Gemini CLI",
+        status: "missing",
+        profiles: [],
+      },
+    ]);
+    expect(merged?.apiKey).toEqual({ source: "env", envVar: "GEMINI_API_KEY" });
+  });
 });

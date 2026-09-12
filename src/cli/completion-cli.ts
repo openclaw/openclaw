@@ -12,6 +12,7 @@ import {
   commandNameVariants,
   completionFlags,
   visibleCompletionCommands,
+  type ShellCompletionCommandTree,
   type ShellCompletionContext,
 } from "./completion-command-tree.js";
 import {
@@ -34,16 +35,24 @@ import { removeCommandGroupNames } from "./program/register-command-groups.js";
 import { getSubCliCompletionGroups } from "./program/register.subclis-core.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
-  if (shell === "zsh") {
-    return generateZshCompletion(program);
-  }
-  if (shell === "bash") {
-    return generateBashCompletion(program);
-  }
-  if (shell === "powershell") {
-    return generatePowerShellCompletion(program);
-  }
-  return generateFishCompletion(program);
+  return createCompletionScriptGenerator(program)(shell);
+}
+
+function createCompletionScriptGenerator(program: Command): (shell: CompletionShell) => string {
+  let tree: ShellCompletionCommandTree | undefined;
+  return (shell) => {
+    if (shell === "zsh") {
+      return generateZshCompletion(program);
+    }
+    tree ??= collectShellCompletionCommandTree(program);
+    if (shell === "bash") {
+      return generateBashCompletion(tree);
+    }
+    if (shell === "powershell") {
+      return generatePowerShellCompletion(tree);
+    }
+    return generateFishCompletion(tree);
+  };
 }
 
 function preferredCompletionFlag(option: Option): string {
@@ -135,8 +144,9 @@ async function writeCompletionCache(params: {
   shells: CompletionShell[];
   binName: string;
 }): Promise<void> {
+  const generateScript = createCompletionScriptGenerator(params.program);
   for (const shell of params.shells) {
-    const script = getCompletionScript(shell, params.program);
+    const script = generateScript(shell);
     await publishOutputFileAtomically({
       filePath: resolveCompletionCachePath(shell, params.binName),
       tempPrefix: ".openclaw-completion-cache",
@@ -396,14 +406,14 @@ ${funcName}() {
   return segments.join("");
 }
 
-function generatePowerShellCompletion(program: Command): string {
-  const rootCmd = program.name();
+function generatePowerShellCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants: contexts } = tree;
+  const rootCmd = root.command.name();
   const completionBodies: string[] = [];
   const formatPowerShellArray = (entries: string[]) =>
     entries.length > 0
       ? `@(${entries.map((entry) => `'${entry.replaceAll("'", "''")}'`).join(",")})`
       : "@()";
-  const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
   const rootValueOptions = root.valueOptions;
   const commandPathCases = contexts
     .flatMap((context) =>
@@ -552,9 +562,9 @@ ${choiceCompletion}
 `;
 }
 
-function generateFishCompletion(program: Command): string {
-  const rootCmd = program.name();
-  const { root, descendants } = collectShellCompletionCommandTree(program);
+function generateFishCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants } = tree;
+  const rootCmd = root.command.name();
   const segments: string[] = [generateFishPathHelper(rootCmd, descendants)];
 
   for (const context of [root, ...descendants]) {

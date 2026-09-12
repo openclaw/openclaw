@@ -1,7 +1,12 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode, GatewayAgentRow, ModelsProbeResult } from "../../api/types.ts";
+import type {
+  FastMode,
+  GatewayAgentRow,
+  ModelAuthStatusResult,
+  ModelsProbeResult,
+} from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
@@ -57,6 +62,8 @@ type ModelProvidersViewProps = {
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
+  authStatus?: ModelAuthStatusResult | null;
+  automaticUtilityModel?: string | null;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
@@ -338,12 +345,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
                 title=${keyBlocked}
                 @click=${() => props.onOpenKeyEditor(card.id)}
               >
-                ${
-                  card.hasConfigApiKey ||
-                  card.profiles.some((profile) => profile.type === "api_key")
-                    ? t("modelProviders.apiKey.replace")
-                    : t("modelProviders.apiKey.set")
-                }
+                ${t("modelProviders.apiKey.set")}
               </button>
             `
       }
@@ -554,6 +556,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         ${renderDefaultModels({
           models: props.configuredModels,
           selection: props.defaultModels,
+          authStatus: props.authStatus,
+          automaticUtilityModel: props.automaticUtilityModel,
           thinkingLevel: props.thinkingLevel,
           thinkingOverridden: props.thinkingOverridden,
           fastMode: props.fastMode,
@@ -607,6 +611,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       ${renderDefaultModels({
         models: props.configuredModels,
         selection: props.defaultModels,
+        authStatus: props.authStatus,
+        automaticUtilityModel: props.automaticUtilityModel,
         thinkingLevel: props.thinkingLevel,
         thinkingOverridden: props.thinkingOverridden,
         fastMode: props.fastMode,
@@ -703,7 +709,7 @@ export function renderModelProvidersPageShell(props: {
         >
           ${t("modelProviders.login.action")}
         </button>
-        <button class="btn" @click=${props.onOpenModelSetup}>
+        <button class="btn btn--ghost" @click=${props.onOpenModelSetup}>
           ${icons.settings}<span>${t("modelProviders.configureModels")}</span>
         </button>
       `,

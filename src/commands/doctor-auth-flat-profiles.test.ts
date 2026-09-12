@@ -1622,7 +1622,8 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       },
     });
 
-    expect(result.configOwnerMigrationApplied).toBe(false);
+    expect(result.blockedProfileIds).toEqual(new Set(["openai-codex:default"]));
+    expect(result.migratedProfileIds).toContain("openai:later");
     expect(result.warnings).toEqual([expect.stringContaining("SQLite verification failed")]);
     expect(fs.existsSync(configAuthPath)).toBe(true);
     expect(fs.existsSync(laterAuthPath)).toBe(false);

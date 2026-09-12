@@ -547,7 +547,7 @@ describe("memory manager database publication", () => {
     try {
       cleanupAgedMemoryReindexTempFiles(databasePath);
     } finally {
-      lock.release();
+      await lock.release();
     }
 
     await expectPathMissing(oldShadow);

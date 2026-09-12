@@ -17,6 +17,8 @@ let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 let logging: typeof import("../logging.js");
 
 beforeAll(async () => {
+  // A sibling may retain an older logger; this suite observes its own config mock.
+  vi.resetModules();
   logging = await import("../logging.js");
 });
 
@@ -46,7 +48,6 @@ describe("resolved logging settings cache", () => {
   it("loads file settings once per logger generation", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
     readLoggingConfigMock.mockReturnValue({ level: "silent" });
-    logging.setLoggerConfigLoaderForTests(readLoggingConfigMock);
 
     logging.getLogger();
     logging.getLogger();
@@ -65,7 +66,6 @@ describe("resolved logging settings cache", () => {
   it("reuses settings resolved by the file-level admission check when building the logger", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
     readLoggingConfigMock.mockReturnValue({ level: "silent" });
-    logging.setLoggerConfigLoaderForTests(readLoggingConfigMock);
 
     expect(logging.isFileLogLevelEnabled("info")).toBe(false);
     logging.getLogger();
@@ -76,7 +76,6 @@ describe("resolved logging settings cache", () => {
   it("loads console settings once per logger generation", () => {
     process.env.OPENCLAW_TEST_CONSOLE = "1";
     readLoggingConfigMock.mockReturnValue({ consoleLevel: "silent" });
-    logging.setLoggerConfigLoaderForTests(readLoggingConfigMock);
     logging.setLoggerOverride(null);
     readLoggingConfigMock.mockClear();
 

@@ -76,6 +76,21 @@ migration sources. Hot transcript JSONL files are imported and archived after
 successful import; archive-tier JSONL files remain support artifacts, not
 runtime fallbacks.
 
+Doctor also discovers primary conversation transcripts omitted from the legacy
+registry, including timestamp-prefixed filenames. It verifies the session header,
+file identity, and logical owner before importing. Known historical generations
+remain attached to their existing session without changing its current generation
+or settings. History with no registry owner is recovered as an archived session
+only when its agent owner is unambiguous.
+
+Rerunning import can recover primary history swept into protected archives by an
+earlier migration. Doctor uses retained migration manifests and archived registry
+lineage; it does not restore stale settings over live SQLite state. Originals stay
+protected, and completed recovery is recorded so later runs do not resurrect
+history explicitly deleted by the user. Diagnostic trajectory envelopes, deleted
+artifacts, unsupported files, conflicting identities, and ambiguous ownership are
+not converted into conversations. Deferred files remain available for recovery.
+
 The public Doctor migration path stages transcript payloads and performs branch
 and provider repairs in a private, temporary SQLite database instead of retaining
 complete histories in memory. It keeps the raw transcript untouched until archiving it through an
@@ -121,7 +136,7 @@ Modes:
 Selectors:
 
 - Default: the configured default agent store; SQLite inspection does not require a legacy file.
-- `--session-sqlite-agent <id>`: one configured agent.
+- `--session-sqlite-agent <id>`: one configured agent, or the expected database owner when paired with `--session-sqlite-store` (which otherwise assumes `main`).
 - `--session-sqlite-all-agents`: configured agent stores plus discovered agent stores.
 - `--session-sqlite-store <path>`: one explicit `.sqlite` database or legacy `sessions.json` path.
 

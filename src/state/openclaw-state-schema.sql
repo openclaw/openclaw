@@ -1494,6 +1494,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
 CREATE INDEX IF NOT EXISTS idx_cron_run_receipts_job_history
   ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);
 
+-- Retirement follows the receipt's retention without changing its released shape.
+CREATE TABLE IF NOT EXISTS cron_run_trigger_state_retirements (
+  receipt_id TEXT PRIMARY KEY
+    REFERENCES cron_run_receipts(receipt_id) ON DELETE CASCADE
+) STRICT;
+
 -- Runtime-private authority is independent of job_json so downgraded writers
 -- can rewrite recognized job config without erasing or silently widening it.
 CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (

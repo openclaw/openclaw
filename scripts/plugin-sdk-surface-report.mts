@@ -366,7 +366,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choices for channel consumers.
       // +3: public provider-owned asynchronous embedding batch contract.
-      4451,
+      // +2: canonical credential-value functions through the narrow secret-input surface.
+      // +1: shared removed-model choice recovery text for channel consumers.
+      4454,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -499,7 +501,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choice reader.
-      2630,
+      // +2: canonical env-value reader and managed SecretRef marker constructor.
+      2632,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

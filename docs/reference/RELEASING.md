@@ -46,13 +46,62 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - If a beta tag has been pushed or published and needs a fix, maintainers cut the next `-beta.N` tag instead of deleting or recreating the old one
 - Detailed release procedure, approvals, credentials, and recovery notes are maintainer-only
 
+## Release changelog artifacts
+
+`CHANGELOG.md` is the generated release index. Each release has one complete
+`CHANGELOG/YYYY.M.PATCH.md` file. Existing complete contribution records are
+also retained in `CHANGELOG/records/YYYY.M.PATCH.md`, independently of later
+editorial changes. Historical releases without records gain no invented data.
+Initial release generation keeps its existing Highlights, Changes, Fixes and
+contribution-record format; it does not automatically run the later docs rewrite.
+
+Use the shared changelog owner rather than parsing the root index as release
+notes:
+
+```bash
+node scripts/release-changelog.mjs read --version YYYY.M.PATCH
+node scripts/release-changelog.mjs read --version YYYY.M.PATCH --ref <exact-sha-or-tag>
+node scripts/release-changelog.mjs read --version YYYY.M.PATCH --record
+node scripts/release-changelog.mjs write --version YYYY.M.PATCH --file /path/to/initial-section.md
+pnpm changelog:check
+```
+
+The reader supports older tagged commits that still use a monolithic changelog.
+Current writes require the split layout and update the selected entry, its
+matching record and index together. Initial generation refuses to overwrite a
+docs mirror. Historical duplicate version headings are preserved in their
+original order, but automated single-release selection refuses an ambiguous
+version. Generated files retain their source bytes; use their generator and
+`changelog:check`, not a general-purpose formatter.
+
+### Changelog-only evidence reuse
+
+After product qualification, a later Release SHA may reuse Code SHA evidence
+under `split-changelog-release-v1` only when the complete delta:
+
+- Adds or modifies `CHANGELOG/YYYY.M.PATCH.md` for the selected release.
+- Optionally adds or modifies that release's matching record and modifies the
+  root `CHANGELOG.md` index.
+- Contains no other paths, other releases, renames or deletions.
+
+Beta package versions select the stable-base entry and matching record. For
+example, `2026.9.5-beta.1` uses `CHANGELOG/2026.9.5.md` and
+`CHANGELOG/records/2026.9.5.md`, as release-note generation does.
+
+Docs-source changes do not qualify for this narrow reuse policy. Historical
+root-only receipts retain `changelog-only-release-v1` and its original exact
+`CHANGELOG.md` delta; they are not relabeled as split-layout evidence. Either
+form reuses product validation only: the new Release SHA's package and image
+bytes still require their own qualification.
+
 ## Monthly Gateway extended-stable publication
 
 For completed month `YYYY.M`, create `extended-stable/YYYY.M.33` and publish
 `.33+` from that branch. Tag, branch, checkout, package version, preflight, and
 validation must identify one commit. Before `.33`, protected `main` must contain
-a later month's final version below patch `33`; later maintenance patches remain
-eligible.
+a final version below patch `33` exactly one calendar month later, making the
+release the trailing completed month. Maintenance patches remain eligible only
+while that holds; the older line retires when `main` advances another month.
 
 ### Prepare and stabilize the candidate
 
@@ -62,7 +111,7 @@ branch directly.
 
 On the canonical branch, set `YYYY.M.P`, run `pnpm release:prep`, and require
 that version in every publishable official plugin. From the approved ledger,
-generate and commit a complete `## YYYY.M.P` section with `### Highlights`,
+generate and commit a complete `## YYYY.M.P` section in `CHANGELOG/YYYY.M.P.md` with `### Highlights`,
 `### Changes`, and `### Fixes`, citing original merged `main` PRs for equivalent
 backports. Preflight rejects a missing or empty section.
 
@@ -272,14 +321,16 @@ For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm pu
 2. Create `release/YYYY.M.PATCH` from that commit. Backports are optional; apply only the operator-selected set. Bump every required version location, run `pnpm release:prep`, finish release fixes and required forward-ports, and review `src/plugins/compat/registry.ts` plus `src/commands/doctor/shared/deprecation-compat.ts`.
 3. Prepare the complete history manifest and release notes, then freeze the product-complete commit and target context as the **Code SHA/ref**, and record the trusted **Tooling SHA/ref**. Run the deterministic source preflight, then use `pnpm ci:full-release --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Reuse those exact identities for later release validation; never refresh the tooling from moving `main`. Beta-publish uses `release_profile=beta` without soak; postpublish-confidence owns broad live, QA-live, mobile, and Parallels work.
 4. Classify failures before editing as product, harness/tooling/provenance, infrastructure/credential, or wrapper. Only confirmed product failure creates a new Code SHA. Use one diagnosis, one fix when needed, and one narrow retry, then reassess.
-5. Keep the top `CHANGELOG.md` section complete, user-facing and deduplicated, covering merged PRs and direct commits since the last reachable shipped tag. The full manifest and editorial pass may overlap Code validation. When a divergent shipped tag or later forward-port re-associates already-released PRs, pass it explicitly as `--shipped-ref`. A contribution-record target may be an ancestor of the final target; include later fixes honestly rather than inventing a self-referential SHA.
-6. If the qualified Code SHA already contains fully final notes, use that same commit as **Release SHA**. One successful fresh full qualification can supply both lifecycle roles and their exact publication bytes; do not create another commit or run solely to separate the labels. If notes change after qualification, commit only `CHANGELOG.md` as a new Release SHA. Any other changed path returns the release to step 2.
-7. When Code SHA equals Release SHA, retain its successful full validation parent and exact prepared npm/OCI descriptors. Only for a later genuine CHANGELOG-only descendant, optionally run SHA-pinned Full Release Validation with evidence reuse: the complete delta must be exactly `CHANGELOG.md`, and the parent must record `changelog-only-release-v1`, point at green Code evidence, and dispatch no product child lanes. That path still prepares and qualifies new Release SHA package/image bytes. Either path must satisfy every required profile gate. Regular final artifacts include SDK reports for both npm `beta` and `latest`; review the report and 8-character acknowledgement for the channel you will publish.
+5. Keep the selected `CHANGELOG/YYYY.M.PATCH.md` section complete, user-facing and deduplicated, covering merged PRs and direct commits since the last reachable shipped tag. Use the shared writer to keep its contribution record and root index aligned. The full manifest and editorial pass may overlap Code validation. When a divergent shipped tag or later forward-port re-associates already-released PRs, pass it explicitly as `--shipped-ref`. A contribution-record target may be an ancestor of the final target; include later fixes honestly rather than inventing a self-referential SHA.
+6. If the qualified Code SHA already contains fully final notes, use that same commit as **Release SHA**. One successful fresh full qualification can supply both lifecycle roles and their exact publication bytes; do not create another commit or run solely to separate the labels. If notes change after qualification, commit the selected release entry and any matching record/index updates as a new Release SHA. Changes outside the [changelog-only delta](#changelog-only-evidence-reuse) return the release to step 2.
+7. When Code SHA equals Release SHA, retain its successful full validation parent and exact prepared npm/OCI descriptors. Only for a later genuine changelog-only descendant, optionally run SHA-pinned Full Release Validation with evidence reuse: the complete delta must satisfy `split-changelog-release-v1`, point at green Code evidence, and dispatch no product child lanes. That path still prepares and qualifies new Release SHA package/image bytes. Either path must satisfy every required profile gate. Regular final artifacts include SDK reports for both npm `beta` and `latest`; review the report and 8-character acknowledgement for the channel you will publish.
 8. Save that successful Full Release Validation run as both the validation run and `preflight_run_id`. Its read-only npm workflow builds and packs the root/core packages once, checks source in parallel, and qualifies the exact bytes with the final changelog. Docker images build in parallel and are preserved for later promotion. Review the **Plugin SDK API diff** summary. If it reports changes, inspect the readable diff (also uploaded as `plugin-sdk-api-release-diff-<run-id>-<run-attempt>`) and record the 8-character acknowledgement digest printed by the report; omit the acknowledgement when it reports no Plugin SDK API changes. Standalone `OpenClaw NPM Release` with `preflight_only=true` remains available for focused preflight and recovery.
 
    Prepared packing reuses the exact preflight build while retaining package smoke checks, inventory generation, docs and changelog preparation, and source restoration. It also runs `pnpm update:compat:check` against npm's current `latest` and `beta` tags before packing. Ordinary source packing still performs a clean package build without that registry freshness check.
 
-   If the packaged changelog exceeds 500 KiB, packaging keeps every editorial note and replaces only the complete contribution record with a link to the full record in the exact release tag's `CHANGELOG.md`. The full source changelog and contributor credits remain unchanged after postpack restoration. Editorial notes must still satisfy the release-note minimum, and packaging fails if the compact result still exceeds the cap.
+   Packaging resolves the selected release through the shared owner and temporarily replaces the root index with that release's notes. If initial notes exceed 500 KiB, it keeps every editorial note and replaces only the complete contribution record with a link to the exact release tag's `CHANGELOG/records/YYYY.M.PATCH.md`; historical monolithic tags retain their `CHANGELOG.md` record link. Initial editorial notes must still satisfy the release-note minimum, and packaging fails if the compact result still exceeds the cap.
+
+   Later docs mirrors remain complete in the package while they fit the same cap. An oversized mirror produces a small page linking the complete changelog and its Raw view, the separate contribution record, and the release documentation. Those changelog links follow the maintained files on `main`, so they also work for historical releases whose tags predate the split layout. Packaging never truncates mirrored prose. Postpack restores the exact source index, leaving the full release entry, docs sources, and credits unchanged. The archive is not included in the npm package.
 
 9. Create the protected lightweight tooling tag at the recorded Tooling SHA using the [publish automation commands](#regular-release-publish-automation). Run the candidate helper against the untagged Release SHA with the successful Release-SHA validation parent and that tooling tag:
 
@@ -299,7 +350,7 @@ For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm pu
 
    The helper uses the qualified npm artifact bound by Full Release Validation. Supply `--npm-preflight-run` only to recover a separately prepared historical release. It never silently rebuilds a missing qualified artifact. Docker publication consumes the prepared OCI artifacts after checking the finalized tag and exact producer tuple; only registry writes and selector promotion hold the publication lock.
 
-   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin packages to npm and the same set to ClawHub in parallel, then promotes the prepared OpenClaw npm preflight artifact with the matching dist-tag once plugin npm publish succeeds. It keeps the GitHub release as a draft while it verifies registry readback, calls `Docker Release` with the immutable tag and Release SHA for beta and stable releases, and only then finalizes the GitHub release. npm-only alpha releases finalize after the required npm checks without scheduling Docker. The release checkout remains the product/data root, while planning and final verification execute from the exact trusted workflow-source checkout so an older release commit cannot silently use obsolete release tooling. Once publication binds the frozen Tooling SHA to an exact protected lightweight `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping remains authoritative when `main` advances; the suffix records tag-creation provenance, not the current parent run id. Core and plugin npm publishers re-read that exact tag and revalidate the exact parent run tuple immediately before each npm publish or dist-tag mutation, failing closed on a missing, moved, annotated, or wrong-SHA tag, parent mismatch, or disallowed parent state. Other privileged writers require their dependent enforcement changes before the protected-tag publication route is globally complete. Before any publish child starts, it renders and caches the exact GitHub release body. When the complete matching `CHANGELOG.md` section fits GitHub's 125,000-character limit and the renderer's matching 125,000-byte safety ceiling, the page contains that exact `## YYYY.M.PATCH` section including its heading. When the source section does not fit, the page keeps the exact grouped editorial notes and replaces the oversized contribution record with a stable link to the full record in the tag-pinned `CHANGELOG.md`; partial records and truncated bullets are never published. The workflow chooses that full or compact body before adding `### Release verification`; if the proof tail would exceed the limit, it keeps the canonical body and relies on the immutable attached evidence instead. Stable releases published to npm `latest` become the GitHub latest release, while stable maintenance releases kept on npm `beta` are created with GitHub `latest=false`. The workflow also uploads the preflight dependency evidence, the full-validation manifest, and postpublish registry verification evidence to the GitHub release for post-release incident response. It prints child run IDs immediately, auto-approves release environment gates the workflow token is allowed to approve, summarizes failed child jobs with log tails, creates the draft GitHub release page up front, runs native Android qualification independently for a matching tagged Android pin (otherwise recording an explicit skip and shared mobile cutter remedy) and dispatches its publisher after the npm publisher succeeds without making GitHub finalization wait, waits for ClawHub staging only when `wait_for_clawhub=true` (the default `false` leaves that child detached), then runs the trusted-main beta verifier and uploads postpublish evidence for the GitHub release, npm package, selected plugin npm packages, staged ClawHub child workflow run IDs, and optional NPM Telegram run ID. The ClawHub bootstrap verifier requires the exact trusted-main workflow path and SHA, producer and terminal run attempts, release SHA, requested package set, immutable package artifact tuple, and terminal registry readback artifact; a successful legacy release-ref run is not accepted.
+   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin packages to npm and the same set to ClawHub in parallel, then promotes the prepared OpenClaw npm preflight artifact with the matching dist-tag once plugin npm publish succeeds. It keeps the GitHub release as a draft while it verifies registry readback, calls `Docker Release` with the immutable tag and Release SHA for beta and stable releases, and only then finalizes the GitHub release. npm-only alpha releases finalize after the required npm checks without scheduling Docker. The release checkout remains the product/data root, while planning and final verification execute from the exact trusted workflow-source checkout so an older release commit cannot silently use obsolete release tooling. Once publication binds the frozen Tooling SHA to an exact protected lightweight `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping remains authoritative when `main` advances; the suffix records tag-creation provenance, not the current parent run id. Core and plugin npm publishers re-read that exact tag and revalidate the exact parent run tuple immediately before each npm publish or dist-tag mutation, failing closed on a missing, moved, annotated, or wrong-SHA tag, parent mismatch, or disallowed parent state. Other privileged writers require their dependent enforcement changes before the protected-tag publication route is globally complete. Before any publish child starts, it renders and caches the exact GitHub release body. When the complete selected `CHANGELOG/YYYY.M.PATCH.md` section fits GitHub's 125,000-character limit and the renderer's matching 125,000-byte safety ceiling, the page contains that exact `## YYYY.M.PATCH` section including its heading. When the source section does not fit, the page keeps the exact grouped editorial notes and replaces the oversized contribution record with a stable link to the full record in the tag-pinned `CHANGELOG/records/YYYY.M.PATCH.md` (historical monolithic tags retain their original record link); partial records and truncated bullets are never published. The workflow chooses that full or compact body before adding `### Release verification`; if the proof tail would exceed the limit, it keeps the canonical body and relies on the immutable attached evidence instead. Stable releases published to npm `latest` become the GitHub latest release, while stable maintenance releases kept on npm `beta` are created with GitHub `latest=false`. The workflow also uploads the preflight dependency evidence, the full-validation manifest, and postpublish registry verification evidence to the GitHub release for post-release incident response. It prints child run IDs immediately, auto-approves release environment gates the workflow token is allowed to approve, summarizes failed child jobs with log tails, creates the draft GitHub release page up front, runs native Android qualification independently for a matching tagged Android pin (otherwise recording an explicit skip and shared mobile cutter remedy) and dispatches its publisher after the npm publisher succeeds without making GitHub finalization wait, waits for ClawHub staging only when `wait_for_clawhub=true` (the default `false` leaves that child detached), then runs the trusted-main beta verifier and uploads postpublish evidence for the GitHub release, npm package, selected plugin npm packages, staged ClawHub child workflow run IDs, and optional NPM Telegram run ID. The ClawHub bootstrap verifier requires the exact trusted-main workflow path and SHA, producer and terminal run attempts, release SHA, requested package set, immutable package artifact tuple, and terminal registry readback artifact; a successful legacy release-ref run is not accepted.
 
    Core npm dispatch and environment approval start as soon as plugin npm succeeds. Once the exact `npm-release` approval succeeds, the parent proceeds without waiting for core runner allocation. ClawHub inventory authorization and optional bootstrap completion can overlap the running core publish. A failed ClawHub authorization still fails the parent and leaves the GitHub release as a draft; the parent collects any already-started core result and records its evidence.
 
@@ -319,7 +370,7 @@ Stable publication is not complete until `main` carries the actual shipped relea
 
 1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and forward-port real fixes absent from `main`. Do not blindly merge release-only compatibility, test, or validation adapters into newer `main`.
 2. For the normal path, set `main` to the shipped stable version. A late closeout may use `main` after it has advanced to a later stable OpenClaw CalVer; do not downgrade an already-started release train solely to close the prior release. The validator still requires the exact shipped changelog section and records the actual `main` version and SHA. It requires the matching appcast entry once the macOS release has published; until then it records `appcast: pending`. Run `pnpm release:prep` after any root version change.
-3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the tagged release branch. Include the stable `appcast.xml` update when the mac release published one.
+3. Resolve the shipped release through the shared changelog owner. Its initial-format `CHANGELOG/YYYY.M.PATCH.md` section on `main` must exactly match the tagged release, with the matching contribution record retained separately. If `main` already has an approved docs mirror, preserve that prose and require its frozen contribution record to match the shipped accounting instead. Keep the generated root index current. Include the stable `appcast.xml` update when the mac release published one.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main` contains the shipped version and changelog before calling the stable release done.
 6. Keep the repository variables `RELEASE_ROLLBACK_DRILL_ID` and `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
@@ -333,6 +384,61 @@ If the Release Publish parent failed only after immutable npm/plugin evidence wa
 A legacy fallback correction tag may reuse base-package evidence only when the correction tag resolves to the same source commit as the base stable tag. Its Android release reuses the base tag's verified APK and adds provenance for the correction tag. A correction with different source must publish and verify its own package evidence and use a higher Android `versionCode`.
 
 For correction artifact preparation, validate the immutable SHA with `--target-ref release/YYYY.M.PATCH-N` before tagging, or the exact `vYYYY.M.PATCH-N` context after tagging. The existing `target_context_ref` workflow input carries the same context. This preserves the intended correction tag in both npm and Docker artifacts; a base-version package is accepted only when `vYYYY.M.PATCH` resolves to that same SHA. The package bytes keep their original version, and publishers still require artifacts sealed for the exact final tag. A base-context Full Release Validation run does not authorize reusing its base-tag publication artifacts for a correction.
+
+## Post-release documentation publication
+
+Approved detailed docs may replace the initial release prose after publication.
+This is a separate documentation update, not another package release. The docs
+are the editorial source; publish their complete flat Markdown mirror in the
+same source PR so both presentations stay synchronized.
+
+```bash
+pnpm changelog:from-docs --version YYYY.M.PATCH \
+  --source docs/releases/YYYY.M.PATCH.md \
+  --output CHANGELOG/YYYY.M.PATCH.md
+pnpm changelog:check
+```
+
+For a release spread across several docs pages, repeat `--source` in the
+approved reading order. Keep one complete flat file even when it is too large
+for GitHub's rendered preview; provide its Raw/download link. The renderer
+removes presentation wrappers, promotes accordion titles to headings, expands
+docs links and retains the prose, warnings, references, credits, code, tables
+and images. Unsupported markup fails rather than silently dropping content.
+
+The first-line mirror marker records the ordered source paths and exact source
+digest. It is provenance, not publication approval. `changelog:check` checks
+marked mirrors against their sources; historical unmarked release files are
+not automatically rewritten. Any later edit to a mirrored docs source must
+regenerate its flat file in the same PR. Preserve the frozen contribution
+record and unrelated index entries when updating reader-facing prose.
+
+After the exact approved source PR merges and the deployed docs are verified,
+the release-notes publication workflow can update only the GitHub Release body:
+
+- Show the version, verified PR/direct-commit/contributor counts, a Raw
+  changelog link, and the reader-friendly docs link.
+- Include one alphabetically deduplicated thanks list covering all verified
+  contributors, including `@steipete`: PR and direct-commit authors, coauthors
+  and credited issue contributors. Exclude bots; a mention or comment alone
+  does not establish credit.
+- Preserve the existing `### Release verification` section byte-for-byte.
+  Check both the 125,000-character and 125,000-byte limits; never truncate
+  credits or verification to fit.
+
+Source merge, deployed docs and Release-body publication are separate results.
+An unchanged earlier deployment or a coalesced later deployment is acceptable
+only when the publication workflow proves its source lineage and exact approved
+docs bytes. Re-read the live body and source before application, require the
+exact publication approval and comparison, and verify the result afterward.
+If interrupted, reconcile the existing PR or already-applied body and resume
+only incomplete steps; do not repeat an uncertain remote write.
+
+Initial publishing and proof-append helpers refuse a body marked
+`openclaw-release-publication:docs-v1`. Do not rerun them to overwrite the
+post-docs body. GitHub manages native contributor avatars and assets; exact
+avatar counts are informational. This documentation workflow never retags a
+release, rebuilds binaries, republishes assets or changes registry selectors.
 
 ## Release preflight
 
@@ -356,6 +462,15 @@ Drop releases older than the supported upgrade window when regenerating it;
 the inventory must not accumulate indefinitely. A release with no post-swap
 imports still has an entry with an empty chunk list, so coverage is explicit.
 Conflicting origins for the same chunk export across releases fail generation.
+
+The recorder corrects one verified historical bundler annotation: the 2026.9.1,
+2026.9.2, and 2026.9.3 registry-lifecycle chunks grouped the retirement function
+under the cache module's source region. The correction requires the exact release
+version, build identity, commit, npm integrity, chunk and export. It changes only
+recorded source provenance; missing or ambiguous current exports still fail the
+build. Remove each correction when its release leaves the supported upgrade
+window. Regenerate the inventory from verified tarballs rather than editing its
+origins by hand.
 
 `pnpm update:compat:check` reads `npm view openclaw dist-tags --json` and requires
 the versions tagged `latest` and `beta` to be present, even when both tags refer
@@ -544,7 +659,7 @@ writers remain blocked until their dependent enforcement changes land.
 
 If the fresh qualified commit already contains final notes, Code SHA and Release SHA are identical. Use that same successful parent/attempt and its exact prepared bytes for candidate and publication checks, including the final channel-specific SDK report and required acknowledgement. No second commit or FRV is required merely to name a Release SHA.
 
-If notes change afterward, commit only `CHANGELOG.md` and optionally run the same helper with the new Release SHA:
+If notes change afterward, commit the selected release entry and any matching record/index updates, then optionally run the same helper with the new Release SHA:
 
 ```bash
 TOOLING_SHA="<same-recorded-tooling-sha>"
@@ -554,7 +669,7 @@ pnpm ci:full-release \
   --workflow-sha "$TOOLING_SHA"
 ```
 
-This optional second parent reuses product evidence only when GitHub proves the Release SHA descends from the Code SHA and the complete changed path set is exactly `CHANGELOG.md`. It records `changelog-only-release-v1` and dispatches no product children. Npm preflight and package/install acceptance still run on the Release SHA because its tarball bytes changed.
+This optional second parent reuses product evidence only when GitHub proves the Release SHA descends from the Code SHA and its complete delta meets [changelog-only evidence reuse](#changelog-only-evidence-reuse). Current split-layout evidence records `split-changelog-release-v1` and dispatches no product children. Npm preflight and package/install acceptance still run on the Release SHA because its tarball bytes changed.
 
 For a fresh Code SHA, the workflow resolves the target, dispatches manual `CI`, then dispatches `OpenClaw Release Checks`. Beta-publish maps to `release_profile=beta` and `run_release_soak=false`. An `all` run for an actual beta package on its matching canonical release branch or beta tag records `coveragePolicy=npm-beta-v1`: Linux/macOS/Windows Node, Control UI, plugin, package, Linux cross-OS, and QA parity/runtime/restart/tool gates remain; Windows/macOS cross-OS outcomes are advisory; native apps, performance, and published-package Telegram confidence are deferred. Beta `all` without soak also defers broad live/E2E, QA-live, and Package Acceptance Telegram. Postpublish-confidence uses the exact published package with soak or explicit focused groups. Stable-publish maps to `release_profile=stable`. The final verifier summary includes slowest-job tables for each selected child run.
 
@@ -630,10 +745,11 @@ Do not use the full umbrella as the first rerun after a focused fix. Classify th
 
 `rerun_group=all` may reuse a prior green umbrella run when the release profile,
 coverage policy, effective soak setting, and validation inputs match and either the target SHA
-is identical or the new target is a descendant whose complete changed path set
-is exactly `CHANGELOG.md`. Exact-target reuse records
-`exact-target-full-validation-v1`; an optional CHANGELOG-only descendant records
-`changelog-only-release-v1`. The latter reuses only product validation. Npm
+is identical or the new target is a descendant whose complete delta meets
+[changelog-only evidence reuse](#changelog-only-evidence-reuse). Exact-target reuse records
+`exact-target-full-validation-v1`; a split-layout changelog-only descendant records
+`split-changelog-release-v1`. Historical root-only evidence keeps its original
+`changelog-only-release-v1` policy. Changelog-only reuse covers only product validation. Npm
 preflight, package bytes, release-note provenance, and install/update acceptance
 must still run against the Release SHA. Any version, source, generated,
 dependency, package, or workflow-owned target change requires a new Code SHA
@@ -1140,7 +1256,7 @@ SHA-256, and npm integrity. A mismatch requires a new package version.
 - `release_publish_run_id`: approved `OpenClaw Release Publish` run id; required when this workflow is dispatched by that parent (bot-actor real-publish calls)
 - `plugin_npm_run_id`: successful exact-head `Plugin NPM Release` run id; required for a real `extended-stable` core publish
 - `npm_dist_tag`: npm target tag for the publish path; accepts `alpha`, `beta`, `latest`, or `extended-stable` and defaults to `beta`. Final patch `33` and later must use `extended-stable`; by default, `extended-stable` rejects earlier patches, and it always rejects non-final tags.
-- `bypass_extended_stable_guard`: testing-only boolean, default `false`; with `npm_dist_tag=extended-stable`, bypasses monthly extended-stable eligibility while preserving release identity, artifact, approval, and readback checks.
+- `bypass_extended_stable_guard`: testing-only boolean, default `false`; with `npm_dist_tag=extended-stable`, bypasses monthly extended-stable eligibility, including the trailing-completed-month rule, while preserving release identity, artifact, approval, and readback checks.
 
 `Plugin NPM Release` accepts `npm_dist_tag=default` for existing release
 behavior or `npm_dist_tag=extended-stable` for the guarded monthly path. The

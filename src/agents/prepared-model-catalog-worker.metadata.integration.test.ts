@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createPluginCache,
   getPluginMetadataSnapshotCache,
+  retirePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { createCatalogFixture, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
@@ -102,7 +104,10 @@ describe("prepared catalog parent metadata ownership", () => {
         await waitForWorkers();
       } finally {
         captureSpy.mockRestore();
-        cache.disposeModules?.();
+        if (registry) {
+          await disposePluginRegistryInstances(registry);
+        }
+        await retirePluginCache(cache);
       }
     }
   });

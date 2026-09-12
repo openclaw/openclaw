@@ -1,7 +1,7 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
-import { GitHubPublicationController } from "./github-publication-controller.ts";
+import type { GitHubPublicationController } from "./github-publication-controller.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
@@ -95,7 +95,11 @@ export function createSessionGitHubPublication(host: Host) {
     sessions: [row],
   });
   return {
-    attach(row: GatewaySessionRow, changed: () => void): GitHubPublicationBinding | null {
+    attach(
+      row: GatewaySessionRow,
+      changed: () => void,
+      Controller: typeof GitHubPublicationController,
+    ): GitHubPublicationBinding | null {
       const connection = host.connection.capture();
       if (!connection) {
         return null;
@@ -120,7 +124,7 @@ export function createSessionGitHubPublication(host: Host) {
             host.connection.isCurrent(connection) &&
             identity(host.snapshot()) === owner &&
             host.deletionState(candidate.row) !== "confirmed",
-          controller: new GitHubPublicationController({
+          controller: new Controller({
             client: connection.client,
             target: route,
             isCurrent: () => candidate.current(),

@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { emitPluginAgentEvent } from "./agent-event-emission.js";
-import { buildPluginApi } from "./api-builder.js";
+import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
 import {
   clearPluginRunContext,
@@ -16,14 +16,17 @@ import {
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
 import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
-import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
+import {
+  capturePluginLifecycleAuthority,
+  getPluginRecordRegistry,
+  isPluginRecordActive,
+} from "./registry-lifecycle.js";
 import type { PluginRegistrars } from "./registry-registrars.js";
 import type { PluginRuntimeResolver } from "./registry-runtime.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
   type PluginTypedHookPolicy,
-  type PluginSideEffectGuard,
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
@@ -63,29 +66,8 @@ export function createPluginApiFactory(
   registrars: PluginRegistrars,
   runtimeResolver: PluginRuntimeResolver,
 ) {
-  const { registry, registryParams, getHostCronService, pluginSideEffectGuards, pushDiagnostic } =
-    state;
-  const { resolvePluginRuntime, resolveRegisteredChannelRuntime, setPluginRuntimeRecord } =
-    runtimeResolver;
-
-  const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
-    const guard = { active: true };
-    const guards = pluginSideEffectGuards.get(pluginId) ?? new Set<PluginSideEffectGuard>();
-    guards.add(guard);
-    pluginSideEffectGuards.set(pluginId, guards);
-    return guard;
-  };
-
-  const deactivatePluginSideEffectGuards = (pluginId: string): void => {
-    const guards = pluginSideEffectGuards.get(pluginId);
-    if (!guards) {
-      return;
-    }
-    for (const guard of guards) {
-      guard.active = false;
-    }
-    pluginSideEffectGuards.delete(pluginId);
-  };
+  const { registry, registryParams, getHostCronService, pushDiagnostic } = state;
+  const { resolvePluginRuntime, resolveRegisteredChannelRuntime } = runtimeResolver;
 
   const createApi = (
     record: PluginRecord,
@@ -98,32 +80,17 @@ export function createPluginApiFactory(
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
-    setPluginRuntimeRecord(record);
-    const sideEffectGuard = createPluginSideEffectGuard(record.id);
-    const isLoadedRecordInRegistry = () =>
-      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
-    const isLoadedRecordInLiveRegistry = () =>
-      sideEffectGuard.active &&
-      isPluginRegistryActivated(registry) &&
-      !isPluginRegistryRetired(registry) &&
-      isLoadedRecordInRegistry();
-    const isActivatingLoadedRecord = () =>
-      registryParams.activateGlobalSideEffects !== false &&
-      record.enabled &&
-      record.status === "loaded" &&
-      !registry.plugins.some((plugin) => plugin.id === record.id);
     const shouldCommitWorkflowSideEffect = () =>
-      sideEffectGuard.active &&
-      !isPluginRegistryRetired(registry) &&
-      (isActivatingLoadedRecord() ||
-        (isPluginRegistryActivated(registry) && isLoadedRecordInRegistry()));
+      capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+        registration: true,
+      })?.() === true;
     const boundRegistrars = Object.fromEntries(
       Object.entries(registrars).map(([name, register]) => [
         name,
         (...args: unknown[]) => Reflect.apply(register, undefined, [record, ...args]),
       ]),
     );
-    // SAFETY: Each registrar keeps its signature with only the leading record bound.
+    // SAFETY: Every registrar retains its key and signature with only its leading record bound.
     const { registerChannel, ...bound } = boundRegistrars as BoundRegistrars;
     return buildPluginApi({
       id: record.id,
@@ -136,9 +103,13 @@ export function createPluginApiFactory(
       registrationMode,
       config: params.config,
       pluginConfig: params.pluginConfig,
-      runtime: resolvePluginRuntime(record.id),
+      runtime:
+        registrationMode === "cli-metadata"
+          ? createUnavailableRuntime(registrationMode, record.id)
+          : resolvePluginRuntime(record),
       logger: normalizeLogger(registryParams.logger),
-      resolvePath: (input: string) => resolvePluginPath(input, record.rootDir),
+      resolvePath: (input: string) =>
+        resolvePluginPath(input, registrationMode === "cli-metadata" ? undefined : record.rootDir),
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {
@@ -189,7 +160,14 @@ export function createPluginApiFactory(
                   };
                 }
                 const { enqueuePluginNextTurnInjection } = await loadHookState();
+                if (
+                  registryParams.activateGlobalSideEffects === false ||
+                  !shouldCommitWorkflowSideEffect()
+                ) {
+                  return { enqueued: false, id: "", sessionKey: injection.sessionKey };
+                }
                 return enqueuePluginNextTurnInjection({
+                  // SAFETY: The host helper reads the SDK's readonly view of the same config data.
                   cfg: registryParams.runtime.config.current() as OpenClawConfig,
                   pluginId: record.id,
                   pluginName: record.name,
@@ -239,10 +217,11 @@ export function createPluginApiFactory(
                 }
                 try {
                   const { sendPluginSessionAttachment } = await loadAttachments();
-                  if (!isLoadedRecordInLiveRegistry()) {
+                  if (!isPluginRecordActive(registry, record)) {
                     return { ok: false, error: "plugin is not loaded" };
                   }
                   const runtimeConfig =
+                    // SAFETY: Attachment setup reads the published config without mutating it.
                     (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
                     params.config;
                   return await sendPluginSessionAttachment({
@@ -268,8 +247,8 @@ export function createPluginApiFactory(
                   origin: record.origin,
                   schedule,
                   cron: getHostCronService(),
-                  shouldCommit: isLoadedRecordInLiveRegistry,
-                  ownerRegistry: registry,
+                  shouldCommit: shouldCommitWorkflowSideEffect,
+                  ownerRegistry: getPluginRecordRegistry(registry, record),
                 });
               },
               unscheduleSessionTurnsByTag: async (request) => {
@@ -277,7 +256,7 @@ export function createPluginApiFactory(
                   return { removed: 0, failed: 0 };
                 }
                 await Promise.resolve();
-                if (!isLoadedRecordInLiveRegistry()) {
+                if (!shouldCommitWorkflowSideEffect()) {
                   return { removed: 0, failed: 0 };
                 }
                 return unschedulePluginSessionTurnsByTag({
@@ -301,17 +280,21 @@ export function createPluginApiFactory(
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
         // without opting into the wider full-registration surface.
         registerCli: bound.registerCli,
-        registerChannel: (registration) =>
-          registerChannel(
-            registration,
-            registrationMode,
-            registrationCapabilities.runtimeChannel
-              ? () => resolveRegisteredChannelRuntime(record)
-              : undefined,
-          ),
+        ...(registrationMode === "cli-metadata"
+          ? {}
+          : {
+              registerChannel: (registration) =>
+                registerChannel(
+                  registration,
+                  registrationMode,
+                  registrationCapabilities.runtimeChannel
+                    ? () => resolveRegisteredChannelRuntime(record)
+                    : undefined,
+                ),
+            }),
       },
     });
   };
 
-  return { createApi, deactivatePluginSideEffectGuards };
+  return createApi;
 }

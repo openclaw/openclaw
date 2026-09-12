@@ -94,30 +94,33 @@ function createRepositoryFixture(
 }
 
 describe("DraftPlaceState repository selection", () => {
-  it("keeps the picker open while toggling Auto and closes after a manual destination choice", () => {
-    const { state, browser } = createRepositoryFixture();
-    onTestFinished(() => browser.disconnect());
-    const close = vi.spyOn(browser, "close");
-    browser.onPopoverShow("where");
-    browser.changeEnvironmentQuery("runner");
+  it.each(["local", "device", "cloud"] as const)(
+    "closes after selecting Auto and clears Auto when choosing %s",
+    (destination) => {
+      const { state, browser } = createRepositoryFixture();
+      onTestFinished(() => browser.disconnect());
+      state.selectRemoteProject(REMOTE_PROJECT);
+      browser.onPopoverShow("where");
+      browser.changeEnvironmentQuery("runner");
 
-    state.selectDevice("", true, { keepPickerOpen: true });
-    expect(state.autoDevice).toBe(true);
-    expect(browser.popoverOpen("where")).toBe(true);
-    expect(browser.environmentQuery).toBe("runner");
-    expect(close).not.toHaveBeenCalled();
+      state.selectDevice("", true);
+      expect(state.autoDevice).toBe(true);
+      expect(browser.popoverOpen("where")).toBe(false);
+      expect(browser.environmentQuery).toBe("runner");
 
-    state.selectDevice("", false, { keepPickerOpen: true });
-    expect(state.autoDevice).toBe(false);
-    expect(state.deviceId).toBe("");
-    expect(browser.popoverOpen("where")).toBe(true);
-    expect(close).not.toHaveBeenCalled();
-
-    state.selectDevice("desktop");
-    expect(state.deviceId).toBe("desktop");
-    expect(browser.popoverOpen("where")).toBe(false);
-    expect(close).toHaveBeenCalledOnce();
-  });
+      browser.onPopoverShow("where");
+      expect(browser.environmentQuery).toBe("");
+      if (destination === "cloud") {
+        state.selectCloudProfile("aws");
+      } else {
+        state.selectDevice(destination === "device" ? "desktop" : "");
+      }
+      expect(state.autoDevice).toBe(false);
+      expect(state.deviceId).toBe(destination === "device" ? "desktop" : "");
+      expect(state.cloudProfileId).toBe(destination === "cloud" ? "aws" : "");
+      expect(browser.popoverOpen("where")).toBe(destination === "cloud");
+    },
+  );
 
   it.each(["git", "unavailable", "rejected"] as const)(
     "preserves an edited base branch through reconnect discovery (%s)",

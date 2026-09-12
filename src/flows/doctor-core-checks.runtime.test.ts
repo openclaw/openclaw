@@ -241,40 +241,57 @@ describe("doctor runtime tool schema checks", () => {
     );
   });
 
-  it("reports bundle MCP runtime diagnostics when tool listing fails schema validation", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "fuzzplugin",
-          safeServerName: "fuzzplugin",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
+  it.each([false, true])(
+    "preserves MCP schema diagnostics with cleanup failure=%s",
+    async (cleanupFails) => {
+      if (cleanupFails) {
+        mocks.disposeBundleRuntime.mockRejectedValueOnce(
+          new Error("MCP runtime cleanup could not confirm closure"),
+        );
+      }
+      mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
+        tools: [],
+        diagnostics: [
+          {
+            serverName: "fuzzplugin",
+            safeServerName: "fuzzplugin",
+            launchSummary: "node fuzzplugin-mcp.mjs",
+            message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+          },
+        ],
+        dispose: mocks.disposeBundleRuntime,
+      });
 
-    await expect(
-      collectRuntimeToolSchemaFindings({
+      const findings = await collectRuntimeToolSchemaFindings({
         mcp: {
           servers: {
             fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
           },
         },
-      }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/runtime-tool-schemas",
-      severity: "error",
-      message:
-        'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
-      path: "mcp.servers.fuzzplugin",
-      requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-      fixHint:
-        "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
-    });
-    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
-  });
+      });
+      expect(findings).toContainEqual({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        message:
+          'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
+        path: "mcp.servers.fuzzplugin",
+        requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        fixHint:
+          "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+      });
+      if (cleanupFails) {
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "core/doctor/runtime-tool-schemas",
+            path: "mcp.servers",
+            requirement: "MCP runtime cleanup could not confirm closure",
+            fixHint: "Inspect or stop the configured MCP server processes, then rerun doctor.",
+          }),
+        );
+      }
+      expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reports bundle MCP runtime diagnostics for exact MCP tool allowlists", async () => {
     mocks.createBundleMcpToolRuntime.mockReturnValueOnce({

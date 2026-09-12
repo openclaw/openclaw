@@ -6,7 +6,11 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import { uuidv7 } from "./harness/session/uuid.js";
-import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import {
+  type AgentCoreStreamRuntimeDeps,
+  resolveAgentCoreStreamFn,
+  runAgentCoreStream,
+} from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
 import { normalizeCoreContextMessages } from "./turn-interruption.js";
 import type {
@@ -217,7 +221,7 @@ export async function streamAgentResponse(
     executions = Promise.all([previousExecutions, execution]).then(() => {});
   };
   try {
-    const response = await streamFunction(config.model, llmContext, {
+    const stream = streamFunction(config.model, llmContext, {
       ...config,
       apiKey: resolvedApiKey,
       signal: executionSignal,
@@ -225,153 +229,160 @@ export async function streamAgentResponse(
       asyncToolExecution: true,
     });
 
-    let partialMessage: AssistantMessage | null = null;
-    let partialIndex: number | undefined;
-    let committedContentCount = 0;
-    let streamedTurnId: string | undefined;
+    return await runAgentCoreStream(
+      stream,
+      async () => {
+        const response = await stream;
+        let partialMessage: AssistantMessage | null = null;
+        let partialIndex: number | undefined;
+        let committedContentCount = 0;
+        let streamedTurnId: string | undefined;
 
-    // Result wrappers bind ownership to unchanged content. Only split actual async fragments.
-    const remainingFragment = (message: AssistantMessage) =>
-      committedContentCount === 0
-        ? message
-        : replaceCompactionReplayOwnerContent(
-            message,
-            message.content.slice(committedContentCount),
-          );
-    const updatePartial = async (message: AssistantMessage) => {
-      const fragment = remainingFragment(message);
-      if (partialIndex === undefined) {
-        partialIndex = context.messages.length;
-        context.messages.push(fragment);
-        await emit({ type: "message_start", message: { ...fragment } });
-      } else {
-        context.messages[partialIndex] = fragment;
-      }
-      return fragment;
-    };
+        // Result wrappers bind ownership to unchanged content. Only split actual async fragments.
+        const remainingFragment = (message: AssistantMessage) =>
+          committedContentCount === 0
+            ? message
+            : replaceCompactionReplayOwnerContent(
+                message,
+                message.content.slice(committedContentCount),
+              );
+        const updatePartial = async (message: AssistantMessage) => {
+          const fragment = remainingFragment(message);
+          if (partialIndex === undefined) {
+            partialIndex = context.messages.length;
+            context.messages.push(fragment);
+            await emit({ type: "message_start", message: { ...fragment } });
+          } else {
+            context.messages[partialIndex] = fragment;
+          }
+          return fragment;
+        };
 
-    const commitFragment = async (message: AssistantMessage) => {
-      if (partialIndex === undefined) {
-        context.messages.push(message);
-        await emit({ type: "message_start", message: { ...message } });
-      } else {
-        context.messages.splice(partialIndex, 1);
-        context.messages.push(message);
-      }
-      partialIndex = undefined;
-      newMessages.push(message);
-      await emit({ type: "message_end", message });
-    };
+        const commitFragment = async (message: AssistantMessage) => {
+          if (partialIndex === undefined) {
+            context.messages.push(message);
+            await emit({ type: "message_start", message: { ...message } });
+          } else {
+            context.messages.splice(partialIndex, 1);
+            context.messages.push(message);
+          }
+          partialIndex = undefined;
+          newMessages.push(message);
+          await emit({ type: "message_end", message });
+        };
 
-    for await (const event of response) {
-      switch (event.type) {
-        case "start": {
-          const message = event.partial;
-          partialMessage = message;
-          await updatePartial(message);
-          break;
-        }
-
-        case "text_start":
-        case "text_delta":
-        case "text_end":
-        case "thinking_start":
-        case "thinking_delta":
-        case "thinking_end":
-        case "toolcall_start":
-        case "toolcall_delta":
-        case "toolcall_end":
-          if (partialMessage) {
-            const message = resolveAssistantMessageUpdate(event, partialMessage);
-            partialMessage = message;
-            if (event.contentIndex < committedContentCount) {
+        for await (const event of response) {
+          switch (event.type) {
+            case "start": {
+              const message = event.partial;
+              partialMessage = message;
+              await updatePartial(message);
               break;
             }
-            const fragment = await updatePartial(message);
-            const fragmentEvent = {
-              ...event,
-              contentIndex: event.contentIndex - committedContentCount,
-              ...("partial" in event ? { partial: fragment } : {}),
-            };
-            await emit({
-              type: "message_update",
-              assistantMessageEvent: fragmentEvent,
-              message: { ...fragment },
-            });
-            if (
-              event.type === "toolcall_end" &&
-              event.toolCall.async &&
-              !executedIds.has(event.toolCall.id) &&
-              message.content
-                .slice(committedContentCount, event.contentIndex)
-                .every((item) => item.type !== "toolCall" || item.async === true)
-            ) {
-              const prefix = prepareAssistantMessage(
-                ensureToolTurnIdentity({
-                  ...replaceCompactionReplayOwnerContent(
-                    message,
-                    message.content.slice(committedContentCount, event.contentIndex + 1),
-                  ),
-                  ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-                  stopReason: "toolUse",
-                  // Usage belongs to the terminal fragment, once per provider response.
-                  usage: {
-                    input: 0,
-                    output: 0,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    totalTokens: 0,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                  },
-                }),
+
+            case "text_start":
+            case "text_delta":
+            case "text_end":
+            case "thinking_start":
+            case "thinking_delta":
+            case "thinking_end":
+            case "toolcall_start":
+            case "toolcall_delta":
+            case "toolcall_end":
+              if (partialMessage) {
+                const message = resolveAssistantMessageUpdate(event, partialMessage);
+                partialMessage = message;
+                if (event.contentIndex < committedContentCount) {
+                  break;
+                }
+                const fragment = await updatePartial(message);
+                const fragmentEvent = {
+                  ...event,
+                  contentIndex: event.contentIndex - committedContentCount,
+                  ...("partial" in event ? { partial: fragment } : {}),
+                };
+                await emit({
+                  type: "message_update",
+                  assistantMessageEvent: fragmentEvent,
+                  message: { ...fragment },
+                });
+                if (
+                  event.type === "toolcall_end" &&
+                  event.toolCall.async &&
+                  !executedIds.has(event.toolCall.id) &&
+                  message.content
+                    .slice(committedContentCount, event.contentIndex)
+                    .every((item) => item.type !== "toolCall" || item.async === true)
+                ) {
+                  const prefix = prepareAssistantMessage(
+                    ensureToolTurnIdentity({
+                      ...replaceCompactionReplayOwnerContent(
+                        message,
+                        message.content.slice(committedContentCount, event.contentIndex + 1),
+                      ),
+                      ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
+                      stopReason: "toolUse",
+                      // Usage belongs to the terminal fragment, once per provider response.
+                      usage: {
+                        input: 0,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 0,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                      },
+                    }),
+                  );
+                  streamedTurnId ??= prefix.turnId;
+                  // Await transcript persistence before admitting side effects. The model
+                  // may keep sampling, but every executed call has a durable owner.
+                  await commitFragment(prefix);
+                  committedContentCount = event.contentIndex + 1;
+                  enqueueTools(prefix);
+                }
+              }
+              break;
+
+            case "done":
+            case "error":
+              return await finalizeAssistantMessage(
+                event.type === "done" ? event.message : event.error,
               );
-              streamedTurnId ??= prefix.turnId;
-              // Await transcript persistence before admitting side effects. The model
-              // may keep sampling, but every executed call has a durable owner.
-              await commitFragment(prefix);
-              committedContentCount = event.contentIndex + 1;
-              enqueueTools(prefix);
-            }
           }
-          break;
+        }
 
-        case "done":
-        case "error":
-          return await finalizeAssistantMessage(
-            event.type === "done" ? event.message : event.error,
+        // Stream ended without a terminal event: result() either carries an explicit
+        // end(result) value or rejects with the EventStream terminal-contract error,
+        // so a contract-violating producer surfaces loudly instead of hanging here.
+        return await finalizeAssistantMessage();
+
+        async function finalizeAssistantMessage(terminal?: AssistantMessage) {
+          // Fence queued side effects before result hooks or transcript persistence can yield.
+          abortFailedResponse(terminal);
+          const result = await response.result();
+          abortFailedResponse(result);
+          const finalMessage = prepareAssistantMessage(
+            ensureToolTurnIdentity(
+              removeNonExecutableToolCalls({
+                ...remainingFragment(result),
+                ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
+              }),
+            ),
           );
-      }
-    }
-
-    // Stream ended without a terminal event: result() either carries an explicit
-    // end(result) value or rejects with the EventStream terminal-contract error,
-    // so a contract-violating producer surfaces loudly instead of hanging here.
-    return await finalizeAssistantMessage();
-
-    async function finalizeAssistantMessage(terminal?: AssistantMessage) {
-      // Fence queued side effects before result hooks or transcript persistence can yield.
-      abortFailedResponse(terminal);
-      const result = await response.result();
-      abortFailedResponse(result);
-      const finalMessage = prepareAssistantMessage(
-        ensureToolTurnIdentity(
-          removeNonExecutableToolCalls({
-            ...remainingFragment(result),
-            ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-          }),
-        ),
-      );
-      await commitFragment(finalMessage);
-      if (executedIds.size > 0) {
-        enqueueTools(finalMessage);
-      }
-      await executions;
-      if (executionFailure) {
-        throw executionFailure.error;
-      }
-      const continuationRequired = await steering.finish();
-      return { message: finalMessage, executedIds, batches, continuationRequired };
-    }
+          await commitFragment(finalMessage);
+          if (executedIds.size > 0) {
+            enqueueTools(finalMessage);
+          }
+          await executions;
+          if (executionFailure) {
+            throw executionFailure.error;
+          }
+          const continuationRequired = await steering.finish();
+          return { message: finalMessage, executedIds, batches, continuationRequired };
+        }
+      },
+      runtime,
+    );
   } finally {
     executionAbort.abort(new Error("Model response closed"));
     await executions;

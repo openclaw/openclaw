@@ -110,7 +110,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(bridge.isConnected()).toBe(true);
     expect(onReady).toHaveBeenCalledOnce();
 
-    bridge.close();
+    await bridge.close();
   });
 
   it("clears canceled rotation metadata before an explicit reconnect", async () => {
@@ -134,8 +134,8 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     });
     expect(firstSocket.closed).toBe(true);
 
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("completed");
 
@@ -167,7 +167,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
       }),
     );
 
-    bridge.close();
+    void bridge.close();
     await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(0);
     expect(onClose).toHaveBeenCalledTimes(2);
@@ -189,7 +189,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(1);
 
-    bridge.close();
+    void bridge.close();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(vi.getTimerCount()).toBe(0);
@@ -207,7 +207,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(bridge.isConnected()).toBe(true);
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(onError).not.toHaveBeenCalled();
-    bridge.close();
+    await bridge.close();
   });
 
   it("does not report reconnect readiness after cancellation during provider setup", async () => {
@@ -224,7 +224,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const retrySocket = requireSocket(1);
     openSocket(retrySocket);
 
-    bridge.close();
+    void bridge.close();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(onEvent).not.toHaveBeenCalledWith(
@@ -252,7 +252,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
       error: { message: "queued retry startup failure" },
     });
 
-    bridge.close();
+    void bridge.close();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(onError).not.toHaveBeenCalled();
@@ -335,7 +335,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(onError).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
-    bridge.close();
+    await bridge.close();
   });
 
   it("exhausts retries when sockets open but never become provider-ready", async () => {
@@ -385,7 +385,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
       detail: "reason=websocket-close attempts=5",
     });
 
-    bridge.close();
+    void bridge.close();
     expect(onClose).toHaveBeenCalledOnce();
   });
 

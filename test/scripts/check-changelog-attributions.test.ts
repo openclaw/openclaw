@@ -216,6 +216,60 @@ describe("check-changelog-attributions", () => {
     }
   });
 
+  it.each([
+    {
+      name: "initial release keeps maintainer exclusion",
+      file: "2026.9.1.md",
+      mirror: false,
+      handle: "steipete",
+      rejected: true,
+    },
+    {
+      name: "docs mirror includes the maintainer",
+      file: "2026.9.1.md",
+      mirror: true,
+      handle: "steipete",
+      rejected: false,
+    },
+    {
+      name: "docs mirror excludes bots",
+      file: "2026.9.1.md",
+      mirror: true,
+      handle: "dependabot[bot]",
+      rejected: true,
+    },
+    {
+      name: "frozen record retains initial policy",
+      file: "records/2026.9.1.md",
+      mirror: true,
+      handle: "steipete",
+      rejected: true,
+    },
+  ])("$name", ({ file, mirror, handle, rejected }) => {
+    const repo = createRepoWithChangelog("# Changelog\n\n<!-- openclaw:split-changelog -->\n");
+    mkdirSync(path.join(repo, "CHANGELOG/records"), { recursive: true });
+    writeFileSync(
+      path.join(repo, "CHANGELOG", file),
+      `## 2026.9.1\n\n${mirror ? "<!-- openclaw-docs-mirror-v1 -->\n\n" : ""}- Repair. Thanks @${handle}.\n`,
+    );
+    try {
+      if (rejected) {
+        let output = "";
+        try {
+          validateChangelogAttributionPolicy(repo);
+        } catch (error) {
+          output = commandOutput(error);
+        }
+        expect(output).toContain(`CHANGELOG/${file}:`);
+        expect(output).toContain(`uses Thanks @${handle}`);
+      } else {
+        expect(validateChangelogAttributionPolicy(repo)).toBe("");
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("rejects root changelog updates from normal prepare gates", () => {
     const repo = createRepoWithPrChangelogDiff("- User fix (#123). Thanks @alice.");
     const callsPath = path.join(repo, "calls.log");
@@ -241,7 +295,6 @@ checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
-normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
@@ -264,7 +317,6 @@ prepare_gates 123
       const calls = existsSync(callsPath) ? readFileSync(callsPath, "utf8") : "";
 
       expect(output).toContain("CHANGELOG.md is release-owned");
-      expect(calls).not.toContain("normalize");
       expect(calls).not.toContain("policy");
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -294,7 +346,6 @@ checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
-normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
@@ -315,7 +366,7 @@ prepare_gates 123
       const calls = readFileSync(callsPath, "utf8");
 
       expect(output).toContain("docs_only=true");
-      expect(calls).toContain("normalize\npolicy\n");
+      expect(calls).toContain("policy\n");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

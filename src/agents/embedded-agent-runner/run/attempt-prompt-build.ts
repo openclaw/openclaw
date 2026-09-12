@@ -87,6 +87,7 @@ type EmbeddedAttemptSteeringLease = {
 };
 
 type EmbeddedAttemptPromptAssembly = {
+  assertHostActive?: () => void;
   hookCtx: PromptBuildHookContext;
   effectivePrompt: string;
   promptBuildPrependContext?: string;
@@ -331,6 +332,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       : undefined;
 
   return {
+    assertHostActive,
     hookCtx,
     effectivePrompt,
     promptBuildPrependContext,
@@ -390,7 +392,7 @@ type EmbeddedAttemptPromptContext = {
   systemPromptForHook: string;
 };
 
-export function prepareEmbeddedAttemptPromptContext(input: {
+export async function prepareEmbeddedAttemptPromptContext(input: {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
   attempt: PromptContextAttempt;
@@ -406,7 +408,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   systemPromptReport?: SessionSystemPromptReport;
   systemPromptText: string;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
-}): EmbeddedAttemptPromptContext {
+}): Promise<EmbeddedAttemptPromptContext> {
   const { attempt } = input;
   const preparedUserTurnTimestamp = (
     input.preparedUserTurnMessage as { timestamp?: unknown } | undefined
@@ -512,7 +514,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   const runtimeFacts =
     input.isRawModelRun || attempt.operation === "settled-tool-finalization"
       ? []
-      : buildRuntimeFactsContext({
+      : await buildRuntimeFactsContext({
           capabilityToolNames: input.capabilityToolNames,
           cfg: attempt.config ?? {},
           sessionKey: attempt.sessionKey,

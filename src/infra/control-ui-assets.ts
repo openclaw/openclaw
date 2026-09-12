@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -345,15 +347,20 @@ export function inspectControlUiRootAssets(
 }
 
 function summarizeCommandOutput(text: string): string | undefined {
-  const lines = normalizeStringEntries(text.split(/\r?\n/g));
+  const lines = normalizeStringEntries(
+    stripAnsi(text)
+      .split(/\r?\n/g)
+      .map((line) => sanitizeTerminalText(line.trim())),
+  );
   if (!lines.length) {
     return undefined;
   }
-  const last = lines.at(-1);
-  if (!last) {
-    return undefined;
-  }
-  return last.length > 240 ? `${truncateUtf16Safe(last, 239)}…` : last;
+  // Keep the error and its context, not a warning preamble or a stack/object tail.
+  const errorIndex = lines.findIndex((line) =>
+    /^(?:\[[^\]]+\]\s*)?(?:\w*error|fatal)\b/iu.test(line),
+  );
+  const summary = lines.slice(Math.max(0, errorIndex)).join(" ");
+  return summary.length > 240 ? `${truncateUtf16Safe(summary, 239)}…` : summary;
 }
 
 export async function ensureControlUiAssetsBuilt(

@@ -243,9 +243,10 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       "subsequent block",
       "aborted progress",
       "tool-only reply",
+      "cancelled block and tool-only reply",
       "no pending reply",
     ] as const)(
-      "settles queued presentation after %s through retained callbacks",
+      "dispatchReplyFromConfig settles queued presentation after %s through retained callbacks",
       async (phase) => {
         type ResolverOptions = import("./get-reply.types.js").InternalGetReplyOptions;
         let retained: ResolverOptions | undefined;
@@ -263,6 +264,12 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         const dispatcher = createReplyDispatcher({
           humanDelay: { mode: "custom", minMs: 1, maxMs: 1 },
           beforeDeliver: async (payload) => {
+            if (
+              phase === "cancelled block and tool-only reply" &&
+              payload.text === "initial reply"
+            ) {
+              return null;
+            }
             if (payload.text === "queued reply" && phase === "before delivery") {
               entered.resolve();
               await release.promise;
@@ -292,6 +299,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           replyResolver: async (_ctx, opts) => {
             retained = opts;
             await opts?.onBlockReply?.({ text: "initial reply" });
+            if (phase === "cancelled block and tool-only reply") {
+              opts?.onDeliberateSilentTerminalReply?.();
+            }
             resolverEntered.resolve();
             if (phase === "aborted progress") {
               await returnResolver.promise;
@@ -308,7 +318,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           dispatcher.markComplete();
           await dispatcher.waitForIdle();
           if (phase !== "no pending reply") {
-            if (phase === "tool-only reply") {
+            if (phase === "tool-only reply" || phase === "cancelled block and tool-only reply") {
               dispatcher.sendToolResult({ text: "queued reply" });
             } else {
               await retained?.onBlockReply?.({ text: "queued reply" });
@@ -345,15 +355,20 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           await progress;
           await dispatch;
           const receipt = await dispatcher.waitForIdle();
-          const noPendingBlock = phase === "no pending reply" || phase === "tool-only reply";
+          const noPendingBlock =
+            phase === "no pending reply" ||
+            phase === "tool-only reply" ||
+            phase === "cancelled block and tool-only reply";
           expect(cleanedUpBeforeDelivery).toBe(noPendingBlock ? 1 : 0);
           expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
           expect(receipt?.counts.block.delivered).toBe(
-            noPendingBlock || phase === "transport failure"
-              ? 1
-              : phase === "subsequent block"
-                ? 3
-                : 2,
+            phase === "cancelled block and tool-only reply"
+              ? 0
+              : noPendingBlock || phase === "transport failure"
+                ? 1
+                : phase === "subsequent block"
+                  ? 3
+                  : 2,
           );
           expect(receipt?.counts.block.failedAfterSend).toBe(phase === "transport failure" ? 1 : 0);
           if (phase === "transport failure") {

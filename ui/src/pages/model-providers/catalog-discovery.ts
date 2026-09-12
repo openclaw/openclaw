@@ -19,6 +19,8 @@ type DiscoveryGateway = {
 };
 
 export type CatalogDiscoveryController = {
+  /** Latest picker request, including one that has already settled. */
+  readonly generation: number;
   /** Whether a discovery request is currently in flight. */
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
@@ -27,8 +29,8 @@ export type CatalogDiscoveryController = {
   openPicker: () => void;
   /** Retries a failed discovery. */
   retry: () => void;
-  /** Resets request history and pending/error state when core data or its owner changes. */
-  reset: () => void;
+  /** Retires pending results; same-owner publication preserves discovery history. */
+  reset: (options?: { preserveHistory?: boolean }) => void;
 };
 
 type CreateOptions = {
@@ -46,8 +48,12 @@ export function createCatalogDiscoveryController(
   let pending: AbortController | null = null;
   let error: string | null = null;
   let requestedDiscovery = false;
+  let generation = 0;
 
   const controller: CatalogDiscoveryController = {
+    get generation() {
+      return generation;
+    },
     get discovering() {
       return pending !== null;
     },
@@ -60,11 +66,13 @@ export function createCatalogDiscoveryController(
     retry() {
       void discover(true);
     },
-    reset() {
+    reset({ preserveHistory = false } = {}) {
       const retired = pending;
       pending = null;
       error = null;
-      requestedDiscovery = false;
+      if (!preserveHistory) {
+        requestedDiscovery = false;
+      }
       retired?.abort();
       options.requestUpdate();
     },
@@ -89,12 +97,14 @@ export function createCatalogDiscoveryController(
       options.getAgentId() === agentId &&
       options.getAgentEpoch() === agentEpoch;
     pending = request;
+    generation += 1;
     error = null;
     requestedDiscovery = true;
     options.requestUpdate();
     try {
       const result = await loadModelCatalog(client, {
         agentId,
+        includeDefaultModels: true,
         ...(refresh ? { refresh: true } : {}),
         signal: request.signal,
       });
@@ -105,6 +115,7 @@ export function createCatalogDiscoveryController(
           options.setData({
             ...data,
             models: result.models,
+            automaticUtilityModel: result.defaultModels?.automaticUtilityModel,
             providerOutcomes: result.providerOutcomes ?? [],
             catalogError: null,
           });

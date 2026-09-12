@@ -16,10 +16,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import { applicationContext } from "../../app/context.ts";
 import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
-import type {
-  NativeGatewaysCapability,
-  NativeGatewaysSnapshot,
-} from "../../app/native-gateways.runtime.ts";
 import {
   createQuestionPromptState,
   listQuestionPrompts,
@@ -273,8 +269,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) mergedChrome = false;
   @property({ attribute: false }) navDrawerOpen = false;
-  @property({ attribute: false }) nativeGateways?: NativeGatewaysCapability | null;
-  @property({ attribute: false }) gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;

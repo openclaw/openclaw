@@ -34,20 +34,38 @@ export type LegacyCollectionBackupRoot =
     }
   | { legacyRoot: string; warning: string; recoverable?: true };
 
-export async function listPendingLegacyCollectionBackupRoots(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<LegacyCollectionBackupRoot[]> {
+async function listLegacyCollectionBackupRoots(env: NodeJS.ProcessEnv): Promise<string[]> {
   const backupRoot = path.join(resolveStateDir(env), "skill-workshop", "collection-backups");
   if (!(await pathExists(backupRoot))) {
     return [];
   }
-  const names = (await fs.readdir(backupRoot, { withFileTypes: true }))
+  return (await fs.readdir(backupRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && /^[a-f0-9]{16}$/u.test(entry.name))
-    .map((entry) => entry.name);
+    .map((entry) => path.join(backupRoot, entry.name));
+}
+
+export async function listLegacyCollectionBackupWorkspaceDirs(
+  env: NodeJS.ProcessEnv,
+): Promise<string[]> {
+  const workspaces = new Set<string>();
+  for (const legacyRoot of await listLegacyCollectionBackupRoots(env)) {
+    try {
+      for (const backup of await readLegacyCollectionBackups(legacyRoot)) {
+        workspaces.add(backup.workspaceDir);
+      }
+    } catch {
+      // The migration reports invalid manifests; they cannot establish a workspace.
+    }
+  }
+  return [...workspaces];
+}
+
+export async function listPendingLegacyCollectionBackupRoots(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<LegacyCollectionBackupRoot[]> {
   const roots: LegacyCollectionBackupRoot[] = [];
-  for (const name of names) {
-    const legacyRoot = path.join(backupRoot, name);
+  for (const legacyRoot of await listLegacyCollectionBackupRoots(env)) {
     try {
       const backups = await readLegacyCollectionBackups(legacyRoot);
       if (backups.length === 0) {

@@ -1,4 +1,3 @@
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -10,11 +9,10 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
-import { formatCliCommand } from "../command-format.js";
-import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
+import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import {
   assertUpdateCommandPackageFinalization,
   createUpdateCommandFinalizationFence,
@@ -130,16 +128,16 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   const publishFinalResult = async (failure?: unknown): Promise<UpdateRunResult> => {
     const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure);
     const result = completedResult(settled.result);
+    result.recovery = settled.settlementFailed ? undefined : result.recovery;
+    const reportDowntime = !settled.settlementFailed && pendingRestartAtMs === undefined;
     if (pendingNotify) {
-      await writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result,
-        jsonMode: Boolean(params.opts.json),
-      });
+      const meta = params.controlPlaneUpdateSentinelMeta;
+      const jsonMode = Boolean(params.opts.json);
+      await writeControlPlaneUpdateRestartSentinelBestEffort({ meta, result, jsonMode });
     }
     return publishUpdateCommandTerminalResult(params, result, {
       rolledBack: rolledBack && !settled.settlementFailed,
-      downtimeMs: pendingRestartAtMs === undefined ? completedDowntimeMs : undefined,
+      downtimeMs: reportDowntime ? completedDowntimeMs : undefined,
     });
   };
   const deferredTerminal = deferUpdateCommandTerminalResult(params.opts.run, publishFinalResult);
@@ -340,6 +338,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
         recovery: result.recovery,
+        updateRun: params.opts.run,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
         nodeRunner: params.packageUpdateNodeRunner,
@@ -468,6 +467,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       postUpdateConfigSnapshot ??
       (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
         readConfigFileSnapshot({
+          observe: false,
           skipPluginValidation: true,
           suppressFutureVersionWarning: true,
         }),
@@ -528,6 +528,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           onVerificationFailure: (reason) => {
             verificationFailure = reason;
           },
+          onPluginWarnings: (warnings) => {
+            resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
+          },
           onVerified: recordVerifiedDowntime,
         }),
       );
@@ -550,14 +553,13 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         reason: verificationFailure,
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       };
-      const canRepairService =
-        restartContext.serviceMutationAllowed &&
-        !restartContext.skipLegacyServiceRestart &&
-        !postVerificationRepairAttempted;
       const recovered = await recoverFailedResult(
         failure,
         false,
-        verificationFailure !== "service-runtime-refresh-failed" && canRepairService
+        verificationFailure !== "service-runtime-refresh-failed" &&
+          restartContext.serviceMutationAllowed &&
+          !restartContext.skipLegacyServiceRestart &&
+          !postVerificationRepairAttempted
           ? (result) =>
               repairUpdateService({
                 result,
@@ -658,19 +660,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     }
     // Restart and health verification own recovery of the service stopped for this update.
     // Optional completion refresh must run only after that lifecycle boundary settles.
-    try {
-      await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
-    } catch (err) {
-      if (!params.opts.json) {
-        const completionCacheRefreshCommand = formatCliCommand("openclaw completion --write-state");
-        defaultRuntime.log(
-          theme.warn(
-            `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`,
-          ),
-        );
-      }
-    }
     await tryInstallShellCompletion({
+      root: postUpdateRoot,
       jsonMode: Boolean(params.opts.json),
       skipPrompt: Boolean(params.opts.yes),
     });

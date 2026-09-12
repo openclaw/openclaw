@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
   verifyReleaseEvidenceChecksum,
   verifyStableMainCloseout,
@@ -70,12 +71,18 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const mainDir = resolve(args["main-dir"]);
   const tagDir = resolve(args["tag-dir"]);
+  const tagPackageJson = readJson(resolve(tagDir, "package.json"));
+  const tagVersion = args.tag.replace(/^v/u, "");
+  const version =
+    tagPackageJson.version === tagVersion.replace(/-[1-9]\d*$/u, "")
+      ? tagPackageJson.version
+      : tagVersion;
   const result = verifyStableMainCloseout({
     tag: args.tag,
     mainPackageJson: readJson(resolve(mainDir, "package.json")),
-    tagPackageJson: readJson(resolve(tagDir, "package.json")),
-    mainChangelog: readFileSync(resolve(mainDir, "CHANGELOG.md"), "utf8"),
-    tagChangelog: readFileSync(resolve(tagDir, "CHANGELOG.md"), "utf8"),
+    tagPackageJson,
+    mainRelease: loadReleaseChangelog({ rootDir: mainDir, version }),
+    tagRelease: loadReleaseChangelog({ rootDir: tagDir, version }),
     mainAppcast: readFileSync(resolve(mainDir, "appcast.xml"), "utf8"),
     publishedAppcast: args["published-appcast"]
       ? readFileSync(resolve(args["published-appcast"]), "utf8")

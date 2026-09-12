@@ -507,13 +507,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       return false;
     }
   };
-  const cancelBuild = (environmentId: string) => {
+  const cancelPreparation = (environmentId: string) => {
     const record = store.get(environmentId);
-    if (record?.preparation?.purpose === "build" && retire(record, "invalidated")) {
+    if (record?.preparation && retire(record, "invalidated")) {
       // The durable cancellation fences readiness; the lifecycle retains provider
       // custody until its aborted operation and physical cleanup actually settle.
       preparations.get(environmentId)?.abort();
     }
   };
-  return { schedule, noteDemand, candidates, maintain, canPruneDemand, cancelBuild };
+  return { schedule, noteDemand, candidates, maintain, canPruneDemand, cancelPreparation };
 }

@@ -27,6 +27,11 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
+Native plugin imports evaluate each requested SDK entry synchronously before
+linking the plugin's asynchronous module graph. This lets CommonJS bundles
+`require()` the same SDK entry during concurrent channel startup without seeing
+an unfinished ESM module. Unused SDK entries remain unloaded.
+
 Safety gates run **before** runtime execution. Discovery blocks a candidate
 when:
 
@@ -202,8 +207,10 @@ reuse the same checked bytes rather than reopening a file at each stage.
 
 Actual code imports retain their boundary and file-identity checks before first
 execution. Consent checks use a fresh inspection after an awaited approval so
-changed artifacts cannot inherit approval for older capabilities. Failed module
-evaluation remains retryable; a successful import is shared across consumers.
+changed artifacts cannot inherit approval for older capabilities. The plugin
+cache releases failed loads, but Node retains failed native ESM evaluations for
+the process lifetime; restarting an account cannot repair that module graph.
+A successful import is shared across consumers.
 
 The CLI invocation owns one operation cache across config reads, output metadata,
 command ownership, nested registration, and actions. Standalone registration uses

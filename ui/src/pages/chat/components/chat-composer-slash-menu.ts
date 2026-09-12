@@ -54,7 +54,7 @@ export type SlashMenuHost = {
   getTextarea: () => HTMLTextAreaElement | null;
   resolveArgOptions: (command: SlashCommandDef) => string[];
   runCommand: () => void;
-  canRun: (inline: boolean, command?: SlashCommandDef) => boolean;
+  canRun: (inline: boolean, command?: SlashCommandDef, args?: string) => boolean;
   runInlineCommand?: (command: string) => void;
   refreshCommands?: () => void | Promise<void>;
   commandFilter?: (command: SlashCommandDef) => boolean;
@@ -337,7 +337,7 @@ function selectSlashArg(
   const { slashMenuCommand: command, slashMenuCompletion: completion } = state;
   if (
     command?.source !== "skill" &&
-    !host.canRun(completion?.inline === true, command ?? undefined)
+    !host.canRun(completion?.inline === true, command ?? undefined, arg)
   ) {
     return;
   }
@@ -347,7 +347,7 @@ function selectSlashArg(
     state.slashMenuCompletion?.inline &&
     command &&
     executesInlineImmediately(command) &&
-    host.canRun(true, command) &&
+    host.canRun(true, command, arg) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -385,7 +385,6 @@ function submitInlineSlashArgument(
     !completion?.inline ||
     !command ||
     !executesInlineImmediately(command) ||
-    !host.canRun(true, command) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -393,7 +392,7 @@ function submitInlineSlashArgument(
   const current = host.getTextarea()?.value ?? host.getDraft();
   const argumentStart = completion.argumentStart ?? completion.start + `/${command.name} `.length;
   const args = current.slice(argumentStart, completion.end).trim();
-  if (!removeInlineSlashSelection(state, host)) {
+  if (!host.canRun(true, command, args) || !removeInlineSlashSelection(state, host)) {
     return false;
   }
   resetSlashMenuState(state);
@@ -409,7 +408,7 @@ function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHo
   const current = host.getTextarea()?.value ?? host.getDraft();
   const caret = host.getTextarea()?.selectionStart ?? current.length;
   const invocation = findDirectInlineSlashArgumentInvocation(current, caret);
-  if (!invocation || !host.canRun(true, invocation.command)) {
+  if (!invocation) {
     return false;
   }
   state.slashMenuMode = "freeform-args";
@@ -448,7 +447,8 @@ export function handleInlineSlashArgKeydown(
     return false;
   }
   event.preventDefault();
-  return submitInlineSlashArgument(state, host, requestUpdate);
+  submitInlineSlashArgument(state, host, requestUpdate);
+  return true;
 }
 
 export function handleSlashMenuKeydown(

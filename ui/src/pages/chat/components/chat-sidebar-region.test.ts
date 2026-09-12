@@ -269,6 +269,7 @@ describe("chat sidebar region", () => {
         themeMode: "dark",
         agentId: "main",
         browserPresented: false,
+        browserTabsInHeader: true,
         companionPresented: false,
         browserRefreshOnPresentation: false,
         desktopPresented: false,
@@ -442,7 +443,7 @@ describe("chat sidebar region", () => {
     };
     await region.updateComplete;
     const event = new CustomEvent("openclaw:terminal-toggle", {
-      detail: { catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" } },
+      detail: { terminalSessionId: "terminal-1", agentOwned: true },
     });
 
     expect(region.deliverPanelEvent("terminal", event)).toBe(true);

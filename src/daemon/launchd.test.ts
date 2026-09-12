@@ -1058,6 +1058,7 @@ describe("launchd runtime state", () => {
     expect(runtime).toEqual({
       status: "unknown",
       detail: "Operation not permitted while reading launchd state",
+      inspectionReason: "launchd-gui-domain-unavailable",
     });
   });
 
@@ -1082,6 +1083,7 @@ describe("launchd runtime state", () => {
     expect(runtime).toEqual({
       status: "unknown",
       detail: "System LaunchDaemon system/ai.openclaw.gateway already owns this gateway label.",
+      inspectionReason: "launchd-system-owned",
       systemLaunchDaemon: {
         status: "loaded",
         serviceTarget: "system/ai.openclaw.gateway",
@@ -1758,13 +1760,13 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd uninstall", () => {
-  it("rejects an unrecognized launchctl inspection failure", async () => {
+  it("rejects a permission-denied launchctl inspection", async () => {
     state.printError = "launchctl print permission denied";
     state.printFailuresRemaining = 1;
 
-    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
-      "launchctl print failed: launchctl print permission denied",
-    );
+    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toMatchObject({
+      reason: "launchd-gui-domain-unavailable",
+    });
   });
 
   it("refuses an in-band uninstall before bootout or plist removal", async () => {
@@ -2777,7 +2779,9 @@ describe("launchd install", () => {
 
     await stopLaunchAgent({ env, stdout, disable });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port, {
+      assertCurrent: expect.any(Function),
+    });
     expect(inspectPortUsage).toHaveBeenCalledWith(port, { probeHosts: ["127.0.0.1"] });
     expect(output).toContain("Stopped LaunchAgent");
   });
@@ -2841,7 +2845,9 @@ describe("launchd install", () => {
 
     await stopLaunchAgent(launchAgentControlFixture(env));
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19006);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19006, {
+      assertCurrent: expect.any(Function),
+    });
     expect(inspectPortUsage).toHaveBeenCalledWith(19006, {
       probeHosts: ["127.0.0.1"],
     });
@@ -2871,7 +2877,9 @@ describe("launchd install", () => {
       );
 
       expect(onMutation).toHaveBeenCalledWith({ mode });
-      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port);
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port, {
+        assertCurrent: expect.any(Function),
+      });
       expect(inspectPortUsage).toHaveBeenCalledWith(port, { probeHosts: ["127.0.0.1"] });
       expect(launchctlCommandNames()).toContain("bootout");
       if (disable) {

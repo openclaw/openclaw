@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { githubLinkPrefetch } from "../../../components/github-link-prefetch.ts";
 import { renderLoadingState } from "../../../components/loading-state.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
@@ -77,7 +78,11 @@ function renderTranscriptShell(
                   ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
                   : nothing
               }
-              ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
+              ${
+                projection.isEmpty && !projection.searchOpen
+                  ? renderWelcomeState({ ...props, onModelSetup: undefined })
+                  : nothing
+              }
               ${
                 projection.isEmpty && projection.searchOpen
                   ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
@@ -90,6 +95,7 @@ function renderTranscriptShell(
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
       ${markdownBlocks(props.transcriptVisible ?? true)}
+      ${githubLinkPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           hydrateLinkFavicons(element, props.fetchLinkFavicon);

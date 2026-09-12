@@ -121,6 +121,8 @@ suite.define(() => {
       await gateway.setMethodResponse("models.list", { models: [discoveredModel] });
       const sessionListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await modelSelect.click();
+      expect(await gateway.getRequests("models.list")).toHaveLength(1);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       const modelsRequest = await gateway.waitForRequest("models.list", { after: 1 });
       expect(modelsRequest.params).toEqual({
         view: "configured",

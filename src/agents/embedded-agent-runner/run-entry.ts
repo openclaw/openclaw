@@ -67,6 +67,7 @@ type RunEntryHarnessPreparation =
     };
 
 type DeliveryEvidence = {
+  hasRetryBlockedDelivery: boolean;
   hasDirectlySentBlockReply: boolean;
   hasBlockReplyPipelineOutput: boolean;
 };
@@ -433,12 +434,16 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   // delivered its reply, producing a duplicate visible answer (#113788). Consult the
   // same live delivery evidence the result classifier already uses so both exit
   // paths suppress fallback after a delivered reply.
-  const canFallbackAfterError = committedSideEffect
+  const canFallback = committedSideEffect
     ? () => !committedSideEffect()
     : readChannelDeliveryEvidence
       ? () => {
           const evidence = readChannelDeliveryEvidence();
-          return !evidence.hasDirectlySentBlockReply && !evidence.hasBlockReplyPipelineOutput;
+          return (
+            !evidence.hasDirectlySentBlockReply &&
+            !evidence.hasBlockReplyPipelineOutput &&
+            !evidence.hasRetryBlockedDelivery
+          );
         }
       : undefined;
   try {
@@ -501,9 +506,11 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
               result.result.meta.modelFallbackStopReason
                 ? { stopReason: result.result.meta.modelFallbackStopReason }
-                : result.classification,
+                : canFallback?.() === false
+                  ? undefined
+                  : result.classification,
           }),
-      ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
+      ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
@@ -533,6 +540,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           | { result: EmbeddedAgentRunResult; value: ModelFallbackResultClassification }
           | undefined;
         const classifyResult = (result: EmbeddedAgentRunResult) => {
+          // Custody can settle between classification and finalization; never cache its veto.
+          if (canFallback?.() === false) {
+            return undefined;
+          }
           if (!classified || classified.result !== result) {
             const classification =
               params.behavior.kind === "maintenance"
@@ -551,10 +562,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             // returns a replacement that must not inherit its predecessor's decision.
             classified = {
               result,
-              value:
-                effectiveClassification && committedSideEffect?.()
-                  ? undefined
-                  : effectiveClassification,
+              value: effectiveClassification,
             };
           }
           return classified.value;

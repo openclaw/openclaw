@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type {
   GetReplyOptions,
   SourceReplyDeliveryMode,
@@ -72,10 +72,7 @@ export type {
   PluginHookInboundMessageMetadata,
   PluginHookLocation,
   PluginHookMediaFact,
-  PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
   PluginHookProviderUpdate,
 } from "./hook-message.types.js";
 export {
@@ -340,6 +337,11 @@ export type PluginHookAgentContext = {
   channelContext?: PluginHookChannelContext;
   /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
   toolAuthority?: PluginHookToolAuthority;
+  /**
+   * Present for before_prompt_build only. Checks this handler's result-acceptance lifetime,
+   * not tool authorization or eventual model consumption. Underlying work is not cancelled.
+   */
+  readonly hookInvocation?: Readonly<{ assertActive(): void }>;
 };
 
 export type PluginHookContextWindowSource =
@@ -823,7 +825,7 @@ export type PluginHookSessionEndEvent = {
   nextSessionKey?: string;
 };
 
-export type PluginHookSubagentContext = {
+type PluginHookSubagentContext = {
   runId?: string;
   childSessionKey?: string;
   requesterSessionKey?: string;
@@ -851,7 +853,7 @@ type PluginHookSubagentSpawnBase = {
   threadRequested: boolean;
 };
 
-export type PluginHookSubagentDeliveryTargetEvent = {
+type PluginHookSubagentDeliveryTargetEvent = {
   childSessionKey: string;
   requesterSessionKey: string;
   requesterOrigin?: {
@@ -1166,7 +1168,7 @@ export type PluginHookBeforeInstallEvent = {
   plugin?: PluginHookBeforeInstallPlugin;
 };
 
-export type PluginHookBeforeInstallResult = {
+type PluginHookBeforeInstallResult = {
   findings?: PluginInstallFinding[];
   block?: boolean;
   blockReason?: string;

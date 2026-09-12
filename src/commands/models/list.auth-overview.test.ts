@@ -1,11 +1,11 @@
 // Model auth overview tests cover provider auth overview rows for model listings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
   formatProviderAuthProfileCounts,

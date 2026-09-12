@@ -16,8 +16,8 @@ import {
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 
-async function createTempRepo() {
-  return fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-gallery-"));
+async function createTempRepo(prefix = "qa-evidence-gallery-") {
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 async function writeJson(filePath: string, value: unknown) {
@@ -168,6 +168,106 @@ describe("evidence gallery", () => {
     });
   });
 
+  it.each([
+    {
+      kind: "gif-runner-log",
+      file: "artifact.LOG",
+      content: "runner passed\n",
+      mediaKind: "text",
+      preview: "runner passed\n",
+    },
+    {
+      kind: "video-report",
+      file: "artifact.json",
+      content: '{"ok":true}',
+      mediaKind: "json",
+      preview: '{\n  "ok": true\n}',
+    },
+    {
+      kind: "screenshot-validation",
+      file: "artifact.webm",
+      content: "video",
+      mediaKind: "video",
+      preview: null,
+    },
+    {
+      kind: "video-report",
+      file: "artifact.png",
+      content: "image",
+      mediaKind: "image",
+      preview: null,
+    },
+    {
+      kind: "motion-preview-gif",
+      file: "artifact",
+      content: "image",
+      mediaKind: "image",
+      preview: null,
+    },
+    {
+      kind: "video-capture",
+      file: "artifact.capture",
+      content: "video",
+      mediaKind: "video",
+      preview: null,
+    },
+    {
+      kind: "validation-result",
+      file: "artifact.data",
+      content: '{"ok":true}',
+      mediaKind: "json",
+      preview: '{\n  "ok": true\n}',
+    },
+    {
+      kind: "report",
+      file: "artifact.html",
+      content: "<p>report</p>",
+      mediaKind: "text",
+      preview: "<p>report</p>",
+    },
+    {
+      kind: "video-screenshot",
+      file: "artifact.data",
+      content: "image",
+      mediaKind: "image",
+      preview: null,
+    },
+    {
+      kind: "attachment",
+      file: "artifact.data",
+      content: "opaque",
+      mediaKind: "file",
+      preview: null,
+    },
+  ])(
+    "classifies $file with $kind metadata",
+    async ({ kind, file, content, mediaKind, preview }) => {
+      const repoRoot = await createTempRepo();
+      try {
+        const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(path.join(outputDir, file), content, "utf8");
+        await writeJson(
+          path.join(outputDir, QA_EVIDENCE_FILENAME),
+          vitestArtifactEvidence({
+            id: "qa-lab.artifact-classification",
+            title: "Artifact classification",
+            artifact: { kind, path: file },
+          }),
+        );
+        const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
+        expect(model.entries[0]?.artifacts[0]).toMatchObject({
+          exists: true,
+          kind,
+          mediaKind,
+          preview,
+        });
+      } finally {
+        await fs.rm(repoRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("sanitizes local roots from gallery failure reasons", async () => {
     const repoRoot = await createTempRepo();
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
@@ -203,7 +303,7 @@ describe("evidence gallery", () => {
   });
 
   it("normalizes absolute source and declared artifact paths for gallery links", async () => {
-    const repoRoot = await createTempRepo();
+    const repoRoot = await createTempRepo("qa-evidence-gallery-gif-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
     const artifactPath = path.join(outputDir, "absolute.log");
     await fs.mkdir(outputDir, { recursive: true });
@@ -268,6 +368,7 @@ describe("evidence gallery", () => {
     expect(artifact).toMatchObject({
       exists: true,
       kind: "<repo-root>/log",
+      mediaKind: "text",
       path: ".artifacts/qa-e2e/vitest/absolute.log",
       preview: "absolute artifact <repo-root>\nfile://<repo-root>/trace.log\n",
       source: "<repo-root>/vitest",

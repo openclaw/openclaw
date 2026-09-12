@@ -299,6 +299,7 @@ describe("Windows command execution", () => {
 
   it("spawns node plus npm-cli.js instead of npm.cmd when available", async () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
     await withMockedWindowsPlatform(async () => {
       void spawnCommand(["npm", "--version"]);
       const [command, args, options] = requireExecaCall(0);

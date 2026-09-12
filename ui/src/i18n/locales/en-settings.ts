@@ -18,6 +18,10 @@ const enSettings = {
       status: {
         connected: "Connected",
         offline: "Offline",
+        connecting: "Connecting…",
+        starting: "Starting…",
+        reconnecting: "Reconnecting…",
+        "reload-required": "Reload required",
       },
       gatewayUrl: "Gateway URL",
       gatewayUrlHint: "Use wss:// when the Gateway sits behind HTTPS or Tailscale Serve.",
@@ -31,8 +35,18 @@ const enSettings = {
       trustedProxy: "Authenticated via trusted proxy.",
       trustedProxyStatus: "Trusted proxy",
       sessionKey: "Default session",
-      sessionKeyHint: "Session opened after connecting.",
-      unsavedHint: "Unsaved changes apply when you connect.",
+      sessionKeyHint: "Save the session to open in this browser without reconnecting.",
+      sessionTitle: "Session",
+      saved: "Saved",
+      sessionDescription: "For {host} in this browser.",
+      unsavedHint: "Connection changes have not been applied.",
+      applyReconnect: "Apply and reconnect",
+      discard: "Discard changes",
+      retry: "Retry connection",
+      details: "Connection details",
+      reconnect: "Reconnect",
+      reconnectHint:
+        "Reconnect this browser to the current Gateway to troubleshoot a stuck connection.",
       lastError: "Last error",
       showSecret: "Show secret",
       hideSecret: "Hide secret",
@@ -130,6 +144,11 @@ const enSettings = {
       cancelBuildMessage:
         "Stop this snapshot build and destroy its worker? OpenClaw waits for provider work and cleanup to finish.",
       buildCancelled: "Build canceled",
+      dismiss: "Dismiss",
+      dismissBuild: "Dismiss failed build",
+      dismissBuildMessage:
+        "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
+      buildDismissed: "Failed build dismissed",
       buildAge: "Age: {age}",
       buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
       buildStates: {
@@ -275,7 +294,7 @@ const enSettings = {
   },
   modelProviders: {
     title: "Configured providers",
-    configureModels: "Configure Models",
+    configureModels: "Model setup",
     login: {
       action: "Connect provider",
       title: "Connect a provider",
@@ -349,7 +368,6 @@ const enSettings = {
       placeholder: "Enter provider API key",
       replacePlaceholder: "Secret saved. Enter a new key to replace it.",
       set: "Set API key",
-      replace: "Replace key",
       remove: "Remove key",
       saved: "Secret saved.",
       removed: "Saved API keys removed.",
@@ -412,6 +430,7 @@ const enSettings = {
       utilityHelpAutomatic:
         "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
+      automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback Model",
       noFallback: "No fallback model",
@@ -578,6 +597,15 @@ const enSettings = {
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
       computerControlProvider: "Computer Control provider",
+      unattendedDesktop: "Unattended desktop hosting",
+      unattendedDesktopHint:
+        "Keep this Mac awake between jobs while it is connected and hosting. Manual lock and logout are still respected; OpenClaw never unlocks the Mac.",
+      desktopAvailability: "Desktop availability",
+      desktopStates: {
+        locked: "Locked",
+        unlocked: "Unlocked",
+        unknown: "Unknown",
+      },
       peekaboo: "Peekaboo",
       cua: "CUA",
       cuaUnavailable: "CUA (driver not bundled)",
@@ -958,6 +986,45 @@ const enSettings = {
       deleteConfirm: "Confirm before deleting sessions",
       deleteConfirmHint:
         "Applies to sidebar deletes. Stopping cloud workers and removing preserved worktrees always ask.",
+    },
+    sessionStorage: {
+      title: "Session storage",
+      description: "Transcript counts and disk usage across this Gateway's agent databases.",
+      transcripts: "Transcripts",
+      transcriptCounts: "{hot} uncompressed · {cold} archived",
+      database: "Databases",
+      walSize: "Write-ahead logs: {size}",
+      archives: "Archive files",
+      embeddedArchives: "Compressed archives in database",
+      embeddedArchivesHint: "Included in the database size above.",
+      refreshAfterError: "Refresh to check the current maintenance state.",
+      byAgent: "Details by agent",
+      agentCounts:
+        "{hot} uncompressed · {cold} archived · Database {database} · WAL {wal} · Archive files {archives} · Compressed in database {embedded}",
+      worker: "Background maintenance",
+      completed: "Last completed {time} · {count} transcripts archived",
+      notRun: "No completed maintenance run in this Gateway process.",
+      running: "Running",
+      runningProgress: "{archived} transcripts archived · {externalized} archives moved to files",
+      externalized: "{count} compressed archives moved from the database to files.",
+      idle: "Idle",
+      failed: "Needs attention",
+      adminRequired: "Administrator access is required to inspect session storage.",
+      disconnected: "Connect to the Gateway to inspect session storage.",
+      automatic: "Automatic archival",
+      enabled: "Archive older transcripts",
+      enabledHint:
+        "Workers move inactive transcripts into compressed JSONL files. Running sessions stay in the database; archived history is restored before use.",
+      afterDays: "Archive after (days)",
+      afterDaysHint:
+        "Days since the transcript last changed. Changes apply without a Gateway restart.",
+      backupHint:
+        "OpenClaw backups capture archived history with the database. Direct database copies also need the archive files. Missing or damaged archives require recovery from a backup.",
+      advanced: "Advanced session settings",
+      runNow: "Run now",
+      runHint: "Run one background batch using the saved, applied policy.",
+      runStarted: "Background batch started. You can leave this page while it runs.",
+      runCompleted: "Batch completed. {count} transcripts archived.",
     },
     sessionObserver: {
       title: "Session observer",

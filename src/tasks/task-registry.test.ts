@@ -4715,6 +4715,49 @@ describe("task-registry", () => {
     });
   });
 
+  it.each(["succeeded", "failed", "timed_out", "lost", "cancelled"] as const)(
+    "preserves ACP %s recorded during cancellation",
+    async (status) => {
+      await withTaskRegistryTempDir(async () => {
+        const runId = "run-acp-cancel-race";
+        const task = createTaskFixture("acp", {
+          childSessionKey: "agent:codex:acp:cancel-race",
+          runId,
+          task: "Finish during cancellation",
+          notifyPolicy: "silent",
+        });
+        hoisted.cancelSessionMock.mockImplementationOnce(async () => {
+          updateTaskStateByRunId({
+            runId,
+            runtime: "acp",
+            status,
+            endedAt: 200,
+            terminalSummary: "Recorded terminal result",
+          });
+        });
+
+        const result = await cancelTask(task.taskId);
+
+        expectRecordFields(result, {
+          found: true,
+          cancelled: status === "cancelled",
+          reason:
+            status === "cancelled"
+              ? undefined
+              : `Task became ${status} while cancellation was in progress.`,
+        });
+        for (const record of [result.task, getTaskById(task.taskId)]) {
+          expectRecordFields(record, {
+            status,
+            endedAt: 200,
+            error: undefined,
+            terminalSummary: "Recorded terminal result",
+          });
+        }
+      });
+    },
+  );
+
   it("cancels subagent-backed tasks through subagent control", async () => {
     await withTaskRegistryTempDir(async () => {
       const silentTask = createTaskFixture("subagent", {
