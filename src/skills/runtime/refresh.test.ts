@@ -355,6 +355,20 @@ describe("ensureSkillsWatcher", () => {
     }).toEqual({ postCloseReads: 0, pendingTimers: 0 });
   });
 
+  it("closes only the deleted workspace skill watchers", async () => {
+    const otherWorkspaceDir = await createFixtureDirectory("other-workspace");
+    await createFixtureDirectory("other-workspace/skills");
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: otherWorkspaceDir });
+    const deletedWorkspaceWatch = watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills"));
+    const otherWorkspaceWatch = watchForSkillRoot(path.join(otherWorkspaceDir, "skills"));
+
+    await refreshModule.closeSkillsWatchersForWorkspace(fixtureWorkspaceDir);
+
+    expect(deletedWorkspaceWatch.watcher.close).toHaveBeenCalledOnce();
+    expect(otherWorkspaceWatch.watcher.close).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")(
     "watches allowed symlink skill targets without following every root symlink",
     async () => {

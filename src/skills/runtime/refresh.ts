@@ -32,7 +32,11 @@ import {
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
-import { resolveSkillsWatchPath, toWatchRoot } from "./refresh-watch-path.js";
+import { toWatchRoot } from "./refresh-watch-path.js";
+import {
+  addSkillRootWatchTargets,
+  type SkillsWatchTarget as WatchTarget,
+} from "./refresh-watch-target.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
@@ -42,12 +46,6 @@ type SkillsPathWatchState = {
   timer?: ReturnType<typeof setTimeout>;
   pendingPath?: string;
   readonly subscribers: Set<string>;
-};
-
-type WatchTarget = {
-  path: string;
-  watchRoot: string;
-  depth: number;
 };
 
 type WatchTargetCacheEntry = {
@@ -61,8 +59,7 @@ type FileStabilitySnapshot = {
 };
 
 const log = createSubsystemLogger("gateway/skills");
-// Gateway startup imports this owner before serving turns. Shared watcher handles,
-// including later rebuilds, must inherit that lifetime rather than the triggering turn.
+// Gateway startup owns shared watcher handles beyond the lifetime of a triggering turn.
 const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
 const GROUPED_SKILLS_WATCH_DEPTH = 6;
 const CONFIGURED_ROOT_WATCH_DEPTH = 2;
@@ -71,26 +68,17 @@ const MAX_SYMLINK_WATCH_DIRECTORY_SCANS_PER_ROOT = 200;
 const MAX_SYMLINK_WATCH_RAW_ENTRIES_PER_ROOT = 2_000;
 const RAW_SKILL_FILE_POLL_INTERVAL_MS = 100;
 const SKILLS_WATCH_DEBOUNCE_MS = 250;
-// One watcher per unique watched directory. Agent workspaces that include the
-// same shared skill root (the global skills dir, the home skills dir, or a
-// configured extra/plugin dir) subscribe to the same watcher instead of each
-// opening its own, so open file descriptors scale with distinct directories
-// rather than with agent count.
+// Share one watcher per directory so descriptors scale with roots, not agents.
 const pathWatchers = new Map<string, SkillsPathWatchState>();
 let nativeWatchCapacityFailed = false;
-// Watch targets each workspace is currently subscribed to, used to reconcile
-// subscriptions and to detect watch-target changes across calls.
+// Track workspace subscriptions to reconcile watch-target changes across calls.
 const workspaceWatchTargets = new Map<string, WatchTarget[]>();
-// A watcher key may include an execution root, but refresh events and versions
-// retain the configured agent workspace as their stable public identity.
+// Preserve the configured agent workspace as the public identity for composite watcher keys.
 const workspaceWatchOwnerDirs = new Map<string, string>();
-// Resolved nested skill watch roots are filesystem-derived. Cache them so the
-// per-turn watcher reconciliation path stays cheap until config or watched
-// filesystem changes require a fresh root scan.
+// Cache filesystem-derived roots until config or watched files require a fresh scan.
 const workspaceWatchTargetCache = new Map<string, WatchTargetCacheEntry>();
 const workspaceWatchLastEnsuredAt = new Map<string, number>();
-// Session turns re-ensure their workspace; entries older than this are treated
-// as abandoned subscriptions and evicted by the next ensure call.
+// Session turns re-ensure workspaces; the next ensure evicts abandoned subscriptions.
 const SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS = 60 * 60_000;
 
 setSkillsChangeListenerErrorHandler((err) => {
@@ -101,13 +89,11 @@ const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
-  // Python virtual environments and caches
   /(^|[\\/])\.venv([\\/]|$)/,
   /(^|[\\/])venv([\\/]|$)/,
   /(^|[\\/])__pycache__([\\/]|$)/,
   /(^|[\\/])\.mypy_cache([\\/]|$)/,
   /(^|[\\/])\.pytest_cache([\\/]|$)/,
-  // Build artifacts and caches
   /(^|[\\/])build([\\/]|$)/,
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
@@ -179,36 +165,6 @@ function resolveWatchTargets(
   return sortedTargets;
 }
 
-function makeWatchTarget(raw: string, depth: number): WatchTarget {
-  const watchPath = toWatchRoot(resolveSkillsWatchPath(raw));
-  let watchRoot = watchPath;
-  while (!fs.existsSync(watchRoot)) {
-    const parent = path.dirname(watchRoot);
-    if (parent === watchRoot) {
-      break;
-    }
-    watchRoot = parent;
-  }
-  return { path: watchPath, watchRoot: toWatchRoot(watchRoot), depth };
-}
-
-function addWatchTarget(targets: Map<string, WatchTarget>, raw: string, depth: number): void {
-  const target = makeWatchTarget(raw, depth);
-  target.depth = Math.max(target.depth, targets.get(target.path)?.depth ?? 0);
-  targets.set(target.path, target);
-}
-
-function addSkillRootWatchTargets(
-  targets: Map<string, WatchTarget>,
-  root: string,
-  rootDepth: number,
-): string {
-  addWatchTarget(targets, root, rootDepth);
-  const companionSkillsRoot = path.join(root, "skills");
-  addWatchTarget(targets, companionSkillsRoot, GROUPED_SKILLS_WATCH_DEPTH);
-  return companionSkillsRoot;
-}
-
 function addSkillSourceWatchTargets(
   targets: Map<string, WatchTarget>,
   root: string,
@@ -218,7 +174,12 @@ function addSkillSourceWatchTargets(
     ? GROUPED_SKILLS_WATCH_DEPTH
     : CONFIGURED_ROOT_WATCH_DEPTH,
 ): void {
-  const companionSkillsRoot = addSkillRootWatchTargets(targets, root, rootDepth);
+  const companionSkillsRoot = addSkillRootWatchTargets(
+    targets,
+    root,
+    rootDepth,
+    GROUPED_SKILLS_WATCH_DEPTH,
+  );
   // Both bounded scans share the source's containment identity for this preparation.
   // Trusted symlink leaves below remain registration-only, never recursive scans.
   const rootRealPath = resolveRealpathOrAbsolute(root);
@@ -261,7 +222,7 @@ function addTrustedSymlinkSkillWatchTargets(
         allowedSymlinkTargetRealPaths,
       )
     ) {
-      addSkillRootWatchTargets(targets, rootRealPath, maxDepth);
+      addSkillRootWatchTargets(targets, rootRealPath, maxDepth, GROUPED_SKILLS_WATCH_DEPTH);
     }
   } catch {
     return;
@@ -313,7 +274,12 @@ function addTrustedSymlinkSkillWatchTargets(
             allowedSymlinkTargetRealPaths,
           )
         ) {
-          addSkillRootWatchTargets(targets, targetRealPath, GROUPED_SKILLS_WATCH_DEPTH);
+          addSkillRootWatchTargets(
+            targets,
+            targetRealPath,
+            GROUPED_SKILLS_WATCH_DEPTH,
+            GROUPED_SKILLS_WATCH_DEPTH,
+          );
           watched += 1;
         }
         continue;
@@ -634,27 +600,30 @@ function subscribeWorkspaceToPath(workspaceDir: string, watchTarget: WatchTarget
   pathWatchers.set(watchTarget.path, state);
 }
 
-function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: WatchTarget): void {
+async function unsubscribeWorkspaceFromPath(
+  workspaceDir: string,
+  watchTarget: WatchTarget,
+): Promise<void> {
   const state = pathWatchers.get(watchTarget.path);
   if (!state) {
     return;
   }
   state.subscribers.delete(workspaceDir);
   if (state.subscribers.size === 0) {
-    void teardownSkillsPathWatcher(state);
     pathWatchers.delete(watchTarget.path);
+    await teardownSkillsPathWatcher(state);
   }
 }
 
 function disposeWorkspaceWatchState(
   watcherKey: string,
   watchTargets: readonly WatchTarget[] = workspaceWatchTargets.get(watcherKey) ?? [],
-): void {
+): Promise<void> {
   const workspaceDir = workspaceWatchOwnerDirs.get(watcherKey) ?? watcherKey;
   const hadWatchTargets = watchTargets.length > 0;
-  for (const watchTarget of watchTargets) {
-    unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
-  }
+  const teardowns = watchTargets.map((watchTarget) =>
+    unsubscribeWorkspaceFromPath(watcherKey, watchTarget),
+  );
   workspaceWatchTargets.delete(watcherKey);
   workspaceWatchOwnerDirs.delete(watcherKey);
   workspaceWatchTargetCache.delete(watcherKey);
@@ -665,13 +634,14 @@ function disposeWorkspaceWatchState(
     bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch-targets" });
   }
   clearSkillsSnapshotVersionForWorkspace(workspaceDir);
+  return Promise.all(teardowns).then(() => undefined);
 }
 
 function evictIdleWorkspaceWatchStates(now: number): void {
   const cutoff = now - SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS;
   for (const [workspaceDir, lastEnsuredAt] of workspaceWatchLastEnsuredAt) {
     if (lastEnsuredAt < cutoff) {
-      disposeWorkspaceWatchState(workspaceDir);
+      void disposeWorkspaceWatchState(workspaceDir);
     }
   }
 }
@@ -698,7 +668,7 @@ export function ensureSkillsWatcher(params: {
   const previousTargets = workspaceWatchTargets.get(watcherKey) ?? [];
 
   if (!watchEnabled) {
-    disposeWorkspaceWatchState(watcherKey, previousTargets);
+    void disposeWorkspaceWatchState(watcherKey, previousTargets);
     evictIdleWorkspaceWatchStates(now);
     return;
   }
@@ -739,7 +709,7 @@ export function ensureSkillsWatcher(params: {
   const nextTargetKeys = new Set(watchTargets.map((target) => target.path));
   for (const watchTarget of previousTargets) {
     if (!nextTargetKeys.has(watchTarget.path)) {
-      unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
+      void unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
     }
   }
   for (const watchTarget of watchTargets) {
@@ -757,6 +727,15 @@ export function ensureSkillsWatcher(params: {
     });
   }
   evictIdleWorkspaceWatchStates(now);
+}
+
+/** Releases Gateway-owned skill watchers before an agent workspace is removed. */
+export async function closeSkillsWatchersForWorkspace(workspaceDir: string): Promise<void> {
+  const canonicalWorkspaceDir = resolveRealpathOrAbsolute(workspaceDir);
+  const watcherKeys = Array.from(workspaceWatchOwnerDirs)
+    .filter(([, ownerDir]) => resolveRealpathOrAbsolute(ownerDir) === canonicalWorkspaceDir)
+    .map(([watcherKey]) => watcherKey);
+  await Promise.all(watcherKeys.map((watcherKey) => disposeWorkspaceWatchState(watcherKey)));
 }
 
 export async function closeSkillsWatchers(resetState = false): Promise<void> {
