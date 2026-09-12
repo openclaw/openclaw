@@ -1,8 +1,19 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { attemptMemoryCorpus, runMemoryCorpusDeadline } from "./memory-corpus.js";
+import { z } from "zod";
+import {
+  attemptMemoryCorpus,
+  runMemoryCorpusDeadline,
+  searchMemoryCorpusSupplements,
+  readMemoryCorpusSupplements,
+} from "./memory-corpus.js";
 
 afterEach(() => {
+  clearMemoryPluginState();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -150,4 +161,58 @@ it("keeps caller cancellation immediate while the deadline is paused", async () 
     },
   });
   await expect(result).rejects.toBe(callerError);
+});
+
+it("passes search cancellation separately from strictly validated plugin input", async () => {
+  const controller = new AbortController();
+  const schema = z.object({ query: z.string(), maxResults: z.number() }).strict();
+  const hit = { corpus: "wiki", path: "entities/alpha.md", score: 1, snippet: "Alpha" };
+  let receivedSignal: AbortSignal | undefined;
+  registerMemoryCorpusSupplement("strict-plugin", {
+    search: async (input, context) => {
+      schema.parse(input);
+      receivedSignal = context?.signal;
+      return [hit];
+    },
+    get: async () => null,
+  });
+  await expect(
+    searchMemoryCorpusSupplements({ query: "alpha", maxResults: 3, signal: controller.signal }),
+  ).resolves.toEqual({ corpus: "wiki", outcome: "ok", value: [hit] });
+  expect(receivedSignal).toBe(controller.signal);
+});
+
+it("passes read cancellation separately from strictly validated plugin input", async () => {
+  const controller = new AbortController();
+  const schema = z.object({ lookup: z.string() }).strict();
+  let receivedSignal: AbortSignal | undefined;
+  registerMemoryCorpusSupplement("strict-plugin", {
+    search: async () => [],
+    get: async (input, context) => {
+      schema.parse(input);
+      receivedSignal = context?.signal;
+      return { corpus: "wiki", path: input.lookup, content: "Alpha", fromLine: 1, lineCount: 1 };
+    },
+  });
+  await expect(
+    readMemoryCorpusSupplements({ lookup: "entities/alpha.md", signal: controller.signal }),
+  ).resolves.toMatchObject({ outcome: "ok", value: { text: "Alpha" } });
+  expect(receivedSignal).toBe(controller.signal);
+});
+
+it("does not start queued supplements after cancellation", async () => {
+  const controller = new AbortController();
+  const started: number[] = [];
+  for (let index = 0; index < 6; index += 1) {
+    registerMemoryCorpusSupplement(`supplement-${index}`, {
+      search: async () => {
+        started.push(index);
+        controller.abort(new Error("caller cancelled"));
+        return [];
+      },
+      get: async () => null,
+    });
+  }
+  await searchMemoryCorpusSupplements({ query: "alpha", signal: controller.signal });
+  expect(started).toEqual([0]);
 });

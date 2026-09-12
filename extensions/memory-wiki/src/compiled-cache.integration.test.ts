@@ -239,6 +239,65 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     }
   });
 
+  it.each([1, 3])(
+    "stops cold activation hashing at read %i and allows a later request to reconcile",
+    async (abortAtRead) => {
+      const { rootDir, config } = await createPersistentVault({ initialize: true });
+      const sourcePaths = ["alpha.md", "beta.md"].map((name) =>
+        path.join(rootDir, "sources", name),
+      );
+      await Promise.all(sourcePaths.map((file) => fs.writeFile(file, "# Source\n")));
+      await compileMemoryWikiVault(config);
+      deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+      const controller = new AbortController();
+      const reason = new Error("search deadline");
+      const sourceReads: string[] = [];
+      const readFile = fs.readFile;
+      const spy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        const content = await readFile(...args);
+        const file = args[0];
+        if (typeof file === "string" && sourcePaths.includes(file)) {
+          sourceReads.push(file);
+          expect(args[1]).toEqual({ signal: controller.signal });
+          if (sourceReads.length === abortAtRead) {
+            controller.abort(reason);
+          }
+        }
+        return content;
+      });
+      try {
+        // Read 1 is initial identity validation; read 3 is the reconciliation callback.
+        await expect(initializeMemoryWikiVault(config, { signal: controller.signal })).rejects.toBe(
+          reason,
+        );
+        expect(sourceReads).toEqual(
+          abortAtRead === 1 ? [sourcePaths[0]] : [...sourcePaths, sourcePaths[0]],
+        );
+        await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
+
+      await initializeMemoryWikiVault(config);
+      await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
+    },
+  );
+
+  it("preserves cancellation when an in-flight identity log read fails as missing", async () => {
+    const { rootDir } = await createPersistentVault({ initialize: true });
+    const controller = new AbortController();
+    const reason = new Error("search deadline");
+    const readFile = vi.spyOn(fs, "readFile").mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw Object.assign(new Error("missing log"), { code: "ENOENT" });
+    });
+    try {
+      await expect(loadMemoryWikiVaultIdentity(rootDir, controller.signal)).rejects.toBe(reason);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
   it.each(["source-edit", "log-rollback"] as const)(
     "explicit activation rejects the compiled snapshot after %s",
     async (change) => {

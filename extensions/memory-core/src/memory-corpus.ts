@@ -234,6 +234,7 @@ async function settleMemorySupplements<T>(params: {
     await raceMemoryCorpusSignal(params.signal, () =>
       runTasksWithConcurrency({
         tasks: supplements.map((registration, index) => async () => {
+          params.signal.throwIfAborted();
           const result = await params.run(registration);
           completed[index] = result;
           return result;
@@ -280,7 +281,7 @@ export async function searchMemoryCorpusSupplements(params: {
   const { signal, ...query } = params;
   return await settleMemorySupplements({
     signal,
-    run: async ({ supplement }) => await supplement.search(query),
+    run: async ({ supplement }) => await supplement.search(query, { signal }),
     merge: (results) =>
       results
         .flat()
@@ -302,7 +303,7 @@ export async function readMemoryCorpusSupplements(params: {
   return await settleMemorySupplements({
     signal,
     run: async ({ supplement }) => {
-      const result = await supplement.get(query);
+      const result = await supplement.get(query, { signal });
       if (!result) {
         return null;
       }

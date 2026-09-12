@@ -7,6 +7,41 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const tempDirs = createMemoryWikiTestHarness();
 
 describe("walkMemoryWikiDirectory", () => {
+  it("does not start an aborted walk or replace its reason with an empty result", async () => {
+    const root = await tempDirs.createTempDir("memory-wiki-walk-");
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("search deadline"), { code: "not-found" });
+    controller.abort(reason);
+
+    await expect(
+      walkMemoryWikiDirectory(root, "missing", { signal: controller.signal }),
+    ).rejects.toBe(reason);
+  });
+
+  it("stops examining entries after cancellation, including filtered entries", async () => {
+    const root = await tempDirs.createTempDir("memory-wiki-walk-");
+    await Promise.all([
+      fs.writeFile(path.join(root, "one.md"), "one"),
+      fs.writeFile(path.join(root, "two.md"), "two"),
+    ]);
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("search deadline"), { code: "not-found" });
+    const examined: string[] = [];
+
+    await expect(
+      walkMemoryWikiDirectory(root, "", {
+        signal: controller.signal,
+        onDirectoryError: "skip-and-report",
+        entryFilter: (entry) => {
+          examined.push(entry.relativePath);
+          controller.abort(reason);
+          return "skip";
+        },
+      }),
+    ).rejects.toBe(reason);
+    expect(examined).toHaveLength(1);
+  });
+
   it("fails instead of truncating at the entry budget", async () => {
     const root = await tempDirs.createTempDir("memory-wiki-walk-");
     await Promise.all([

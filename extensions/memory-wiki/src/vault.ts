@@ -158,7 +158,7 @@ export async function initializeMemoryWikiVault(
       },
     });
   }
-  const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir);
+  const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir, options?.signal);
   options?.signal?.throwIfAborted();
   // Ordinary requests reuse the reconciled owner. Cold activation and explicit
   // lifecycle refresh validate source hashes; scaffold/generation replacement retires it.
@@ -180,7 +180,7 @@ export async function activateExistingMemoryWikiVault(
 ): Promise<void> {
   signal?.throwIfAborted();
   const rootDir = config.vault.path;
-  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
+  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir, signal);
   if (!identity.vaultGeneration) {
     throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
   }
@@ -194,7 +194,7 @@ export async function activateExistingMemoryWikiVault(
   // runs again only when its path, generation, or publication identity changes.
   if (needsReconcile) {
     await reconcileMemoryWikiCompiledCacheOwner(config, () =>
-      loadMemoryWikiValidatedVaultIdentity(rootDir),
+      loadMemoryWikiValidatedVaultIdentity(rootDir, signal),
     );
   }
   signal?.throwIfAborted();

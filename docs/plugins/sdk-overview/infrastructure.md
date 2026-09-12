@@ -280,11 +280,15 @@ Contract notes:
 
 Memory prompt supplement builders receive optional `agentId`,
 `agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
-and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
-agent-owned storage should resolve that storage for each call instead of
-capturing one global path during registration. If an agent id is required but
-missing in a multi-agent operation, fail closed rather than choosing an
-arbitrary agent.
+and `get` calls receive optional `agentId`, `agentSessionKey`, and `sandboxed`
+context in their first argument. Their optional second argument carries the
+caller-owned `signal`; the first argument retains its existing shape for plugins
+that validate it strictly. Supplements should stop starting work after cancellation
+and reject with the signal's reason. The host preserves completed sibling results
+and reports the existing per-corpus timeout warning when the deadline wins.
+Plugins with agent-owned storage should resolve that storage for each call instead
+of capturing one global path during registration. If an agent id is required but
+missing in a multi-agent operation, fail closed rather than choosing an arbitrary agent.
 
 Use `registerMemoryPromptPreparation(...)` when prompt text depends on async
 plugin state. The callback runs once before each full agent prompt and receives

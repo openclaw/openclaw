@@ -442,13 +442,16 @@ describe("memory tools", () => {
         corpus,
       });
 
-      expect(search).toHaveBeenCalledWith({
-        query: "alpha",
-        maxResults: 3,
-        agentId: "marketing-agent",
-        agentSessionKey: "agent:marketing-agent:main",
-        sandboxed: true,
-      });
+      expect(search).toHaveBeenCalledWith(
+        {
+          query: "alpha",
+          maxResults: 3,
+          agentId: "marketing-agent",
+          agentSessionKey: "agent:marketing-agent:main",
+          sandboxed: true,
+        },
+        { signal: expect.any(AbortSignal) },
+      );
     },
   );
 
@@ -615,6 +618,7 @@ describe("memory tools", () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
+      let supplementSignal: AbortSignal | undefined;
       setMemorySearchImpl(async () => {
         searchCalls += 1;
         return [
@@ -629,7 +633,10 @@ describe("memory tools", () => {
         ];
       });
       registerMemoryCorpusSupplement("memory-wiki", {
-        search: async () => await new Promise(() => {}),
+        search: async (_input, context) => {
+          supplementSignal = context?.signal;
+          return await new Promise(() => {});
+        },
         get: async () => null,
       });
 
@@ -652,6 +659,8 @@ describe("memory tools", () => {
         ],
         warning: expect.stringContaining("Wiki corpus unavailable"),
       });
+
+      expect(supplementSignal?.aborted).toBe(true);
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
         query: "alpha",

@@ -46,11 +46,17 @@ export async function appendMemoryWikiLog(
 
 export async function loadMemoryWikiVaultIdentity(
   vaultRoot: string,
+  signal?: AbortSignal,
 ): Promise<MemoryWikiVaultIdentity> {
+  signal?.throwIfAborted();
   let raw: string;
   try {
-    raw = await fs.readFile(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"), "utf8");
+    raw = await fs.readFile(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"), {
+      encoding: "utf8",
+      signal,
+    });
   } catch (error) {
+    signal?.throwIfAborted();
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return {
         vaultGeneration: null,
@@ -61,6 +67,7 @@ export async function loadMemoryWikiVaultIdentity(
     }
     throw error;
   }
+  signal?.throwIfAborted();
   let vaultGeneration: string | null = null;
   let compiledCacheReservationId: string | null = null;
   let compiledCachePublicationId: string | null = null;
@@ -124,11 +131,15 @@ export async function loadMemoryWikiVaultIdentity(
   };
 }
 
-export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
+export async function resolveMemoryWikiVaultSourceGeneration(
+  vaultRoot: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
   const files = (
     await Promise.all(
       COMPILED_SOURCE_DIRECTORIES.map(async (relativeDir) => {
-        const entries = await walkMemoryWikiDirectory(vaultRoot, relativeDir);
+        const entries = await walkMemoryWikiDirectory(vaultRoot, relativeDir, { signal });
         return entries
           .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
           .map((entry) => {
@@ -145,26 +156,35 @@ export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string):
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath));
   const hash = createHash("sha256");
   for (const file of files) {
+    signal?.throwIfAborted();
     const relativePath = Buffer.from(file.relativePath);
     const pathLength = Buffer.allocUnsafe(4);
     pathLength.writeUInt32BE(relativePath.byteLength);
-    const contentDigest = createHash("sha256")
-      .update(await fs.readFile(file.absolutePath))
-      .digest();
+    let content: Buffer;
+    try {
+      content = await fs.readFile(file.absolutePath, { signal });
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw error;
+    }
+    signal?.throwIfAborted();
+    const contentDigest = createHash("sha256").update(content).digest();
     hash.update(pathLength).update(relativePath).update(contentDigest);
   }
+  signal?.throwIfAborted();
   return hash.digest("hex");
 }
 
 export async function loadMemoryWikiValidatedVaultIdentity(
   vaultRoot: string,
+  signal?: AbortSignal,
 ): Promise<MemoryWikiVaultIdentity> {
-  const identity = await loadMemoryWikiVaultIdentity(vaultRoot);
+  const identity = await loadMemoryWikiVaultIdentity(vaultRoot, signal);
   if (!identity.compiledCachePublicationId || !identity.compiledCacheSourceGeneration) {
     return identity;
   }
   if (
-    (await resolveMemoryWikiVaultSourceGeneration(vaultRoot)) ===
+    (await resolveMemoryWikiVaultSourceGeneration(vaultRoot, signal)) ===
     identity.compiledCacheSourceGeneration
   ) {
     return identity;
@@ -176,12 +196,18 @@ export async function loadMemoryWikiValidatedVaultIdentity(
   };
 }
 
-async function loadMemoryWikiVaultGeneration(vaultRoot: string): Promise<string | null> {
-  return (await loadMemoryWikiVaultIdentity(vaultRoot)).vaultGeneration;
+async function loadMemoryWikiVaultGeneration(
+  vaultRoot: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  return (await loadMemoryWikiVaultIdentity(vaultRoot, signal)).vaultGeneration;
 }
 
-export async function ensureMemoryWikiVaultGeneration(vaultRoot: string): Promise<string> {
-  const existing = await loadMemoryWikiVaultGeneration(vaultRoot);
+export async function ensureMemoryWikiVaultGeneration(
+  vaultRoot: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const existing = await loadMemoryWikiVaultGeneration(vaultRoot, signal);
   if (existing) {
     return existing;
   }
@@ -193,5 +219,5 @@ export async function ensureMemoryWikiVaultGeneration(vaultRoot: string): Promis
   });
   // Concurrent initialization can append two candidates. The first durable
   // audit entry owns the vault generation, so every caller converges on it.
-  return (await loadMemoryWikiVaultGeneration(vaultRoot)) ?? candidate;
+  return (await loadMemoryWikiVaultGeneration(vaultRoot, signal)) ?? candidate;
 }

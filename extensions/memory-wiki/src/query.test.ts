@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
+import * as wikiMarkdown from "./markdown.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -247,6 +249,141 @@ describe("getMemoryWikiPage", () => {
 });
 
 describe("searchMemoryWiki", () => {
+  it("summarizes only candidates while retaining long queries spread across the body", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await Promise.all(
+      Array.from({ length: 64 }, (_, index) =>
+        fs.writeFile(
+          path.join(rootDir, "sources", `padding-${index}.md`),
+          renderWikiMarkdown({
+            frontmatter: { pageType: "source", title: `Padding ${index}` },
+            body: "# Padding\n\nUnrelated content.\n",
+          }),
+        ),
+      ),
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "late-hit.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", title: "Relevant note" },
+        body: "# Relevant note\n\nOpenClaw embedding configuration.\nMigration of the memory index.\nSearch and reindex share a lock.\n",
+      }),
+    );
+    const summarize = vi.spyOn(wikiMarkdown, "toWikiPageSummary");
+    try {
+      const results = await searchMemoryWiki({
+        config,
+        query: "OpenClaw memory search reindex lock embedding index migration",
+      });
+      expect(collectWikiResultPaths(results)).toEqual(["sources/late-hit.md"]);
+      expect(summarize).toHaveBeenCalledTimes(1);
+    } finally {
+      summarize.mockRestore();
+    }
+  });
+
+  it("retains body-only matches outside the compiled digest candidates", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "metadata-hit.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", title: "Needle" },
+        body: "# Metadata match\n",
+      }),
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "body-hit.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", title: "Unrelated title" },
+        body: "# Unrelated title\n\nA body-only needle.\n",
+      }),
+    );
+    await compileMemoryWikiVault(config);
+    const results = await searchMemoryWiki({ config, query: "needle", maxResults: 10 });
+    expect(collectWikiResultPaths(results)).toEqual(
+      expect.arrayContaining(["sources/body-hit.md", "sources/metadata-hit.md"]),
+    );
+  });
+
+  it("retains body tokens joined by removing a generated related block", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "related.md"),
+      "# Unrelated title\n\nal<!-- openclaw:wiki:related:start -->unrelated<!-- openclaw:wiki:related:end -->pha\n",
+    );
+    const results = await searchMemoryWiki({ config, query: "alpha" });
+    expect(collectWikiResultPaths(results)).toEqual(["sources/related.md"]);
+  });
+
+  it.each([
+    { name: "escaped text", metadata: String.raw`title: "\u0041lpha"`, query: "alpha" },
+    { name: "normalized numbers", metadata: "estimate: 0x10", query: "16" },
+    { name: "normalized null", metadata: "note: ~", query: "null" },
+    { name: "serialized block scalars", metadata: "note: |\n  first\n  foo", query: "nfoo" },
+  ])("retains $name matches absent from raw YAML", async ({ metadata, query }) => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "metadata.md"),
+      `---\npageType: source\n${metadata}\n---\n\n# Unrelated body\n`,
+    );
+    const results = await searchMemoryWiki({ config, query });
+    expect(collectWikiResultPaths(results)).toEqual(["sources/metadata.md"]);
+  });
+
+  it.each(["search", "get"] as const)(
+    "does not initialize the vault for a pre-aborted %s",
+    async (operation) => {
+      const { rootDir, config } = await createQueryVault();
+      const reason = new Error("caller cancelled before initialization");
+      const signal = AbortSignal.abort(reason);
+      const result =
+        operation === "search"
+          ? searchMemoryWiki({ config, query: "needle", signal })
+          : getMemoryWikiPage({ config, lookup: "needle", signal });
+      await expect(result).rejects.toBe(reason);
+      await expect(fs.stat(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["search", "get"] as const)(
+    "stops queued page reads when the caller aborts %s",
+    async (operation) => {
+      const { rootDir, config } = await createQueryVault({ initialize: true });
+      const pageCount = 64;
+      await Promise.all(
+        Array.from({ length: pageCount }, (_, index) =>
+          fs.writeFile(
+            path.join(rootDir, "sources", `deadline-pad-${index}.md`),
+            "# Unrelated page\n",
+          ),
+        ),
+      );
+      const controller = new AbortController();
+      const reason = new Error("caller deadline while reading pages");
+      let pageOpens = 0;
+      __setFsSafeTestHooksForTest({
+        beforeOpen: (filePath) => {
+          if (path.basename(filePath).startsWith("deadline-pad-")) {
+            pageOpens += 1;
+            if (pageOpens === 16) {
+              controller.abort(reason);
+            }
+          }
+        },
+      });
+      try {
+        const result =
+          operation === "search"
+            ? searchMemoryWiki({ config, query: "absent", signal: controller.signal })
+            : getMemoryWikiPage({ config, lookup: "absent", signal: controller.signal });
+        await expect(result).rejects.toBe(reason);
+        expect(pageOpens).toBe(16);
+      } finally {
+        __setFsSafeTestHooksForTest(undefined);
+      }
+    },
+  );
+
   it("finds wiki pages by title and body", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

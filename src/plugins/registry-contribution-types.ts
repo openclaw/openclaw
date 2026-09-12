@@ -160,21 +160,27 @@ type MemoryCorpusGetResult = {
 };
 
 export type MemoryCorpusSupplement = {
-  search(params: {
-    query: string;
-    maxResults?: number;
-    agentId?: string;
-    agentSessionKey?: string;
-    sandboxed?: boolean;
-  }): Promise<MemoryCorpusSearchResult[]>;
-  get(params: {
-    lookup: string;
-    fromLine?: number;
-    lineCount?: number;
-    agentId?: string;
-    agentSessionKey?: string;
-    sandboxed?: boolean;
-  }): Promise<MemoryCorpusGetResult | null>;
+  search(
+    params: {
+      query: string;
+      maxResults?: number;
+      agentId?: string;
+      agentSessionKey?: string;
+      sandboxed?: boolean;
+    },
+    context?: { signal?: AbortSignal },
+  ): Promise<MemoryCorpusSearchResult[]>;
+  get(
+    params: {
+      lookup: string;
+      fromLine?: number;
+      lineCount?: number;
+      agentId?: string;
+      agentSessionKey?: string;
+      sandboxed?: boolean;
+    },
+    context?: { signal?: AbortSignal },
+  ): Promise<MemoryCorpusGetResult | null>;
 };
 
 export type MemoryCorpusSupplementRegistration = {
