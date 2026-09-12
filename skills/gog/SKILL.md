@@ -26,6 +26,8 @@ metadata:
 
 Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
 
+Accounts are commonly already authenticated on this host. Run the command you need directly with `exec` — do not ask the user for credentials, do not use the `secrets` tool, and do not assume setup is required. Only fall back to the setup steps below if the command itself fails with an auth error (check with `gog auth list` to confirm).
+
 Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`
