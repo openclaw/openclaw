@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseDateStringTimestampMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
@@ -301,18 +305,21 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       }
       const entry = value as Record<string, unknown>;
       const entryPath = typeof entry.path === "string" ? normalizeMemoryPath(entry.path) : "";
-      const startLine = Number(entry.startLine);
-      const endLine = Number(entry.endLine);
+      // Strict parsers reject non-canonical encodings that Number() silently accepts
+      // (hex/binary/exponent notation, booleans, arrays, Infinity) and enforce
+      // non-negativity, which Number.isInteger alone does not.
+      const startLine = parseStrictNonNegativeInteger(entry.startLine);
+      const endLine = parseStrictNonNegativeInteger(entry.endLine);
       const source = entry.source === "memory" ? "memory" : null;
-      if (!entryPath || !Number.isInteger(startLine) || !Number.isInteger(endLine) || !source) {
+      if (!entryPath || startLine === undefined || endLine === undefined || !source) {
         continue;
       }
 
-      const recallCount = Math.max(0, Math.floor(Number(entry.recallCount) || 0));
-      const dailyCount = Math.max(0, Math.floor(Number(entry.dailyCount) || 0));
-      const groundedCount = Math.max(0, Math.floor(Number(entry.groundedCount) || 0));
-      const totalScore = Math.max(0, Number(entry.totalScore) || 0);
-      const maxScore = clampScore(Number(entry.maxScore) || 0);
+      const recallCount = parseStrictNonNegativeInteger(entry.recallCount) ?? 0;
+      const dailyCount = parseStrictNonNegativeInteger(entry.dailyCount) ?? 0;
+      const groundedCount = parseStrictNonNegativeInteger(entry.groundedCount) ?? 0;
+      const totalScore = Math.max(0, parseStrictFiniteNumber(entry.totalScore) ?? 0);
+      const maxScore = clampScore(parseStrictFiniteNumber(entry.maxScore) ?? 0);
       const firstRecalledAt =
         typeof entry.firstRecalledAt === "string" ? entry.firstRecalledAt : nowIso;
       const lastRecalledAt =
