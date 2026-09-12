@@ -24,7 +24,9 @@ type AccountConfig = { account?: string; allowFrom: string[] };
 
 beforeEach(({ onTestFinished }) => {
   const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previous));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previous);
+  });
   stageActivePluginRegistry(
     createTestRegistry([
       {
