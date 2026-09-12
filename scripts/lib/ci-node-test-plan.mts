@@ -30,6 +30,7 @@ import {
   isUnitConfigTestFile,
 } from "../../test/vitest/vitest.unit-paths.mjs";
 import { buildVitestRunPlans, isTestFileTarget } from "../test-projects.test-support.mts";
+import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 import {
@@ -44,6 +45,7 @@ import {
   estimateVitestTestFileSeconds as stripeFileWeight,
   estimateVitestToolingFileSeconds as toolingFileWeight,
   parseCompactSplitTimingKey,
+  runtimePlacementTimingKey,
 } from "./vitest-shard-metadata.mts";
 
 export type NodeTestShardGroup = {
@@ -206,6 +208,9 @@ const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
 const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 360;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
+// Includes the existing 100s runtime build; reserve 40s of the eight-minute
+// objective for checkout/setup. This is admission, never a test deadline.
+const COMPACT_HYBRID_RUNTIME_JOB_SECONDS = 440;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
@@ -2867,7 +2872,7 @@ function createCompactNodeTestShardBundles(
   );
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
   const synthesizedSplitSeconds = new Map<string, number>();
-  const runnerRank = (group: NodeTestShardGroup) =>
+  const runnerRank = (group: Pick<NodeTestShardGroup, "runner">) =>
     [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].indexOf(
       group.runner,
     );
@@ -2993,6 +2998,16 @@ function createCompactNodeTestShardBundles(
       .filter((family): family is string => family !== undefined);
     return new Set(families).size === families.length;
   };
+  const admitsCompactBin = (
+    groups: NodeTestShardGroup[],
+    secondsCap: number,
+    seconds = estimateBinSeconds,
+    { sharedFamily = false, parallel = false } = {},
+  ) =>
+    groups.length > 0 &&
+    (sharedFamily || hasDistinctStripeFamilies(groups)) &&
+    (parallel || groups.length <= COMPACT_NODE_TEST_JOB_GROUPS) &&
+    seconds(groups) <= secondsCap;
   const usesBlacksmithCapacity = (runner: string) =>
     isBlacksmithProfile ||
     (options.runnerBackend === "hybrid" &&
@@ -3063,9 +3078,10 @@ function createCompactNodeTestShardBundles(
       const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
-        (sharesSerialCliBudget || hasDistinctStripeFamilies(combined)) &&
-        (parallel || candidate.length < COMPACT_NODE_TEST_JOB_GROUPS) &&
-        estimateBinSeconds(combined) <= secondsCap
+        admitsCompactBin(combined, secondsCap, estimateBinSeconds, {
+          sharedFamily: sharesSerialCliBudget,
+          parallel,
+        })
       );
     };
     const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, packsHostedTooling);
@@ -3247,6 +3263,44 @@ function createCompactNodeTestShardBundles(
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${COMPACT_NODE_TEST_JOB_CAP} jobs (${compactJobs.length} planned)`,
     );
+  }
+
+  if (options.runnerBackend === "hybrid" && compactMode === "push") {
+    const timings = readCompactGroupTimings("blacksmith");
+    const runtimeJobs = compactJobs.filter(
+      (job) =>
+        job.pretestBuildMode === "runtime" &&
+        !job.requiresDist &&
+        job.planConcurrency === 1 &&
+        runnerRank(job) >= 0 &&
+        job.groups.every(
+          (group) => group.pretestBuildMode === "runtime" && !isExclusiveCompactGroup(group),
+        ),
+    );
+    const measured = (group: NodeTestShardGroup) => {
+      const key = runtimePlacementTimingKey(group);
+      return key === undefined ? undefined : timings[key];
+    };
+    if (runtimeJobs.some((job) => job.groups.some((group) => measured(group) !== undefined))) {
+      // Observe complete existing envelopes only after splitting/packing. These
+      // floors cannot feed a runtime cost back into ordinary stripe generation.
+      const cost = (groups: NodeTestShardGroup[]) =>
+        VITEST_PRETEST_BUILD_SECONDS.runtime +
+        groups.reduce(
+          (total, group) =>
+            total +
+            Math.max(
+              estimateStripeSeconds(group),
+              measured(group) === undefined
+                ? estimateCompactGroupSeconds(group, "hybrid")
+                : Math.round(measured(group)! * COMPACT_HYBRID_GROUP_SECONDS_SCALE),
+            ),
+          0,
+        );
+      const admits = (groups: NodeTestShardGroup[]) =>
+        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, cost);
+      rebalanceRuntimeTestJobs(runtimeJobs, { cost, admits, runnerRank });
+    }
   }
 
   return compactJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
