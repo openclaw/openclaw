@@ -284,9 +284,9 @@ export class UpdateFinalizationLifecycle {
     if (!hasCliProcessScope()) {
       return;
     }
-    // This timer never keeps a healthy command alive. Once output has a terminal
-    // outcome, retained handles or cleanup must not withhold EOF from supervisors.
-    const watch = () =>
+    // Recovery may still await diagnostics after terminal output; arm the watchdog
+    // from finishRecovery before unwinding resource cleanup.
+    this.deferredExitWatch = () =>
       watchCliExitAfterOutput(exitCode, () => {
         const diagnostic = JSON.stringify({
           activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
@@ -300,12 +300,6 @@ export class UpdateFinalizationLifecycle {
         this.recordDiagnostic(diagnostic);
         this.stopChildren();
       });
-    // Human repair may still await a recovery choice or agent after reporting failure.
-    if (this.json) {
-      watch();
-    } else {
-      this.deferredExitWatch = watch;
-    }
   }
 }
 

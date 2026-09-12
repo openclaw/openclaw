@@ -74,6 +74,7 @@ async function triageCommand() {
   const contextIndex = process.argv.indexOf('--update-result');
   if (contextIndex < 0) throw new Error('Missing update failure artifact');
   await fs.readFile(process.argv[contextIndex + 1], 'utf8');
+  ${scenario === "plugin-error" ? "await new Promise(resolve => setTimeout(resolve, 11_000));" : ""}
   const promptPath = path.join(process.env.OPENCLAW_STATE_DIR, 'logs', 'support', 'triage-fixture-prompt.md');
   await fs.mkdir(path.dirname(promptPath), { recursive: true });
   await fs.writeFile(promptPath, 'Synthetic update failure debugging prompt.\\n');

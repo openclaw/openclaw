@@ -88,6 +88,9 @@ describe("PDF tool prepared-runtime cancellation", () => {
       );
 
       await vi.waitFor(() => expect(completeMock).toHaveBeenCalledOnce());
+      expect(vi.mocked(pdfExtractModule.extractPdfContent).mock.calls[0]?.[0].signal).toBe(
+        controller.signal,
+      );
       const options = completeMock.mock.calls[0]?.[2];
       expect(options?.signal).toBe(controller.signal);
       const assertion = expect(execution).rejects.toThrow("PDF provider cancelled");

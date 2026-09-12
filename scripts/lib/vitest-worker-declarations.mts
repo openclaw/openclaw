@@ -3,6 +3,8 @@ export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
     "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
+  "extensions/document-extract/document-extractor-worker-entrypoint":
+    "extensions/document-extract/document-extractor-worker-entrypoint.ts",
   "extensions/memory-core/manager-search-knn-entrypoint":
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
