@@ -125,6 +125,21 @@ describe("acp session UX bridge behavior", () => {
     );
   });
 
+  it("keeps the Gateway-owned default for remote targets with an ambiguous local roster", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      skipAgentOwnerRosterValidation: true,
+      config: explicitMultiAgentConfig,
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toMatch(
+      /^agent:main:acp-bridge:/,
+    );
+  });
+
   it("preserves explicit session routing without an ambient owner", async () => {
     const sessionStore = createInMemorySessionStore();
     const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {

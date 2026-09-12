@@ -25,7 +25,7 @@ import { GatewayClient } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
@@ -114,7 +114,15 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   // routing never consults --agent, and remote Gateway targets enforce
   // ownership at the Gateway boundary instead of the client's local roster.
   const skipAgentOwnerRosterValidation = isRemoteGatewayTarget(cfg, opts.gatewayUrl);
-  const agentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
+  const strictAgentId = requestedAgentId ? normalizeAgentIdStrict(requestedAgentId) : undefined;
+  if (strictAgentId && !strictAgentId.ok) {
+    // Reject unrepresentable explicit ids instead of silently selecting main,
+    // which would pass roster validation while targeting the wrong agent.
+    throw new Error(
+      `--agent "${requestedAgentId}" has no valid id characters. Use at least one letter a-z or digit.`,
+    );
+  }
+  const agentId = strictAgentId?.ok ? strictAgentId.value : undefined;
   const resolvedOpts: AcpServerOptions = {
     ...opts,
     ...(agentId ? { agentId } : {}),

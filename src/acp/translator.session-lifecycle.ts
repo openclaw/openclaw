@@ -25,12 +25,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   resolveAgentOperationAgentId,
   resolveConfiguredAgentId,
+  tryResolveAgentOperationAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
-import { toAgentStoreSessionKey } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { AcpEventLedgerReplay } from "./event-ledger.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveAcpSessionKey } from "./session-mapper.js";
 import { extractReplayChunks, type GatewayTranscriptMessage } from "./translator.replay.js";
@@ -341,10 +343,17 @@ export class AcpTranslatorSessionLifecycle {
   }
 
   private resolveGeneratedBridgeSessionKey(sessionKey: string): string {
-    const agentId = resolveAgentOperationAgentId(this.config, this.opts.agentId, {
-      surface: "ACP bridge session",
-      hint: "Pass --agent <id>, set agents.defaults.systemAgent.agentId, or provide an agent-owned session key or label.",
-    });
+    // Remote Gateway targets enforce ownership at the Gateway boundary, so the
+    // local roster must not block bridge startup: an ambiguous local roster
+    // keeps the Gateway-owned default instead of throwing AgentSelectionRequiredError.
+    const agentId = this.opts.skipAgentOwnerRosterValidation
+      ? (tryResolveAgentOperationAgentId(this.config, this.opts.agentId) ??
+        tryResolveSoleAgentId(this.config) ??
+        LEGACY_IMPLICIT_AGENT_ID)
+      : resolveAgentOperationAgentId(this.config, this.opts.agentId, {
+          surface: "ACP bridge session",
+          hint: "Pass --agent <id>, set agents.defaults.systemAgent.agentId, or provide an agent-owned session key or label.",
+        });
     // Local bridges validate the owner early against the configured roster;
     // remote Gateway targets enforce ownership at the Gateway boundary instead.
     const ownerId = this.opts.skipAgentOwnerRosterValidation

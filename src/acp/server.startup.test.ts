@@ -499,6 +499,18 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
+  it("rejects an unrepresentable --agent id instead of selecting main", async () => {
+    mockState.runtimeConfig = {
+      gateway: { mode: "local" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    await expect(serveAcpGateway({ agentId: "!!!" })).rejects.toThrow(/no valid id characters/i);
+  });
+
   it("skips local roster validation for remote Gateway targets", async () => {
     mockState.runtimeConfig = {
       gateway: { mode: "local" },
