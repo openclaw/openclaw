@@ -147,7 +147,7 @@ openclaw-sidebar-agent-roster {
   opacity: 1;
   pointer-events: auto;
 }
-.identity-avatar__agent-face {
+.sidebar-agent-roster__avatar .identity-avatar__agent-face {
   width: 100%;
   height: 100%;
   color: color-mix(in srgb, hsl(var(--identity-hue) 48% 48%) 65%, var(--text));

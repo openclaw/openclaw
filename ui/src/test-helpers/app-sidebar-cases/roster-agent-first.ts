@@ -13,15 +13,30 @@ import {
 } from "./roster.test-support.ts";
 
 describe("AppSidebar agent roster", () => {
-  it.each([false, true])(
-    "keeps queued descendants distinct from executing work (mixed=%s)",
-    async (mixed) => {
+  it.each(
+    [false, true].flatMap((mixed) =>
+      (["idle", "running", "queued", "failed"] as const).map((parentState) => ({
+        mixed,
+        parentState,
+      })),
+    ),
+  )(
+    "shows each status once for a $parentState parent and queued descendants (mixed=$mixed)",
+    async ({ mixed, parentState }) => {
       const parent = "agent:working:parent";
       const { sidebar } = await mountRoster(roster, [
-        session("working", 1, { key: parent, isMain: false }),
+        session("working", 1, {
+          key: parent,
+          isMain: false,
+          unread: true,
+          hasActiveRun: parentState === "running" || parentState === "queued",
+          lastRunError: parentState === "failed" ? "Parent failed" : undefined,
+          status: parentState === "idle" ? "done" : parentState,
+        }),
         session("working", 2, {
           key: "agent:working:queued-child",
           isMain: false,
+          unread: true,
           spawnedBy: parent,
           status: "queued",
           hasActiveRun: true,
@@ -35,21 +50,49 @@ describe("AppSidebar agent roster", () => {
                 status: "running",
                 hasActiveRun: true,
               }),
+              session("working", 4, {
+                key: "agent:working:failed-child",
+                isMain: false,
+                spawnedBy: parent,
+                status: "failed",
+                lastRunError: "Child failed",
+              }),
             ]
           : []),
       ]);
       sidebar.sidebarAgentsMode = "roster";
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain(parent));
-      const summary = sidebar.querySelector(`[data-session-key="${parent}"] .sidebar-tree-summary`);
-      expect(summary?.querySelector(".session-glyph__ring--queued")).not.toBeNull();
-      expect(summary?.querySelectorAll(".session-run-spinner")).toHaveLength(mixed ? 1 : 0);
+      const row = sidebar.querySelector(`[data-session-key="${parent}"]`)!;
+      const runningSelector =
+        ".session-run-spinner, .session-glyph__ring:not(.session-glyph__ring--queued)";
+      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(row.querySelectorAll(runningSelector)).toHaveLength(
+        mixed || parentState === "running" ? 1 : 0,
+      );
+      expect(row.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(row.querySelectorAll('[data-session-attention="error"]')).toHaveLength(
+        mixed || parentState === "failed" ? 1 : 0,
+      );
+      sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`)?.click();
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:queued-child"));
+      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
+        parentState === "queued" ? 1 : 0,
+      );
+      expect(row.querySelectorAll(runningSelector)).toHaveLength(parentState === "running" ? 1 : 0);
+      expect(
+        sidebar.querySelectorAll(
+          '[data-session-key="agent:working:queued-child"] .session-glyph__ring--queued',
+        ),
+      ).toHaveLength(1);
       sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
       await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain(parent));
       const header = sidebar.querySelector(
         '[data-agent-group="working"] .sidebar-agent-roster__signals',
       );
       expect(header?.querySelector(".session-glyph__ring--queued")).not.toBeNull();
-      expect(header?.querySelectorAll(".session-run-spinner")).toHaveLength(mixed ? 1 : 0);
+      expect(header?.querySelectorAll(".session-run-spinner")).toHaveLength(
+        mixed || parentState === "running" ? 1 : 0,
+      );
     },
   );
 

@@ -121,6 +121,8 @@ export function renderSessionTreeSummary(
   rows: readonly SidebarRecentSession[],
   descendantsOnly = false,
 ) {
+  const owner = descendantsOnly ? rows[0] : undefined;
+  const ownAttention = owner?.ownAttention ?? owner?.attention;
   const attention = [
     ...new Map(
       rows
@@ -128,7 +130,7 @@ export function renderSessionTreeSummary(
           ...(descendantsOnly ? [] : [row.ownAttention ?? row.attention]),
           ...(row.childAttention ?? []),
         ])
-        .filter((value) => value.kind !== "none")
+        .filter((value) => value.kind !== "none" && value.kind !== ownAttention?.kind)
         .map((value) => [value.kind, value]),
     ).values(),
   ];
@@ -167,10 +169,10 @@ export function renderSessionTreeSummary(
     aria-label=${descendantsOnly ? t("sessionsView.childSessions") : t("chat.sidebar.threads")}
   >
     ${attention.map(renderCompactSessionAttention)}
-    ${failed > 0 && !attention.some((value) => value.kind === "error") ? html`<span class="sidebar-child-session__status--failed" role="img" aria-label=${t("sessionsView.statusFailed")} title=${t("sessionsView.statusFailed")}>${icons.alertTriangle}</span>` : nothing}
+    ${failed > 0 && ownAttention?.kind !== "error" && !attention.some((value) => value.kind === "error") ? html`<span class="sidebar-child-session__status--failed" role="img" aria-label=${t("sessionsView.statusFailed")} title=${t("sessionsView.statusFailed")}>${icons.alertTriangle}</span>` : nothing}
     ${conflicts > 0 ? html`<span role="img" aria-label=${t("sessionsView.cloudWorkerDescendantConflicts", { count: String(conflicts) })} title=${t("sessionsView.cloudWorkerDescendantConflicts", { count: String(conflicts) })}>${icons.globe}</span>` : nothing}
-    ${running > 0 ? html`<span class="session-run-spinner" role="img" aria-label=${t("sessionsView.activeRun")} title=${t("sessionsView.activeRun")}></span>` : nothing}
-    ${queued > 0 ? renderSessionGlyph({ content: nothing, running: true, queued: true }) : nothing}
-    ${unread > 0 ? html`<span class="sidebar-agent-roster__unread" role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread}</span>` : nothing}
+    ${running > 0 && !(owner?.hasActiveRun && owner.status !== "queued") ? html`<span class="session-run-spinner" role="img" aria-label=${t("sessionsView.activeRun")} title=${t("sessionsView.activeRun")}></span>` : nothing}
+    ${queued > 0 && !(owner?.hasActiveRun && owner.status === "queued") ? renderSessionGlyph({ content: nothing, running: true, queued: true }) : nothing}
+    ${unread > 0 && !owner?.unread ? html`<span class="sidebar-agent-roster__unread" role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread}</span>` : nothing}
   </span>`;
 }

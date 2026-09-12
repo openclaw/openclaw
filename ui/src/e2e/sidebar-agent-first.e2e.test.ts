@@ -21,7 +21,7 @@ const agentsList: AgentsListResult = {
     { id: "writing", name: "Writing", identity: { avatarUrl: imageAvatar } },
   ],
 };
-const row = (
+const sessionRow = (
   id: string,
   label: string,
   extra: Partial<GatewaySessionRow & { updatedAt: number }> = {},
@@ -33,34 +33,34 @@ const row = (
   updatedAt: 100,
   ...extra,
 });
-const rows = [
-  row("parent", "Implement the navigation sidebar without losing independent outcomes", {
+const sessionRows = [
+  sessionRow("parent", "Implement the navigation sidebar without losing independent outcomes", {
     lastMessagePreview: "A preview must not create a second line in team mode.",
   }),
-  row("child", "Check rendering", { spawnedBy: "agent:main:parent" }),
-  row("grandchild", "Compare deeply nested layouts with long labels", {
+  sessionRow("child", "Check rendering", { spawnedBy: "agent:main:parent" }),
+  sessionRow("grandchild", "Compare deeply nested layouts with long labels", {
     spawnedBy: "agent:main:child",
     hasActiveRun: true,
     status: "running",
     unread: true,
     startedAt: Date.now() - 3_000,
   }),
-  row("failure", "Review failed checks", {
+  sessionRow("failure", "Review failed checks", {
     spawnedBy: "agent:main:parent",
     status: "failed",
     endedAt: 100,
     lastRunError: "Geometry mismatch",
   }),
-  row("queued", "Queued follow-up", { hasActiveRun: true, status: "queued" }),
-  row("private", "Private planning", { incognito: true }),
-  row("automation", "Daily review", { hasAutomation: true }),
+  sessionRow("queued", "Queued follow-up", { hasActiveRun: true, status: "queued" }),
+  sessionRow("private", "Private planning", { incognito: true }),
+  sessionRow("automation", "Daily review", { hasAutomation: true }),
 ];
 const sessions: SessionsListResult = {
   ts: 100,
   path: "",
-  count: rows.length,
+  count: sessionRows.length,
   defaults: { model: null, modelProvider: null, contextTokens: null },
-  sessions: rows,
+  sessions: sessionRows,
 };
 
 suite.define(() => {
@@ -99,7 +99,7 @@ suite.define(() => {
             },
           );
           await installMockGateway(page, {
-            sessions: rows,
+            sessions: sessionRows,
             methodResponses: {
               "agents.list": agentsList,
               "agent.identity.get": {
@@ -195,6 +195,13 @@ suite.define(() => {
           expect(await add.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
           expect(await geometry()).toEqual(beforeFocus);
           expect(await add.getAttribute("href")).toBe("/new?agent=main");
+          await sidebar.locator(".sidebar-brand .sidebar-new-session-menu button").click();
+          const menuFace = sidebar.locator(
+            '.sidebar-brand .sidebar-new-session-menu [value="main"] .identity-avatar__agent-face',
+          );
+          await menuFace.waitFor();
+          await expect.poll(async () => (await menuFace.boundingBox())?.width).toBe(36);
+          await page.keyboard.press("Escape");
           await captureSidebarUiProof(
             suite,
             page,
