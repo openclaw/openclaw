@@ -65,7 +65,8 @@ function readStateText() {
 function configureMockOpenAi() {
   const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
-  applyMockOpenAiModelConfig(cfg, { mockPort, includeImageDefaults: true });
+  const configDialect = process.env.OPENCLAW_UPGRADE_SURVIVOR_MOCK_CONFIG_DIALECT || "current";
+  applyMockOpenAiModelConfig(cfg, { mockPort, includeImageDefaults: true, configDialect });
   writeConfig(cfg);
 }
 

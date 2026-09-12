@@ -177,9 +177,19 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
     }),
   ]);
   const removed = [];
+  const allowMissingLegacyChunks =
+    process.env.OPENCLAW_UPDATE_FIXTURE_ALLOW_MISSING_LEGACY_COMPAT === "1";
   for (const name of chunks) {
     const relativePath = `dist/${name}`;
     const filePath = path.join(paths.root, relativePath);
+    if (
+      allowMissingLegacyChunks &&
+      LEGACY_UPDATE_COMPAT_CHUNKS.includes(name) &&
+      !fs.existsSync(filePath) &&
+      !inventory.includes(relativePath)
+    ) {
+      continue;
+    }
     if (!fs.existsSync(filePath) || !inventory.includes(relativePath)) {
       throw new Error(`package fixture is missing compatibility input: ${relativePath}`);
     }

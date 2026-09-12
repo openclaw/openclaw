@@ -318,6 +318,33 @@ export function createPrepublishPluginRegistryArtifact(params) {
       fs.constants.COPYFILE_EXCL,
     );
   }
+  if (
+    requiredPackages.includes("openclaw") &&
+    !packages.some((entry) => entry.name === "openclaw")
+  ) {
+    if (!params.rootPackageTarball) {
+      throw new Error("openclaw registry publication requires the packed root candidate");
+    }
+    const rootTarball = path.resolve(params.rootPackageTarball);
+    const packedRoot = inspectNpmPackageTarball(rootTarball);
+    if (
+      packedRoot.packageJson.name !== "openclaw" ||
+      packedRoot.packageJson.version !== params.candidateVersion
+    ) {
+      throw new Error("packed root candidate identity differs from the selected release candidate");
+    }
+    const tarball = path.basename(rootTarball);
+    if (!TARBALL_PATTERN.test(tarball)) {
+      throw new Error("packed root candidate must use a portable .tgz filename");
+    }
+    fs.copyFileSync(rootTarball, path.join(outputDir, tarball), fs.constants.COPYFILE_EXCL);
+    packages.push({
+      name: "openclaw",
+      version: params.candidateVersion,
+      tarball,
+      sha256: packedRoot.sha256,
+    });
+  }
   for (const packageName of requiredPackages) {
     if (packages.some((entry) => entry.name === packageName)) {
       continue;
@@ -417,6 +444,7 @@ function main() {
           sourceSha: common.expectedSourceSha,
           candidateVersion: common.expectedCandidateVersion,
           preparedBundleDir: options.get("--prepared-bundle-dir"),
+          rootPackageTarball: options.get("--root-package-tarball"),
           requiredPackages,
         })
       : command === "verify"

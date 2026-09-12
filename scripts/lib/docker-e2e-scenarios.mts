@@ -18,6 +18,7 @@ export type DockerE2eLane = {
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
+  prepublishRootPackage?: boolean;
   resources: string[];
   retries: number;
   retryPatterns: RegExp[];
@@ -58,6 +59,8 @@ const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
 );
+const extendedStableUpgradeSurvivorCommand =
+  'OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/extended-stable-upgrade-survivor-docker.sh"\'';
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
@@ -118,6 +121,7 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
+    prepublishRootPackage: options.prepublishRootPackage,
     retryPatterns: options.retryPatterns ?? [],
     retries: options.retries ?? 0,
     resources: options.resources ?? [],
@@ -243,6 +247,14 @@ function createPackageUpdateMaintenanceLanes() {
     npmLane("update-restart-auth", updateRestartAuthCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
+      upgradeSurvivorScenario: "base",
+      weight: 3,
+    }),
+    npmLane("extended-stable-upgrade-survivor", extendedStableUpgradeSurvivorCommand, {
+      prepublishPluginPackages: ["@openclaw/brave-plugin", "@openclaw/feishu", "@openclaw/matrix"],
+      prepublishRootPackage: true,
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 50 * 60 * 1000,
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
@@ -921,6 +933,7 @@ const releasePathPackageOnboardingLanes = scheduledLaneList(
 const releasePathPackageMigrationLanes = scheduledLaneList(
   "update-channel-switch",
   "published-upgrade-survivor",
+  "extended-stable-upgrade-survivor",
 );
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",

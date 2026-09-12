@@ -2,6 +2,8 @@
 
 openclaw_prepublish_plugin_registry_configure_docker_args() {
   local registry_dir="$1"
+  local harness_scripts_dir
+  harness_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   local resolved_registry_dir
   resolved_registry_dir="$(cd "$registry_dir" && pwd)"
   local manifest="$resolved_registry_dir/prepublish-plugin-registry.json"
@@ -25,7 +27,8 @@ openclaw_prepublish_plugin_registry_configure_docker_args() {
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$candidate_version"
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$manifest_sha256"
     -v "$resolved_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
-    --entrypoint /opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh
+    -v "$harness_scripts_dir:/tmp/openclaw-release-harness/scripts:ro"
+    --entrypoint /tmp/openclaw-release-harness/scripts/e2e/lib/prepublish-plugin-registry.sh
   )
 }
 
@@ -66,9 +69,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const manifestPath = process.env.PREPUBLISH_PLUGIN_REGISTRY_MANIFEST;
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const includeCore = process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_INCLUDE_CORE === "1";
 for (const entry of manifest.packages) {
   // Root installs use their explicit tarball; baseline selectors stay upstream.
-  if (entry.name === "openclaw") continue;
+  if (entry.name === "openclaw" && !includeCore) continue;
   process.stdout.write(
     `${entry.name}\t${entry.version}\t${path.join(path.dirname(manifestPath), entry.tarball)}\n`,
   );
@@ -153,8 +157,14 @@ openclaw_prepublish_plugin_registry_run_mounted() (
   trap 'exit 129' HUP
   # Before lane code selects an update target, published baseline selectors must
   # remain published; exact candidate dependencies are already in the package set.
-  OPENCLAW_NPM_REGISTRY_DIST_TAGS="" OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM=1 \
-    openclaw_prepublish_plugin_registry_start_mounted "$registry_root" registry_pid '[]'
+  if [ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_INCLUDE_CORE:-0}" = "1" ]; then
+    export OPENCLAW_NPM_REGISTRY_DIST_TAGS="extended-stable=${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+    export OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM=versions
+  else
+    export OPENCLAW_NPM_REGISTRY_DIST_TAGS=""
+    export OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM=1
+  fi
+  openclaw_prepublish_plugin_registry_start_mounted "$registry_root" registry_pid '[]'
   if [ -n "$registry_pid" ]; then
     export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL="$NPM_CONFIG_REGISTRY"
   fi

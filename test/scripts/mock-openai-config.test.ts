@@ -153,4 +153,31 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
       },
     });
   });
+
+  it("writes the frozen list and image-generation dialect", () => {
+    const cfg = {
+      agents: {
+        defaults: { models: {} },
+        list: [{ id: "main", model: { primary: "openai/old" }, models: {} }],
+      },
+      models: { providers: {} },
+    };
+
+    applyMockOpenAiModelConfig(cfg, {
+      configDialect: "legacy",
+      includeImageDefaults: true,
+      mockPort: 18181,
+    });
+
+    expect(cfg.agents.defaults).toMatchObject({
+      model: { primary: "openai/gpt-5.5" },
+      imageModel: { primary: "openai/gpt-5.5", timeoutMs: 30_000 },
+      imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+    });
+    expect(cfg.agents.defaults).not.toHaveProperty("mediaModels");
+    expect(cfg.agents.list[0]).toMatchObject({
+      model: { primary: "openai/gpt-5.5" },
+      models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
+    });
+  });
 });

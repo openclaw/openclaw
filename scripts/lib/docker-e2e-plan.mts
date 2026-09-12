@@ -665,6 +665,9 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
   for (const poolLane of poolLanes) {
+    if (poolLane.prepublishRootPackage) {
+      requiredPackages.add("openclaw");
+    }
     for (const packageName of poolLane.prepublishPluginPackages ?? []) {
       requiredPackages.add(packageName);
     }

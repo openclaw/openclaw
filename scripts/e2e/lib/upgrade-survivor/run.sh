@@ -87,7 +87,7 @@ BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SUR
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
-OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="stable"
+OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL:-stable}"
 if [ "$SCENARIO" = "prerelease-plugin-registry" ] ||
   { [ "$UPDATE_RESTART_MODE" = "auto-auth" ] &&
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
@@ -660,6 +660,20 @@ assert_prepublish_fixture_idle() {
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
 }
 
+assert_prepublish_fixture_install_requests() {
+  [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_PREPUBLISH_PLUGIN_SOURCE:-npm}" = "clawhub" ]; then
+    local plugin_id="whatsapp"
+    [ "$SCENARIO" = "legacy-operator-state" ] && plugin_id="discord"
+    configured_plugin_installs_enabled && plugin_id="matrix"
+    node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/$plugin_id" \
+      "$candidate_version" required
+    return
+  fi
+  assert_prepublish_fixture_idle
+}
+
 assert_prepublish_plugin_install() {
   local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
   local consent_supported=0 pending_args=()
@@ -680,7 +694,7 @@ assert_prepublish_plugin_install() {
     assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
     "$consent_supported" ${pending_args[@]+"${pending_args[@]}"} || return "$?"
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
-  assert_prepublish_fixture_idle
+  assert_prepublish_fixture_install_requests
 }
 
 configure_plugin_registry() {
@@ -1324,6 +1338,10 @@ NODE
 }
 
 candidate_update_spec() {
+  if [ "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL" = "extended-stable" ]; then
+    printf '%s\n' "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL"
+    return
+  fi
   if [ "$CANDIDATE_KIND" != "tarball" ]; then
     printf '%s\n' "$CANDIDATE_SPEC"
     return 0
@@ -1372,6 +1390,9 @@ update_candidate() {
     previous_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
   fi
   local update_args=(update --tag "$update_spec" --yes --json)
+  if [ "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL" = "extended-stable" ]; then
+    update_args=(update --channel extended-stable --yes --json)
+  fi
   local update_env=(
     env
     -u OPENCLAW_GATEWAY_TOKEN
@@ -1387,6 +1408,9 @@ update_candidate() {
   fi
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
+  fi
+  if [ "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL" = "extended-stable" ]; then
+    update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
   fi
   update_env+=(
     "OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=$observation_root"
@@ -1642,6 +1666,10 @@ NODE
 repair_update_restart_auth() {
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    if [ "${OPENCLAW_UPGRADE_SURVIVOR_DOCTOR_REPAIRED_SERVICE:-0}" = "1" ]; then
+      phase verify-doctor-repaired-service \
+        verify_and_stop_doctor_repaired_gateway "$COMMAND_TIMEOUT" || return "$?"
+    fi
     # Historical preservation has already passed. This separate current-runtime
     # update needs a configured inference route for its real serving receipt.
     phase prepare-restart-inference prepare_restart_inference || return "$?"

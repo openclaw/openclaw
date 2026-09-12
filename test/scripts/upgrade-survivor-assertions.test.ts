@@ -537,11 +537,17 @@ function createMigratedSessionFileStore(
 
 function writeMigratedSessionFiles(
   stateDir: string,
-  options: { includePrompt?: boolean } = {},
+  options: { includePrompt?: boolean; includeSessionFile?: boolean } = {},
 ): void {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
   mkdirSync(agentSessionsDir, { recursive: true });
-  writeJson(join(agentSessionsDir, "sessions.json"), createMigratedSessionFileStore(options));
+  const store = createMigratedSessionFileStore(options);
+  if (options.includeSessionFile) {
+    for (const entry of Object.values(store)) {
+      entry.sessionFile = join(agentSessionsDir, `${String(entry.sessionId)}.jsonl`);
+    }
+  }
+  writeJson(join(agentSessionsDir, "sessions.json"), store);
   for (const sessionId of [
     "upgrade-main-session",
     "upgrade-direct-session",
@@ -725,6 +731,7 @@ function assertConfig(params: {
   scenario: string;
   stage?: "baseline" | "survival";
   updateChannel?: string;
+  discordDmOwner?: "canonical" | "legacy";
 }): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-config-"));
   try {
@@ -744,6 +751,7 @@ function assertConfig(params: {
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: params.stage ?? "survival",
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: params.updateChannel ?? "",
+        OPENCLAW_UPGRADE_SURVIVOR_DISCORD_DM_OWNER: params.discordDmOwner ?? "",
       },
       stdio: "pipe",
     });
@@ -1724,6 +1732,14 @@ process.stdout.write(sessionDir + "\\n");
         scenario: "base",
       }),
     ).toThrow(/legacy Discord DM config survived/);
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["discord-channel"],
+        config: legacyConfig,
+        scenario: "base",
+        discordDmOwner: "legacy",
+      }),
+    ).not.toThrow();
   });
 
   it("requires canonical Discord DM config after update", () => {
@@ -2019,6 +2035,22 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
+  it("requires legacy plugin runtime dependency cleanup for a frozen target", () => {
+    expect(() =>
+      runSessionStateAssertion((stateDir) => {
+        rmSync(join(stateDir, "plugin-runtime-deps"), { force: true, recursive: true });
+        writeMigratedSessionState(stateDir);
+        return { OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_OUTCOME: "removed" };
+      }),
+    ).not.toThrow();
+    expect(() =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionState(stateDir);
+        return { OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_OUTCOME: "removed" };
+      }),
+    ).toThrow(/survived cleanup/);
+  });
+
   it("prefers session_nodes over stale file and cache session stores", () => {
     expect(() =>
       runSessionStateAssertion((stateDir) => {
@@ -2089,6 +2121,15 @@ process.stdout.write(sessionDir + "\\n");
           db.close();
         }
         writeMigratedSessionFiles(stateDir);
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts the exact file-owned session metadata for a frozen target", () => {
+    expect(() =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionFiles(stateDir, { includeSessionFile: true });
+        return { OPENCLAW_UPGRADE_SURVIVOR_SESSION_METADATA_OWNER: "file" };
       }),
     ).not.toThrow();
   });

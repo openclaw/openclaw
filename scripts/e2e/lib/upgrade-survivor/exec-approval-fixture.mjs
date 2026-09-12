@@ -72,7 +72,10 @@ function parsePolicy(raw) {
 
 export function assertExecApprovalPolicySurvived(stateDir, stage) {
   let policy;
-  if (stage === "baseline") {
+  const expectedOwner =
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVAL_OWNER?.trim() || "sqlite";
+  assert(expectedOwner === "json" || expectedOwner === "sqlite", "unsupported exec approval owner");
+  if (stage === "baseline" || expectedOwner === "json") {
     policy = parsePolicy(fs.readFileSync(path.join(stateDir, "exec-approvals.json"), "utf8"));
   } else {
     // Observe the canonical owner directly. Runtime readers or an approvals CLI
@@ -90,7 +93,8 @@ export function assertExecApprovalPolicySurvived(stateDir, stage) {
       db.close();
     }
   }
-  const expected = stage === "baseline" ? legacyPolicy() : expectedPolicy();
+  const expected =
+    stage === "baseline" || expectedOwner === "json" ? legacyPolicy() : expectedPolicy();
   // Socket credentials are runtime-owned; compare the complete authored policy
   // without printing command text or any other state values on failure.
   for (const field of ["version", "defaults", "agents"]) {

@@ -306,6 +306,7 @@ esac
   it.each([
     ["base", undefined, "stable"],
     ["base", "beta", "beta"],
+    ["base", "extended-stable", "extended-stable"],
     ["prerelease-plugin-registry", undefined, "beta"],
   ])(
     "keeps the %s scenario on the %s override update channel",

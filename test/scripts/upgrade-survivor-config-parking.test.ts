@@ -18,6 +18,50 @@ function run(...args: string[]) {
 }
 
 describe("upgrade survivor config parking", () => {
+  it("updates extended-stable by persisted channel without an explicit tag", () => {
+    const root = tempDirs.make("openclaw-update-channel-");
+    const source = readFileSync(PUBLISHED_RUNNER_PATH, "utf8");
+    const start = source.indexOf("\ncandidate_update_spec() {");
+    const end = source.indexOf("\nassert_root_managed_vps_cli_usable()", start);
+    const argsLog = path.join(root, "args.log");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail
+${source.slice(start + 1, end)}
+openclaw_e2e_maybe_timeout() { shift; printf '%s\\n' "$*" >"$ARGS_LOG"; printf '{"status":"ok"}'; }
+read_installed_version() { printf '2026.7.33\\n'; }
+node() { [ "$1" = "-e" ] && command node "$@" || return 0; }
+baseline_spec=openclaw@2026.6.35
+baseline_version=2026.6.35
+CANDIDATE_KIND=npm
+CANDIDATE_SPEC=openclaw@extended-stable
+candidate_version=2026.7.33
+installed_version=2026.6.35
+UPDATE_RESTART_MODE=manual
+ROOT_MANAGED_VPS=0
+SCENARIO=base
+COMMAND_TIMEOUT=10s
+UPDATE_JSON=${JSON.stringify(path.join(root, "update.json"))}
+UPDATE_ERR=${JSON.stringify(path.join(root, "update.err"))}
+POST_UPDATE_VALIDATE_JSON=${JSON.stringify(path.join(root, "validate.json"))}
+POST_UPDATE_VALIDATE_ERR=${JSON.stringify(path.join(root, "validate.err"))}
+ARTIFACT_ROOT=${JSON.stringify(root)}
+OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL=extended-stable
+update_candidate
+! grep -q -- '--tag' "$ARGS_LOG"
+grep -q -- 'OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw' "$ARGS_LOG"
+grep -q -- 'openclaw update --channel extended-stable --yes --json --no-restart' "$ARGS_LOG"
+OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL=stable
+update_candidate
+grep -q -- 'openclaw update --tag openclaw@extended-stable --yes --json --no-restart' "$ARGS_LOG"`,
+      ],
+      { env: { ...process.env, ARGS_LOG: argsLog } },
+    );
+    expect(result.status, result.stderr.toString()).toBe(0);
+  });
+
   it.each([
     { registry: false, installStatus: 0, stopStatus: 0, activeStatus: 3 },
     { registry: true, installStatus: 0, stopStatus: 0, activeStatus: 3 },

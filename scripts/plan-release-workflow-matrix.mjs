@@ -6,7 +6,7 @@ import { createPluginPrereleaseTestPlan } from "./lib/plugin-prerelease-test-pla
 import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups.mjs";
 
 export const RELEASE_PACKAGE_ACCEPTANCE_LANES =
-  "release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape";
+  "release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor extended-stable-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape";
 
 const DOCKER_E2E_CHUNKS = [
   {

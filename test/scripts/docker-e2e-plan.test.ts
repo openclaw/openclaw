@@ -969,6 +969,17 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         weight: 3,
       },
       {
+        command:
+          'OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/extended-stable-upgrade-survivor-docker.sh"\'',
+        imageKind: "bare",
+        live: false,
+        name: "extended-stable-upgrade-survivor",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 3_000_000,
+        weight: 3,
+      },
+      {
         command: trustedUpgradeSurvivorCommand(),
         imageKind: "bare",
         live: false,
@@ -1131,8 +1142,8 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
       const lanes = partitions.flatMap((partition) => partition.lanes);
 
-      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 3]);
-      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(10);
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 3, 3]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(11);
       expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
       const complete = planFor({ ...options, planReleaseAll: true });
       const packageNames = new Set(lanes.map((lane) => lane.name));
@@ -1176,6 +1187,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "skill-install",
       "update-channel-switch",
       "published-upgrade-survivor",
+      "extended-stable-upgrade-survivor",
       "upgrade-survivor",
       "update-first-hop-compat",
       "update-run-package-self-upgrade",
@@ -2247,6 +2259,19 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       ]);
       expect(plan.needs.prepublishPluginRegistry).toBe(true);
     }
+
+    expect(
+      planFor({ selectedLaneNames: ["extended-stable-upgrade-survivor"] })
+        .requiredPrepublishPluginPackages,
+    ).toEqual([
+      "@openclaw/brave-plugin",
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/feishu",
+      "@openclaw/matrix",
+      "@openclaw/whatsapp",
+      "openclaw",
+    ]);
 
     const feishuPlan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],

@@ -146,6 +146,45 @@ async function withPublishedRegistry(root: string, run: (url: string) => void | 
 }
 
 describe("prepublish plugin registry shell helper", () => {
+  it("serves candidate dist-tag and exact-version metadata from the local registry", async () => {
+    const root = tempDirs.make("openclaw-prepublish-registry-target-");
+    const fixture = registryFixture(root, ["openclaw"]);
+    await withPublishedRegistry(root, async (upstream) => {
+      const result = spawnSync(
+        "bash",
+        [
+          resolve(SCRIPT),
+          process.execPath,
+          "--input-type=module",
+          "-e",
+          `
+const base = process.env.NPM_CONFIG_REGISTRY + "/openclaw/";
+const tagged = await (await fetch(base + "extended-stable")).json();
+const exact = await (await fetch(base + process.env.VERSION)).json();
+console.log(JSON.stringify({ tagged, exact }));
+`,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            ...fixture.env,
+            OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_INCLUDE_CORE: "1",
+            VERSION,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const output = JSON.parse(result.stdout);
+      expect(output.tagged).toMatchObject({ name: "openclaw", version: VERSION });
+      expect(output.exact).toMatchObject({ name: "openclaw", version: VERSION });
+    });
+  });
+
   it("retries failed upstream metadata while preserving published and candidate versions", async () => {
     const root = tempDirs.make("openclaw-prepublish-registry-retry-");
     const fixture = registryFixture(root, ["@openclaw/ai"]);

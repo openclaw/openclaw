@@ -6751,8 +6751,11 @@ process.exit(73);
     for (const args of runs) {
       expect(args).toContain(`${tarball}:/tmp/openclaw-current.tgz:ro`);
       expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
+      expect(
+        args.some((arg) => arg.endsWith("/scripts:/tmp/openclaw-release-harness/scripts:ro")),
+      ).toBe(true);
       expect(args[args.indexOf("--entrypoint") + 1]).toBe(
-        "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
+        "/tmp/openclaw-release-harness/scripts/e2e/lib/prepublish-plugin-registry.sh",
       );
     }
   });

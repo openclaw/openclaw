@@ -64,9 +64,9 @@ function fixture() {
     OPENCLAW_TEST_WORKSPACE_DIR: join(home, "workspace"),
     OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
   };
-  const run = (command: string, stage = "survival") =>
+  const run = (command: string, stage = "survival", extraEnv: Record<string, string> = {}) =>
     spawnSync(process.execPath, [assertions, command], {
-      env: { ...env, OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage },
+      env: { ...env, ...extraEnv, OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage },
       encoding: "utf8",
       timeout: 10_000,
     });
@@ -126,6 +126,14 @@ describe("survivor exec approval policy observation", () => {
     const { writeCanonical, observe } = fixture();
     writeCanonical(JSON.stringify(canonicalPolicy()));
     const result = observe();
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("accepts the complete JSON policy for a frozen JSON-owned target", () => {
+    const { run } = fixture();
+    const result = run("assert-exec-approvals", "survival", {
+      OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVAL_OWNER: "json",
+    });
     expect(result.status, result.stderr).toBe(0);
   });
 

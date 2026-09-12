@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -239,6 +239,47 @@ describe("standalone upgrade survivor plugin registry", () => {
     expect(readFileSync(join(captureDir, "docker-args"), "utf8")).toContain(
       ":/tmp/openclaw-prepublish-plugin-registry:ro",
     );
+  });
+
+  it("forwards the hermetic extended-stable candidate registry contract", () => {
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_INCLUDE_CORE: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.6.35",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: "extended-stable",
+      OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVAL_OWNER: "json",
+      OPENCLAW_UPGRADE_SURVIVOR_DISCORD_DM_OWNER: "legacy",
+      OPENCLAW_UPGRADE_SURVIVOR_SESSION_METADATA_OWNER: "file",
+      OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_OUTCOME: "removed",
+      OPENCLAW_UPGRADE_SURVIVOR_PREPUBLISH_PLUGIN_SOURCE: "clawhub",
+      OPENCLAW_UPDATE_FIXTURE_ALLOW_MISSING_LEGACY_COMPAT: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_DOCTOR_REPAIRED_SERVICE: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_MOCK_CONFIG_DIALECT: "legacy",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(captureDir, "node-env"), "utf8")).toBe(
+      "extended-stable-upgrade-survivor|openclaw@2026.6.35|base\n",
+    );
+    const args = readFileSync(join(captureDir, "docker-run-args"), "utf8").split("\0").slice(0, -1);
+    expect(args).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_INCLUDE_CORE=1");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL=extended-stable");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVAL_OWNER=json");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_DISCORD_DM_OWNER=legacy");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_SESSION_METADATA_OWNER=file");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_OUTCOME=removed");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_PREPUBLISH_PLUGIN_SOURCE=clawhub");
+    expect(args).toContain("OPENCLAW_UPDATE_FIXTURE_ALLOW_MISSING_LEGACY_COMPAT=1");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_DOCTOR_REPAIRED_SERVICE=1");
+    expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_MOCK_CONFIG_DIALECT=legacy");
+    expect(args).toContain(`${resolve("scripts")}:/tmp/openclaw-release-harness/scripts:ro`);
+    const entrypointIndex = args.indexOf("--entrypoint");
+    expect(entrypointIndex).toBeGreaterThanOrEqual(0);
+    expect(args[entrypointIndex + 1]).toBe(
+      "/tmp/openclaw-release-harness/scripts/e2e/lib/prepublish-plugin-registry.sh",
+    );
+    expect(
+      statSync(resolve("scripts/e2e/lib/prepublish-plugin-registry.sh")).mode & 0o111,
+    ).not.toBe(0);
   });
 
   it("does not prepare a registry for a published candidate", () => {

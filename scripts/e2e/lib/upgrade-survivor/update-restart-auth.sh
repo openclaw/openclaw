@@ -468,6 +468,23 @@ stop_update_restart_probe_gateway() {
   gateway_pid=""
 }
 
+verify_and_stop_doctor_repaired_gateway() {
+  local command_timeout="$1" readiness_log
+  readiness_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG}.doctor-repair.readiness.log"
+  if ! systemctl --user is-active --quiet openclaw-gateway.service; then
+    echo "Doctor did not restore the managed gateway service" >&2
+    return 1
+  fi
+  gateway_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")" || return "$?"
+  openclaw_e2e_wait_gateway_ready \
+    "$gateway_pid" "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG" 360 18789 strict \
+    >"$readiness_log" 2>&1 || {
+      openclaw_e2e_print_log "$readiness_log" >&2
+      return 1
+    }
+  stop_update_restart_probe_gateway "$command_timeout"
+}
+
 hash_update_restart_service_definition() {
   node --input-type=module <<'NODE'
 import { createHash } from "node:crypto";

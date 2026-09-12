@@ -428,6 +428,25 @@ describe("scripts/test-docker-all scheduler", () => {
     });
   });
 
+  it("adds core to an extended-stable candidate registry", () => {
+    const root = tempDirs.make("openclaw-extended-stable-registry-");
+    const plan = candidatePlan({ requiredPackages: ["@openclaw/discord", "openclaw"] });
+    createPrepublishPluginRegistryArtifact.mockReturnValue({
+      manifestSha256: "b".repeat(64),
+    });
+
+    preparePrepublishPluginRegistry(plan, root, "a".repeat(40), "2026.7.33", {
+      OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/openclaw-current.tgz",
+    });
+
+    expect(createPrepublishPluginRegistryArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiredPackages: ["@openclaw/discord", "openclaw"],
+        rootPackageTarball: "/tmp/openclaw-current.tgz",
+      }),
+    );
+  });
+
   it("rejects unknown CLI options without a stack trace", () => {
     const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--bogus"], {
       cwd: process.cwd(),

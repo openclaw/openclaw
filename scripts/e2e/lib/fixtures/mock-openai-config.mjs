@@ -21,8 +21,13 @@ export function parseMockOpenAiPort(value, label = "mock OpenAI port") {
 
 export function applyMockOpenAiModelConfig(cfg, params) {
   const mockPort = parseMockOpenAiPort(params.mockPort);
-  const modelRef = params.modelRef ?? "openai/gpt-5.6-luna";
-  const modelId = modelRef.split("/").at(-1) ?? "gpt-5.6-luna";
+  const configDialect = params.configDialect ?? "current";
+  if (configDialect !== "current" && configDialect !== "legacy") {
+    throw new Error(`unsupported mock OpenAI config dialect: ${configDialect}`);
+  }
+  const legacyConfig = configDialect === "legacy";
+  const modelRef = params.modelRef ?? (legacyConfig ? "openai/gpt-5.5" : "openai/gpt-5.6-luna");
+  const modelId = modelRef.split("/").at(-1) ?? (legacyConfig ? "gpt-5.5" : "gpt-5.6-luna");
   const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   cfg.models = {
     ...cfg.models,
@@ -59,13 +64,18 @@ export function applyMockOpenAiModelConfig(cfg, params) {
       ...cfg.agents?.defaults,
       model: { primary: modelRef },
       ...(params.includeImageDefaults
-        ? {
-            imageModel: { primary: modelRef, timeoutMs: 30_000 },
-            mediaModels: {
-              ...cfg.agents?.defaults?.mediaModels,
-              image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
-            },
-          }
+        ? legacyConfig
+          ? {
+              imageModel: { primary: modelRef, timeoutMs: 30_000 },
+              imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+            }
+          : {
+              imageModel: { primary: modelRef, timeoutMs: 30_000 },
+              mediaModels: {
+                ...cfg.agents?.defaults?.mediaModels,
+                image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+              },
+            }
         : {}),
       models: {
         ...cfg.agents?.defaults?.models,
@@ -75,34 +85,53 @@ export function applyMockOpenAiModelConfig(cfg, params) {
         },
       },
     },
-    ...(cfg.agents?.entries
+    ...(legacyConfig && Array.isArray(cfg.agents?.list)
       ? {
-          entries: Object.fromEntries(
-            Object.entries(cfg.agents.entries).map(([agentId, agent]) => [
-              agentId,
-              {
-                ...agent,
-                model: {
-                  ...(typeof agent.model === "object" && agent.model !== null ? agent.model : {}),
-                  primary: modelRef,
+          list: cfg.agents.list.map((agent) => ({
+            ...agent,
+            model: { ...agent.model, primary: modelRef },
+            models: {
+              ...agent.models,
+              [modelRef]: {
+                ...agent.models?.[modelRef],
+                agentRuntime: { id: "openclaw" },
+                params: {
+                  ...agent.models?.[modelRef]?.params,
+                  transport: "sse",
+                  openaiWsWarmup: false,
                 },
-                models: {
-                  ...agent.models,
-                  [modelRef]: {
-                    ...agent.models?.[modelRef],
-                    agentRuntime: { id: "openclaw" },
-                    params: {
-                      ...agent.models?.[modelRef]?.params,
-                      transport: "sse",
-                      openaiWsWarmup: false,
+              },
+            },
+          })),
+        }
+      : cfg.agents?.entries
+        ? {
+            entries: Object.fromEntries(
+              Object.entries(cfg.agents.entries).map(([agentId, agent]) => [
+                agentId,
+                {
+                  ...agent,
+                  model: {
+                    ...(typeof agent.model === "object" && agent.model !== null ? agent.model : {}),
+                    primary: modelRef,
+                  },
+                  models: {
+                    ...agent.models,
+                    [modelRef]: {
+                      ...agent.models?.[modelRef],
+                      agentRuntime: { id: "openclaw" },
+                      params: {
+                        ...agent.models?.[modelRef]?.params,
+                        transport: "sse",
+                        openaiWsWarmup: false,
+                      },
                     },
                   },
                 },
-              },
-            ]),
-          ),
-        }
-      : {}),
+              ]),
+            ),
+          }
+        : {}),
   };
   cfg.plugins = {
     ...cfg.plugins,

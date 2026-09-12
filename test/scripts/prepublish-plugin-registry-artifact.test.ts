@@ -212,6 +212,41 @@ function preparedBundleFixture(repoRoot: string, sourceSha: string) {
 }
 
 describe("prepublish plugin registry artifact", () => {
+  it("adds the packed root candidate when the Docker plan requires core", () => {
+    const { repoRoot, sourceSha } = cliFixture([]);
+    const rootTarball = path.join(repoRoot, "openclaw-current.tgz");
+    writeFixtureTarball(path.join(repoRoot, "root-staging"), rootTarball, "openclaw");
+    const artifactDir = path.join(repoRoot, "artifact");
+
+    const result = createPrepublishPluginRegistryArtifact({
+      repoRoot,
+      outputDir: artifactDir,
+      sourceSha,
+      candidateVersion: VERSION,
+      rootPackageTarball: rootTarball,
+      requiredPackages: ["openclaw"],
+    });
+
+    const verified = validatePrepublishPluginRegistryArtifact({
+      artifactDir,
+      expectedSourceSha: sourceSha,
+      expectedCandidateVersion: VERSION,
+      expectedManifestSha256: result.manifestSha256,
+      requiredPackages: ["openclaw"],
+    });
+    expect(verified.manifest.packages).toEqual([
+      {
+        name: "openclaw",
+        version: VERSION,
+        tarball: path.basename(rootTarball),
+        sha256: sha256(rootTarball),
+      },
+    ]);
+    expect(readFileSync(path.join(artifactDir, path.basename(rootTarball)))).toEqual(
+      readFileSync(rootTarball),
+    );
+  });
+
   it("reuses prepared root and core bytes while packing only selected plugins", () => {
     const { repoRoot, sourceSha } = cliFixture([PACKAGE_NAME, "@openclaw/slack"]);
     const { preparedBundleDir, entries } = preparedBundleFixture(repoRoot, sourceSha);

@@ -223,6 +223,36 @@ describe("first-hop package fixtures", () => {
     expect(fs.readFileSync(path.join(root, "dist", "index.js"), "utf8")).toBe("export {};\n");
   });
 
+  it("allows an explicit frozen package that predates the declared legacy chunks", () => {
+    const root = makePackageFixture();
+    const inventoryPath = path.join(root, "dist", "postinstall-inventory.json");
+    writeJson(
+      inventoryPath,
+      (JSON.parse(fs.readFileSync(inventoryPath, "utf8")) as string[]).filter(
+        (entry) => !LEGACY_UPDATE_COMPAT_CHUNKS.some((name) => entry === `dist/${name}`),
+      ),
+    );
+    for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
+      fs.rmSync(path.join(root, "dist", name));
+    }
+
+    expect(() => markFutureUpdateFixture(root)).toThrow(/missing compatibility input/);
+    const previous = process.env.OPENCLAW_UPDATE_FIXTURE_ALLOW_MISSING_LEGACY_COMPAT;
+    process.env.OPENCLAW_UPDATE_FIXTURE_ALLOW_MISSING_LEGACY_COMPAT = "1";
+    try {
+      markFutureUpdateFixture(root);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_UPDATE_FIXTURE_ALLOW_MISSING_LEGACY_COMPAT;
+      } else {
+        process.env.OPENCLAW_UPDATE_FIXTURE_ALLOW_MISSING_LEGACY_COMPAT = previous;
+      }
+    }
+    expect(JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version).toBe(
+      FUTURE_FIXTURE_VERSION,
+    );
+  });
+
   it("marks a distinct future package after the compatibility window closes", () => {
     const root = makePackageFixture();
     markFutureUpdateFixture(root);
@@ -636,7 +666,7 @@ process.stdout.write(JSON.stringify([{ filename }]));
       }
       for (const args of invocations) {
         expect(args[args.indexOf("--entrypoint") + 1]).toBe(
-          "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
+          "/tmp/openclaw-release-harness/scripts/e2e/lib/prepublish-plugin-registry.sh",
         );
         expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
         expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-original.tgz:ro`);
