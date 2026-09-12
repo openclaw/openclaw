@@ -141,8 +141,9 @@ export async function loadModelProvidersData(
 export function loadModelProviderUsage(
   client: GatewayBrowserClient,
   signal: AbortSignal,
+  agentId?: string,
 ): Promise<ProviderUsageRequestResult> {
-  return requestProviderUsage(client, { signal });
+  return requestProviderUsage(client, { signal, ...(agentId ? { agentId } : {}) });
 }
 
 export function loadModelProviderCost(
