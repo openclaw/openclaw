@@ -116,7 +116,7 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
     errorMessage: stringifyField(errorMessage, 4096) ?? "Unknown provider error",
     ...(errorCode ? { errorCode: truncateUtf16Safe(errorCode, 256) } : {}),
     ...(errorType ? { errorType: truncateUtf16Safe(errorType, 256) } : {}),
-    ...(body ? { errorBody: truncateField(body, MAX_ERROR_BODY_LENGTH) } : {}),
+    ...(body ? { errorBody: truncateField(body, 500) } : {}),
   };
 }
 

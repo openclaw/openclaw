@@ -1200,12 +1200,13 @@ describe("anthropic transport stream", () => {
 
     expect(result).toMatchObject({ stopReason: "error", errorCode: "400" });
     expect(result.errorMessage).toContain(message);
-    expect(JSON.parse(result.errorBody ?? "null")).toMatchObject({
+    expect(JSON.parse(result.errorMessage?.slice("400: ".length) ?? "null")).toMatchObject({
       error: {
         message: "All target providers failed.",
         attempts: body.error.attempts.map(({ status, details }) => ({ status, details })),
       },
     });
+    expect(result.errorBody?.length).toBeLessThanOrEqual(515);
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(credential);
     expect(serialized).not.toContain(media);
