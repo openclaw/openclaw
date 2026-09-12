@@ -103,6 +103,7 @@ the page that now holds the content.
 - <a id="task-names-and-targeting" />[Task names and targeting](/tools/subagents/tool-reference#task-names-and-targeting)
 - <a id="tool%3A-sessions_yield" /><a id="tool-sessions_yield" />[Tool: `sessions_yield`](/tools/subagents/tool-reference#tool-sessions_yield)
 - <a id="tool%3A-subagents" /><a id="tool-subagents" />[Tool: `subagents`](/tools/subagents/tool-reference#tool-subagents)
+- <a id="shared-working-directory-advisory" />[Shared working directory advisory](/tools/subagents/tool-reference#shared-working-directory-advisory)
 - <a id="thread-bound-sessions" />[Thread-bound sessions](/tools/subagents/thread-bound-sessions#thread-bound-sessions)
 - <a id="thread-supporting-channels" />[Thread supporting channels](/tools/subagents/thread-bound-sessions#thread-supporting-channels)
 - <a id="quick-flow" />[Quick flow](/tools/subagents/thread-bound-sessions#quick-flow)
