@@ -15,6 +15,12 @@ import {
 
 // The shared fixture must register mocks before other runtime modules load.
 const { createDeferred } = await import("../../test/helpers/promise.js");
+const { AsyncLocalStorage } = await import("node:async_hooks");
+const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeRegistryScope } =
+  await import("../plugins/runtime/gateway-request-scope.js");
+const { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } =
+  await import("../shared/async-work-scope.js");
 const { validateAgentRunDelegatedAuthority } = await import("../infra/agent-run-registry.js");
 const { mintSecretSentinel } = await import("../secrets/sentinel.js");
 const { getAdmittedRunDelegatedAuthority } = await import("./admitted-run-context.js");
@@ -612,5 +618,121 @@ describe("runIsolatedCompletion", () => {
       model: "gemini-3.1-flash-preview",
       owner: { kind: "cli", id: "google-gemini-cli" },
     });
+  });
+});
+
+describe("isolated completion work ownership", () => {
+  it.each(["acquisition", "host-auth"] as const)(
+    "owns %s descendants and preserves parent cancellation context",
+    async (stage) => {
+      const parent = new AsyncWorkScope();
+      const caller = new AbortController();
+      const callerReason = new Error("isolated caller cancelled");
+      const parentReason = new Error("isolated parent closing");
+      const callerRegistry = createEmptyPluginRegistry();
+      const selectedRegistry = createEmptyPluginRegistry();
+      const foreignRegistry = createEmptyPluginRegistry();
+      Object.assign(preparedModelRuntime, { pluginRegistry: selectedRegistry });
+      let cancellationRegistryMatches = false;
+      const entered = createDeferred();
+      const finishSetup = createDeferred();
+      const finishTail = createDeferred();
+      const tails: Promise<unknown>[] = [];
+      let observedReason: unknown;
+      let cancellationScopeMatches = false;
+      const pause = async () => {
+        const signal = getAsyncWorkSignal();
+        if (!signal) {
+          throw new Error("Setup did not inherit its actual work owner");
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            observedReason = signal.reason;
+            cancellationScopeMatches = getAsyncWorkSignal() === signal;
+            cancellationRegistryMatches =
+              getPluginRuntimeGatewayRequestScope()?.pluginRegistry ===
+              (stage === "acquisition" ? callerRegistry : selectedRegistry);
+            tails.push(trackAsyncWork(() => finishTail.promise));
+          },
+          { once: true },
+        );
+        entered.resolve();
+        await finishSetup.promise;
+      };
+      if (stage === "acquisition") {
+        mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
+          await pause();
+          return { snapshot: preparedModelRuntime, release: releaseRuntimeLease };
+        });
+      } else {
+        mocks.prepareSimpleCompletionModel.mockImplementationOnce(async () => {
+          await pause();
+          return {
+            model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
+            auth: { apiKey: "synthetic-key", mode: "api-key", source: "test" },
+          };
+        });
+      }
+      const dispatch = vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "done" }]),
+      }));
+      registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+      const completion = withPluginRuntimeRegistryScope(callerRegistry, () =>
+        parent.run(() =>
+          runIsolatedCompletion({
+            ...isolatedRequest(),
+            abortSignal: caller.signal,
+          }),
+        ),
+      );
+      let drained = false;
+      let drainage: Promise<void> | undefined;
+      try {
+        await Promise.race([
+          entered.promise,
+          completion.then(() => {
+            throw new Error("Completion ended before setup entered");
+          }),
+        ]);
+        caller.abort(callerReason);
+        withPluginRuntimeRegistryScope(foreignRegistry, () => parent.beginClose(parentReason));
+        expect.soft(cancellationRegistryMatches).toBe(true);
+        expect.soft(observedReason).toBe(parentReason);
+        expect.soft(cancellationScopeMatches).toBe(true);
+        drainage = parent.drain().then(() => {
+          drained = true;
+        });
+        finishSetup.resolve();
+        await expect(completion).rejects.toBe(callerReason);
+        expect(dispatch).not.toHaveBeenCalled();
+        expect.soft(releaseRuntimeLease).not.toHaveBeenCalled();
+        expect.soft(drained).toBe(false);
+        finishTail.resolve();
+        await drainage;
+        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+      } finally {
+        finishSetup.resolve();
+        finishTail.resolve();
+        await Promise.allSettled([completion, ...tails]);
+        await drainage;
+        await parent.drain();
+      }
+    },
+  );
+
+  it("does not begin setup through a captured closed parent", async () => {
+    const parent = new AsyncWorkScope();
+    registerIsolatedHarness({
+      runIsolatedCompletionV2: vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "done" }]),
+      })),
+    });
+    const invoke = parent.run(() =>
+      AsyncLocalStorage.bind(() => runIsolatedCompletion(isolatedRequest())),
+    );
+    await parent.drain();
+    await expect(invoke()).rejects.toThrow("Async work scope is closed");
+    expect(mocks.acquireAgentRunPreparedModelRuntime).not.toHaveBeenCalled();
   });
 });

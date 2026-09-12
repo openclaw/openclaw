@@ -33,6 +33,7 @@ import {
 } from "../../announce-idempotency.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { FailoverError } from "../../failover-error.js";
+import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
@@ -651,12 +652,7 @@ describe("subagent announce formatting", () => {
       }
       if (typed.method === "chat.history") {
         return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Worker executed successfully" }],
-            },
-          ],
+          messages: [textAssistant("Worker executed successfully")],
         };
       }
       if (typed.method === "sessions.delete") {
@@ -715,10 +711,7 @@ describe("subagent announce formatting", () => {
     async (testCase) => {
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "" }],
-          },
+          textAssistant(""),
           {
             role: testCase.role,
             content: [{ type: "text", text: testCase.toolOutput }],
@@ -750,10 +743,7 @@ describe("subagent announce formatting", () => {
           role: "tool",
           content: [{ type: "text", text: "tool output line" }],
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "assistant final line" }],
-        },
+        textAssistant("assistant final line"),
       ],
     });
     readLatestAssistantReplyMock.mockResolvedValue("");
@@ -2238,10 +2228,7 @@ describe("subagent announce formatting", () => {
           role: "toolResult",
           content: [{ type: "text", text: "old tool output" }],
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "assistant completion text" }],
-        },
+        textAssistant("assistant completion text"),
       ],
     });
     readLatestAssistantReplyMock.mockResolvedValue("");
@@ -2268,10 +2255,7 @@ describe("subagent announce formatting", () => {
   it("does not fall back to latest tool output for completion-mode when assistant output is empty", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "" }],
-        },
+        textAssistant(""),
         {
           role: "toolResult",
           content: [{ type: "text", text: "tool output only" }],

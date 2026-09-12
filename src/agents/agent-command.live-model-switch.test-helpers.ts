@@ -195,7 +195,6 @@ export function createTestModelVisibilityPolicy(params: ModelSelectionParams) {
     providerWildcards: new Set<string>(),
     hasConfiguredEntries: !allowed.allowAny,
     hasProviderWildcards: wildcardModelKeys.size > 0,
-    allowsKey,
     allows: ({ provider, model }: { provider: string; model: string }) =>
       allowsKey(`${provider}/${model}`),
     allowsByWildcard: ({ provider, model }: { provider: string; model: string }) =>

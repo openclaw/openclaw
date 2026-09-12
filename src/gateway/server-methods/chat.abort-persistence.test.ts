@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessageSync,
@@ -685,11 +686,7 @@ describe("chat abort transcript persistence", () => {
       idempotencyKey,
       sessionId,
       storePath,
-      message: {
-        role: "user",
-        content: "colliding user key",
-        timestamp: 1,
-      },
+      message: makeUserMessage("colliding user key", 1),
     });
 
     const respond = vi.fn();

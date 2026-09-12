@@ -48,7 +48,7 @@ Multiple flags:
 ```json
 {
   "diagnostics": {
-    "flags": ["telegram.http", "brave.http", "gateway.*"]
+    "flags": ["telegram.http", "brave.http", "health"]
   }
 }
 ```
@@ -136,6 +136,9 @@ Or enable it in config:
 
 The output path always comes from `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, even
 when the flag itself is set in config; there is no config key for the path.
+See [Environment variables](/help/environment) for where OpenClaw reads
+`OPENCLAW_DIAGNOSTICS`, `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, and
+`OPENCLAW_DIAGNOSTICS_EVENT_LOOP` from, and in what precedence order.
 When `timeline` is enabled only from config, the earliest config-loading spans
 are missing because OpenClaw has not read config yet; subsequent startup spans
 are captured normally.
@@ -209,8 +212,8 @@ For remote gateways, use `openclaw logs --follow` instead (see
 
 ## Notes
 
-- If `logging.level` is set higher than `warn`, flag-gated logs may be
-  suppressed. Default `info` is fine.
+- If `logging.level` is set to `error`, `fatal`, or `silent`, flag-gated logs
+  may be suppressed. Default `info` is fine.
 - `brave.http` logs Brave Search request URLs/query params, response
   status/timing, and cache hit/miss/write events. It does not log the API key
   (sent as a request header) or response bodies, but search queries can be

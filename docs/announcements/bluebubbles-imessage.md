@@ -61,7 +61,7 @@ If your config still contains `channels.bluebubbles`, migrate it to `channels.im
    }
    ```
 
-5. Restart the gateway and verify:
+5. Restart the Gateway and verify:
 
    ```bash
    openclaw channels status --probe

@@ -47,8 +47,13 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mts";
+import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  previousReleaseInventory,
+  writeUpdateCompatibilityBuildFixture,
+} from "./update-compat-chunks.test-support.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
@@ -205,10 +210,18 @@ function writeBuild(mirror: string) {
     path.join(mirror, "dist", RUNTIME_POSTBUILD_STAMP_FILE),
     `${JSON.stringify({ head })}\n`,
   );
+  writeUpdateCompatibilityBuildFixture(mirror);
+  writeUpdateCompatibilityChunks({
+    distDir: path.join(mirror, "dist"),
+    sourceDir: mirror,
+    inventory: previousReleaseInventory,
+  });
   for (const relativePath of listCoreRuntimePostBuildOutputs({ rootDir: mirror })) {
     const outputPath = path.join(mirror, relativePath);
     mkdirSync(path.dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, "// runtime postbuild\n");
+    if (!existsSync(outputPath)) {
+      writeFileSync(outputPath, "// runtime postbuild\n");
+    }
   }
   writeFileSync(path.join(mirror, "dist/build-info.json"), `${JSON.stringify({ commit: head })}\n`);
 }

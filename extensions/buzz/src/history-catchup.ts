@@ -147,6 +147,9 @@ export async function catchUpBuzzRoomHistory(params: {
     }
     let page: BuzzRoomHistoryPage;
     try {
+      if (params.signal?.aborted) {
+        return "aborted";
+      }
       page = await queryBuzzRoomHistoryPage({
         relay: params.relay,
         channelId: params.channelId,

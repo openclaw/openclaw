@@ -3,17 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "./entry-status.js";
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("shared/entry-status", () => {
   it("combines metadata presentation fields with evaluated requirements", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
 
     const result = evaluateEntryRequirementsForCurrentPlatform({
       always: false,
@@ -65,7 +61,7 @@ describe("shared/entry-status", () => {
   });
 
   it("evaluates OS requirements against process.platform", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
 
     const result = evaluateEntryRequirementsForCurrentPlatform({
       always: false,
@@ -84,7 +80,7 @@ describe("shared/entry-status", () => {
   });
 
   it("combines frontmatter presentation with always-on requirements", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
 
     const result = evaluateEntryRequirementsForCurrentPlatform({
       always: true,
@@ -127,7 +123,7 @@ describe("shared/entry-status", () => {
   });
 
   it("returns empty requirements when metadata and frontmatter are missing", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
 
     const result = evaluateEntryRequirementsForCurrentPlatform({
       always: false,

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import {
   WorkerProviderError,
@@ -20,6 +19,7 @@ const PROFILE_KEYS = new Set([
   "setup",
   "setupEnv",
   "ttl",
+  "target",
   "warmImage",
 ]);
 const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/u;
@@ -45,24 +45,53 @@ type CrabboxProfile = {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   idleTimeout: string;
+  idleTimeoutMs: number;
   provider: string;
   ttl: string;
+  target: CrabboxOperatingSystem;
   setup?: string;
   setupEnv?: string[];
   warmImage?: boolean;
 };
 
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
-const MAX_CRABBOX_MACHINE_OPTIONS = 32;
-const CRABBOX_DESKTOP_PROVIDERS = new Set(["aws", "hetzner"]);
+const MAX_CRABBOX_MACHINE_OPTIONS = 64;
+export const CRABBOX_ENROLLABLE_TARGETS = [
+  "linux",
+  "windows/wsl2",
+  "windows/normal",
+  "macos",
+] as const;
+export type CrabboxOperatingSystem = (typeof CRABBOX_ENROLLABLE_TARGETS)[number];
+export const CRABBOX_OS_LABELS: Record<CrabboxOperatingSystem, string> = {
+  linux: "Linux",
+  "windows/wsl2": "Windows (WSL2)",
+  "windows/normal": "Windows",
+  macos: "macOS",
+};
+
+export function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSystem {
+  if (value === undefined) {
+    return "linux";
+  }
+  const target = nonEmptyString(value);
+  for (const supported of CRABBOX_ENROLLABLE_TARGETS) {
+    if (target === supported) {
+      return supported;
+    }
+  }
+  throw new WorkerProviderError(
+    `Crabbox target must be ${CRABBOX_ENROLLABLE_TARGETS.join(" or ")}`,
+  );
+}
+const CRABBOX_DESKTOP_PROVIDERS = new Set(["aws", "azure", "hetzner"]);
 
 export type CrabboxMachineShape = Readonly<{
   class: string;
+  os: CrabboxOperatingSystem;
   cpu?: number;
   memoryGb?: number;
 }>;
-
-type IsExecutable = (candidate: string) => boolean;
 
 export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 
@@ -115,7 +144,7 @@ function heartbeatIntervalMs(idleTimeoutMs: number): number {
   return Math.min(referenceIntervalMs, Math.max(1, Math.floor(idleTimeoutMs / 2)));
 }
 
-export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
+export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>): CrabboxProfile {
   for (const key of Object.keys(profile)) {
     if (!PROFILE_KEYS.has(key)) {
       throw new WorkerProviderError(`unknown Crabbox profile setting: ${key}`);
@@ -124,6 +153,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
 
   const provider = nonEmptyString(profile.provider)?.toLowerCase();
   const machineClass = nonEmptyString(profile.class);
+  const target = parseCrabboxOperatingSystem(profile.target);
   if (!provider) {
     throw new WorkerProviderError("Crabbox profile provider must be a non-empty string");
   }
@@ -180,7 +210,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   }
   if (desktop && !CRABBOX_DESKTOP_PROVIDERS.has(provider)) {
     throw new WorkerProviderError(
-      "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
+      "Crabbox desktop profiles support only AWS, Azure, and coordinator-backed Hetzner",
     );
   }
   const warmImage = profile.warmImage;
@@ -197,10 +227,12 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
       Math.max(1, Math.floor(idleTimeoutMs / 2)),
     ),
     idleTimeout,
+    idleTimeoutMs,
     provider,
     setup,
     setupEnv,
     ttl,
+    target,
     warmImage,
   };
 }
@@ -227,12 +259,43 @@ function resolveCrabboxProfileSetupEnv(
 export function resolveCrabboxWarmImageProfile(
   profile: CrabboxProfile,
   machineClass = profile.class,
+  target = profile.target,
 ) {
+  if (target !== "linux" && profile.desktop) {
+    throw new WorkerProviderError("Crabbox desktop is Linux only");
+  }
+  if (target !== "linux" && profile.warmImage === true) {
+    throw new WorkerProviderError("Crabbox warm images are Linux only");
+  }
   return {
     ...profile,
     class: machineClass,
-    warmImage: profile.warmImage ?? (machineClass !== undefined && !profile.setupEnv?.length),
+    target,
+    warmImage:
+      profile.warmImage ??
+      (target === "linux" && machineClass !== undefined && !profile.setupEnv?.length),
   };
+}
+
+export function resolveCrabboxWarmImageProfileKey(
+  profile: CrabboxProfile,
+  projectKey?: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        backendProvider: profile.provider,
+        // Missing target in persisted Linux keys already means Linux.
+        ...(profile.target !== "linux" ? { target: profile.target } : {}),
+        setup: profile.setup ?? "",
+        setupEnvKeys: [...(profile.setupEnv ?? [])].toSorted(),
+        desktop: profile.desktop ?? false,
+        // Exact class is intentionally conservative; cross-class reuse comes later.
+        machineClass: profile.class,
+        ...(projectKey ? { projectKey } : {}),
+      }),
+    )
+    .digest("hex");
 }
 
 type CrabboxProvisionProfile = CrabboxProfile &
@@ -241,6 +304,7 @@ type CrabboxProvisionProfile = CrabboxProfile &
 export function resolveCrabboxProvisionProfile(
   profile: WorkerProfile,
   requestedClassValue: unknown,
+  requestedOsValue?: unknown,
 ): { profile: CrabboxProvisionProfile; forwardedEnv?: Record<string, string> } {
   const configured = parseCrabboxProfile(profile);
   const requestedClass = nonEmptyString(requestedClassValue);
@@ -252,7 +316,13 @@ export function resolveCrabboxProvisionProfile(
       "Crabbox machine class must be a non-empty string of at most 128 characters",
     );
   }
-  const resolved = resolveCrabboxWarmImageProfile(configured, requestedClass ?? configured.class);
+  const resolved = resolveCrabboxWarmImageProfile(
+    configured,
+    requestedClass ?? configured.class,
+    requestedOsValue === undefined
+      ? configured.target
+      : parseCrabboxOperatingSystem(requestedOsValue),
+  );
   let provisionProfile: CrabboxProvisionProfile;
   if (!resolved.warmImage) {
     provisionProfile = { ...resolved, warmImage: false };
@@ -276,49 +346,40 @@ export function listCrabboxMachineOptions(
   shapes: readonly CrabboxMachineShape[] = [],
 ): readonly WorkerMachineOption[] {
   const seen = new Set<string>();
-  const candidates = shapes.filter((shape) => {
-    if (shape.class.length > MAX_CRABBOX_MACHINE_CLASS_LENGTH || seen.has(shape.class)) {
-      return false;
-    }
-    seen.add(shape.class);
-    return true;
-  });
-  if (candidates.length === 0) {
-    return [];
-  }
-  const catalogLimit =
-    configuredClass === undefined ||
-    candidates
-      .slice(0, MAX_CRABBOX_MACHINE_OPTIONS)
-      .some((shape) => shape.class === configuredClass)
-      ? MAX_CRABBOX_MACHINE_OPTIONS
-      : MAX_CRABBOX_MACHINE_OPTIONS - 1;
-  const options = candidates.slice(0, catalogLimit).map((shape) => {
-    const id = shape.class;
-    const result: {
-      id: string;
-      label: string;
-      cpu?: number;
-      memoryGb?: number;
-      default?: boolean;
-    } = { id, label: id.replace(/^./u, (initial) => initial.toUpperCase()) };
-    if (shape.cpu !== undefined) {
-      result.cpu = shape.cpu;
-    }
-    if (shape.memoryGb !== undefined) {
-      result.memoryGb = shape.memoryGb;
-    }
-    if (id === configuredClass) {
-      result.default = true;
-    }
-    return result;
-  });
-  if (configuredClass !== undefined && !options.some((option) => option.id === configuredClass)) {
-    options.push({
-      id: configuredClass,
-      label: configuredClass,
-      default: true,
+  const options: WorkerMachineOption[] = [];
+  for (const os of CRABBOX_ENROLLABLE_TARGETS) {
+    const candidates = shapes.filter((shape) => {
+      const key = `${shape.os}:${shape.class}`;
+      if (
+        shape.os !== os ||
+        shape.class.length > MAX_CRABBOX_MACHINE_CLASS_LENGTH ||
+        seen.has(key)
+      ) {
+        return false;
+      }
+      seen.add(key);
+      return true;
     });
+    if (candidates.length === 0) {
+      continue;
+    }
+    const remaining = MAX_CRABBOX_MACHINE_OPTIONS - options.length;
+    const reserveDefault =
+      configuredClass !== undefined &&
+      !candidates.slice(0, remaining).some((shape) => shape.class === configuredClass);
+    for (const shape of candidates.slice(0, Math.max(0, remaining - Number(reserveDefault)))) {
+      options.push({
+        id: shape.class,
+        os,
+        label: shape.class.replace(/^./u, (initial) => initial.toUpperCase()),
+        ...(shape.cpu !== undefined ? { cpu: shape.cpu } : {}),
+        ...(shape.memoryGb !== undefined ? { memoryGb: shape.memoryGb } : {}),
+        ...(shape.class === configuredClass ? { default: true } : {}),
+      });
+    }
+    if (reserveDefault && remaining > 0 && configuredClass !== undefined) {
+      options.push({ id: configuredClass, os, label: configuredClass, default: true });
+    }
   }
   return options;
 }
@@ -335,6 +396,11 @@ export function buildCrabboxAllocationArgs(
     "public",
     "--tailscale=false",
     ...(profile.class ? ["--class", profile.class] : []),
+    ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),
+    ...(profile.target === "windows/normal"
+      ? ["--target", "windows", "--windows-mode", "normal"]
+      : []),
+    ...(profile.target === "macos" ? ["--target", "macos", "--market", "on-demand"] : []),
     "--ttl",
     profile.ttl,
     "--idle-timeout",
@@ -349,72 +415,6 @@ export function buildCrabboxAllocationArgs(
     args.push("--desktop", "--browser", "--desktop-env", "xfce");
   }
   return args;
-}
-
-function defaultIsExecutable(candidate: string, platform: NodeJS.Platform): boolean {
-  try {
-    if (!fs.statSync(candidate).isFile()) {
-      return false;
-    }
-    fs.accessSync(candidate, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function binaryCandidates(base: string, platform: NodeJS.Platform): string[] {
-  return platform === "win32"
-    ? [".exe", ".cmd", ".bat", ".com", ""].map((suffix) => `${base}${suffix}`)
-    : [base];
-}
-
-export function resolveCrabboxBinary(params: {
-  explicit?: string;
-  isExecutable?: IsExecutable;
-  openclawRoot: string;
-  pathEnv?: string;
-  platform?: NodeJS.Platform;
-}): string {
-  if (params.explicit) {
-    return params.explicit;
-  }
-  return findCrabboxBinary(params) ?? "crabbox";
-}
-
-export function findCrabboxBinary(params: {
-  explicit?: string;
-  isExecutable?: IsExecutable;
-  openclawRoot: string;
-  pathEnv?: string;
-  platform?: NodeJS.Platform;
-}): string | undefined {
-  const platform = params.platform ?? process.platform;
-  const isExecutable =
-    params.isExecutable ?? ((candidate) => defaultIsExecutable(candidate, platform));
-  if (params.explicit) {
-    return isExecutable(params.explicit) ? params.explicit : undefined;
-  }
-  const siblingBase = path.resolve(params.openclawRoot, "../crabbox/bin/crabbox");
-  for (const candidate of binaryCandidates(siblingBase, platform)) {
-    if (isExecutable(candidate)) {
-      return candidate;
-    }
-  }
-  const delimiter = platform === "win32" ? ";" : ":";
-  const executableNames = binaryCandidates("crabbox", platform);
-  for (const directory of (params.pathEnv ?? "").split(delimiter)) {
-    if (!directory) {
-      continue;
-    }
-    for (const name of executableNames) {
-      const candidate = path.resolve(directory, name);
-      if (isExecutable(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return undefined;
 }
 
 export function resolveOpenClawRoot(pluginRoot: string | undefined): string {

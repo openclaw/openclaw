@@ -114,12 +114,13 @@ fences the process and causes a clean exit.
 A `stale-base-leaf` transcript rejection fail-stops the current run. Worker
 mode does not retry the rejected sequence against a different leaf, so no
 duplicate commit is produced; any still-uncommitted in-memory tail from that
-run is lost. Relaunch belongs to the milestone-3 placement owner, which must
+run is lost. Relaunch belongs to
+[placement](/gateway/cloud-workers/placement-and-machine-selection), which must
 create a fresh assignment from the gateway's authoritative transcript and
 commit ledger. Likewise, a gateway process restart terminates a pending
 inference turn with a provider error; only a worker WebSocket reconnect can
 reattach to an active same-process inference stream.
 
-See [Gateway protocol](/gateway/protocol#worker-role-and-closed-protocol) for the
+See [Gateway protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol) for the
 closed worker RPC surface and [Cloud workers](/gateway/cloud-workers) for the
 architecture and security model.

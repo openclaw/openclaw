@@ -18,6 +18,7 @@ import {
   normalizeWebhookPath,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -552,7 +553,9 @@ export class VoiceCallWebhookServer {
           if (path === streamPath && this.mediaStreamHandler) {
             this.mediaStreamHandler?.handleUpgrade(request, socket, head);
           } else {
-            socket.destroy();
+            // HTTP relinquishes upgraded sockets; own errors while the 404 flushes.
+            socket.once("error", () => {});
+            rejectWebSocketUpgrade(socket, { status: 404 });
           }
         });
       }

@@ -15,8 +15,8 @@ jsonl, yaml/yml/lobster). Self-hosters, plugin authors, and editor extensions
 use it to read, find, or update a narrow location without hand-rolling a
 per-file parser.
 
-`path` is provided by the bundled optional `oc-path` plugin. Enable it before
-first use:
+`path` is provided by the bundled optional [`oc-path` plugin](/plugins/oc-path).
+Enable it before first use:
 
 ```bash
 openclaw plugins enable oc-path
@@ -444,8 +444,7 @@ openclaw path resolve 'oc://gateway.jsonc/server/port' --json
 
 Enumerate every match for a wildcard / predicate / union pattern. Exits `0`
 on at least one match, `1` on zero. File-slot wildcards are rejected with
-`OC_PATH_FILE_WILDCARD_UNSUPPORTED` — pass a concrete file (multi-file
-globbing is a follow-up feature).
+`OC_PATH_FILE_WILDCARD_UNSUPPORTED` and exit `2` — pass a concrete file path.
 
 ```bash
 openclaw path find 'oc://AGENTS.md/tools/**/risk'
@@ -532,3 +531,4 @@ auto-detection.
 ## Related
 
 - [CLI reference](/cli)
+- [OC Path plugin](/plugins/oc-path)

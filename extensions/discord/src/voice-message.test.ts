@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordError, type RequestClient } from "./internal/discord.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 import { hasDiscordMessageCreateAmbiguity, type DiscordRetryRunner } from "./retry.js";
@@ -68,28 +69,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 
 let ensureOggOpus: typeof import("./voice-message.js").ensureOggOpus;
 let sendDiscordVoiceMessage: typeof import("./voice-message.js").sendDiscordVoiceMessage;
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 describe("ensureOggOpus", () => {
   beforeAll(async () => {
@@ -300,7 +279,7 @@ describe("sendDiscordVoiceMessage", () => {
     const post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }));
     const rest = createRest(post);
     let uploadUrlRequests = 0;
-    const successfulUpload = cancelTrackedResponse("uploaded", { status: 200 });
+    const successfulUpload = cancelTrackedTextResponse("uploaded", { status: 200 });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const method = input instanceof Request ? input.method : (init?.method ?? "GET");
@@ -632,7 +611,7 @@ describe("sendDiscordVoiceMessage", () => {
 
   it("bounds voice upload error bodies without using response.text()", async () => {
     const rest = createRest();
-    const tracked = cancelTrackedResponse(`${"cdn unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"cdn unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "content-type": "text/plain" },
     });

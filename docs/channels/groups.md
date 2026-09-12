@@ -46,7 +46,7 @@ always-on group chatter -> user request, or room event when configured
 
 For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`: the final assistant text posts to the room as the visible reply.
 
-Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best with tool-reliable models (for example GPT-5.6 Sol). If the model misses the tool and returns substantive final text, OpenClaw keeps that text private instead of posting it to the room.
+Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private instead of posting it to the room.
 
 Use `"automatic"` for models or runtimes that do not reliably follow tool-only delivery: normal text finals post directly to the room, and the agent may still call `message(action=send)` for files, images, or other attachments that cannot ride along with the final text.
 
@@ -54,7 +54,7 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls 
 
 For direct chats and any other source event, `messages.visibleReplies: "message_tool"` applies the same tool-only behavior globally; `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract.
 
-Tool-only mode replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode the prompt does not define a `NO_REPLY` contract; doing nothing visible simply means not calling the message tool.
+Tool-only mode replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode the prompt does not define a `NO_REPLY` contract; doing nothing visible simply means not calling the message tool. `"automatic"` group replies still carry the silent-reply instruction, so `NO_REPLY` applies only there.
 
 Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
@@ -119,7 +119,7 @@ By default OpenClaw keeps context as received: allowlists decide who can trigger
 
 Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Mattermost, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
 
-These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
+These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security/hardened-baseline#requester-scoped-controls-and-prompt-context).
 
 ![Group message flow](/images/groups-flow.svg)
 
@@ -236,7 +236,7 @@ If you need truly separate workspaces/personas ("personal" and "public" must nev
 
 Related:
 
-- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
+- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
 - Bind mounts details: [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent)
 
@@ -601,17 +601,13 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
 
-## WhatsApp system prompts
-
-See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics.
-
-## WhatsApp specifics
-
-See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
-
 ## Related
+
+<a id="whatsapp-system-prompts" />
+<a id="whatsapp-specifics" />
 
 - [Broadcast groups](/channels/broadcast-groups)
 - [Channel routing](/channels/channel-routing)
-- [Group messages](/channels/group-messages)
+- [Group messages](/channels/group-messages) — WhatsApp-only behavior (history injection, mention handling details)
 - [Pairing](/channels/pairing)
+- [WhatsApp](/channels/whatsapp#system-prompts) — canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics

@@ -38,6 +38,10 @@ beforeEach(() => {
 });
 
 describe("buildSubagentList", () => {
+  const baseConfig: OpenClawConfig = {
+    commands: { text: true },
+    channels: { whatsapp: { allowFrom: ["*"] } },
+  };
   it("builds the subagent list without decoding unrelated saved prompts", async () => {
     const stateDir = await fs.mkdtemp(path.join(testWorkspaceDir, "metadata-"));
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -112,12 +116,8 @@ describe("buildSubagentList", () => {
   });
 
   it("returns empty active and recent sections when no runs exist", () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
     const list = buildSubagentList({
-      cfg,
+      cfg: baseConfig,
       runs: [],
       recentMinutes: 30,
       taskMaxChars: 110,
@@ -140,12 +140,9 @@ describe("buildSubagentList", () => {
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+
     const list = buildSubagentList({
-      cfg,
+      cfg: baseConfig,
       runs: [run],
       recentMinutes: 30,
       taskMaxChars: 110,
@@ -169,13 +166,9 @@ describe("buildSubagentList", () => {
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = buildSubagentList({
-      cfg,
+      cfg: baseConfig,
       runs: [run],
       recentMinutes: 30,
     });
@@ -275,12 +268,9 @@ describe("buildSubagentList", () => {
       createdAt: now - 30_000,
       startedAt: now - 30_000,
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+
     const list = buildSubagentList({
-      cfg,
+      cfg: baseConfig,
       runs: [orchestratorRun],
       recentMinutes: 30,
       taskMaxChars: 110,
@@ -412,13 +402,9 @@ describe("buildSubagentList", () => {
       endedAt: now - 31 * 60_000,
       outcome: { status: "ok" },
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = buildSubagentList({
-      cfg,
+      cfg: baseConfig,
       runs: [parentRun],
       recentMinutes: 30,
       taskMaxChars: 110,
@@ -491,13 +477,9 @@ describe("buildSubagentList", () => {
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(staleRun);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = buildSubagentList({
-      cfg,
+      cfg: baseConfig,
       runs: [staleRun],
       recentMinutes: 30,
       taskMaxChars: 110,
@@ -537,13 +519,9 @@ describe("buildSubagentList", () => {
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = buildSubagentList({
-      cfg,
+      cfg: baseConfig,
       runs: [parentRun],
       recentMinutes: 30,
       taskMaxChars: 110,

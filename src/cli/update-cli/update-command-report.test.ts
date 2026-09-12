@@ -106,6 +106,59 @@ describe("interactive update failure action", () => {
     );
   });
 
+  it.each([
+    [
+      "duplicate issue",
+      { status: "duplicate", url: "https://github.com/openclaw/openclaw/issues/123" },
+      "Existing issue: https://github.com/openclaw/openclaw/issues/123",
+    ],
+    [
+      "duplicate fallback with a retired locator",
+      { status: "duplicate", fallbackUrl: "https://github.com/openclaw/openclaw/issues/new" },
+      "Existing prefilled issue: https://github.com/openclaw/openclaw/issues/new",
+    ],
+    ["pending", { status: "pending" }, undefined],
+    ["unsaved stale", { status: "stale" }, undefined],
+  ] as const)(
+    "keeps %s guidance without claiming a saved artifact",
+    async (_name, result, link) => {
+      const fixture = setup("report", true);
+      const message = "Report outcome details";
+      fixture.submit.mockResolvedValue({
+        ...result,
+        message,
+        savedReportPath: fixture.prepared.savedReportPath,
+      });
+
+      await expect(fixture.run()).resolves.toBe("handled");
+
+      expect(fixture.runtime.log).toHaveBeenCalledWith(message);
+      if (link) {
+        expect(fixture.runtime.log).toHaveBeenCalledWith(link);
+      }
+      expect(fixture.runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("Saved sanitized report:"),
+      );
+    },
+  );
+
+  it("keeps the saved report path beside an ordinary browser fallback", async () => {
+    const fixture = setup("report", true);
+    fixture.submit.mockResolvedValue({
+      status: "fallback",
+      message: "GitHub submission is unavailable.",
+      fallbackUrl: fixture.prepared.url,
+      savedReportPath: fixture.prepared.savedReportPath,
+    });
+
+    await expect(fixture.run()).resolves.toBe("handled");
+
+    expect(fixture.runtime.log).toHaveBeenCalledWith(`Prefilled issue: ${fixture.prepared.url}`);
+    expect(fixture.runtime.log).toHaveBeenCalledWith(
+      `Saved sanitized report: ${fixture.prepared.savedReportPath}`,
+    );
+  });
+
   it("returns a retryable no-start result to explicit action and confirmation", async () => {
     const fixture = setup(["report", "report"], true);
     fixture.submit

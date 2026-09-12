@@ -38,6 +38,12 @@ layout remain per-device UI state. Ordinary task revisits restore the browser's
 saved arrangement for that task; opening a gallery card explicitly focuses the
 dashboard.
 
+The browser keeps the three most recently visited tasks in each pane loaded,
+including their dashboard widgets, while you switch tasks or visit Settings.
+Returning to a retained task preserves widget interactions and reading position;
+changed content refreshes in place. Older tasks may reload when reopened. A browser
+reload or a change of Gateway or signed-in user clears these retained views.
+
 ## Arrange your task
 
 The main area and side panel can show either the dashboard or chat. Browser,
@@ -50,6 +56,16 @@ Terminal, Files, and Review use the same layout controls:
 - **Layout** in the task toolbar moves the side panel left, right, or below the
   main area. Drag the divider to resize it. Narrow panes use a bottom panel
   until there is room for a side-by-side layout again.
+- Click the **Dashboard** side-panel tab to expand the dashboard to the full
+  task area in one step, even when another tab is selected. Click it again to
+  restore the split. Arrow-key tab navigation only selects the tab; Enter or
+  Space expands or restores Dashboard. Other tabs keep their normal selection
+  behavior.
+- **Expand** beside the side panel’s close **×** expands its active tab. The
+  same control becomes **Restore split** and stays beside **×** while expanded.
+  Restoring returns the original main view, panel placement, and size without
+  swapping chat and dashboard. Closing the expanded panel returns to the main
+  view instead.
 - **Focus** in the task toolbar gives the main view the full task area.
   **Restore split** brings back the side panel with its previous placement and
   size.

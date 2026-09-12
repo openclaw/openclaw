@@ -55,11 +55,13 @@ function buildExecutableResolution(
   params: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    useCache?: boolean;
   },
 ): ExecutableResolution {
   const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
     cwd: params.cwd,
     env: params.env,
+    useCache: params.useCache,
   });
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
@@ -77,6 +79,7 @@ function buildCommandResolution(params: {
   policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  useCache?: boolean;
   effectiveArgv: string[];
   wrapperChain: string[];
   policyBlocked: boolean;
@@ -122,6 +125,7 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
+  options?: { useCache?: boolean },
 ): CommandResolution | null {
   const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
@@ -136,6 +140,7 @@ export function resolveCommandResolutionFromArgv(
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
+    useCache: options?.useCache,
     cwd,
     env,
   });

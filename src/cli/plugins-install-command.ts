@@ -109,7 +109,6 @@ async function runPluginInstallCommandUnlocked(
     ...resolveInstallPolicyWarningAcknowledgementCliOptions({
       acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
       allowPrompt: params.allowInstallPolicyWarningPrompt,
-      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
     }),
   });
   const capabilityConsent = resolvePluginCapabilityConsentCliOptions({

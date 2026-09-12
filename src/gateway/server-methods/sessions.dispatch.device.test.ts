@@ -351,7 +351,7 @@ describe("sessions.dispatch device targets", () => {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
         // A local row starts at generation one; failed and retried dispatches advance it twice.
-        const harness = createHarness(placements, { environmentGeneration: 3 });
+        const harness = createHarness(database, placements, { environmentGeneration: 3 });
         const nodes = [connectedNode("first", 3), connectedNode("second", 2)];
         vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
           deviceEnvironments(nodes),
@@ -753,7 +753,7 @@ describe("sessions.dispatch device targets", () => {
       try {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = createHarness(placements);
+        const harness = createHarness(database, placements);
         const runtime = createDeviceWorkerRuntime({
           getPairedDevice: async (deviceId) => pairedNode(deviceId),
         });

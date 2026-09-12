@@ -7,6 +7,8 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
+  /** Queued reply delivery, rather than runtime execution, owns chat completion. */
+  completionSource?: "reply-dispatch";
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;

@@ -34,7 +34,6 @@ function normalizeMessageId(messageId: string | undefined): string | undefined {
   return normalized;
 }
 
-let mirror: PersistedEchoEntry[] | null = null;
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
   if (persistenceFailureLogged) {
@@ -80,9 +79,9 @@ function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
   return entry.timestamp >= cutoff && (entry.expiresAt == null || entry.expiresAt > now);
 }
 
-function loadMirrorFromStore(): void {
+function readRecentEntries(): PersistedEchoEntry[] {
   try {
-    mirror = openPersistedEchoStore()
+    return openPersistedEchoStore()
       .entries()
       .map(({ value }) => value)
       .filter((entry) => isLiveEntry(entry))
@@ -90,13 +89,8 @@ function loadMirrorFromStore(): void {
       .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
   } catch (err) {
     reportFailure("read", err);
-    mirror = [];
+    return [];
   }
-}
-
-function readRecentEntries(): PersistedEchoEntry[] {
-  loadMirrorFromStore();
-  return mirror ?? [];
 }
 
 function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undefined {
@@ -141,12 +135,7 @@ export function rememberPersistedIMessageEcho(params: {
   if (!entry.text && !entry.media && !entry.messageId) {
     return undefined;
   }
-  loadMirrorFromStore();
-  const key = persistEntry(entry, params.ttlMs);
-  mirror = [...(mirror ?? []), entry]
-    .filter((candidate) => isLiveEntry(candidate))
-    .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
-  return key;
+  return persistEntry(entry, params.ttlMs);
 }
 
 export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
@@ -158,7 +147,6 @@ export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
   } catch (err) {
     reportFailure("delete", err);
   }
-  mirror = (mirror ?? []).filter((entry) => resolveIMessageSentEchoEntryKey(entry) !== key);
 }
 
 export function hasPersistedIMessageEcho(params: {

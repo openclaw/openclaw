@@ -1,5 +1,5 @@
 // Status update tests cover update check display and availability formatting.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
 import {
@@ -25,6 +25,10 @@ function nextMajorVersion(version: string): string {
   }
   return "999999.0.0";
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("resolveUpdateAvailability", () => {
   it("flags git update when behind upstream", () => {
@@ -95,7 +99,7 @@ describe("formatUpdateOneLiner", () => {
     );
   });
 
-  it("renders synced git installs with a single up to date label", () => {
+  it.each([true, null])("renders synced git installs with fetchOk=%s unchanged", (fetchOk) => {
     const update = buildUpdate({
       installKind: "git",
       git: {
@@ -107,7 +111,7 @@ describe("formatUpdateOneLiner", () => {
         dirty: false,
         ahead: 0,
         behind: 0,
-        fetchOk: true,
+        fetchOk,
       },
       registry: { latestVersion: VERSION },
       deps: {
@@ -120,6 +124,39 @@ describe("formatUpdateOneLiner", () => {
 
     expect(formatUpdateOneLiner(update)).toBe(
       `Update: git main · ↔ origin/main · up to date · npm latest ${VERSION} · deps ok`,
+    );
+  });
+
+  it.each([
+    { ahead: 0, behind: 0 },
+    { ahead: 3, behind: 2 },
+  ])("labels stale counts as cached with ahead=$ahead and behind=$behind", ({ ahead, behind }) => {
+    vi.spyOn(Date, "now").mockReturnValue(600_000);
+    const update = buildUpdate({
+      installKind: "git",
+      git: {
+        root: "/tmp/repo",
+        sha: "abc123456789",
+        tag: null,
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead,
+        behind,
+        fetchOk: null,
+        countsCached: true,
+        stale: {
+          reason: "fetch-failed",
+          failedAtMs: 300_000,
+          detail: "network error",
+          runId: "3d076d15-ff42-4167-9159-850c83298466",
+        },
+      },
+      registry: { latestVersion: VERSION },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe(
+      `Update: git main · ↔ origin/main · update check stale: last update fetch failed 5m ago (network error) · cached: ahead ${ahead}, behind ${behind} · npm latest ${VERSION}`,
     );
   });
 
@@ -212,7 +249,7 @@ describe("formatUpdateAvailableHint", () => {
     expect(formatUpdateAvailableHint(update)).toBeNull();
   });
 
-  it("renders git and registry update details", () => {
+  it.each([false, true])("renders git and registry update details with cached=%s", (cached) => {
     const latestVersion = nextMajorVersion(VERSION);
     const update = buildUpdate({
       installKind: "git",
@@ -225,13 +262,14 @@ describe("formatUpdateAvailableHint", () => {
         dirty: false,
         ahead: 0,
         behind: 2,
-        fetchOk: true,
+        fetchOk: cached ? null : true,
+        ...(cached ? { countsCached: true as const } : {}),
       },
       registry: { latestVersion },
     });
 
     expect(formatUpdateAvailableHint(update)).toBe(
-      `Update available (git behind 2 · npm ${latestVersion}). Run: openclaw update`,
+      `Update available (git behind 2${cached ? " (cached)" : ""} · npm ${latestVersion}). Run: openclaw update`,
     );
   });
 });

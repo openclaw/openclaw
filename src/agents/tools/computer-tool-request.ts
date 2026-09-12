@@ -474,6 +474,20 @@ export function validateCapabilityBoundInput(params: {
   const elementRef = readToolStringParam(input, "elementRef");
   const observationId = readToolStringParam(input, "observationId");
   const deliveryMode = normalizeOptionalLowercaseString(input.deliveryMode);
+  if (
+    LOCAL_ACTIONS.has(params.action) &&
+    (windowRef || browserRef || pageRef || elementRef || observationId)
+  ) {
+    const observations = ["get_window_state", "get_browser_state"].filter((action) =>
+      capabilities?.actions.some((available) => available === action),
+    );
+    throw new Error(
+      `COMPUTER_INVALID_REQUEST: ${params.action} captures a desktop screen; remove target and observation references.` +
+        (observations.length
+          ? ` Use ${observations.join(" or ")} for a targeted observation.`
+          : ""),
+    );
+  }
   if (windowRef && !capabilities?.targets.includes("window")) {
     throw new Error(`${COMPUTER_CONTRACT_MISMATCH}: selected node has no window target support`);
   }
