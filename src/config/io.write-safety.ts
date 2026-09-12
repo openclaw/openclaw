@@ -18,24 +18,73 @@ export function createGuardedConfigFileSystem(
   configPath: string,
   fsModule: typeof fs,
   assertCurrent?: () => void,
+  publication?: {
+    snapshot: ConfigFileSnapshot;
+    includeGraph: { hashes: Record<string, string>; targets: Record<string, string> };
+  },
 ): typeof fs {
-  if (!assertCurrent) {
+  if (!assertCurrent && !publication) {
     return fsModule;
   }
+  const assertPublication = () => {
+    assertCurrent?.();
+    if (publication) {
+      assertBaseSnapshotStillCurrent(
+        publication.snapshot,
+        configPath,
+        fsModule,
+        publication.includeGraph,
+      );
+    }
+  };
   const directory = path.dirname(path.resolve(configPath));
   return {
     ...fsModule,
+    mkdirSync: new Proxy(fsModule.mkdirSync, {
+      apply(target, thisArg, args) {
+        assertCurrent?.();
+        return Reflect.apply(target, thisArg, args);
+      },
+    }),
+    fchmodSync: (fd, mode) => {
+      assertCurrent?.();
+      return fsModule.fchmodSync(fd, mode);
+    },
+    renameSync: (source, destination) => {
+      if (destination === configPath) {
+        assertPublication();
+      } else {
+        assertCurrent?.();
+      }
+      return fsModule.renameSync(source, destination);
+    },
+    rmSync: (filePath, options) => {
+      if (filePath === configPath) {
+        assertPublication();
+      }
+      return fsModule.rmSync(filePath, options);
+    },
+    openSync: (filePath, flags, mode) => {
+      if (filePath === configPath) {
+        if (publication?.snapshot.exists === false) {
+          assertPublication();
+        } else {
+          assertCurrent?.();
+        }
+      }
+      return fsModule.openSync(filePath, flags, mode);
+    },
     promises: {
       ...fsModule.promises,
       // Preserve mkdir's overloads while checking immediately at native dispatch.
       mkdir: new Proxy(fsModule.promises.mkdir, {
         apply(target, thisArg, args) {
-          assertCurrent();
+          assertCurrent?.();
           return Reflect.apply(target, thisArg, args);
         },
       }),
       rename: (source, destination) => {
-        assertCurrent();
+        assertCurrent?.();
         return fsModule.promises.rename(source, destination);
       },
       open: async (filePath, flags, mode) => {
@@ -44,7 +93,7 @@ export function createGuardedConfigFileSystem(
           // fs-safe observes this directory handle before applying its mode.
           const chmod = handle.chmod.bind(handle);
           handle.chmod = (nextMode) => {
-            assertCurrent();
+            assertCurrent?.();
             return chmod(nextMode);
           };
         }

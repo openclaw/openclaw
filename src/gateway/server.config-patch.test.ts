@@ -1,5 +1,6 @@
 // Config patch tests cover control-UI config edits, secret-ref writes, auth
 // profile persistence, and rate limiting through a real Gateway owner.
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -517,6 +518,65 @@ describe("gateway config methods", () => {
         expect(operations?.[0]?.changedPaths).toBeUndefined();
       } else {
         expect(await fs.readFile(includePath, "utf8")).toBe(includeBefore);
+      }
+    },
+  );
+
+  it.each(
+    (["EPERM", "EEXIST"] as const).flatMap((code) =>
+      (["unchanged", "changed"] as const).map((includedContent) => ({ code, includedContent })),
+    ),
+  )(
+    "config.set handles $code copy fallback with $includedContent included content",
+    async ({ code, includedContent }) => {
+      const original = await getCurrentConfigObject();
+      const includePath = path.join(path.dirname(original.path), "logging.json");
+      await writeJsonFile(includePath, { level: "info" });
+      await writeJsonFile(original.path, {
+        ...original.config,
+        logging: { $include: "logging.json" },
+        gateway: { reload: { mode: "off" } },
+      });
+      invalidateConfigGetResponseCache();
+      const draft = await getCurrentConfigObject();
+      const rootBefore = await fs.readFile(original.path, "utf8");
+      const rename = fsNode.renameSync;
+      let renameDenied = false;
+      vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {
+        if (destination !== original.path) {
+          return rename(source, destination);
+        }
+        renameDenied = true;
+        if (includedContent === "changed") {
+          fsNode.writeFileSync(includePath, JSON.stringify({ level: "debug" }));
+        }
+        throw Object.assign(new Error("rename denied"), { code });
+      });
+
+      const result = await rpcReq(requireClient(), "config.set", {
+        raw: JSON.stringify({ ...draft.config, ui: { prefs: { locale: "fr" } } }),
+        baseHash: draft.hash,
+      });
+
+      expect(renameDenied).toBe(true);
+      if (includedContent === "changed") {
+        expect(result.ok).toBe(false);
+        expect(result.error?.message).toContain("included config");
+        expect(await fs.readFile(original.path, "utf8")).toBe(rootBefore);
+        expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "debug" });
+      } else {
+        expect(result.ok, result.error?.message).toBe(true);
+        invalidateConfigGetResponseCache();
+        const committed = await getCurrentConfigObject();
+        expect(result.payload).toMatchObject({ config: committed.config, hash: committed.hash });
+        expect(committed.config).toMatchObject({
+          logging: { level: "info" },
+          ui: { prefs: { locale: "fr" } },
+        });
+        expect(JSON.parse(await fs.readFile(original.path, "utf8"))).toMatchObject({
+          logging: { $include: "logging.json" },
+        });
+        expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "info" });
       }
     },
   );
