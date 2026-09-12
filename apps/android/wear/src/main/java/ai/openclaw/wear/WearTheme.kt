@@ -126,7 +126,7 @@ private val LightWearColors =
     voiceAccentSoft = Color(0xFFEAF2FF),
     onVoiceAccent = Color(0xFFFFFFFF),
     success = Color(0xFF217747),
-    warning = Color(0xFFA56F17),
+    warning = Color(0xFFA06A17),
     danger = Color(0xFFB82929),
   )
 

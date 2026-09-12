@@ -67,6 +67,10 @@ class WearThemeTest {
         "$mode muted text must remain readable",
         contrastRatio(colors.textMuted, colors.surfaceRaised) >= MIN_TEXT_CONTRAST,
       )
+      assertTrue(
+        "$mode streaming warning heading must remain readable",
+        contrastRatio(colors.warning, colors.surfaceRaised) >= MIN_TEXT_CONTRAST,
+      )
     }
   }
 
