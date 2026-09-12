@@ -1131,24 +1131,21 @@ describe("frozen admission workflow barriers", () => {
   );
 
   it.each([
-    { lane: "onboard", prepareOnly: false },
-    { lane: "upgrade-survivor", prepareOnly: false },
-    { lane: "root-managed-vps-upgrade update-restart-auth", prepareOnly: true },
-  ])(
-    "leaves unselected published baselines unresolved for $lane prepare=$prepareOnly",
-    ({ lane, prepareOnly }) => {
-      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
-        docker_lanes: lane,
-        include_live_suites: false,
-        include_release_path_suites: false,
-        prepare_only: prepareOnly,
-        published_upgrade_survivor_baseline: "openclaw@latest",
-      });
-      expect(f.selection().obligations).toEqual([]);
-      expect(f.run("Resolve selected upgrade baseline versions").status).toBe(0);
-      expect(existsSync(join(f.root, "forbidden"))).toBe(false);
-    },
-  );
+    ["onboard", false],
+    ["upgrade-survivor", false],
+    ["root-managed-vps-upgrade update-restart-auth", true],
+  ])("leaves unselected published baselines unresolved for %s prepare=%s", (lane, prepareOnly) => {
+    const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+      docker_lanes: lane,
+      include_live_suites: false,
+      include_release_path_suites: false,
+      prepare_only: prepareOnly,
+      published_upgrade_survivor_baseline: "openclaw@latest",
+    });
+    expect(f.selection().obligations).toEqual([]);
+    expect(f.run("Resolve selected upgrade baseline versions").status).toBe(0);
+    expect(existsSync(join(f.root, "forbidden"))).toBe(false);
+  });
 
   it("keeps shared verification evidence separate from each child's selected and tooling reads", () => {
     const inputs = {
@@ -1198,15 +1195,12 @@ describe("frozen admission workflow barriers", () => {
   });
 
   it.each([
-    { prepareOnly: false, baselines: "openclaw@2026.9.1\r\nopenclaw@2026.7.33" },
-    { prepareOnly: true, baselines: "openclaw@2026.9.1\r\nopenclaw@2026.7.33" },
-    {
-      prepareOnly: false,
-      baselines: "OPENCLAW_ADMISSION_OUTPUT\nOPENCLAW_ADMISSION_OUTPUT_\nopenclaw@2026.9.1\n",
-    },
+    [false, "openclaw@2026.9.1\r\nopenclaw@2026.7.33"],
+    [true, "openclaw@2026.9.1\r\nopenclaw@2026.7.33"],
+    [false, "OPENCLAW_ADMISSION_OUTPUT\nOPENCLAW_ADMISSION_OUTPUT_\nopenclaw@2026.9.1\n"],
   ])(
-    "round-trips unselected multiline baseline outputs with prepare_only=$prepareOnly $baselines",
-    ({ prepareOnly, baselines }) => {
+    "round-trips unselected multiline baseline outputs with prepare_only=%s %s",
+    (prepareOnly, baselines) => {
       const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
         docker_lanes: "onboard",
         include_live_suites: false,
@@ -5954,33 +5948,18 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
   });
 
   it.each([
-    {
-      failure: "receipt preparation",
-      env: { CLAWHUB_AUTHORIZATION_OUTCOME: "failure", CLAWHUB_RECEIPT_OUTCOME: "skipped" },
-      bootstrapCompleted: false,
-      approvesClawHub: false,
-    },
-    {
-      failure: "receipt upload",
-      env: { CLAWHUB_RECEIPT_OUTCOME: "failure" },
-      bootstrapCompleted: false,
-      approvesClawHub: false,
-    },
-    {
-      failure: "bootstrap publication",
-      env: { MOCK_BOOTSTRAP_RESULT: "1" },
-      bootstrapCompleted: false,
-      approvesClawHub: true,
-    },
-    {
-      failure: "normal ClawHub publication",
-      env: { MOCK_CLAWHUB_RESULT: "1" },
-      bootstrapCompleted: true,
-      approvesClawHub: true,
-    },
+    [
+      "receipt preparation",
+      { CLAWHUB_AUTHORIZATION_OUTCOME: "failure", CLAWHUB_RECEIPT_OUTCOME: "skipped" },
+      false,
+      false,
+    ],
+    ["receipt upload", { CLAWHUB_RECEIPT_OUTCOME: "failure" }, false, false],
+    ["bootstrap publication", { MOCK_BOOTSTRAP_RESULT: "1" }, false, true],
+    ["normal ClawHub publication", { MOCK_CLAWHUB_RESULT: "1" }, true, true],
   ])(
-    "collects core evidence after $failure fails",
-    ({ env, bootstrapCompleted, approvesClawHub }) => {
+    "collects core evidence after %s fails",
+    (_failure, env, bootstrapCompleted, approvesClawHub) => {
       const fixture = createReleasePublishFixture();
       const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
       const initialize = job.steps?.find(
@@ -6339,16 +6318,16 @@ print_failed_run_summary 404
   });
 
   it.each([
-    { mode: "lagged", exit: 0, approvals: 1 },
-    { mode: "approved-queued", exit: 0, approvals: 1 },
-    { mode: "unrelated-environment", exit: 1, approvals: 0 },
-    { mode: "manual", exit: 0, approvals: 0 },
-    { mode: "duplicate", exit: 1, approvals: 0 },
-    { mode: "wrong-sha", exit: 1, approvals: 0 },
-    { mode: "changed-sha-after-approval", exit: 1, approvals: 1 },
-    { mode: "approval-failed", exit: 1, approvals: 1 },
-    { mode: "passive", exit: 0, approvals: 0 },
-  ])("observes the core publication gate: $mode", ({ mode, exit, approvals }) => {
+    ["lagged", 0, 1],
+    ["approved-queued", 0, 1],
+    ["unrelated-environment", 1, 0],
+    ["manual", 0, 0],
+    ["duplicate", 1, 0],
+    ["wrong-sha", 1, 0],
+    ["changed-sha-after-approval", 1, 1],
+    ["approval-failed", 1, 1],
+    ["passive", 0, 0],
+  ])("observes the core publication gate: %s", (mode, exit, approvals) => {
     const root = tempDirs.make("release-publish-wait-");
     const calls = join(root, "calls");
     writeFileSync(calls, "");
@@ -6459,13 +6438,13 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
   );
 
   it.each([
-    { tag: "v2026.9.1", pin: "2026.7.4", native: false },
-    { tag: "v2026.9.1", pin: "2026.9.1", native: true },
-    { tag: "v2026.9.1-1", pin: "2026.9.1", native: true },
-    { tag: "v2026.9.1-1", pin: "2026.7.4", native: false },
-    { tag: "v2026.9.1-beta.1", pin: "2026.9.1", native: false },
-    { tag: "v2026.9.1-alpha.1", pin: "2026.9.1", native: false },
-  ])("admits Android only when $tag pins its native train ($pin)", ({ tag, pin, native }) => {
+    ["v2026.9.1", "2026.7.4", false],
+    ["v2026.9.1", "2026.9.1", true],
+    ["v2026.9.1-1", "2026.9.1", true],
+    ["v2026.9.1-1", "2026.7.4", false],
+    ["v2026.9.1-beta.1", "2026.9.1", false],
+    ["v2026.9.1-alpha.1", "2026.9.1", false],
+  ])("admits Android only when %s pins its native train (%s)", (tag, pin, native) => {
     const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const ref = workflowStep(target, "Resolve checked-out release ref");
     const root = tempDirs.make("release-android-pin-");
@@ -7005,51 +6984,15 @@ NODE
   });
 
   it.each([
-    {
-      label: "current Docker publication",
-      docker: "current",
-      conclusion: "success",
-      npm: true,
-      ok: true,
-    },
-    {
-      label: "historical Docker publication",
-      docker: "historical",
-      conclusion: "success",
-      npm: true,
-      ok: true,
-    },
-    {
-      label: "failed Docker publication",
-      docker: "current",
-      conclusion: "failure",
-      npm: true,
-      ok: false,
-    },
-    {
-      label: "missing Docker publication",
-      docker: "missing",
-      conclusion: "success",
-      npm: true,
-      ok: false,
-    },
-    {
-      label: "ambiguous Docker publication",
-      docker: "both",
-      conclusion: "success",
-      npm: true,
-      ok: false,
-    },
-    {
-      label: "missing npm publication",
-      docker: "current",
-      conclusion: "success",
-      npm: false,
-      ok: false,
-    },
+    ["current Docker publication", "current", "success", true, true],
+    ["historical Docker publication", "historical", "success", true, true],
+    ["failed Docker publication", "current", "failure", true, false],
+    ["missing Docker publication", "missing", "success", true, false],
+    ["ambiguous Docker publication", "both", "success", true, false],
+    ["missing npm publication", "current", "success", false, false],
   ])(
-    "checks $label for failed-parent closeout without app evidence",
-    ({ docker, conclusion, npm, ok }) => {
+    "checks %s for failed-parent closeout without app evidence",
+    (_label, docker, conclusion, npm, ok) => {
       const evidenceStep = workflowStep(
         workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
         "Verify release workflow evidence",
@@ -8219,24 +8162,16 @@ test "$package_manager" = "pnpm@12.1.0"
   });
 
   it.each([
-    {
-      expected: "telegram_mode must not be none",
-      telegramMode: "none",
-      telegramScenarios: "telegram-commands-command",
-    },
-    {
-      expected: "telegram_scenarios must contain exactly one scenario",
-      telegramMode: "mock-openai",
-      telegramScenarios: "",
-    },
-    {
-      expected: "telegram_scenarios must contain exactly one scenario",
-      telegramMode: "mock-openai",
-      telegramScenarios: "telegram-help-command, telegram-commands-command",
-    },
+    ["telegram_mode must not be none", "none", "telegram-commands-command"],
+    ["telegram_scenarios must contain exactly one scenario", "mock-openai", ""],
+    [
+      "telegram_scenarios must contain exactly one scenario",
+      "mock-openai",
+      "telegram-help-command, telegram-commands-command",
+    ],
   ])(
-    "rejects an invalid Telegram-only profile: $expected",
-    ({ expected, telegramMode, telegramScenarios }) => {
+    "rejects an invalid Telegram-only profile: %s",
+    (expected, telegramMode, telegramScenarios) => {
       const { result } = runPackageAcceptanceProfile({
         suiteProfile: "telegram",
         telegramMode,
@@ -10838,10 +10773,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
-    { apiError: "context", targetContextRef: "release/2026.8.1" },
-    { apiError: "comparison", targetContextRef: "release/2026.8.1" },
-    { apiError: "base", targetContextRef: "release/2026.8.1-1" },
-  ] as const)("fails closed on a $apiError API error", ({ apiError, targetContextRef }) => {
+    ["context", "release/2026.8.1"],
+    ["comparison", "release/2026.8.1"],
+    ["base", "release/2026.8.1-1"],
+  ] as const)("fails closed on a %s API error", (apiError, targetContextRef) => {
     const result = runFullReleaseTargetIdentityValidation({
       anonymousGitUnavailable: true,
       apiError,
@@ -10911,39 +10846,26 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   );
 
   it.each([
-    {
-      context: "refs/heads/extended-stable/2026.6.33",
-      version: "2026.6.35",
-      distTag: "extended-stable",
-      branch: "extended-stable/2026.6.33",
-    },
-    {
-      context: "refs/tags/v2026.6.35",
-      version: "2026.6.35",
-      distTag: "extended-stable",
-      branch: "extended-stable/2026.6.33",
-    },
-    { context: "v2026.8.1-alpha.2", version: "2026.8.1-alpha.2", distTag: "alpha", branch: "" },
-    {
-      context: "refs/heads/release/2026.8.1",
-      version: "2026.8.1-beta.3",
-      distTag: "beta",
-      branch: "",
-    },
-    { context: "v2026.8.1", version: "2026.8.1", distTag: "beta", branch: "" },
-  ])(
-    "records the npm publication channel for $context",
-    ({ context, version, distTag, branch }) => {
-      const result = runFullReleaseTargetIdentityValidation({
-        targetContextRef: context,
-        targetRef: "a".repeat(40),
-        version,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.output).toContain(`npm_dist_tag=${distTag}\n`);
-      expect(result.output).toContain(`release_candidate_branch=${branch}\n`);
-    },
-  );
+    [
+      "refs/heads/extended-stable/2026.6.33",
+      "2026.6.35",
+      "extended-stable",
+      "extended-stable/2026.6.33",
+    ],
+    ["refs/tags/v2026.6.35", "2026.6.35", "extended-stable", "extended-stable/2026.6.33"],
+    ["v2026.8.1-alpha.2", "2026.8.1-alpha.2", "alpha", ""],
+    ["refs/heads/release/2026.8.1", "2026.8.1-beta.3", "beta", ""],
+    ["v2026.8.1", "2026.8.1", "beta", ""],
+  ])("records the npm publication channel for %s", (context, version, distTag, branch) => {
+    const result = runFullReleaseTargetIdentityValidation({
+      targetContextRef: context,
+      targetRef: "a".repeat(40),
+      version,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.output).toContain(`npm_dist_tag=${distTag}\n`);
+    expect(result.output).toContain(`release_candidate_branch=${branch}\n`);
+  });
 
   it("rejects exact-SHA release contexts outside the named branch or tag", () => {
     const divergedBranch = runFullReleaseTargetIdentityValidation({
@@ -10996,8 +10918,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
-    {
-      expected: {
+    [
+      "all",
+      {
         cross_os_scheduled: "true",
         docker_required: "true",
         install_smoke_scheduled: "true",
@@ -11008,10 +10931,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         qa_parity_scheduled: "true",
         run_maturity_scorecard: "true",
       },
-      phase: "all",
-    },
-    {
-      expected: {
+    ],
+    [
+      "independent",
+      {
         cross_os_scheduled: "false",
         docker_required: "false",
         install_smoke_scheduled: "true",
@@ -11022,10 +10945,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         qa_parity_scheduled: "true",
         run_maturity_scorecard: "true",
       },
-      phase: "independent",
-    },
-    {
-      expected: {
+    ],
+    [
+      "candidate",
+      {
         cross_os_scheduled: "true",
         docker_required: "true",
         install_smoke_scheduled: "false",
@@ -11036,9 +10959,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         qa_parity_scheduled: "false",
         run_maturity_scorecard: "false",
       },
-      phase: "candidate",
-    },
-  ] as const)("routes only the $phase release-check phase", ({ expected, phase }) => {
+    ],
+  ] as const)("routes only the %s release-check phase", (phase, expected) => {
     const { outputPath, result } = runReleaseChecksInputValidation(
       "stable",
       "false",
@@ -12282,29 +12204,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
-    {
-      workflowPath: MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW,
-      jobName: "run_status_reactions",
-      candidateStep: "Prepare baseline and candidate worktrees",
-    },
-    {
-      workflowPath: MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW,
-      jobName: "run_thread_attachment",
-      candidateStep: "Prepare baseline and candidate worktrees",
-    },
-    {
-      workflowPath: MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW,
-      jobName: "run_slack_desktop",
-      candidateStep: "Prepare candidate worktree",
-    },
-    {
-      workflowPath: MANTIS_TELEGRAM_BOT_E2E_PROOF_WORKFLOW,
-      jobName: "run_telegram_proof",
-      candidateStep: "Build exact candidate without credentials or network",
-    },
+    [
+      "run_status_reactions",
+      MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW,
+      "Prepare baseline and candidate worktrees",
+    ],
+    [
+      "run_thread_attachment",
+      MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW,
+      "Prepare baseline and candidate worktrees",
+    ],
+    ["run_slack_desktop", MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "Prepare candidate worktree"],
+    [
+      "run_telegram_proof",
+      MANTIS_TELEGRAM_BOT_E2E_PROOF_WORKFLOW,
+      "Build exact candidate without credentials or network",
+    ],
   ])(
-    "sets up plugin-owned Crabbox before candidate execution in $jobName",
-    ({ workflowPath, jobName, candidateStep }) => {
+    "sets up plugin-owned Crabbox before candidate execution in %s",
+    (jobName, workflowPath, candidateStep) => {
       const workflow = readWorkflow(workflowPath);
       const job = workflowJob(workflowPath, jobName);
       const telegram = jobName === "run_telegram_proof";
@@ -12410,50 +12328,50 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
-    {
-      expectedOutput: undefined,
-      expectedStatus: 0,
-      name: "accepts Telegram result success when enabled=true",
-      params: { telegramEnabled: true, telegramResult: "success" },
-    },
-    {
-      expectedOutput: undefined,
-      expectedStatus: 0,
-      name: "accepts Telegram result skipped when enabled=false",
-      params: { telegramEnabled: false, telegramResult: "skipped" },
-    },
-    {
-      expectedOutput: "::error::package_telegram ended with skipped",
-      expectedStatus: 1,
-      name: "rejects a skipped Telegram lane when package acceptance enabled it",
-      params: { telegramEnabled: true, telegramResult: "skipped" },
-    },
-    {
-      expectedOutput: "::error::No Docker acceptance transport ran",
-      expectedStatus: 1,
-      name: "rejects package acceptance when no Docker transport ran",
-      params: {
+    [
+      "accepts Telegram result success when enabled=true",
+      undefined,
+      0,
+      { telegramEnabled: true, telegramResult: "success" },
+    ],
+    [
+      "accepts Telegram result skipped when enabled=false",
+      undefined,
+      0,
+      { telegramEnabled: false, telegramResult: "skipped" },
+    ],
+    [
+      "rejects a skipped Telegram lane when package acceptance enabled it",
+      "::error::package_telegram ended with skipped",
+      1,
+      { telegramEnabled: true, telegramResult: "skipped" },
+    ],
+    [
+      "rejects package acceptance when no Docker transport ran",
+      "::error::No Docker acceptance transport ran",
+      1,
+      {
         dockerArtifactResult: "skipped",
         dockerRegistryResult: "skipped",
         telegramEnabled: false,
         telegramResult: "skipped",
       },
-    },
-    {
-      expectedOutput: "::error::npm_12_install_sh ended with failure",
-      expectedStatus: 1,
-      name: "rejects a failed npm 12 installer acceptance lane",
-      params: {
+    ],
+    [
+      "rejects a failed npm 12 installer acceptance lane",
+      "::error::npm_12_install_sh ended with failure",
+      1,
+      {
         npm12InstallResult: "failure",
         telegramEnabled: false,
         telegramResult: "skipped",
       },
-    },
-    {
-      expectedOutput: undefined,
-      expectedStatus: 0,
-      name: "accepts Telegram-only profile when broad lanes skip and Telegram succeeds",
-      params: {
+    ],
+    [
+      "accepts Telegram-only profile when broad lanes skip and Telegram succeeds",
+      undefined,
+      0,
+      {
         dockerArtifactResult: "skipped",
         dockerRegistryResult: "skipped",
         npm12InstallResult: "skipped",
@@ -12461,39 +12379,38 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         telegramEnabled: true,
         telegramResult: "success",
       },
-    },
-    {
-      expectedOutput: "::error::npm_12_install_sh ran for suite_profile=telegram",
-      expectedStatus: 1,
-      name: "rejects Telegram-only profile when npm 12 acceptance runs",
-      params: {
+    ],
+    [
+      "rejects Telegram-only profile when npm 12 acceptance runs",
+      "::error::npm_12_install_sh ran for suite_profile=telegram",
+      1,
+      {
         dockerArtifactResult: "skipped",
         dockerRegistryResult: "skipped",
         suiteProfile: "telegram",
         telegramEnabled: true,
         telegramResult: "success",
       },
-    },
-    {
-      expectedOutput: "::error::Docker acceptance ran for suite_profile=telegram",
-      expectedStatus: 1,
-      name: "rejects Telegram-only profile when a Docker transport runs",
-      params: {
+    ],
+    [
+      "rejects Telegram-only profile when a Docker transport runs",
+      "::error::Docker acceptance ran for suite_profile=telegram",
+      1,
+      {
         dockerRegistryResult: "skipped",
         npm12InstallResult: "skipped",
         suiteProfile: "telegram",
         telegramEnabled: true,
         telegramResult: "success",
       },
-    },
-    {
-      expectedOutput:
-        "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
-      expectedStatus: 0,
-      name: "preserves advisory handling for an unexpectedly skipped Telegram lane",
-      params: { advisory: true, telegramEnabled: true, telegramResult: "skipped" },
-    },
-  ] as const)("$name", ({ expectedOutput, expectedStatus, params }) => {
+    ],
+    [
+      "preserves advisory handling for an unexpectedly skipped Telegram lane",
+      "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
+      0,
+      { advisory: true, telegramEnabled: true, telegramResult: "skipped" },
+    ],
+  ] as const)("%s", (_name, expectedOutput, expectedStatus, params) => {
     const result = runPackageAcceptanceSummary(params);
 
     expect(result.status).toBe(expectedStatus);
@@ -13044,37 +12961,37 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ];
 
     it.each([
-      {
-        artifacts: [1, 2].flatMap((attempt, index) =>
+      [
+        "selects the current producer attempt",
+        [1, 2].flatMap((attempt, index) =>
           artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
         ),
-        consumerAttempt: "2",
-        expectedAttempt: 2,
-        name: "selects the current producer attempt",
-      },
-      {
-        artifacts: artifactsFor(pair("qa_job", "candidate", "candidate"), 1, 1),
-        consumerAttempt: "2",
-        expectedAttempt: 1,
-        name: "carries attempt 1 into consumer attempt 2",
-      },
-      {
-        artifacts: [2, 10].flatMap((attempt, index) =>
+        "2",
+        2,
+      ],
+      [
+        "carries attempt 1 into consumer attempt 2",
+        artifactsFor(pair("qa_job", "candidate", "candidate"), 1, 1),
+        "2",
+        1,
+      ],
+      [
+        "orders producer attempts numerically",
+        [2, 10].flatMap((attempt, index) =>
           artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
         ),
-        consumerAttempt: "10",
-        expectedAttempt: 10,
-        name: "orders producer attempts numerically",
-      },
-      {
-        artifacts: [2, 3].flatMap((attempt, index) =>
+        "10",
+        10,
+      ],
+      [
+        "excludes future producer attempts",
+        [2, 3].flatMap((attempt, index) =>
           artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
         ),
-        consumerAttempt: "2",
-        expectedAttempt: 2,
-        name: "excludes future producer attempts",
-      },
-    ])("$name", ({ artifacts, consumerAttempt, expectedAttempt }) => {
+        "2",
+        2,
+      ],
+    ])("%s", (_name, artifacts, consumerAttempt, expectedAttempt) => {
       const result = runReleaseCheckArtifactResolve({
         artifacts,
         consumerAttempt,
@@ -14010,25 +13927,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
-    { scenario: "omitted", selected: false, hasDigests: false, dispatchFailure: false, exit: 0 },
-    { scenario: "selected", selected: true, hasDigests: true, dispatchFailure: false, exit: 0 },
-    {
-      scenario: "dispatch failure",
-      selected: true,
-      hasDigests: true,
-      dispatchFailure: true,
-      exit: 1,
-    },
-    {
-      scenario: "missing digests",
-      selected: true,
-      hasDigests: false,
-      dispatchFailure: false,
-      exit: 1,
-    },
+    ["omitted", false, false, false, 0],
+    ["selected", true, true, false, 0],
+    ["dispatch failure", true, true, true, 1],
+    ["missing digests", true, false, false, 1],
   ])(
-    "dispatches optional Windows promotion without waiting: $scenario",
-    ({ selected, hasDigests, dispatchFailure, exit }) => {
+    "dispatches optional Windows promotion without waiting: %s",
+    (_scenario, selected, hasDigests, dispatchFailure, exit) => {
       const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
       const root = tempDirs.make("windows-detached-publish-");
       const dispatchPath = join(root, "dispatch");
