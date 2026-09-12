@@ -265,10 +265,7 @@ it.each([
 
       // Warm the real rollups so the handler assertion tests selection, not refresh timing.
       for (const agentId of ["main", "opus"]) {
-        const discovered = await discoverAllSessions({
-          agentId,
-          includeFirstUserMessage: false,
-        });
+        const discovered = await discoverAllSessions({ agentId });
         if (currentArtifact && agentId === "main") {
           expect(discovered[0]?.sessionId).not.toBe(currentId);
         }

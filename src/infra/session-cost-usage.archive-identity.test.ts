@@ -272,7 +272,6 @@ describe("usage archive identity", () => {
               sessionId,
               sessionFile,
               mtime: sourceStats.mtimeMs,
-              firstUserMessage: "retained archive prompt",
             },
           ]);
 
