@@ -1,7 +1,6 @@
-import type { OpenClawConfig, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 // Anthropic Vertex tests cover index plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
   hasAnthropicVertexAvailableAuthMock: vi.fn(),
@@ -17,7 +16,6 @@ vi.mock("./api.js", async (importOriginal) => {
 
 import anthropicVertexPlugin from "./index.js";
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
-import { anthropicVertexProviderDiscovery } from "./provider-discovery.js";
 
 describe("anthropic-vertex provider plugin", () => {
   beforeEach(() => {
@@ -26,7 +24,6 @@ describe("anthropic-vertex provider plugin", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
-    vi.unstubAllEnvs();
   });
 
   afterAll(() => {
@@ -46,171 +43,6 @@ describe("anthropic-vertex provider plugin", () => {
       } as never),
     ).toBe("gcp-vertex-credentials");
   });
-
-  it.each([
-    { region: "global", baseUrl: "https://aiplatform.googleapis.com" },
-    { region: "us-east5", baseUrl: "https://us-east5-aiplatform.googleapis.com" },
-  ])("publishes the $region static catalog without authenticating", async ({ region, baseUrl }) => {
-    hasAnthropicVertexAvailableAuthMock.mockReturnValue(false);
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-    const resolveProviderAuth = vi.fn(() => ({
-      apiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    }));
-    const context = {
-      config: {},
-      env: { GOOGLE_CLOUD_LOCATION: region },
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth,
-    };
-    const result = await provider.staticCatalog?.run(context);
-    expect(result).toMatchObject({
-      provider: {
-        api: "anthropic-messages",
-        baseUrl,
-        models: expect.arrayContaining([
-          expect.objectContaining({
-            id: "claude-sonnet-4-6",
-            input: ["text", "image"],
-            contextWindow: 1_000_000,
-          }),
-        ]),
-      },
-    });
-    expect(await anthropicVertexProviderDiscovery.staticCatalog.run(context)).toEqual(result);
-    expect(resolveProviderAuth).not.toHaveBeenCalled();
-    expect(
-      provider.resolveSyntheticAuth?.({ config: {}, provider: "anthropic-vertex" }),
-    ).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "service region",
-      region: "us-east5",
-      expected: "https://us-east5-aiplatform.googleapis.com",
-    },
-    {
-      name: "provider override",
-      region: "us-east5",
-      endpoint: "https://aiplatform.eu.rep.googleapis.com",
-      expected: "https://aiplatform.eu.rep.googleapis.com",
-    },
-    {
-      name: "model override",
-      region: "us-east5",
-      endpoint: "https://aiplatform.eu.rep.googleapis.com",
-      modelEndpoint: "https://aiplatform.googleapis.com",
-      expected: "https://aiplatform.googleapis.com",
-    },
-    {
-      name: "Sonnet 5 regional pricing",
-      region: "eu",
-      modelId: "claude-sonnet-5",
-      expected: "https://aiplatform.eu.rep.googleapis.com",
-    },
-    {
-      name: "unsupported implicit Sonnet 5 region",
-      region: "us-east5",
-      modelId: "claude-sonnet-5",
-      rejected: true,
-    },
-    {
-      name: "unsupported implicit Opus 5 region",
-      region: "us-east5",
-      modelId: "claude-opus-5",
-      rejected: true,
-    },
-    {
-      name: "explicit Sonnet 5 alias in a custom region",
-      region: "us-east5",
-      modelId: "claude-sonnet-5",
-      modelAlias: "production-sonnet",
-      endpoint: "https://us-east5-aiplatform.googleapis.com",
-      expected: "https://us-east5-aiplatform.googleapis.com",
-    },
-  ])(
-    "normalizes a sterile static model using $name",
-    async ({
-      region,
-      endpoint,
-      modelEndpoint,
-      modelId = "claude-sonnet-4-6",
-      modelAlias,
-      rejected,
-      expected,
-    }) => {
-      vi.stubEnv("GOOGLE_CLOUD_LOCATION", region);
-      const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-      const catalog = await anthropicVertexProviderDiscovery.staticCatalog.run({
-        config: {},
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-      });
-      expect(catalog.provider.baseUrl).toBe("https://aiplatform.googleapis.com");
-      const row = catalog.provider.models.find((entry) => entry.id === modelId);
-      assert(row && typeof row.contextWindow === "number");
-      const input = row.input;
-      assert(input.every((value) => value === "text" || value === "image"));
-      const model: ProviderRuntimeModel = {
-        ...row,
-        ...(modelAlias ? { id: modelAlias, params: { canonicalModelId: modelId } } : {}),
-        input,
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
-        baseUrl: "https://aiplatform.googleapis.com",
-        contextWindow: row.contextWindow,
-        cost: {
-          input: row.cost.input,
-          output: row.cost.output,
-          cacheRead: row.cost.cacheRead,
-          cacheWrite: row.cost.cacheWrite,
-        },
-      };
-      const config: OpenClawConfig = endpoint
-        ? {
-            models: {
-              providers: {
-                "anthropic-vertex": {
-                  baseUrl: endpoint,
-                  models: modelAlias
-                    ? [{ ...row, id: modelAlias, params: { canonicalModelId: modelId } }]
-                    : modelEndpoint
-                      ? [{ ...row, baseUrl: modelEndpoint }]
-                      : [],
-                },
-              },
-            },
-          }
-        : {};
-      const normalize = () =>
-        provider.normalizeResolvedModel?.({
-          config,
-          provider: "anthropic-vertex",
-          modelId: model.id,
-          model,
-        }) ?? model;
-      if (rejected) {
-        expect(normalize).toThrow(`model ${modelId} is unavailable in region ${region}`);
-        return;
-      }
-      const normalized = normalize();
-      expect(normalized.baseUrl).toBe(expected);
-      expect(normalized.id).toBe(model.id);
-      expect(normalized.api).toBe("anthropic-messages");
-      if (modelId === "claude-sonnet-5" && region === "eu") {
-        expect(normalized.cost).toEqual({
-          input: 2.2,
-          output: 11,
-          cacheRead: 0.22,
-          cacheWrite: 2.75,
-        });
-        expect(normalized.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
-      }
-    },
-  );
 
   it("returns raw discovery for the host to merge with explicit provider overrides", async () => {
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);

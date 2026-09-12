@@ -10,8 +10,10 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexConfigApiKey } from "./api.js";
 import { runAnthropicVertexCatalog } from "./provider-catalog-runtime.js";
-import { normalizeAnthropicVertexResolvedModel } from "./provider-catalog.js";
-import { anthropicVertexProviderDiscovery } from "./provider-discovery.js";
+import {
+  normalizeAnthropicVertexResolvedModel,
+  resolveAnthropicVertexDynamicModel,
+} from "./provider-catalog.js";
 
 const PROVIDER_ID = "anthropic-vertex";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -27,15 +29,17 @@ export default definePluginEntry({
       label: "Anthropic Vertex",
       docsPath: "/providers/models",
       auth: [],
-      staticCatalog: anthropicVertexProviderDiscovery.staticCatalog,
       catalog: {
         order: "simple",
         run: runAnthropicVertexCatalog,
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
+      resolveDynamicModel: ({ provider, modelId, modelRegistry, providerConfig }) =>
+        modelRegistry.find(provider, modelId) ??
+        resolveAnthropicVertexDynamicModel(modelId, providerConfig?.baseUrl),
       ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
-      normalizeResolvedModel: ({ modelId, model, config }) =>
-        normalizeAnthropicVertexResolvedModel(modelId, model, config),
+      normalizeResolvedModel: ({ modelId, model }) =>
+        normalizeAnthropicVertexResolvedModel(modelId, model),
       resolveThinkingProfile: ({ modelId, params }) =>
         resolveClaudeThinkingProfile(modelId, params, { includeNativeMax: true }),
       resolveSyntheticAuth: () => {

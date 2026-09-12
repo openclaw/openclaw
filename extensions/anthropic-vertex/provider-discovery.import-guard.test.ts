@@ -11,7 +11,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => {
 });
 
 describe("anthropic-vertex provider discovery entry", () => {
-  it("loads live catalog runtime only when live discovery executes", async () => {
+  it("loads catalog runtime only when discovery executes", async () => {
     const { default: provider } = await import("./provider-discovery.js");
     expect(provider.id).toBe("anthropic-vertex");
     expect(provider.catalog.order).toBe("simple");
@@ -26,11 +26,6 @@ describe("anthropic-vertex provider discovery entry", () => {
       resolveProviderApiKey: () => ({ apiKey: undefined }),
       resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     };
-    const staticResult = await provider.staticCatalog.run(ctx);
-    expect(staticResult.provider.models).toContainEqual(
-      expect.objectContaining({ id: "claude-sonnet-4-6" }),
-    );
-    expect(runtime.loaded).toBe(false);
     const result = { provider: { models: [] } };
     runtime.run.mockResolvedValue(result);
     expect(await provider.catalog.run(ctx)).toBe(result);

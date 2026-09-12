@@ -1,4 +1,4 @@
-import type { OpenClawConfig, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 /**
  * Static Anthropic Vertex model catalog builder. It derives provider base URLs
  * from region configuration and publishes Claude model metadata.
@@ -9,7 +9,6 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   modelCostsEqual,
-  normalizeProviderId,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
@@ -47,12 +46,12 @@ function buildAnthropicVertexModel(params: {
   id: string;
   name: string;
   reasoning: boolean;
-  input: ModelDefinitionConfig["input"];
-  cost: ModelDefinitionConfig["cost"];
+  input: ProviderRuntimeModel["input"];
+  cost: ProviderRuntimeModel["cost"];
   maxTokens: number;
   mediaInput?: ModelDefinitionConfig["mediaInput"];
   thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
-}): ModelDefinitionConfig {
+}) {
   return {
     id: params.id,
     name: params.name,
@@ -63,10 +62,10 @@ function buildAnthropicVertexModel(params: {
     maxTokens: params.maxTokens,
     ...(params.mediaInput ? { mediaInput: params.mediaInput } : {}),
     ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
-  };
+  } satisfies ModelDefinitionConfig;
 }
 
-function resolveOpus5Cost(region: string): ModelDefinitionConfig["cost"] | undefined {
+function resolveOpus5Cost(region: string): ProviderRuntimeModel["cost"] | undefined {
   const normalizedRegion = normalizeLowercaseStringOrEmpty(region);
   if (!CLAUDE_5_SUPPORTED_REGIONS.has(normalizedRegion)) {
     return undefined;
@@ -74,7 +73,7 @@ function resolveOpus5Cost(region: string): ModelDefinitionConfig["cost"] | undef
   return normalizedRegion === "global" ? OPUS_5_COST.global : OPUS_5_COST.multiRegion;
 }
 
-function resolveSonnet5Cost(region: string): ModelDefinitionConfig["cost"] | undefined {
+function resolveSonnet5Cost(region: string): ProviderRuntimeModel["cost"] | undefined {
   const normalizedRegion = normalizeLowercaseStringOrEmpty(region);
   if (!CLAUDE_5_SUPPORTED_REGIONS.has(normalizedRegion)) {
     return undefined;
@@ -82,7 +81,7 @@ function resolveSonnet5Cost(region: string): ModelDefinitionConfig["cost"] | und
   return normalizedRegion === "global" ? SONNET_5_COST.global : SONNET_5_COST.multiRegion;
 }
 
-function buildAnthropicVertexCatalog(region: string): ModelDefinitionConfig[] {
+function buildAnthropicVertexCatalog(region: string) {
   const opus5Cost = resolveOpus5Cost(region);
   const opus5 = opus5Cost
     ? [
@@ -169,34 +168,31 @@ function buildAnthropicVertexCatalog(region: string): ModelDefinitionConfig[] {
   ];
 }
 
-/** Apply the service endpoint and generation metadata to static or explicit model rows. */
+/** Resolve a missing runtime row using the same regional inventory as discovery. */
+export function resolveAnthropicVertexDynamicModel(
+  modelId: string,
+  baseUrl?: string,
+): ProviderRuntimeModel | undefined {
+  const endpoint = normalizeOptionalString(baseUrl) ?? resolveAnthropicVertexBaseUrl();
+  const region = resolveAnthropicVertexClientRegion({ baseUrl: endpoint });
+  const model = buildAnthropicVertexCatalog(region).find((entry) => entry.id === modelId);
+  return model
+    ? { ...model, provider: "anthropic-vertex", api: "anthropic-messages", baseUrl: endpoint }
+    : undefined;
+}
+
+/** Restore required generation metadata after explicit models replace an implicit row. */
 export function normalizeAnthropicVertexResolvedModel(
   modelId: string,
   model: ProviderRuntimeModel,
-  config?: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
 ): ProviderRuntimeModel | undefined {
-  const configured = Object.entries(config?.models?.providers ?? {}).find(
-    ([provider]) => normalizeProviderId(provider) === "anthropic-vertex",
-  )?.[1];
-  const configuredModel = configured?.models?.find((entry) => entry.id === modelId);
-  const configuredBaseUrl =
-    normalizeOptionalString(configuredModel?.baseUrl) ??
-    normalizeOptionalString(configured?.baseUrl);
-  const serviceRegionConfigured =
-    normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION) ||
-    normalizeOptionalString(env.CLOUD_ML_REGION);
-  const baseUrl =
-    configuredBaseUrl ??
-    (serviceRegionConfigured ? resolveAnthropicVertexBaseUrl(env) : model.baseUrl);
-  const endpointModel = baseUrl === model.baseUrl ? model : { ...model, baseUrl };
   const ref = { id: modelId, params: model.params };
   const fable5 = resolveClaudeFable5ModelIdentity(ref) !== undefined;
   const mythos5 = resolveClaudeMythos5ModelIdentity(ref) !== undefined;
   const opus5 = resolveClaudeOpus5ModelIdentity(ref) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(ref) !== undefined;
   if (!fable5 && !mythos5 && !opus5 && !sonnet5) {
-    return endpointModel !== model ? endpointModel : undefined;
+    return undefined;
   }
   const input: ProviderRuntimeModel["input"] = model.input.includes("image")
     ? model.input
@@ -215,17 +211,7 @@ export function normalizeAnthropicVertexResolvedModel(
     model.thinkingLevelMap.max === "max" &&
     (!(fable5 || mythos5) ||
       (model.thinkingLevelMap.off === "low" && model.thinkingLevelMap.minimal === "low"));
-  const region = resolveAnthropicVertexClientRegion({ baseUrl, env });
-  // Static rows span regions; explicit model declarations retain their own support contract.
-  if (
-    !configuredModel &&
-    (opus5 || sonnet5) &&
-    !CLAUDE_5_SUPPORTED_REGIONS.has(normalizeLowercaseStringOrEmpty(region))
-  ) {
-    throw new Error(
-      `Anthropic Vertex model ${modelId} is unavailable in region ${region}. Use global, us, or eu, or select a model supported in your region.`,
-    );
-  }
+  const region = resolveAnthropicVertexClientRegion({ baseUrl: model.baseUrl });
   const cost = opus5 ? resolveOpus5Cost(region) : sonnet5 ? resolveSonnet5Cost(region) : undefined;
   const costMatches = !cost || modelCostsEqual(model.cost, cost);
   if (
@@ -237,10 +223,10 @@ export function normalizeAnthropicVertexResolvedModel(
     nativeThinkingLevelsMatch &&
     costMatches
   ) {
-    return endpointModel !== model ? endpointModel : undefined;
+    return undefined;
   }
   return {
-    ...endpointModel,
+    ...model,
     reasoning: true,
     input,
     contextWindow: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,

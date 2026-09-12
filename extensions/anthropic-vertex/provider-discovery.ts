@@ -14,13 +14,6 @@ export const anthropicVertexProviderDiscovery = {
   label: "Anthropic Vertex",
   docsPath: "/providers/models",
   auth: [],
-  staticCatalog: {
-    order: "simple",
-    run: async ({ env }) => {
-      const { buildAnthropicVertexProvider } = await import("./provider-catalog.js");
-      return { provider: buildAnthropicVertexProvider({ env }) };
-    },
-  },
   catalog: {
     order: "simple",
     // Descriptor reads need ADC facts; catalog execution owns model/runtime loading.

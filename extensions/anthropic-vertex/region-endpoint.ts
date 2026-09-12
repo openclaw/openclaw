@@ -1,4 +1,4 @@
-import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 import { resolveAnthropicVertexRegion } from "./region.js";
 
 /** Build the native Vertex endpoint from the service region. */
