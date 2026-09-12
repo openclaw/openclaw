@@ -199,7 +199,11 @@ describe("models.list plugin metadata handoff", () => {
         unrelatedActiveRegistry.agentHarnesses.push({
           pluginId: runtimeId,
           source: "test",
-          harness: { ...harness, loadModelCatalog: loadActiveCatalog },
+          harness: {
+            ...harness,
+            loadModelCatalog: loadActiveCatalog,
+            readModelCatalogReadiness: () => undefined,
+          },
         });
         const previousRegistry = captureActivePluginRegistrySnapshot();
         setActivePluginRegistry(unrelatedActiveRegistry);
@@ -221,7 +225,10 @@ describe("models.list plugin metadata handoff", () => {
           };
           const loadGatewayModelCatalogSnapshot = vi.fn(async () => preparedSnapshot);
           registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-            loadDeferred: async () => preparedSnapshot,
+            loadDeferred: async () => {
+              await loadPreparedCatalog();
+              return preparedSnapshot;
+            },
             readPrepared: async () => preparedSnapshot,
           });
           const respond = vi.fn();

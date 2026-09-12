@@ -2,7 +2,9 @@ import { html, nothing, type Part } from "lit";
 import { directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
 import { live } from "lit/directives/live.js";
-import { UntilDirective } from "lit/directives/until.js";
+import { until, UntilDirective } from "lit/directives/until.js";
+import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
+import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { readAvatarGatewayContext } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
@@ -12,6 +14,7 @@ import {
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
+import "../styles/identity-avatar.css";
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
 
@@ -36,7 +39,10 @@ export function resolveIdentityAvatarView(identity: IdentityAvatarInput): Identi
 }
 
 /** Reconcile changed images without overwriting event fallback on unchanged rerenders. */
-export function identityAvatarClass(className: string, view: IdentityAvatarView) {
+export function identityAvatarClass(
+  className: string,
+  view: Pick<IdentityAvatarView, "imageUrl" | "pending">,
+) {
   return guard([className, view.imageUrl, view.pending], () =>
     live(`${className}${view.pending ? " is-fallback" : ""}`),
   );
@@ -100,7 +106,7 @@ class IdentityAvatarImageDirective extends UntilDirective<unknown> {
 }
 
 /** Local agent and profile routes share the same authenticated image lease. */
-export const identityAvatarImage = directive(IdentityAvatarImageDirective);
+const identityAvatarImage = directive(IdentityAvatarImageDirective);
 
 /** Render the shared authenticated user image with its canonical event lifecycle. */
 export function renderIdentityAvatarImage({
@@ -109,12 +115,14 @@ export function renderIdentityAvatarImage({
   className,
   alt = "",
   ariaHidden = false,
+  onImageError,
 }: {
-  view: IdentityAvatarView;
+  view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl">;
   fallbackSelector: string;
   className?: string;
   alt?: string;
   ariaHidden?: boolean;
+  onImageError?: () => void;
 }) {
   if (!view.imageUrl) {
     return nothing;
@@ -125,7 +133,52 @@ export function renderIdentityAvatarImage({
     alt=${alt}
     aria-hidden=${ariaHidden ? "true" : nothing}
     referrerpolicy="no-referrer"
-    @error=${(event: Event) => settleIdentityAvatarImage(event, fallbackSelector, true)}
+    @error=${(event: Event) => {
+      settleIdentityAvatarImage(event, fallbackSelector, true);
+      onImageError?.();
+    }}
     @load=${(event: Event) => settleIdentityAvatarImage(event, fallbackSelector, false)}
   />`;
+}
+
+/** Agent images and emoji share one fallback across every surface. */
+export function renderAgentIdentityAvatar(
+  agent: { id: string; name?: string; avatar?: string | null; textAvatar?: string | null },
+  className = "",
+  onImageError?: () => void,
+) {
+  if (isReservedSystemAgentId(agent.id)) {
+    return html`<img
+      class=${`identity-avatar--agent ${className}`}
+      src=${inferControlUiPublicAssetPath("favicon.svg")}
+      alt=${agent.name ?? ""}
+      aria-hidden=${agent.name ? nothing : "true"}
+    />`;
+  }
+  const imageUrl = agent.avatar ? (resolveAvatarImageUrl(agent.avatar) ?? agent.avatar) : null;
+  const view = {
+    imageUrl,
+    sourceUrl: agent.avatar ?? undefined,
+    pending: typeof imageUrl !== "string",
+  };
+  return html`<span
+    class=${identityAvatarClass(`identity-avatar--agent ${className}`, view)}
+    role=${agent.name ? "img" : nothing}
+    aria-label=${agent.name ?? nothing}
+    aria-hidden=${agent.name ? nothing : "true"}
+  >
+    ${renderIdentityAvatarImage({ view, fallbackSelector: ".identity-avatar--agent", className: "identity-avatar__image", onImageError })}
+    <span class="identity-avatar__fallback">
+      ${guard([agent.id, agent.textAvatar], () =>
+        until(
+          agent.textAvatar
+            ? html`<span class="identity-avatar__text" data-avatar=${agent.textAvatar}></span>`
+            : import("./agent-avatar-face.ts").then(({ renderAgentAvatarFace }) =>
+                renderAgentAvatarFace(agent.id),
+              ),
+          nothing,
+        ),
+      )}
+    </span>
+  </span>`;
 }

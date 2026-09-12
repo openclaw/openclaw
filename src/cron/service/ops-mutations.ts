@@ -14,6 +14,7 @@ import {
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
@@ -92,11 +93,8 @@ export async function quiesceJobs(
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
 ): Promise<readonly string[] | undefined> {
-  if (!state.deps.listConfiguredChannels) {
-    return undefined;
-  }
   try {
-    return await state.deps.listConfiguredChannels();
+    return await state.deps.listConfiguredChannels?.();
   } catch {
     // Channel discovery is advisory at mutation time. Runtime delivery remains
     // authoritative, so discovery failures must not create false rejections.
@@ -213,11 +211,14 @@ function finalizeUpdatedJob(params: {
       // Preserve only genuine execution. Queued reservations must clear so a
       // disabled job can accept a later force run with the same timestamp.
       if (!isCronJobActive(nextJob.id)) {
-        nextJob.state.runningAtMs = undefined;
+        Object.assign(nextJob.state, { runningAtMs: undefined, runningReceiptId: undefined });
       }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+  }
+  if (nextJob.state.runningAtMs !== job.state.runningAtMs) {
+    delete nextJob.state.runningReceiptId;
   }
 }
 
@@ -333,7 +334,7 @@ export async function add(
     await ensureLoadedForOperation(state);
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
-      throw new Error(`cron job agent is unavailable: ${agentId}`);
+      throw new Error(describeUnavailableCronAgent(agentId));
     }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
@@ -523,7 +524,7 @@ async function updateLoadedJob(params: {
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
-      throw new Error(`cron job agent is unavailable: ${agentId}`);
+      throw new Error(describeUnavailableCronAgent(agentId));
     }
   }
   finalizeUpdatedJob({

@@ -9,10 +9,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import type {
   PluginHostCleanupFailure,
   PluginHostCleanupResult,
+  PluginHostRegistryRetirement,
 } from "./host-hook-cleanup.types.js";
 import {
   cleanupPluginSessionSchedulerJobs,
@@ -60,6 +62,9 @@ async function clearPluginSessionStores(params: {
   for (const target of storeTargets) {
     if (params.shouldCleanup && !params.shouldCleanup()) {
       break;
+    }
+    if (readAgentDatabaseAdmissionRefusal(target.agentId)) {
+      continue;
     }
     cleared += await cleanupPluginHostSessionStore({
       agentId: target.agentId,
@@ -296,7 +301,7 @@ export function createPluginHostRegistryRetirement(params: {
   nextRegistry?: PluginRegistry | null;
   shouldCleanup?: () => boolean;
   skipPersistentSessionState?: boolean;
-}): () => Promise<PluginHostCleanupResult> {
+}): PluginHostRegistryRetirement {
   const previousRegistry = params.previousRegistry;
   const shouldCleanup = params.shouldCleanup ?? (() => true);
   if (!previousRegistry || previousRegistry === params.nextRegistry || !shouldCleanup()) {
@@ -319,7 +324,7 @@ export function createPluginHostRegistryRetirement(params: {
   // Discover stores after admitted writes finish, using the retiring configuration.
   const resolveSessionStoreTargets = () =>
     (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsSync(cfg ?? getRuntimeConfig()));
-  const waits: Array<() => Promise<PluginHostCleanupResult>> = [];
+  const waits: PluginHostRegistryRetirement[] = [];
   for (const pluginId of previousPluginIds) {
     const record = previousRegistry.plugins.find((entry) => entry.id === pluginId);
     // A delayed retirement cannot reclaim an instance already adopted by another registry.
@@ -371,7 +376,12 @@ export function createPluginHostRegistryRetirement(params: {
           .then(cleanup)
           .then(() => ({ errors: [] }));
     void completion.catch(() => {});
-    waits.push(async () => {
+    waits.push(async (options) => {
+      // Publication cannot await the turn requesting reload. The raw completion
+      // remains owned above; final shutdown still joins it without this option.
+      if (options?.deferConsumers && instance?.hasRetainedConsumers) {
+        return { ...result, deferredPluginIds: [pluginId] };
+      }
       const disposed = await (instance ? instance.dispose() : completion);
       return {
         cleanupCount: result.cleanupCount,
@@ -382,11 +392,13 @@ export function createPluginHostRegistryRetirement(params: {
       };
     });
   }
-  return async () => {
-    const results = await Promise.all(waits.map((wait) => wait()));
+  return async (options) => {
+    const results = await Promise.all(waits.map((wait) => wait(options)));
+    const deferredPluginIds = results.flatMap((result) => result.deferredPluginIds ?? []);
     return {
       cleanupCount: results.reduce((count, result) => count + result.cleanupCount, 0),
       failures: results.flatMap((result) => result.failures),
+      ...(deferredPluginIds.length ? { deferredPluginIds } : {}),
     };
   };
 }

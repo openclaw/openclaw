@@ -1,9 +1,17 @@
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import {
+  AsyncWorkScope,
+  getAsyncWorkSignal,
+  trackAsyncWork,
+} from "../../../shared/async-work-scope.js";
 
 type SwarmLaunch = {
   start: () => Promise<void>;
   /** True once failure is durable or the row no longer owns queued work. */
   onStartFailure: (error: unknown) => boolean | Promise<boolean>;
+  /** Release preparation only after an abandoned launch can no longer use it. */
+  onRemoved?: () => Promise<void>;
 };
 
 type QueuedSwarmRun = {
@@ -12,6 +20,7 @@ type QueuedSwarmRun = {
   onCapacityChange?: () => void;
   reportedCapacityWait?: boolean;
   launch?: SwarmLaunch;
+  removal?: Promise<void>;
   holds: number;
   retryReady: boolean;
 };
@@ -50,6 +59,30 @@ function publishLaneCapacityChange(lane: SwarmGroupLane, previouslyFull: boolean
   }
 }
 
+function finalizeRemovedRun(item: QueuedSwarmRun): Promise<void> | undefined {
+  const onRemoved = item.launch?.onRemoved;
+  if (onRemoved && !item.removal) {
+    const cleanup = async () => {
+      const work = new AsyncWorkScope();
+      try {
+        await work.track(onRemoved);
+      } finally {
+        await AsyncWorkScope.runWhenAllIdle(
+          () => [work],
+          () => work.run(() => work.drain()),
+        );
+      }
+    };
+    // A retained launch can finish after its triggering request's work scope closes.
+    item.removal = (getAsyncWorkSignal()?.aborted ? cleanup() : trackAsyncWork(cleanup)).catch(
+      (error: unknown) => {
+        console.warn(`[swarm] Failed queued launch cleanup: ${sanitizeForLog(String(error))}`);
+      },
+    );
+  }
+  return item.removal;
+}
+
 async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch: SwarmLaunch) {
   lane.active.add(item.runId);
   runLocations.set(item.runId, { lane, state: "active", item });
@@ -67,6 +100,7 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
     }
     const location = runLocations.get(item.runId);
     if (location?.state !== "active" || location.lane !== lane || location.item !== item) {
+      await finalizeRemovedRun(item);
       return;
     }
     if (failurePersisted) {
@@ -196,30 +230,34 @@ export function isSwarmRunWaitingForCapacity(runId: string, owner: object): bool
 }
 
 /** Attach launch work to an existing FIFO reservation. */
-export function activateSwarmRun(params: {
-  groupId: string;
-  runId: string;
-  start: () => Promise<void>;
-  onStartFailure: (error: unknown) => boolean | Promise<boolean>;
-}): void {
+export function activateSwarmRun(
+  params: SwarmLaunch & {
+    groupId: string;
+    runId: string;
+  },
+): void {
   const location = runLocations.get(params.runId);
   if (!location || location.state !== "queued" || location.lane.groupId !== params.groupId) {
     throw new Error(`swarm scheduler reservation missing for run ${params.runId}`);
   }
   const { lane, item } = location;
-  item.launch = { start: params.start, onStartFailure: params.onStartFailure };
+  item.launch = {
+    start: params.start,
+    onStartFailure: params.onStartFailure,
+    onRemoved: params.onRemoved,
+  };
   publishCapacityChange(item);
   pumpLane(lane);
 }
 
-export function enqueueSwarmRun(params: {
-  groupId: string;
-  runId: string;
-  maxConcurrent: number;
-  activeRunIds: readonly string[];
-  start: () => Promise<void>;
-  onStartFailure: (error: unknown) => boolean | Promise<boolean>;
-}): void {
+export function enqueueSwarmRun(
+  params: SwarmLaunch & {
+    groupId: string;
+    runId: string;
+    maxConcurrent: number;
+    activeRunIds: readonly string[];
+  },
+): void {
   if (!reserveSwarmRun(params)) {
     throw new Error(`swarm scheduler run already exists: ${params.runId}`);
   }
@@ -253,6 +291,7 @@ export function removeQueuedSwarmRun(runId: string): boolean {
   }
   location.lane.queue.splice(index, 1);
   runLocations.delete(runId);
+  void finalizeRemovedRun(location.item);
   publishCapacityChange(location.item);
   pumpLane(location.lane);
   deleteLaneIfIdle(location.lane);
@@ -275,16 +314,16 @@ export function holdQueuedSwarmRun(runId: string) {
   publishCapacityChange(item);
   let released = false;
   return {
-    release() {
-      if (released) {
-        return;
+    async release() {
+      if (!released) {
+        released = true;
+        item.holds -= 1;
+        if (runLocations.get(runId) === location) {
+          publishCapacityChange(item);
+        }
+        pumpLane(lane);
       }
-      released = true;
-      item.holds -= 1;
-      if (runLocations.get(runId) === location) {
-        publishCapacityChange(item);
-      }
-      pumpLane(lane);
+      await item.removal;
     },
     withdraw() {
       // A retained durable kill may withdraw only its never-started reservation.

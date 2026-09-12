@@ -450,11 +450,19 @@ describe("amazon-bedrock provider plugin", () => {
       defaultLevel: "off",
     },
     {
-      name: "keeps mandatory-adaptive Claude 5 models at high default effort",
+      name: "defaults Fable Bedrock model refs to medium effort",
       modelIds: [
         "anthropic.claude-fable-5",
         "us.anthropic.claude-fable-5",
         "global.anthropic.claude-fable-5",
+        "anthropic.claude-fable-5-1",
+        "us.anthropic.claude-fable-5-1",
+      ],
+      defaultLevel: "medium",
+    },
+    {
+      name: "keeps mandatory-adaptive Mythos 5 models at high default effort",
+      modelIds: [
         "anthropic.claude-mythos-5",
         "us.anthropic.claude-mythos-5",
         "global.anthropic.claude-mythos-5",
@@ -485,7 +493,7 @@ describe("amazon-bedrock provider plugin", () => {
       } as never),
       {
         levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
-        defaultLevel: "high",
+        defaultLevel: "medium",
       },
     );
   });

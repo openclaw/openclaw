@@ -1404,6 +1404,7 @@ export function preparePluginLoaderAliases(
         )),
     );
   const prepared = {
+    packageRoot,
     // These are all inputs to the three map builders; installed artifacts stay
     // stable for the loader lifecycle. Key the captured authority, not raw hints.
     cacheKey,

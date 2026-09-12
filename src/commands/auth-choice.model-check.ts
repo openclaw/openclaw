@@ -70,6 +70,7 @@ export function resolveDefaultModelAuthStatus(
   }
   const evaluation = createModelAuthAvailabilityResolver({
     cfg: config,
+    agentId: options?.agentId,
     authStore,
     ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
     ...(options?.env ? { env: options.env } : {}),

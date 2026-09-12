@@ -6884,29 +6884,30 @@ describe("chat welcome", () => {
     return container;
   }
 
-  it("renders configured assistant avatars and the animated Clawd fallback", () => {
-    let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
-
-    const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
-    expect(avatar?.tagName).toBe("DIV");
-    expect(avatar?.textContent?.trim()).toBe("VC");
+  it("renders configured images and emoji before the generated agent face", async () => {
+    let container = renderWelcome({ assistantAvatar: "🦉", assistantAvatarUrl: null });
+    const avatar = container.querySelector<HTMLElement>(".agent-chat__welcome-avatar");
+    expect(avatar?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
 
     container = renderWelcome({
-      assistantAvatar: "avatars/val.png",
+      assistantAvatar: "🦉",
       assistantAvatarUrl: "blob:identity-avatar",
     });
-
-    const imageAvatar = container.querySelector<HTMLImageElement>("img");
-    expect(imageAvatar?.getAttribute("src")).toBe("blob:identity-avatar");
-    expect(imageAvatar?.getAttribute("alt")).toBe("Val");
+    const image = container.querySelector("img");
+    expect(image?.getAttribute("src")).toBe("blob:identity-avatar");
+    image?.dispatchEvent(new Event("load"));
+    const identity = container.querySelector(".identity-avatar--agent");
+    expect(identity?.classList.contains("is-fallback")).toBe(false);
+    image?.dispatchEvent(new Event("error"));
+    expect(identity?.classList.contains("is-fallback")).toBe(true);
+    expect(identity?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
 
     container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
-
-    const clawd = container.querySelector(".agent-chat__welcome-clawd");
-    expect(clawd).not.toBeNull();
-    expect(clawd?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("idle");
-    expect(container.querySelector(".agent-chat__badge")).toBeNull();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
+    expect(container.querySelector(".agent-chat__welcome-clawd")).toBeNull();
   });
 
   it("replaces sendable welcome actions with model setup", () => {
@@ -6986,24 +6987,6 @@ describe("chat welcome", () => {
     expect(getComposerTextarea(container).disabled).toBe(true);
     container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
     expect(onSend).not.toHaveBeenCalled();
-  });
-
-  it("teases and catches file drags with the welcome mascot", () => {
-    const container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
-    const welcome = requireElement(container, ".agent-chat__welcome", "welcome screen");
-    const mascot = requireElement(
-      container,
-      ".agent-chat__welcome-clawd openclaw-mascot",
-      "welcome mascot",
-    ) as HTMLElement & { tease: boolean; catchOnce: () => void };
-    const catchOnce = vi.spyOn(mascot, "catchOnce");
-
-    welcome.dispatchEvent(createDragEvent("dragenter"));
-    expect(mascot.tease).toBe(true);
-
-    welcome.dispatchEvent(createDragEvent("drop"));
-    expect(mascot.tease).toBe(false);
-    expect(catchOnce).toHaveBeenCalledOnce();
   });
 
   it("renders welcome text from the active locale", async () => {
@@ -8346,104 +8329,128 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("groups models and preserves ranked keyboard selection through catalog replacement", async () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-        { id: "gemini-2.5-pro", name: "Anth model", provider: "google" },
-        {
-          id: "unavailable",
-          name: "Anth unavailable",
-          provider: "google",
-          available: false,
-          unavailableReason: "cooldown",
-        },
-      ],
-    });
-    const onModelSelect = vi.fn(async () => true);
-    const onModelSetup = vi.fn();
-    const container = renderModelControls(state, {
-      onModelSelect,
-      onModelSetup,
-    });
-    document.body.append(container);
+  it.each(["native", "aria"])(
+    "groups models and preserves ranked keyboard selection through catalog replacement (%s disabled)",
+    async (disabledMode) => {
+      const { state } = createChatHeaderState({
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+          { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+          { id: "gemini-2.5-pro", name: "Anth model", provider: "google" },
+          {
+            id: "unavailable",
+            name: "Anth unavailable",
+            provider: "google",
+            available: false,
+            unavailableReason: "cooldown",
+          },
+        ],
+      });
+      const onModelSelect = vi.fn(async () => true);
+      const onModelSetup = vi.fn();
+      const container = renderModelControls(state, {
+        onModelSelect,
+        onModelSetup,
+      });
+      document.body.append(container);
 
-    const providerHeadings = Array.from(
-      container.querySelectorAll<HTMLElement>("[data-chat-model-provider]"),
-    );
-    expect(
-      providerHeadings.map((heading) =>
-        heading.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
-      ),
-    ).toEqual(["OpenAI", "Anthropic", "Google"]);
-    const providerSettings = providerHeadings[0]?.querySelector<HTMLButtonElement>(
-      "[data-chat-model-provider-settings]",
-    );
-    expect(providerSettings?.getAttribute("aria-label")).toBe("Configure models");
-    expect(providerSettings?.closest("openclaw-tooltip")).toBeNull();
-    expect(providerSettings?.closest('[role="listbox"]')).toBeNull();
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>('[role="option"]')).every(
-        (option) => option.closest('[role="listbox"]') !== null,
-      ),
-    ).toBe(true);
-    providerSettings?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
-    const anthropicModels = container.querySelector<HTMLElement>(
-      '[data-chat-model-provider-group="anthropic"]',
-    );
-    expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
-    const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
-    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
-    details!.open = true;
-    expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
-    search!.value = "anth";
-    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      const providerHeadings = Array.from(
+        container.querySelectorAll<HTMLElement>("[data-chat-model-provider]"),
+      );
+      expect(
+        providerHeadings.map((heading) =>
+          heading.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
+        ),
+      ).toEqual(["OpenAI", "Anthropic", "Google"]);
+      const providerSettings = providerHeadings[0]?.querySelector<HTMLButtonElement>(
+        "[data-chat-model-provider-settings]",
+      );
+      expect(providerSettings?.getAttribute("aria-label")).toBe("Configure models");
+      expect(providerSettings?.closest("openclaw-tooltip")).toBeNull();
+      expect(providerSettings?.closest('[role="listbox"]')).toBeNull();
+      expect(
+        Array.from(container.querySelectorAll<HTMLElement>('[role="option"]')).every(
+          (option) => option.closest('[role="listbox"]') !== null,
+        ),
+      ).toBe(true);
+      providerSettings?.click();
+      expect(onModelSetup).toHaveBeenCalledOnce();
+      const anthropicModels = container.querySelector<HTMLElement>(
+        '[data-chat-model-provider-group="anthropic"]',
+      );
+      expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
+      const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+      const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
+      details!.open = true;
+      expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
+      if (disabledMode === "aria") {
+        // Account actions use focusable aria-disabled rows in this shared picker.
+        const unavailable = container.querySelector<HTMLButtonElement>(
+          '[data-chat-model-option="google/unavailable"]',
+        )!;
+        unavailable.disabled = false;
+        unavailable.setAttribute("aria-disabled", "true");
+      }
+      search!.value = "anth";
+      search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
-    const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).filter((option) => !option.hidden);
-    expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
-      "anthropic/claude-sonnet-4-6",
-      "google/gemini-2.5-pro",
-      "google/unavailable",
-    ]);
-    expect(visibleOptions[1]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
-    expect(visibleOptions[2]?.disabled).toBe(true);
-    expect(
-      visibleOptions[1]
-        ?.querySelector("[data-chat-model-shortcut]")
-        ?.getAttribute("data-chat-model-shortcut-number"),
-    ).toBe("1");
-    expect(
-      visibleOptions[0]?.querySelector(".chat-controls__model-option-provider"),
-    ).not.toBeNull();
+      const visibleOptions = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      ).filter((option) => !option.hidden);
+      expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
+        "anthropic/claude-sonnet-4-6",
+        "google/gemini-2.5-pro",
+        "google/unavailable",
+      ]);
+      expect(visibleOptions[1]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
+      expect(visibleOptions[2]?.disabled).toBe(disabledMode === "native");
+      expect(
+        visibleOptions[2]?.querySelector(
+          "[data-chat-model-shortcut][data-chat-model-shortcut-number]",
+        ),
+      ).toBeNull();
+      expect(
+        visibleOptions[1]
+          ?.querySelector("[data-chat-model-shortcut]")
+          ?.getAttribute("data-chat-model-shortcut-number"),
+      ).toBe("1");
+      expect(
+        visibleOptions[0]?.querySelector(".chat-controls__model-option-provider"),
+      ).not.toBeNull();
 
-    search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    const highlighted = container.querySelector<HTMLButtonElement>("[data-chat-model-highlighted]");
-    expect(highlighted).toBe(visibleOptions[0]);
-    expect(highlighted?.id).not.toBe("");
-    expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
+      search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      const highlighted = container.querySelector<HTMLButtonElement>(
+        "[data-chat-model-highlighted]",
+      );
+      expect(highlighted).toBe(visibleOptions[0]);
+      expect(highlighted?.id).not.toBe("");
+      expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
 
-    state.chatModelCatalog = [
-      ...state.chatModelCatalog,
-      { id: "new-match", name: "Anth new", provider: "openai" },
-    ];
-    renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
-    await Promise.resolve();
-    expect(container.querySelector("[data-chat-model-search]")).toBe(search);
-    expect(search?.value).toBe("anth");
-    expect(container.querySelector("[data-chat-model-highlighted]")).toBe(highlighted);
-    expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
+      state.chatModelCatalog = [
+        ...state.chatModelCatalog,
+        { id: "new-match", name: "Anth new", provider: "openai" },
+      ];
+      renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
+      await Promise.resolve();
+      expect(container.querySelector("[data-chat-model-search]")).toBe(search);
+      expect(search?.value).toBe("anth");
+      expect(container.querySelector("[data-chat-model-highlighted]")).toBe(highlighted);
+      expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
 
-    search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main");
-    expect(details?.open).toBe(false);
-    container.remove();
-  });
+      search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main");
+      expect(details?.open).toBe(false);
+
+      onModelSelect.mockClear();
+      details!.open = true;
+      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
+      expect(onModelSelect).toHaveBeenCalledExactlyOnceWith("anthropic/claude-sonnet-4-6", "main");
+      expect(details?.open).toBe(false);
+      container.remove();
+    },
+  );
 
   it("matches the default model by its localized marker", () => {
     const { state } = createChatHeaderState({

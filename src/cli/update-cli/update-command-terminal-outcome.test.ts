@@ -13,6 +13,7 @@ import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "../../infra/package-update-swap.test-support.js";
+import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
@@ -152,6 +153,7 @@ async function scenario(
   json: boolean,
   repeat = false,
   deferred = true,
+  preparedRecovery = false,
 ) {
   let swap;
   let nativeManifest: string | undefined;
@@ -354,10 +356,32 @@ async function scenario(
               root: swap.packageRoot,
               before: { version: "1.0.0" },
               after: { version: "2.0.0" },
-              steps: [],
+              ...(preparedRecovery
+                ? {
+                    recovery: {
+                      serviceRestartSafe: true as const,
+                      packageRollbackVerified: true,
+                      version: "2.0.0",
+                      service: "healthy" as const,
+                    },
+                  }
+                : {}),
+              steps: preparedRecovery
+                ? [
+                    {
+                      name: "original update failure",
+                      command: "openclaw update",
+                      cwd: swap.packageRoot,
+                      durationMs: 1,
+                      exitCode: 1,
+                      stderrTail: "fixture original failure before recovery",
+                    },
+                  ]
+                : [],
               durationMs: 0,
             },
             packageTransaction: swap.transaction,
+            ...(preparedRecovery ? { coreAlreadyCurrent: true } : {}),
             shouldRestart: false,
             installKindChanged: false,
             downgradeRisk: false,
@@ -440,6 +464,7 @@ async function scenario(
     package: JSON.parse(await fs.readFile(path.join(swap.packageRoot, "package.json"), "utf8")),
     launcher: await fs.readFile(swap.launcher, "utf8"),
     jsonOutput,
+    sentinel: preparedRecovery ? await readRestartSentinel(run.env) : undefined,
     humanOutput,
     history,
     report,
@@ -462,6 +487,50 @@ async function scenario(
 }
 
 describe("composed cleanup and terminal outcome", () => {
+  it.each(["release-failure", "revoked", "link-retained"] as const)(
+    "qualifies pending recovery claims after %s settlement",
+    async (kind) => {
+      // Service verification is supplied data; publication, cleanup and owner failure are real.
+      const value = await scenario(kind, true, false, true, true);
+      const settlementFailed = kind !== "link-retained";
+      const reason = settlementFailed
+        ? "update-executor-settlement-failed"
+        : "package-backup-retention-failed";
+      expect(value.injected).toBe(true);
+      expect(value.exitCode).toBe(1);
+      expect(value.jsonOutput).toHaveLength(1);
+      const report = value.jsonOutput[0];
+      expect(report).toMatchObject({ status: "error", reason });
+      expect(value.sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
+      expect(value.history?.status).toBe("failed");
+      expect.soft(value.history?.downtimeMs).toBe(settlementFailed ? null : 0);
+      expect(JSON.stringify(report)).toContain("fixture original failure before recovery");
+      expect(JSON.stringify(value.sentinel)).toContain("fixture original failure before recovery");
+      if (settlementFailed) {
+        expect.soft(JSON.stringify(report)).not.toContain('"recovery":');
+        expect.soft(value.sentinel?.payload.stats?.recovery).toBeUndefined();
+        expect(value.lease).not.toBe("absent");
+      } else {
+        expect(report).toMatchObject({
+          recovery: {
+            serviceRestartSafe: true,
+            packageRollbackVerified: true,
+            version: "2.0.0",
+            service: "healthy",
+          },
+        });
+        expect(value.sentinel?.payload.stats?.recovery).toEqual({
+          serviceRestartSafe: true,
+          version: "2.0.0",
+          service: "healthy",
+        });
+        expect(value.retainedExists).toBe(true);
+        expect(value.lease).toBe("absent");
+      }
+      expect(value.afterRepeat).toEqual(value.beforeRepeat);
+    },
+  );
+
   it.each([true, false])(
     "reports actual retained backup after verified activation (json=%s)",
     async (json) => {

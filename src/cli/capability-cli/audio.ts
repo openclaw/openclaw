@@ -8,6 +8,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -31,10 +32,9 @@ async function runAudioTranscribe(params: {
     commandName: "infer audio transcribe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(
-    cfg,
-    resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe"),
-  );
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
     filePath: path.resolve(params.file),

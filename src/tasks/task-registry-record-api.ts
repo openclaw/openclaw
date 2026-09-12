@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import {
   appendTaskEvent,
   assertParentFlowLinkAllowed,
@@ -47,6 +46,7 @@ import {
   tryPersistTaskUpsert,
 } from "./task-registry-state.js";
 import {
+  isTerminalTaskStatus,
   parseTaskNotifyPolicy,
   type JsonValue,
   type TaskDeliveryState,

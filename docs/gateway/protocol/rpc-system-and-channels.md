@@ -51,11 +51,42 @@ RPC method families for gateway status and identity, models and usage, channels 
 
 ## Plugin management
 
-- `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations.
+- `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation` and each plugin's runtime state separately from configured enablement.
+- `plugins.inspect` (`operator.read`) inspects one plugin with `{ pluginId }`, including declared capabilities, grants, trust details, and a `reviewToken` for capability consent.
 - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
-- `plugins.install` (`operator.admin`) installs either an official catalog entry with `{ source: "official", pluginId, acknowledgeInstallPolicyWarning? }` or a ClawHub package with `{ source: "clawhub", packageName, version?, acknowledgeInstallPolicyWarning? }`. When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks. Successful installs require a Gateway restart.
-- `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled }`. The response includes the updated catalog entry, restart metadata, and any slot-selection warnings.
-- `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions and always requires a Gateway restart.
+- `plugins.install` (`operator.admin`) accepts these source-specific request fields:
+
+  | `source`      | Fields                                                                     |
+  | ------------- | -------------------------------------------------------------------------- |
+  | `bundled`     | `pluginId`, optional `spec`                                                |
+  | `clawhub`     | `packageName`, optional `version`, `expectedPluginId`, `expectedIntegrity` |
+  | `git`         | `spec`                                                                     |
+  | `local`       | `path`, optional `link`                                                    |
+  | `marketplace` | `marketplace`, `plugin`                                                    |
+  | `npm`         | `spec`, optional `pin`, `expectedPluginId`, `expectedIntegrity`            |
+  | `npm-pack`    | `archivePath`                                                              |
+  | `official`    | `pluginId`, optional `version: "latest"`, `pin`                            |
+
+  Each request can also include `mode: "install" | "update"`, `acknowledgeInstallPolicyWarning: true`, and `acknowledgeCapabilities: { reviewToken }`. Omitted `mode` means install. Local paths, npm-pack archives, marketplace sources, and local Git sources require a connection the Gateway identifies as local; paths refer to that Gateway host. Use an npm spec for a specific official package version.
+
+  When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks.
+
+- `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled, acknowledgeCapabilities? }`. The response includes the updated catalog entry and any slot-selection warnings.
+- `plugins.reload` (`operator.admin`) reloads one or more discovered plugins with `{ plugins: [{ pluginId, installHash?, sourceDigests? }], acknowledgeCapabilities? }`, preserving configured enablement. Send 1–64 targets; a one-plugin request uses the same array envelope. The response contains `pluginIds`, `restartRequired: false`, and a required `runtime` receipt.
+- `plugins.refresh` (`operator.admin`) refreshes plugin metadata and applies the resulting registry with `{}`.
+- `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId, keepFiles? }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions.
+
+These mutations wait for runtime application without restarting the Gateway. Successful responses include `restartRequired: false` and a `runtime` receipt with `operationId`, `generation`, `pluginIds`, and optional `sourceDigests`. The Gateway broadcasts `plugins.changed` with `{ generation }` after publication. Runtime replacement errors include `details.runtime.phase` and `details.runtime.committed`, so clients can distinguish rejection before publication from failure after a new generation became active.
+
+If a multi-step mutation publishes a runtime and later fails, `details.runtime` retains the published receipt with `committed: true`. A subsequent replacement that fails before publication is reported separately in `details.runtimeAttempt`. Clients should refresh their runtime view after any committed change, even when the overall mutation fails.
+
+An install error can also include `details.persistence: { operation: "install", pluginId }`. This records that installation was saved, independently of runtime publication. Refresh the installed inventory and config; fix the reported problem and reload the installed plugin instead of blindly repeating installation. `details.runtime.committed: false` does not mean the installation was rolled back.
+
+Install, enable, and reload may require capability consent. After reviewing the declared capabilities, pass `acknowledgeCapabilities: { reviewToken }`; the token is checked against a fresh inspection before application. This is separate from install-policy warning approval. See [Plugin management](/plugins/manage-plugins).
+
+Reload preconditions are optional. `installHash` is the lowercase SHA-256 of the canonical saved install record and requires a tracked package. `sourceDigests` maps resolved runtime plugin IDs to lowercase SHA-256 source digests. Tracked targets resolve their entire package; a bundled or configured source without an install record resolves its discovered runtime ID. Ambiguous, missing, or conflicting managed ownership still rejects the request. The Gateway checks target ownership and expected records before and after consent, then validates source expectations against the captured code it loads. Consent can update the saved install record: if that changes a supplied `installHash`, reload fails visibly without publishing runtime. The caller must refresh its expected state before retrying; the Gateway never rewrites the supplied hash. An acknowledgment covers its reviewed declared surface, and a different required surface stops the operation before runtime publication. Reload does not rebuild compiled bundled code or grant file-mutation authority.
+
+`sourceDigests` requires a captured-source plugin instance and Node's synchronous module hooks. Runtimes without those hooks, including Bun 1.4.2, omit these digests and reject requests that supply them. Ordinary Bun reloads capture fresh source for the replacement while retaining the old instance for admitted consumers; see [runtime instance and source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
 ## Messaging and logs
 

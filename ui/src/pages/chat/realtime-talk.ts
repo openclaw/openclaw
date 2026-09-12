@@ -302,12 +302,17 @@ export class RealtimeTalkSession {
       return false;
     }
     try {
+      const requestedProvider = this.options.provider?.trim();
+      const requestedModel = this.options.model?.trim();
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
-        {},
+        {
+          ...(requestedProvider ? { provider: requestedProvider } : {}),
+          ...(requestedModel ? { model: requestedModel } : {}),
+        },
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
-      const selectedProvider = this.options.provider ?? catalog.realtime.activeProvider;
+      const selectedProvider = catalog.realtime.activeProvider;
       if (!selectedProvider) {
         return false;
       }

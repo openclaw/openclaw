@@ -1,4 +1,3 @@
-// Main update orchestration for source checkouts and package installs.
 import { randomUUID } from "node:crypto";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveConfigPath } from "../../config/paths.js";
@@ -226,6 +225,7 @@ async function initializeAndRunUpdate(
             target.updateInstallKind === "package" &&
             !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
           const stageParams = (progress: ReturnType<typeof createUpdateProgress>["progress"]) => ({
+            reapplyLocalOverrides: opts.reapplyLocalOverrides,
             root: target.root,
             installKind: prepared.installKind,
             tag: target.tag,
@@ -671,7 +671,6 @@ async function updateCommandInternal(
   recoveryState.triageTarget.failureResult = result;
   recoveryState.triageTarget.env =
     recoveryEnv ?? ownedManagedUpdateContext?.env ?? recoveryState.triageTarget.env;
-  const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
     ...executionState,
@@ -679,7 +678,7 @@ async function updateCommandInternal(
     root,
     previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
-    configSnapshot: finalizationConfigSnapshot,
+    configSnapshot: ownedManagedUpdateContext?.configSnapshot ?? configSnapshot,
     requestedChannel,
     storedChannel,
     channel,
@@ -703,7 +702,7 @@ async function updateCommandInternal(
         packageUpdateNodeRunner,
         schemaVersions: execution.schemaVersions,
         candidateSchemaVersions: execution.candidateSchemaVersions,
-        config: finalizationConfigSnapshot.config,
+        config: finalization.configSnapshot.config,
         env: ownedManagedUpdateContext?.env ?? run.env,
       });
   run.executorFence?.assertCurrent();

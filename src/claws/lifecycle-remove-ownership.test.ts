@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readSourceConfigBestEffort, resetConfigRuntimeState } from "../config/config.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -20,7 +20,7 @@ import {
   quiescentClawMonitorGateway,
 } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
-import { readClawInstallRecord } from "./provenance.js";
+import { readClawInstallRecord, persistClawPackageRef, readClawPackageRefs } from "./provenance.js";
 import { readClawWorkspaceFiles } from "./workspace.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -47,16 +47,16 @@ async function fixture(withFile = false) {
         },
       }),
     ).toMatchObject({ status: "complete" });
-    return added.plan.agent.workspace;
+    return { workspace: added.plan.agent.workspace, plan: added.plan };
   };
-  const workspace = await install("initial");
+  const { workspace, plan: initialPlan } = await install("initial");
   const trashPath: NonNullable<ClawRemoveApplyOptions["trashPath"]> = async (pathname) => {
     await fs.rm(pathname, { recursive: true, force: true });
     return true;
   };
   const remove = async (overrides: Partial<ClawRemoveApplyOptions> = {}) => {
     const config = await readSourceConfigBestEffort();
-    const plan = await buildClawRemovePlan("worker", { config });
+    const plan = await buildClawRemovePlan("worker", { config, ...overrides });
     expect(plan.blockers).toEqual([]);
     return await applyClawRemovePlan(plan, {
       config,
@@ -66,7 +66,7 @@ async function fixture(withFile = false) {
       ...overrides,
     });
   };
-  return { state, workspace, install, remove, trashPath };
+  return { state, workspace, plan: initialPlan, install, remove, trashPath };
 }
 
 function expireDeletionLease(): void {
@@ -84,6 +84,75 @@ function expireDeletionLease(): void {
 }
 
 describe("Claw removal operation ownership", () => {
+  it.each(["transport", "runtime"])(
+    "keeps partial state after package %s failure without local fallback",
+    async (failure) => {
+      const current = await fixture(true);
+      persistClawPackageRef(current.plan, {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "1.0.0",
+        integrity: "sha256:audit",
+      });
+      const application = { operationId: "runtime-final", generation: 3, pluginIds: ["audit"] };
+      const message =
+        failure === "transport"
+          ? "package connection lost"
+          : "Plugin activation failed. Gateway generation 3: replacement applied.";
+      const warnings = ["Package dependency pruning failed."];
+      const packages = [
+        {
+          kind: "plugin" as const,
+          ref: "audit",
+          version: "1.0.0",
+          action: "error" as const,
+          reason: message,
+        },
+      ];
+      const packageGateway = vi.fn(async () => {
+        if (failure === "transport") {
+          throw new Error(message);
+        }
+        return { packages, warnings, application };
+      });
+      const uninstallPlugin = vi.fn();
+      const result = await current.remove({
+        referencedCleanup: { mode: "remove-selected", selected: ["plugin:audit@1.0.0"] },
+        packageGateway,
+        packageDeps: {
+          uninstallPlugin,
+          resolvePlugin: async () => ({
+            status: "found",
+            pluginId: "audit",
+            installedVersion: "1.0.0",
+            record: {
+              source: "clawhub",
+              integrity: "sha256:audit",
+              installedAt: "1970-01-01T00:00:00.001Z",
+            },
+          }),
+        },
+      });
+      expect(result).toMatchObject({
+        status: "partial",
+        agentRemoved: true,
+        error: { code: "package_cleanup_failed", message },
+      });
+      expect(result.packages).toEqual(failure === "runtime" ? packages : []);
+      expect(result.pluginRuntime).toEqual(failure === "runtime" ? application : undefined);
+      expect(result.warnings).toEqual(failure === "runtime" ? warnings : undefined);
+      expect(packageGateway).toHaveBeenCalledOnce();
+      expect(uninstallPlugin).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(false);
+      expect(readClawInstallRecord("worker")?.status).toBe("partial");
+      expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
+      await expect(fs.readFile(path.join(current.workspace, "SOUL.md"), "utf8")).resolves.toBe(
+        "managed\n",
+      );
+    },
+  );
+
   it.each([
     { successor: "removing", reject: false },
     { successor: "removing", reject: true },

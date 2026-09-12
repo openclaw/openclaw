@@ -10,8 +10,9 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { readCurrentPackageChangelog } from "../../scripts/package-changelog.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../scripts/package-source-dependencies.mjs";
 import {
   validatePackageSource,
@@ -19,6 +20,9 @@ import {
   validatePackageSourceRef,
 } from "../../scripts/package-source-preflight.mjs";
 import { writeRunSummary } from "../../scripts/test-docker-all.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const changelog = `# Changelog
 
@@ -395,6 +399,23 @@ function runReleaseInputCapture(params: {
 }
 
 describe("package source preflight", () => {
+  it("validates selected split notes instead of accepting an index as package contents", () => {
+    const root = tempDirs.make("openclaw-package-source-split-");
+    mkdirSync(path.join(root, "CHANGELOG"));
+    writeFileSync(path.join(root, "package.json"), rootManifest({ dependencies: {} }));
+    writeFileSync(
+      path.join(root, "CHANGELOG.md"),
+      "# Changelog\n\n- [Release](CHANGELOG/2026.8.1.md)\n",
+    );
+    writeFileSync(
+      path.join(root, "CHANGELOG", "2026.8.1.md"),
+      changelog.replace("Unreleased", "2026.8.1"),
+    );
+    expect(validatePackageSourceDir(root)).toBe("2026.8.1");
+    writeFileSync(path.join(root, "CHANGELOG", "2026.8.1.md"), "## 2026.8.1\n- Tiny.\n");
+    expect(() => validatePackageSourceDir(root)).toThrow("only 7 body bytes");
+  });
+
   it.each([
     ["2026.8.1", "Unreleased"],
     ["2026.8.1-beta.4", "Unreleased"],
@@ -497,13 +518,16 @@ describe("package source preflight", () => {
   it("rejects real partial-json source manifest drift", () => {
     const root = JSON.parse(readFileSync("package.json", "utf8")) as {
       dependencies: Record<string, string>;
+      version: string;
     };
     root.dependencies["partial-json"] = "0.1.8";
     expect(() =>
       validatePackageSource({
         aiManifestContent: readFileSync("packages/ai/package.json", "utf8"),
         allowUnreleasedChangelog: true,
-        changelogContent: readFileSync("CHANGELOG.md", "utf8"),
+        changelogContent: readCurrentPackageChangelog(process.cwd(), root.version, {
+          allowUnreleased: true,
+        }),
         rootManifestContent: JSON.stringify(root),
       }),
     ).toThrow(

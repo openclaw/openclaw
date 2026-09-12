@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -49,6 +50,7 @@ import {
 } from "./io.js";
 import {
   containsConfigIncludeDirective,
+  hashConfigRaw,
   rejectConfigNonFiniteNumbers,
   resolveManagedRuntimeEnvBaseline,
 } from "./io.read-helpers.js";
@@ -101,8 +103,13 @@ export type ConfigReplaceResult = {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
   persistedHash: string | null;
+  persistedSourceConfig?: OpenClawConfig;
   afterWrite: ConfigWriteAfterWrite;
   followUp: ConfigWriteFollowUp;
+};
+
+type ConfigMutationWriteResult = Omit<ConfigWriteResult, "persistedHash"> & {
+  persistedHash: string | null;
 };
 
 export type ConfigMutationIO = {
@@ -137,6 +144,7 @@ export type ConfigMutationCommitParams = {
 export type ConfigMutationCommitResult = {
   config: OpenClawConfig;
   persistedHash: string | null;
+  persistedSourceConfig?: OpenClawConfig;
   afterWrite?: ConfigWriteAfterWrite;
 };
 
@@ -428,33 +436,35 @@ function resolveIncludeOwnedWriteCandidate(params: {
 }
 
 /**
- * Whether one authored $include file solely owns every changed path of this
+ * Resolve the authored $include file that solely owns every changed path of this
  * write. Callers that add root-level metadata before persisting (Doctor wizard
  * state) must consult this first: an extra root key would push the change set
  * outside the boundary and force the guarded root writer to reject the write.
  */
-export function configWriteTargetsIncludeBoundary(params: {
+export function resolveConfigIncludeWriteBoundary(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
   persistCanonicalAgentRoster?: boolean;
-}): boolean {
+  explicitSetPaths?: ConfigWriteOptions["explicitSetPaths"];
+}): IncludeWriteBoundary | null {
   const includeWrite = resolveIncludeOwnedWriteCandidate({
     snapshot: params.snapshot,
     nextConfig: params.nextConfig,
     writeOptions: {
       inputBase: "source",
       persistCanonicalAgentRoster: params.persistCanonicalAgentRoster,
+      explicitSetPaths: params.explicitSetPaths,
     },
   });
   // Eligibility must match the guarded writer: a canonical external target is
   // rejected there, so it must classify as manual repair rather than eligible.
-  return (
-    includeWrite !== null &&
+  return includeWrite &&
     isInternalIncludeWriteTarget({
       configPath: params.snapshot.path,
       includePath: includeWrite.includePath,
     })
-  );
+    ? { boundaryPath: includeWrite.boundaryPath, includePath: includeWrite.includePath }
+    : null;
 }
 
 function snapshotProvesBrokenInclude(snapshot: ConfigFileSnapshot, includePath: string): boolean {
@@ -761,7 +771,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
   afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
-}): Promise<{ persistedHash: string | null; persistedConfig: OpenClawConfig } | null> {
+}): Promise<ConfigMutationWriteResult | null> {
   const includeWrite = resolveIncludeOwnedWriteCandidate({
     snapshot: params.snapshot,
     nextConfig: params.nextConfig,
@@ -961,7 +971,11 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           !hadRuntimeSnapshot &&
           !getRuntimeConfigSnapshotRefreshHandler()
         ) {
-          return { persistedHash: null, persistedConfig: runtimeConfigToWrite };
+          return {
+            persistedHash: null,
+            persistedConfig: runtimeConfigToWrite,
+            persistedSourceConfig: runtimeConfigToWrite,
+          };
         }
 
         let refreshed: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
@@ -1043,7 +1057,12 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           createRefreshError: (detail, cause) =>
             new Error(`runtime snapshot refresh failed: ${detail}`, { cause }),
         });
-        return { persistedHash, persistedConfig: refreshedSnapshot.sourceConfig };
+        return {
+          persistedHash,
+          persistedConfig: refreshedSnapshot.sourceConfig,
+          // A later include edit leaves the root hash unchanged; retain this write's intent.
+          persistedSourceConfig: runtimeConfigToWrite,
+        };
       } catch (error) {
         let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
         try {
@@ -1085,14 +1104,8 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
 function resolveConfigWriteResult(
   result: ConfigWriteResult | void,
   fallbackConfig: OpenClawConfig,
-): { persistedHash: string | null; persistedConfig: OpenClawConfig } {
-  if (result) {
-    return {
-      persistedHash: result.persistedHash,
-      persistedConfig: result.persistedConfig,
-    };
-  }
-  return { persistedHash: null, persistedConfig: fallbackConfig };
+): ConfigMutationWriteResult {
+  return result ?? { persistedHash: null, persistedConfig: fallbackConfig };
 }
 
 export type ConfigReplaceInput =
@@ -1147,6 +1160,7 @@ async function replaceConfigFileUnlocked(
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   markActiveConfigMutationPath(snapshot.path);
+  assertUpdateDoctorConfigInputHash(snapshot.path, hashConfigRaw(snapshot.raw));
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
@@ -1196,6 +1210,7 @@ async function replaceConfigFileUnlocked(
     snapshot,
     nextConfig: writeResult.persistedConfig,
     persistedHash: writeResult.persistedHash,
+    persistedSourceConfig: writeResult.persistedSourceConfig,
     afterWrite,
     followUp: resolveConfigWriteFollowUp(afterWrite),
   };
@@ -1217,6 +1232,7 @@ async function commitPreparedConfigMutation(
   return {
     config: result.nextConfig,
     persistedHash: result.persistedHash,
+    persistedSourceConfig: result.persistedSourceConfig,
     afterWrite: result.afterWrite,
   };
 }
@@ -1286,6 +1302,7 @@ async function transformConfigFileAttempt<T>(
     snapshot,
     nextConfig: committed.config,
     persistedHash: committed.persistedHash,
+    persistedSourceConfig: committed.persistedSourceConfig,
     result: transformed.result,
     attempts: attempt + 1,
     afterWrite: committedAfterWrite,

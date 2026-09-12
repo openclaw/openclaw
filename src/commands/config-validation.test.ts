@@ -1,8 +1,8 @@
-// Config validation tests cover config snapshot validation and command error handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
 import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const {
   readConfigFileSnapshot,
@@ -44,26 +44,6 @@ describe("requireValidConfig", () => {
     ]);
   }
 
-  function createRuntime() {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-  }
-
-  function requireFirstLog(runtime: ReturnType<typeof createRuntime>): string {
-    const [call] = runtime.log.mock.calls;
-    if (!call) {
-      throw new Error("expected runtime log message");
-    }
-    const [message] = call;
-    if (message === undefined) {
-      throw new Error("expected runtime log message");
-    }
-    return String(message);
-  }
-
   it("retains native write ownership and the read-time environment after an await", async () => {
     const writeSnapshot = {
       snapshot: {
@@ -80,7 +60,7 @@ describe("requireValidConfig", () => {
       },
     };
     readConfigFileSnapshotForWrite.mockResolvedValue(writeSnapshot);
-    const result = await requireValidConfigForWrite(createRuntime());
+    const result = await requireValidConfigForWrite(createTestRuntime());
     await Promise.resolve();
     expect(result).toBe(writeSnapshot);
     expect(result?.writeOptions.envSnapshotForRestore).toEqual({ CONFIG_READ_TOKEN: "at-read" });
@@ -102,7 +82,7 @@ describe("requireValidConfig", () => {
       },
       writeOptions: { expectedConfigPath: "/tmp/owned.json" },
     });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     expect(await requireValidConfigForWrite(runtime)).toBeNull();
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
@@ -110,7 +90,7 @@ describe("requireValidConfig", () => {
 
   it("returns config without emitting compatibility advice by default", async () => {
     createValidSnapshot();
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     const config = await requireValidConfig(runtime);
 
@@ -124,7 +104,7 @@ describe("requireValidConfig", () => {
 
   it("can validate core config without loading plugin schemas", async () => {
     createValidSnapshot();
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     await expect(requireValidConfig(runtime, { skipPluginValidation: true })).resolves.toEqual({
       plugins: {},
@@ -135,7 +115,7 @@ describe("requireValidConfig", () => {
 
   it("can validate config without observing persistent health state", async () => {
     createValidSnapshot();
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     await expect(requireValidConfig(runtime, { observe: false })).resolves.toEqual({
       plugins: {},
@@ -146,7 +126,7 @@ describe("requireValidConfig", () => {
 
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
     createValidSnapshot();
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     const config = await requireValidConfig(runtime, {
       includeCompatibilityAdvisory: true,
@@ -156,7 +136,7 @@ describe("requireValidConfig", () => {
     expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(requireFirstLog(runtime)).toBe(
+    expect(runtime.log.mock.calls[0]?.[0]).toBe(
       [
         "Plugin compatibility: 1 notice.",
         "- legacy-plugin is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
@@ -176,7 +156,7 @@ describe("requireValidConfig", () => {
       config: {},
       issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
     });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     const config = await requireValidConfig(runtime, {
       includeCompatibilityAdvisory: true,
@@ -212,7 +192,7 @@ describe("requireValidConfig", () => {
       ],
       legacyIssues: [],
     });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     const config = await requireValidConfig(runtime);
 
@@ -237,7 +217,7 @@ describe("requireValidConfig", () => {
       issues: [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }],
       legacyIssues: [],
     });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     const config = await requireValidConfig(runtime);
 

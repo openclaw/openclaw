@@ -10,7 +10,7 @@ import { proposeCronRunRecovery, recoverCronRunProposal } from "./service/run-re
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 

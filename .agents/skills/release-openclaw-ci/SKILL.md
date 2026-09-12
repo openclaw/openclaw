@@ -118,7 +118,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   and serve as Release SHA. One successful fresh full parent may qualify both
   roles and their exact publication bytes. If notes change afterward, a later
   Release SHA may reuse product evidence only when its complete delta from
-  Code SHA is exactly `CHANGELOG.md`; its changed bytes still need qualification.
+  Code SHA changes the selected `CHANGELOG/YYYY.M.PATCH.md` and optionally
+  `CHANGELOG.md` and `CHANGELOG/records/YYYY.M.PATCH.md`, with no other paths,
+  renames, or deletions; its changed bytes still need qualification.
 - Extended-stable validates one exact branch tip; it does not reuse the regular
   Code-SHA/Release-SHA evidence model.
 - In a sparse worktree or Testbox source sync, first confirm `package.json`,
@@ -347,10 +349,16 @@ that Code SHA as Release SHA and use the same successful parent/attempt and
 its exact prepared bytes for candidate and publication checks. Required gates,
 final channel-specific SDK review and acknowledgement still apply.
 
-Only if notes change after qualification, commit exactly `CHANGELOG.md` and
+Only if notes change after qualification, commit the selected release entry and
+any matching record/index updates, then
 optionally run the helper against the new Release SHA with reuse. That parent must report
-`policy=changelog-only-release-v1`, `evidenceSha=<code-sha>`, and
-`changedPaths=["CHANGELOG.md"]`; it should reuse the product matrix instead of
+`policy=split-changelog-release-v1`, `evidenceSha=<code-sha>`, and the complete
+`changedPaths`: the selected `CHANGELOG/YYYY.M.PATCH.md` is required, with only
+`CHANGELOG.md` and `CHANGELOG/records/YYYY.M.PATCH.md` permitted alongside it.
+Entry/record additions or modifications are permitted; index changes must be
+modifications. Renames, deletions, other releases, and docs source edits require
+fresh product qualification. Historical root-only receipts retain
+`changelog-only-release-v1`. The split path should reuse the product matrix instead of
 dispatching child lanes. Npm preflight and package/install acceptance still run
 against the exact Release SHA and its new tarball bytes.
 
@@ -542,7 +550,8 @@ run-ID-cached bytes first.
      prerequisite, and retry only the failed surface
    - wrapper/monitor failure: keep the child and candidate identities; record
      the wrapper result separately from the child result
-   - changelog/release-note failure: change only `CHANGELOG.md`, keep Code SHA
+   - changelog/release-note failure: change only the selected release entry and
+     permitted record/index paths under `split-changelog-release-v1`, keep Code SHA
      evidence, and repeat Release SHA proof
    - publish child/registry selector failure: keep Release SHA and resume the
      failed child; never rebuild an immutable version that already published

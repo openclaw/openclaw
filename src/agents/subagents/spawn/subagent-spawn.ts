@@ -8,7 +8,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   GatewayDrainingError,
@@ -46,6 +45,7 @@ import {
   prepareContextEngineSubagentSpawn,
   prepareSubagentSessionContext,
   rollbackPreparedContextEngine,
+  type PreparedContextEngineSubagentSpawn,
 } from "./subagent-spawn-context.js";
 import type {
   SpawnSubagentContext,
@@ -131,6 +131,7 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
+  let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
     const childPlan = await resolveSubagentChildPlan({
       request: params,
@@ -407,7 +408,7 @@ export async function spawnSubagentDirect(
         ...provisionalSessionIdentity,
         waitForSessionDeletion,
       });
-    type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
+    type SubagentBackendState = { contextEnginePreparation?: PreparedContextEngineSubagentSpawn };
     // Set once the gateway accepts the child run, so a later failure can tell an
     // accepted run apart from one that never started.
     let acceptedChildRunId: string | undefined;
@@ -428,7 +429,8 @@ export async function spawnSubagentDirect(
         if (result.status === "error") {
           throw new Error(result.error);
         }
-        return { contextEnginePreparation: result.preparation };
+        contextEnginePreparation = result.preparation;
+        return { contextEnginePreparation };
       },
       async dispatchTurn() {
         if (params.collect) {
@@ -620,6 +622,7 @@ export async function spawnSubagentDirect(
             }
             await emitSpawnLifecycleHooks(gatewayRunId);
           }, "subagents:spawn");
+          await pipelineResult.state.contextEnginePreparation?.dispose();
         },
         onStartFailure: async (error) => {
           if (error instanceof GatewayDrainingError) {
@@ -654,7 +657,11 @@ export async function spawnSubagentDirect(
           }
           return true;
         },
+        onRemoved: async () => {
+          await rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation);
+        },
       });
+      contextEnginePreparation = undefined;
       swarmReservationPending = false;
       collectorSessionKey = childSessionKey;
     } else {
@@ -689,6 +696,11 @@ export async function spawnSubagentDirect(
     admissionReservation?.release();
     if (swarmReservationPending) {
       removeQueuedSwarmRun(childRunId);
+    }
+    if (params.collect && contextEnginePreparation) {
+      await rollbackPreparedContextEngine(contextEnginePreparation);
+    } else {
+      await contextEnginePreparation?.dispose();
     }
   }
 }

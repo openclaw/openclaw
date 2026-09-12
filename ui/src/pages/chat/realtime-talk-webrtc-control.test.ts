@@ -9,6 +9,8 @@ import {
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
+let stopInputTrack: ReturnType<typeof vi.fn>;
+
 class FakeDataChannel extends EventTarget {
   readyState: RTCDataChannelState = "open";
   send = vi.fn();
@@ -129,8 +131,9 @@ function sentRealtimeEvents(peer: FakePeerConnection | undefined): Array<Record<
 describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   beforeEach(() => {
     FakePeerConnection.instances = [];
+    stopInputTrack = vi.fn();
     const track = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
+      stop: stopInputTrack,
     }) as unknown as MediaStreamTrack;
     const stream = {
       getAudioTracks: () => [track],
@@ -469,6 +472,78 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     expect(onTalkEvent).not.toHaveBeenCalled();
     expect(FakePeerConnection.instances[0]?.connectionState).toBe("closed");
   });
+
+  it.each([
+    ["close_requested", "idle"],
+    ["expired", "idle"],
+    ["remote_hangup", "idle"],
+    ["content", "error"],
+    ["connection_lost", "error"],
+  ])(
+    "displays GPT-Live transcript fragments and releases media on %s finalization",
+    async (reason, outcome) => {
+      const onTranscript = vi.fn();
+      const onTalkEvent = vi.fn();
+      const onStatus = vi.fn();
+      const transport = await createOpenAiTransport({}, { onTranscript, onTalkEvent, onStatus });
+      await transport.start();
+      const peer = FakePeerConnection.instances[0]!;
+      const dispatch = (event: unknown) =>
+        peer.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
+
+      dispatch({
+        type: "session.input_transcript.delta",
+        delta: "Check the weather",
+        start_ms: 0,
+        end_ms: 900,
+      });
+      dispatch({
+        type: "session.output_transcript.delta",
+        delta: "I'll check",
+        start_ms: 700,
+        end_ms: 1100,
+      });
+
+      expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
+        { role: "user", text: "Check the weather", final: false, textMode: "verbatim" },
+        { role: "assistant", text: "I'll check", final: false, textMode: "verbatim" },
+      ]);
+      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+        "transcript.delta",
+        "output.text.delta",
+      ]);
+      expect(peer.connectionState).not.toBe("closed");
+
+      dispatch({
+        type: "session.delegation.created",
+        delegation: { id: "item_weather", type: "delegation", target: "client" },
+        offset_ms: 900,
+      });
+      dispatch({
+        type: "session.closed",
+        reason,
+        session: { id: "live_test", status: "active" },
+        usage: { seconds: 2 },
+      });
+      dispatch({ type: "session.input_transcript.delta", delta: "stale" });
+
+      expect(peer.connectionState).toBe("closed");
+      expect(peer.channel.close).toHaveBeenCalledOnce();
+      expect(stopInputTrack).toHaveBeenCalledOnce();
+      if (outcome === "error") {
+        expect(onStatus).toHaveBeenLastCalledWith("error", "Realtime connection closed");
+      } else {
+        expect(onStatus).toHaveBeenLastCalledWith("idle");
+      }
+      expect(onTranscript).toHaveBeenCalledTimes(2);
+      expect(onTranscript.mock.calls.some(([entry]) => entry.final)).toBe(false);
+      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+        "transcript.delta",
+        "output.text.delta",
+        "session.closed",
+      ]);
+    },
+  );
 
   it("stops an assistant turn event when its transcript callback closes the transport", async () => {
     const onStatus = vi.fn();

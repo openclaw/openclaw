@@ -42,7 +42,11 @@ export class DesktopMobileKeyboard {
 
   constructor(private readonly options: MobileKeyboardOptions) {}
 
-  focus(): void {
+  focus(event?: MouseEvent): void {
+    const connection = this.currentConnection();
+    if (event && connection) {
+      this.reconcileModifiers(event, connection);
+    }
     const input = this.options.input();
     input?.focus({ preventScroll: true });
     input?.setSelectionRange(input.value.length, input.value.length);
@@ -63,6 +67,9 @@ export class DesktopMobileKeyboard {
     const connection = this.currentConnection();
     if (!connection) {
       return;
+    }
+    if (event.type === "keydown") {
+      this.reconcileModifiers(event, connection);
     }
     // The textarea owns local paste; forwarding its shortcut suppresses browser input.
     if (
@@ -128,6 +135,26 @@ export class DesktopMobileKeyboard {
       return;
     }
     this.value = nextValue;
+  }
+
+  private reconcileModifiers(
+    event: MouseEvent | KeyboardEvent,
+    connection: DesktopConnectionHandle,
+  ): void {
+    // Native popups can consume keyups. Only physical snapshots may retire those
+    // modifiers; synthetic forwarding and paste events do not describe held keys.
+    if (!event.isTrusted) {
+      return;
+    }
+    for (const [code, modifier] of this.modifiers) {
+      if (!event.getModifierState(modifier.key)) {
+        this.modifiers.delete(code);
+        connection.sendKeyboardEvent(new KeyboardEvent("keyup", modifier));
+      }
+    }
+    if (this.modifiers.size === 0) {
+      this.clearModifiers();
+    }
   }
 
   private currentConnection(): DesktopConnectionHandle | null {

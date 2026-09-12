@@ -4,11 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabase());
@@ -100,15 +102,16 @@ it.each([
     };
     const entry = path.join(scratch, "native-entry.mjs");
     const loader = path.resolve("scripts/tsx.mjs");
-    const owner = new URL("../daemon-cli/update-executor.ts", import.meta.url).href;
-    const exec = new URL("../../daemon/exec-file.ts", import.meta.url).href;
+    // Both receiver imports share the same graph and service-authority scope.
+    const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor);
+    const exec = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href;
     fs.writeFileSync(
       entry,
       `
-      await import(${JSON.stringify(loader)});
+      ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(loader)});` : ""}
       const fs=await import("node:fs");
       const {DatabaseSync}=await import("node:sqlite");
-      const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(owner)});
+      const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(owner.href)});
       const {execFileUtf8}=await import(${JSON.stringify(exec)});
       const mode=process.argv[process.argv.indexOf("--update-executor")+1];
       await runGatewayServiceUpdateCommand(mode,"restart",async()=>{

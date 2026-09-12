@@ -323,6 +323,10 @@ function mergeCronRuntimeChanges(
       Reflect.deleteProperty(merged, key);
     }
   }
+  if (previous.runningAtMs !== next.runningAtMs) {
+    merged.runningReceiptId =
+      next.runningAtMs === current.runningAtMs ? current.runningReceiptId : next.runningReceiptId;
+  }
   return merged;
 }
 

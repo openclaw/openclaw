@@ -276,7 +276,7 @@ describe("codex plugin", () => {
     expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
-    expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.6-sol" });
+    expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-6-astra" });
     expect(typeof mediaProviderRegistration?.describeImage).toBe("function");
     expect(typeof mediaProviderRegistration?.describeImages).toBe("function");
     const webSearchRegistration = mockCallArg(registerWebSearchProvider) as

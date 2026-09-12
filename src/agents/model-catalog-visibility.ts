@@ -14,7 +14,7 @@ import {
   type ModelCatalogRoutePolicy,
   type ModelCatalogRouteProjection,
   projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
+  createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
@@ -158,10 +158,14 @@ export async function prepareLogicalVisibleModelCatalog(
     }
   }
   const catalogKeys = new Set(params.catalog.map(keyOf));
+  const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
+    cfg: params.cfg,
+    policy: params.routePolicy,
+  });
   const projections = new Map<
     ModelCatalogEntry,
     {
-      overrides: ReturnType<typeof resolveConfiguredModelCatalogOverrides>;
+      overrides: ReturnType<typeof resolveOverrides>;
       rows: Map<
         | ModelCatalogRouteProjection["kind"]
         | Extract<ModelCatalogRouteProjection, { kind: "selected" }>["route"],
@@ -185,11 +189,7 @@ export async function prepareLogicalVisibleModelCatalog(
         let cached = projections.get(entry);
         if (!cached) {
           cached = {
-            overrides: resolveConfiguredModelCatalogOverrides({
-              cfg: params.cfg,
-              entry,
-              policy: params.routePolicy,
-            }),
+            overrides: resolveOverrides(entry),
             rows: new Map(),
           };
           projections.set(entry, cached);

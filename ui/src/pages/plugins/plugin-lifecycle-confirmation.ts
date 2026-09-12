@@ -1,11 +1,12 @@
-// Plugin code mutations restart the Gateway, so their UI entry points share one
-// confirmation contract before either lifecycle request can be dispatched.
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import type { PluginInstallRequest } from "../../lib/plugins/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { pluginInstallRequestName, type PluginInstallRequest } from "../../lib/plugins/index.ts";
+
+registerPluginManagementEnglish();
 
 export function confirmPluginInstall(request: PluginInstallRequest): Promise<boolean> {
-  const name = request.source === "official" ? request.pluginId : request.packageName;
+  const name = pluginInstallRequestName(request);
   return showConfirmDialog({
     title: t("pluginsPage.installConfirmTitle", { name }),
     message: t("pluginsPage.installConfirmMessage"),

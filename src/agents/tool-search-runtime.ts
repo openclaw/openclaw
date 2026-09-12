@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import {
   finalizeToolTerminalPresentation,
@@ -409,19 +410,25 @@ export class ToolSearchRuntime {
       };
       catalogIndexes.set(indexKey, cachedIndex);
     }
-    const ranked = scoreLexical(cachedIndex.index, tokenizeQuery(query))
-      .toSorted(
-        (a, b) =>
-          Number(isExact(b.value)) - Number(isExact(a.value)) ||
-          Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
-          b.score - a.score ||
-          a.value.id.localeCompare(b.value.id),
-      )
-      .map((hit) => hit.value);
+    const hits = scoreLexical(cachedIndex.index, tokenizeQuery(query));
+    const exactMatchSet = new Set(exactMatches);
     // A tool whose name is a stopword ("do") tokenizes to nothing and so never
     // reaches the ranking at all. Naming it exactly is still an unambiguous
     // request for it, which the previous scorer honored.
-    const exactEntries = exactMatches.filter((entry) => !ranked.includes(entry));
+    const exactEntries = exactMatches.filter((entry) => !hits.some((hit) => hit.value === entry));
+    const remaining = limit - exactEntries.length;
+    const ranked =
+      remaining > 0
+        ? sortAndLimitBy(
+            hits,
+            remaining,
+            (a, b) =>
+              Number(exactMatchSet.has(b.value)) - Number(exactMatchSet.has(a.value)) ||
+              Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
+              b.score - a.score ||
+              a.value.id.localeCompare(b.value.id),
+          ).map((hit) => hit.value)
+        : [];
     return [...exactEntries, ...ranked]
       .slice(0, limit)
       .map((entry) => compactToolSearchCatalogEntry(entry));

@@ -1,13 +1,11 @@
 ---
 title: "Release notes"
-summary: "Curated OpenClaw release notes for people who want the product story, not the changelog."
+summary: "OpenClaw release notes, complete Markdown changelogs, and contribution records."
 description: "Browse polished OpenClaw release notes with highlights, reader-facing context, source links, and contributor credits."
 ---
 
-These pages are the reader-facing release notes for OpenClaw. Each one is
-curated from the changelog and keeps the main story, practical impact, source
-links, and contributor credit together, so you do not have to scan the
-changelog first.
+These pages explain what changed in OpenClaw, how it affects your work, and
+who contributed, with links to the source changes.
 
 ## Releases
 
@@ -26,8 +24,12 @@ v2026.8.1.
 
 ## Changelog
 
-Use these release notes when you want the product story. Use the changelog when
-you need compact maintainer accounting:
+The changelog index links to a complete Markdown file for each release, with
+Raw links for files too large for GitHub's preview. Releases synchronized with
+these docs contain the same notes in flat Markdown. Earlier releases retain
+their original changelogs. Complete contribution records remain available
+separately where recorded.
 
 - [GitHub releases](https://github.com/openclaw/openclaw/releases)
-- [CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
+- [Changelog index](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
+- [Contribution records](https://github.com/openclaw/openclaw/tree/main/CHANGELOG/records)

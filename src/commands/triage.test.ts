@@ -150,9 +150,11 @@ describe("triageCommand", () => {
       expect(mocks.agentExecCommand).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
       const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("Ready-to-run agent handoffs:");
-      expect(output).toContain("claude -p");
-      expect(output).toContain("openclaw triage");
+      expect(output).toContain("No repair agent was started.");
+      expect(output).toContain(run ? "openclaw triage --run" : "claude -p");
+      expect(runtime.log.mock.calls.filter(([line]) => String(line).startsWith("  "))).toHaveLength(
+        1,
+      );
       const artifacts = await fs.readdir(path.join(stateDir, "logs/support"));
       const promptFile = artifacts.find((file) => file.endsWith(".md"));
       expect(await fs.readFile(path.join(stateDir, "logs/support", promptFile!), "utf8")).toContain(
@@ -182,7 +184,7 @@ describe("triageCommand", () => {
     expect(mocks.confirm).toHaveBeenCalledOnce();
     expect(mocks.spawn).not.toHaveBeenCalled();
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith("Ready-to-run agent handoffs:");
+    expect(log).toHaveBeenCalledWith("No repair agent was started.");
   });
 
   it.each([
@@ -390,8 +392,8 @@ describe("triageCommand", () => {
       expect(output).toContain(
         configured ? "Authentication required" : "No configured embedded agent",
       );
-      expect(output).toContain("openclaw triage --run");
-      expect(output).toContain("codex exec --skip-git-repo-check - <");
+      expect(output).toContain(configured ? "openclaw triage --run" : "openclaw triage");
+      expect(output).not.toContain("codex exec --skip-git-repo-check - <");
       const promptFile = (await fs.readdir(path.join(stateDir, "logs/support"))).find((file) =>
         file.endsWith(".md"),
       );
@@ -969,17 +971,13 @@ describe("triageCommand", () => {
       const commands = runtime.log.mock.calls
         .map(([line]) => String(line))
         .filter((line) => line.startsWith("  "));
-      expect(commands).toHaveLength(5);
-      for (const command of commands) {
-        expect(command).not.toMatch(/^ {2}env /u);
-        expect(command).toContain(`'${configPath.replaceAll("'", "''")}'`);
-      }
-      expect(commands[0]).toContain("| & claude -p");
-      expect(commands[1]).toContain("| & codex exec --skip-git-repo-check -");
-      expect(commands[1]).toContain("Get-Content -Raw -Encoding UTF8 -LiteralPath ");
-      expect(commands[2]).toContain("| & opencode run");
-      expect(commands[3]).toContain("| & pi --print");
-      expect(commands[4]).toContain("& openclaw triage --run");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).not.toMatch(/^ {2}env /u);
+      expect(commands[0]).toContain(`'${configPath.replaceAll("'", "''")}'`);
+      expect(commands[0]).toContain(
+        agent === "claude" ? "| & claude -p" : "| & codex exec --skip-git-repo-check -",
+      );
+      expect(commands[0]).toContain("Get-Content -Raw -Encoding UTF8 -LiteralPath ");
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
   );

@@ -69,7 +69,6 @@ const SETTINGS_ROUTE_PATHS = [
   { routeId: "sessions", path: "/sessions", alias: "/settings/sessions" },
   { routeId: "devices", path: "/settings/devices", alias: "/nodes" },
   { routeId: "cron", path: "/automations", alias: "/cron" },
-  { routeId: "agents", path: "/settings/agents", alias: "/agents" },
   {
     routeId: "memory-import",
     path: "/memory-import",
@@ -109,6 +108,7 @@ describe("navigationIconForRoute", () => {
       usage: "coins",
       cron: "calendarClock",
       tasks: "listChecks",
+      "agents-home": "bot",
       agents: "bot",
       skills: "zap",
       "skill-settings": "zap",
@@ -214,6 +214,7 @@ describe("titleForRoute", () => {
       usage: "Usage",
       cron: "Automations",
       tasks: "Tasks",
+      "agents-home": "Agents",
       agents: "Agents",
       skills: "Skills",
       "skill-settings": "Skills",
@@ -269,6 +270,7 @@ describe("subtitleForRoute", () => {
       usage: "API usage and costs.",
       cron: "Scheduled tasks and recurring agent runs.",
       tasks: "Background tasks: subagents, automation runs, CLI.",
+      "agents-home": "Who is on your team and what they are doing",
       agents: "Workspaces, tools, identities.",
       skills: "Manage your agent skills",
       "skill-settings": "Manage your agent skills",
@@ -308,6 +310,8 @@ describe("subtitleForRoute", () => {
 describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
+    expect(pathForRoute("agents-home")).toBe("/agents");
+    expect(pathForRoute("agents")).toBe("/settings/agents");
     expect(pathForRoute("apps")).toBe("/apps");
     expect(pathForRoute("dashboards")).toBe("/dashboards");
     expect(pathForRoute("custodian")).toBe("/custodian");
@@ -342,6 +346,8 @@ describe("route path normalization", () => {
 describe("routeIdFromPath", () => {
   it("returns tab for valid path", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
+    expect(routeIdFromPath("/agents")).toBe("agents-home");
+    expect(routeIdFromPath("/settings/agents")).toBe("agents");
     expect(routeIdFromPath("/custodian")).toBe("custodian");
     expect(routeIdFromPath("/new")).toBe("new-session");
     expect(routeIdFromPath("/overview")).toBeNull();
@@ -603,6 +609,7 @@ describe("plugin tabs route", () => {
 describe("SIDEBAR_NAV_ROUTES", () => {
   it("keeps the canonical sidebar route order", () => {
     expect(SIDEBAR_NAV_ROUTES).toEqual([
+      "agents-home",
       "dashboards",
       "usage",
       "cron",

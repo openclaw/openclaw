@@ -5,9 +5,14 @@ import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { t } from "../../i18n/index.ts";
+import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { pluginInstallRequestName } from "../../lib/plugins/index.ts";
 import type { PluginInstallWizardStage, PluginInstallWizardState } from "./install-wizard-model.ts";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts";
+
+registerPluginConsentEnglish();
 
 type PluginInstallWizardProps = {
   state: PluginInstallWizardState;
@@ -53,7 +58,6 @@ function renderProgress(stage: PluginInstallWizardStage): TemplateResult {
   const steps = [
     ["review", t("pluginsPage.installWizard.reviewStep")],
     ["installing", t("pluginsPage.installWizard.installStep")],
-    ["reconnecting", t("pluginsPage.installWizard.restartStep")],
     ["configuring", t("pluginsPage.installWizard.configureStep")],
     ["enabling", t("pluginsPage.installWizard.enableStep")],
   ] as const;
@@ -75,9 +79,13 @@ function renderProgress(stage: PluginInstallWizardStage): TemplateResult {
 
 function requestSource(state: PluginInstallWizardState): string {
   const request = state.request;
-  return request.source === "clawhub"
-    ? `ClawHub · ${request.packageName}`
-    : `${t("pluginsPage.official")} · ${request.pluginId}`;
+  const source =
+    request.source === "clawhub"
+      ? "ClawHub"
+      : request.source === "official"
+        ? t("pluginsPage.official")
+        : request.source;
+  return `${source} · ${pluginInstallRequestName(request)}`;
 }
 
 function renderReview(state: PluginInstallWizardState): TemplateResult {
@@ -116,8 +124,8 @@ function renderReview(state: PluginInstallWizardState): TemplateResult {
           </dd>
         </div>
         <div>
-          <dt>${t("pluginsPage.installWizard.restartImpact")}</dt>
-          <dd>${t("pluginsPage.installWizard.restartDescription")}</dd>
+          <dt>${t("pluginsPage.installWizard.runtimeImpact")}</dt>
+          <dd>${t("pluginsPage.installWizard.runtimeDescription")}</dd>
         </div>
       </dl>
       ${plugin.catalog.summary ? html`<p>${plugin.catalog.summary}</p>` : nothing}
@@ -164,19 +172,36 @@ function renderConfiguration(props: PluginInstallWizardProps): TemplateResult {
   `;
 }
 
+function renderPolicyWarning(state: PluginInstallWizardState): TemplateResult {
+  return html`<div
+    class="plugin-install-wizard__alert plugin-install-wizard__alert--warning"
+    role="alert"
+  >
+    <strong>${t("pluginsPage.installWizard.policyWarningTitle")}</strong>
+    <p>${t("pluginConsent.installPolicy.policyScope")}</p>
+    <p>${formatUiExternalText(state.policyWarning?.reason ?? "")}</p>
+    ${state.policyWarning?.findings?.map(
+      (finding) => html`<div class="plugins-policy-review__finding">
+        <strong>${t(`pluginConsent.installPolicy.severity.${finding.severity}`)}</strong>
+        <p>${formatUiExternalText(finding.message)}</p>
+        <details>
+          <summary>${t("pluginConsent.installPolicy.technicalDetails")}</summary>
+          <code>${finding.ruleId}</code>
+          ${finding.file ? html`<code>${finding.file}${finding.line ? `:${finding.line}` : ""}</code>` : nothing}
+          ${finding.evidence ? html`<p>${formatUiExternalText(finding.evidence)}</p>` : nothing}
+        </details>
+      </div>`,
+    )}
+  </div>`;
+}
+
 function renderStage(props: PluginInstallWizardProps): TemplateResult {
   const stage = props.state.stage;
   if (stage === "review") {
     return renderReview(props.state);
   }
   if (stage === "policy-warning") {
-    return html`<div
-      class="plugin-install-wizard__alert plugin-install-wizard__alert--warning"
-      role="alert"
-    >
-      <strong>${t("pluginsPage.installWizard.policyWarningTitle")}</strong>
-      <p>${props.state.policyReason}</p>
-    </div>`;
+    return renderPolicyWarning(props.state);
   }
   if (stage === "configuring") {
     return renderConfiguration(props);
@@ -207,9 +232,10 @@ function renderStage(props: PluginInstallWizardProps): TemplateResult {
         ? t("pluginsPage.installWizard.reconnectingBody")
         : t("pluginsPage.installWizard.enablingBody");
   return html`<div class="plugin-install-wizard__working" role="status">
-    <span class="plugin-install-wizard__spinner" aria-hidden="true"></span>
-    <p>${message}</p>
-  </div>`;
+      <span class="plugin-install-wizard__spinner" aria-hidden="true"></span>
+      <p>${message}</p>
+    </div>
+    ${stage === "installing" && props.state.policyWarning ? renderPolicyWarning(props.state) : nothing}`;
 }
 
 function renderPrimaryAction(props: PluginInstallWizardProps): TemplateResult | typeof nothing {
@@ -225,13 +251,21 @@ function renderPrimaryAction(props: PluginInstallWizardProps): TemplateResult | 
     </button>`;
   }
   if (stage === "error") {
-    return html`<button
+    const saved = props.state.savedInstall;
+    const button = html`<button
       type="button"
       class="btn primary oc-action oc-action-primary"
-      @click=${props.onRetry}
+      ?disabled=${saved && !props.mutationBlockedReason && blocked}
+      aria-disabled=${saved && !props.canMutate ? "true" : nothing}
+      @click=${() => {
+        if (!saved || !blocked) {
+          props.onRetry();
+        }
+      }}
     >
-      ${t("pluginsPage.tryAgain")}
+      ${saved ? t("pluginsPage.reload") : t("pluginsPage.tryAgain")}
     </button>`;
+    return saved ? renderReasonedDisabledControl(props.mutationBlockedReason, button) : button;
   }
   if (stage === "policy-warning") {
     return html`<button
@@ -318,7 +352,9 @@ export function renderPluginInstallWizard(props: PluginInstallWizardProps): Temp
       <div class="plugin-install-wizard__body">${renderStage(props)}</div>
       <footer class="plugin-install-wizard__actions">
         ${
-          props.state.stage === "review" || props.state.stage === "configuring"
+          props.state.stage === "review" ||
+          props.state.stage === "configuring" ||
+          props.state.stage === "policy-warning"
             ? html`<button
                 type="button"
                 class="btn oc-action oc-action-secondary"

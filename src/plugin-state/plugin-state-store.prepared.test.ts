@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -10,11 +10,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
 import { lookupPluginStateEntry, registerPluginStateEntry } from "./plugin-state-store.kernel.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
@@ -120,7 +120,7 @@ describe("plugin state prepared queries", () => {
   });
 
   it.each(["register", "registerIfAbsent"] as const)(
-    "reuses %s compilation with fresh write bindings after reopening",
+    "reuses %s write and quota compilation with fresh bindings after reopening",
     (operation) => {
       const options = { namespace: "prepared-writes", maxEntries: 20 };
       const stores = [
@@ -166,6 +166,14 @@ describe("plugin state prepared queries", () => {
               (result) => result.type === "return" && result.value.sql.startsWith("insert"),
             );
             expect(writes).toHaveLength(1);
+            const counts = compile.mock.results.filter(
+              (result) =>
+                result.type === "return" &&
+                result.value.sql.startsWith(
+                  'select count(*) as "count" from "plugin_state_entries"',
+                ),
+            );
+            expect(counts).toHaveLength(2);
           } finally {
             compile.mockRestore();
           }

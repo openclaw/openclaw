@@ -6,6 +6,7 @@ import type {
   PluginInstallRequest,
   PluginListResult,
 } from "../../lib/plugins/index.ts";
+import type { PluginInstallPolicyWarningDetails } from "./install-policy-warning.ts";
 import { pluginEntryValue } from "./settings-model.ts";
 
 export type PluginConfigurationDraft = {
@@ -32,7 +33,8 @@ export type PluginInstallWizardState = {
   pluginId?: string;
   configDraft?: PluginConfigurationDraft;
   error?: string;
-  policyReason?: string;
+  policyWarning?: PluginInstallPolicyWarningDetails;
+  savedInstall?: boolean;
 };
 
 function pluginConfigurationValue(

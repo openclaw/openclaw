@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
@@ -36,6 +37,7 @@ export function recordContextEngineRegistrationSource(
 }
 
 export class ContextEngineFactoryResources {
+  private cleanupInvocations?: ReturnType<PluginInvocationScope["beginCleanup"]>;
   readonly work = new AsyncWorkScope();
   readonly context = this.work.run(() => AsyncLocalStorage.snapshot());
   readonly cleanupWork = new AsyncWorkScope();
@@ -61,11 +63,20 @@ export class ContextEngineFactoryResources {
   }
 
   runCleanup<T>(operation: () => T): T {
+    this.beginCleanup();
     try {
-      return this.cleanupWork.run(() => this.cleanupContext(() => this.invoke(operation)));
+      return this.cleanupWork.run(() =>
+        this.cleanupContext(() =>
+          this.cleanupInvocations ? this.cleanupInvocations.scope.run(operation) : operation(),
+        ),
+      );
     } finally {
       this.context(() => this.work.beginClose());
     }
+  }
+
+  beginCleanup(): void {
+    this.cleanupInvocations ??= this.invocations?.beginCleanup();
   }
 
   private invoke<T>(operation: () => T): T {
@@ -80,6 +91,11 @@ export class ContextEngineFactoryResources {
     this.parentSignal?.removeEventListener("abort", this.abort);
     this.invocations?.release();
     let failure: { error: unknown } | undefined;
+    try {
+      await this.cleanupInvocations?.release();
+    } catch (error) {
+      failure = { error };
+    }
     // An uncovered donor stays held while primary cleanup finishes, even if that cleanup fails.
     for (const claim of this.claims) {
       try {
@@ -115,7 +131,12 @@ function retainContextEngineFactorySource(
     }
     const invocations = primary
       ? primary.createInvocationScope(registry)
-      : new PluginInvocationScope(registry, instances);
+      : new PluginInvocationScope(registry, instances, {
+          // A managed factory owns a logical consumer even on a caller-owned root view.
+          retained:
+            registration !== undefined &&
+            getPluginValueInstance(registration.factory) !== undefined,
+        });
     return new ContextEngineFactoryResources(claims, invocations);
   } catch (error) {
     if (claims.length > 0) {
@@ -134,6 +155,9 @@ export async function disposeContextEngineSources(
   if (sources.length === 0) {
     await dispose();
     return;
+  }
+  for (const source of sources) {
+    source.beginCleanup();
   }
   // Start instance cleanup before retiring the factory lifetime that it may need to stop.
   const cleanup = sources[0]!.cleanupWork.track(() => sources[0]!.runCleanup(dispose));

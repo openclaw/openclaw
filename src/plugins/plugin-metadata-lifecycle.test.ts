@@ -135,6 +135,59 @@ it("keeps bootstrap facts usable when no replacement metadata snapshot is publis
   expect(getPluginCache()).not.toBe(cache);
 });
 
+it.each([true, false])(
+  "observes deferred turn cleanup and joins it on shutdown (borrowed: %s)",
+  async (borrowed) => {
+    const cache = getPluginCache();
+    const release = borrowed ? retainPluginCache(cache) : () => {};
+    const owner = retainGatewayPluginMetadata();
+    owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
+    const next = withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture());
+    const failure = {
+      pluginId: "turn-owner",
+      hookId: "instance",
+      error: new Error("cleanup failed"),
+    };
+    const completed = { cleanupCount: 1, failures: [failure] };
+    const cleanup = createDeferredCore<typeof completed>();
+    owner.publish(next, new Set(["turn-owner"]), (options?: { deferConsumers?: true }) =>
+      options?.deferConsumers
+        ? Promise.resolve({ cleanupCount: 0, failures: [], deferredPluginIds: ["turn-owner"] })
+        : cleanup.promise,
+    );
+    let published = false;
+    const publication = owner.waitForRetirement().then((result) => {
+      published = true;
+      return result;
+    });
+    try {
+      await expect.poll(() => published).toBe(true);
+      expect(await publication).toEqual({
+        cleanupCount: 0,
+        failures: [],
+        deferredPluginIds: ["turn-owner"],
+      });
+      expect(cache.retirement).toBeUndefined();
+      owner.beginClose();
+      let joined = false;
+      const shutdown = owner.waitForRetirement().then((result) => {
+        joined = true;
+        return result;
+      });
+      await Promise.resolve();
+      expect(joined).toBe(false);
+      release();
+      cleanup.resolve(completed);
+      expect(await shutdown).toEqual(completed);
+    } finally {
+      release();
+      cleanup.resolve(completed);
+      await publication;
+      await owner.close();
+    }
+  },
+);
+
 it("fences admission before retirement while an admitted sibling stays usable", async () => {
   const cache = getPluginCache();
   const first = retainGatewayPluginMetadata();

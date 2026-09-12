@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import {
   ensureRepositoryWorkspacePendingResultSchema,
   hasRepositoryWorkspacePendingResultSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,

@@ -171,6 +171,8 @@ export function createPreparedPluginGeneration(params: {
 }
 
 export async function buildPreparedPluginModelCatalog(params: {
+  includeNative?: boolean;
+  providerIds?: readonly string[];
   agentFacts: {
     credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
     input: PreparedModelRuntimeInput;
@@ -191,11 +193,12 @@ export async function buildPreparedPluginModelCatalog(params: {
       metadataSnapshot,
       providerOutcomes: params.providerOutcomes,
       includeProviderPluginAugmentation: params.catalogMode === "live",
+      providerIds: params.providerIds,
       ...(input.env ? { env: input.env } : {}),
       ...(input.readOnly ? { readOnly: true } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
-    return params.catalogMode === "live"
+    return params.catalogMode === "live" && params.includeNative !== false
       ? await augmentPreparedModelCatalogWithAgentHarness({
           input,
           snapshot,

@@ -195,43 +195,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
   });
 
-  it("publishes settlement when deferred bash persistence fails", async () => {
-    let finishResponse: (() => void) | undefined;
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
-      const stream = createAssistantMessageEventStream();
-      finishResponse = () => {
-        const message = createAssistant(activeModel, [{ type: "text", text: "finished" }]);
-        stream.push({ type: "done", reason: "stop", message });
-        stream.end();
-      };
-      return stream;
-    });
-    const { session, sessionManager } = await createTestSession();
-    const settled = vi.fn();
-    session.subscribe((event) => {
-      if (event.type === "agent_end") {
-        vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
-          throw new Error("deferred bash persistence failed");
-        });
-      } else if (event.type === "agent_settled") {
-        settled();
-      }
-    });
-
-    const prompt = session.prompt("run until the response is released");
-    await vi.waitFor(() => expect(finishResponse).toBeTypeOf("function"));
-    session.recordBashResult("printf done", {
-      output: "done",
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
-    });
-    finishResponse?.();
-
-    await expect(prompt).rejects.toThrow("deferred bash persistence failed");
-    expect(settled).toHaveBeenCalledOnce();
-  });
-
   it("does not settle an active run when a concurrent prompt loses admission", async () => {
     let releaseFirst!: () => void;
     let releaseSecond!: () => void;
@@ -920,7 +883,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const abortRetry = vi.spyOn(session, "abortRetry");
     const abortCompaction = vi.spyOn(session, "abortCompaction");
     const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
-    const abortBash = vi.spyOn(session, "abortBash");
     const abortAgent = vi.spyOn(session.agent, "abort");
     abortRetry.mockImplementationOnce(() => {
       throw new Error("retry abort failed");
@@ -935,7 +897,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(abortRetry).toHaveBeenCalledOnce();
     expect(abortCompaction).toHaveBeenCalledOnce();
     expect(abortBranchSummary).toHaveBeenCalledOnce();
-    expect(abortBash).toHaveBeenCalledOnce();
     expect(abortAgent).toHaveBeenCalledOnce();
   });
 

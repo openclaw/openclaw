@@ -11,6 +11,8 @@ type DesktopSecurityFailureDetail = {
   status?: number;
 };
 
+export type DesktopSizingMode = "fit" | "actual" | "match";
+
 type DesktopConnectOptions = {
   background?: string;
   credentials?: { username?: string; password?: string };
@@ -19,7 +21,8 @@ type DesktopConnectOptions = {
   onConnect?: () => void;
   onDisconnect?: (detail: DesktopDisconnectDetail) => void;
   onSecurityFailure?: (detail: DesktopSecurityFailureDetail) => void;
-  scaleViewport?: boolean;
+  canResize?: boolean;
+  sizingMode?: DesktopSizingMode;
   target: HTMLElement;
   viewOnly: boolean;
   wsUrl: string;
@@ -31,7 +34,7 @@ export type DesktopConnectionHandle = {
   sendBackspace(): void;
   sendKeyboardEvent(event: KeyboardEvent): void;
   sendText(text: string): void;
-  setScaleViewport(enabled: boolean): void;
+  setSizingMode(mode: DesktopSizingMode): void;
 };
 
 type RfbClient = EventTarget & {
@@ -39,6 +42,7 @@ type RfbClient = EventTarget & {
   disconnect(): void;
   sendKey(keysym: number, code: string | null, down?: boolean): void;
   scaleViewport: boolean;
+  resizeSession: boolean;
   viewOnly: boolean;
 };
 
@@ -85,17 +89,45 @@ export class DesktopClient {
     );
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
-    rfb.scaleViewport = options.scaleViewport ?? true;
+    rfb.resizeSession = false;
     let retired = false;
-    rfb.addEventListener("connect", () => options.onConnect?.());
+    let connected = false;
+    let sizingMode = options.sizingMode ?? "fit";
+    const disableInput = () => {
+      rfb.resizeSession = false;
+      rfb.viewOnly = true;
+    };
+    const applySizing = () => {
+      // Provider permission is not negotiated RFB support. noVNC owns negotiation
+      // and resize scheduling, but only the current authenticated controller may opt in.
+      rfb.resizeSession = false;
+      if (retired || !options.isCurrent()) {
+        return;
+      }
+      rfb.scaleViewport = sizingMode !== "actual";
+      rfb.resizeSession =
+        connected && !rfb.viewOnly && options.canResize === true && sizingMode === "match";
+    };
+    applySizing();
+    rfb.addEventListener("connect", () => {
+      if (retired || !options.isCurrent()) {
+        disableInput();
+        return;
+      }
+      connected = true;
+      options.onConnect?.();
+      applySizing();
+    });
     rfb.addEventListener("disconnect", (event) => {
       // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
       retired = true;
+      disableInput();
       // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
       const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
       options.onDisconnect?.({ ...closeDetail, clean });
     });
     rfb.addEventListener("securityfailure", (event) => {
+      disableInput();
       const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
       options.onSecurityFailure?.(detail);
     });
@@ -123,14 +155,14 @@ export class DesktopClient {
       disconnect: () => {
         if (!retired) {
           retired = true;
+          disableInput();
           rfb.disconnect();
         }
       },
-      disableInput: () => {
-        rfb.viewOnly = true;
-      },
-      setScaleViewport: (enabled) => {
-        rfb.scaleViewport = enabled;
+      disableInput,
+      setSizingMode: (mode) => {
+        sizingMode = mode;
+        applySizing();
       },
       sendKeyboardEvent: (event) => dispatchKeyboardEvent(cloneKeyboardEvent(event)),
       sendText: (text) => {

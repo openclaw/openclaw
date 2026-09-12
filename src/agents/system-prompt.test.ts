@@ -1294,7 +1294,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+      "Config read: `gateway` (`config.get|config.schema.lookup`) only when those actions are exposed by its schema. Write/restart unavailable; ask human.",
     );
     expect(prompt).not.toContain("config.patch");
     expect(prompt).not.toContain("config.apply");
@@ -1351,27 +1351,6 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).not.toContain("update.run");
     },
   );
-
-  it.each([true, false])("offers an update button only with message presentation (%s)", (rich) => {
-    const plain = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: ["message"] });
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["message"],
-      messageTool: {
-        name: "message",
-        parameters: { type: "object", properties: rich ? { presentation: {} } : {} },
-      },
-    });
-    expect(prompt.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0]).toBe(
-      plain.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0],
-    );
-    expect(prompt.includes('Offer an "Update now" button')).toBe(rich);
-    if (rich) {
-      expect(prompt).toContain('action {type:"command",command:"/update"}');
-      expect(prompt).toContain("reusable:true");
-      expect(prompt).toContain("clicking user's current owner permissions");
-    }
-  });
 
   it("keeps update and delegated controls distinct when both tools are present", () => {
     const prompt = buildAgentSystemPrompt({

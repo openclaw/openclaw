@@ -402,9 +402,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let inlineModelSelectionTarget = app.buttons["chat-composer-model-selection-target"]
         XCTAssertTrue(inlineModelSelectionTarget.waitForExistence(timeout: 3))
         XCTAssertEqual(inlineModelSelectionTarget.label, "Changes the global default")
-        let inlineSelectedModel = app.buttons["openai/gpt-5.6-sol"]
+        let inlineSelectedModel = app.buttons["openai/gpt-6-astra"]
         XCTAssertTrue(inlineSelectedModel.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Default: openai/gpt-5.6-sol"].exists)
+        XCTAssertTrue(app.buttons["Default: openai/gpt-6-astra"].exists)
         let inlineNonDefaultModel = app.buttons["anthropic/claude-opus-4-1"]
         XCTAssertTrue(inlineNonDefaultModel.waitForExistence(timeout: 3))
         self.attachScreenshot(named: "chat-composer-model")
@@ -418,11 +418,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(updatedInlineModelSelectionTarget.label, "Changes the global default")
         let selectedInlineModel = app.buttons["anthropic/claude-opus-4-1"]
         XCTAssertTrue(selectedInlineModel.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["openai/gpt-5.6-sol"].exists)
-        app.buttons["openai/gpt-5.6-sol"].tap()
+        XCTAssertTrue(app.buttons["openai/gpt-6-astra"].exists)
+        app.buttons["openai/gpt-6-astra"].tap()
         let restoredInlineModel = app.buttons["chat-composer-inline-model"]
         XCTAssertTrue(restoredInlineModel.waitForExistence(timeout: 3))
-        self.waitForValue("gpt-5.6-sol", of: restoredInlineModel)
+        self.waitForValue("gpt-6-astra", of: restoredInlineModel)
 
         inlineEffort.tap()
         XCTAssertTrue(app.buttons["Thinking"].waitForExistence(timeout: 3))
@@ -1153,7 +1153,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(popover.buttons["Sessions…"].exists)
         XCTAssertFalse(popover.buttons["Dashboard"].exists)
         XCTAssertTrue(popover.buttons["New session options…"].exists)
-        let defaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        let defaultModel = app.buttons["Default: openai/gpt-6-astra"]
         XCTAssertTrue(defaultModel.waitForExistence(timeout: 5))
         let defaultLogo = defaultModel.images["chat-model-provider-icon-openai"]
         XCTAssertTrue(defaultLogo.exists)
@@ -1162,15 +1162,15 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(providerDrawer.waitForExistence(timeout: 5))
         self.assertMinimumTouchTarget(providerDrawer)
         XCTAssertEqual(providerDrawer.value as? String, "Collapsed")
-        let explicitModel = app.buttons["openai/gpt-5.6-sol"]
+        let explicitModel = app.buttons["openai/gpt-6-astra"]
         let initialExplicitModelCount = app.buttons.matching(
-            NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count
+            NSPredicate(format: "label == %@", "openai/gpt-6-astra")).count
         providerDrawer.tap()
         XCTAssertEqual(providerDrawer.value as? String, "Expanded")
         XCTAssertTrue(explicitModel.exists)
         XCTAssertTrue(explicitModel.images["chat-model-provider-icon-openai"].exists)
         XCTAssertGreaterThan(
-            app.buttons.matching(NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count,
+            app.buttons.matching(NSPredicate(format: "label == %@", "openai/gpt-6-astra")).count,
             initialExplicitModelCount)
         let explicitIsSelected = explicitModel.value as? String == "Selected"
         let selectedModel = explicitIsSelected ? explicitModel : defaultModel
@@ -1206,13 +1206,13 @@ extension OpenClawSnapshotUITests {
         XCTAssertGreaterThan(
             selectedNextModel.images["chat-menu-selection-checkmark"].frame.minX,
             selectedNextModel.frame.midX)
-        let restoredDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        let restoredDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
         XCTAssertTrue(restoredDefaultModel.waitForExistence(timeout: 5))
         restoredDefaultModel.tap()
         XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
 
         actions.tap()
-        let reselectedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        let reselectedDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
         XCTAssertTrue(reselectedDefaultModel.waitForExistence(timeout: 5))
         XCTAssertEqual(reselectedDefaultModel.value as? String, "Selected")
         XCTAssertGreaterThan(
@@ -1269,7 +1269,7 @@ extension OpenClawSnapshotUITests {
         let restoredVerbosity = app.segmentedControls["chat-verbosity-control"]
         XCTAssertTrue(restoredVerbosity.waitForExistence(timeout: 5))
         self.waitForEnabled(restoredVerbosity)
-        let settledDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        let settledDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
         XCTAssertTrue((settledDefaultModel.value as? String)?.contains("Selected") == true)
         XCTAssertTrue(popover.exists)
 
@@ -1288,9 +1288,9 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(reopenedActions.waitForExistence(timeout: 5))
         self.waitForHittable(true, of: reopenedActions)
         reopenedActions.tap()
-        let reopenedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        let reopenedDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
         XCTAssertTrue(reopenedDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(reopenedDefaultModel.label, "Default: openai/gpt-5.6-sol")
+        XCTAssertEqual(reopenedDefaultModel.label, "Default: openai/gpt-6-astra")
         XCTAssertTrue((reopenedDefaultModel.value as? String)?.contains("Selected") == true)
         let reopenedThinkingSlider = app.sliders["chat-thinking-slider"]
         XCTAssertTrue(reopenedThinkingSlider.waitForExistence(timeout: 5))

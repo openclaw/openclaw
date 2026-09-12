@@ -611,7 +611,7 @@ async function drainStoredChatOutbox(
     const freshAdmission = lane.freshAdmissions.delete(item.id);
     const pendingOptions = lane.pendingOptions.get(item.id);
     const retryUnconfirmed = freshAdmission && item.sendState === "unconfirmed";
-    if (!freshAdmission || retryUnconfirmed) {
+    if (!freshAdmission || retryUnconfirmed || !visible) {
       // History reconciles canonical stored versions, not the live row's transport alias.
       const reconciled = await reconcileStoredChatOutboxHead(
         host,
@@ -639,14 +639,14 @@ async function drainStoredChatOutbox(
     const result = await dependencies.sendQueuedChatMessage(
       host,
       item.id,
-      pendingOptions,
+      visible ? pendingOptions : { ...pendingOptions, routingSessionKey: undefined },
       outbox.sessionKey,
     );
     lane.outcomes.set(item.id, result);
     lane.pendingOptions.delete(item.id);
     if (result === "pending") {
-      // Only picker admission carries its earlier settings-event rerun into history.
-      if (!pendingOptions?.pendingSettings) {
+      // A later submission still owns its wakeup if this row became stale while waiting.
+      if (!pendingOptions?.pendingSettings && lane.freshAdmissions.size === 0) {
         lane.rerun = false;
       }
       return "blocked";

@@ -10,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexConfigApiKey } from "./api.js";
 import { runAnthropicVertexCatalog } from "./provider-catalog-runtime.js";
-import { normalizeAnthropicVertexResolvedModel } from "./provider-catalog.js";
+import {
+  normalizeAnthropicVertexResolvedModel,
+  resolveAnthropicVertexDynamicModel,
+} from "./provider-catalog.js";
 
 const PROVIDER_ID = "anthropic-vertex";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -31,6 +34,9 @@ export default definePluginEntry({
         run: runAnthropicVertexCatalog,
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
+      resolveDynamicModel: ({ provider, modelId, modelRegistry, providerConfig }) =>
+        modelRegistry.find(provider, modelId) ??
+        resolveAnthropicVertexDynamicModel(modelId, providerConfig?.baseUrl),
       ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
       normalizeResolvedModel: ({ modelId, model }) =>
         normalizeAnthropicVertexResolvedModel(modelId, model),

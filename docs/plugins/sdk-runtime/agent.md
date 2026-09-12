@@ -219,7 +219,7 @@ different configured profile.
     Default model and provider constants:
 
     ```typescript
-    const model = api.runtime.agent.defaults.model; // e.g. "gpt-5.6-sol"
+    const model = api.runtime.agent.defaults.model; // e.g. "gpt-6-astra"
     const provider = api.runtime.agent.defaults.provider; // e.g. "openai"
     ```
 

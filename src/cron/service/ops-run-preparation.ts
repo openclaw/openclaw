@@ -551,6 +551,7 @@ async function releasePreparedManualReservation(
       }
       if (runningMatches) {
         delete job.state.runningAtMs;
+        delete job.state.runningReceiptId;
       }
       return { upsertJobIds: [job.id], value: job };
     },

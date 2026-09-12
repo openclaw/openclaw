@@ -156,6 +156,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var factory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
+    private var liveCaptionBuffer = TalkRealtimeLiveCaptionBuffer()
     private var session: TalkRealtimeClientSession?
     private var toolBuffers: [String: ToolBuffer] = [:]
     private var activeToolTasks: [String: Task<Void, Never>] = [:]
@@ -220,6 +221,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
         self.stopped = false
+        self.liveCaptionBuffer.reset()
         self.trace(
             "start provider=\(provider ?? "default") model=\(model ?? "default") "
                 + "voice=\(voice ?? "default") sessionKey=\(self.sessionKey)")
@@ -349,6 +351,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     func stop() {
         let shouldNotify = !self.stopped
         self.stopped = true
+        self.liveCaptionBuffer.reset()
         self.audioLevelPollTask?.cancel()
         self.audioLevelPollTask = nil
         self.cancelActiveToolCalls()
@@ -476,6 +479,13 @@ final class TalkRealtimeWebRTCSession: NSObject {
             return
         }
         switch event.type {
+        case "session.delegation.created":
+            self.liveCaptionBuffer.reset()
+        case "session.closed":
+            if let failureStatus = event.sessionCloseFailureStatus {
+                self.delegate?.realtimeSession(self, didChangeStatus: failureStatus)
+            }
+            self.stop()
         case "response.function_call_arguments.delta":
             self.bufferToolDelta(event)
         case "response.output_item.added":
@@ -1185,6 +1195,17 @@ extension TalkRealtimeWebRTCSession {
 
 extension TalkRealtimeWebRTCSession {
     private func handleRealtimeTranscriptEvent(_ event: TalkRealtimeServerEvent) -> Bool {
+        if let entry = self.liveCaptionBuffer.append(event) {
+            // The Gateway sideband persists public Live transcripts before it closes their owner.
+            switch entry.role {
+            case .user:
+                self.delegate?.realtimeSession(self, didReceiveUserTranscript: entry.text)
+            case .assistant:
+                self.markFirstAssistantSignal(event)
+                self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: entry.text)
+            }
+            return true
+        }
         switch event.type {
         case "input_transcript.added":
             if let text = event.item?.text, !text.isEmpty {

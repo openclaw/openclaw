@@ -186,7 +186,7 @@ describe("prepared model catalog worker generation mismatch", () => {
     });
   });
 
-  it("fences queued requests behind a transient mismatch and rebuilds a matching worker", async () => {
+  it("catalog worker request fences a transient mismatch and rebuilds a matching worker", async () => {
     const fixture = await createMismatchFixture();
     // Inject a mismatch only at the first worker clone boundary. This drives the real owner,
     // pool, and worker without depending on the production-only environmental trigger.
@@ -221,8 +221,11 @@ describe("prepared model catalog worker generation mismatch", () => {
       const recovered = await worker.loadCatalog();
       expect(spawned).toHaveLength(2);
       expect(recovered.modelCatalog.entries).toContainEqual(
-        expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
+        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
       );
+      expect(
+        recovered.modelCatalog.entries.some((entry) => entry.id === "account-scoped-model"),
+      ).toBe(false);
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\n");
       await expect(worker.loadAuth({ providerIds: [PROVIDER_ID] })).resolves.toMatchObject({
         authStore: expect.objectContaining({ version: 1 }),
@@ -231,7 +234,7 @@ describe("prepared model catalog worker generation mismatch", () => {
     });
   });
 
-  it("keeps a replacement worker alive when an old mismatch finishes retiring", async () => {
+  it("catalog worker request keeps a replacement alive while an old mismatch retires", async () => {
     const fixture = await createMismatchFixture();
     const stopped = createDeferredCore();
     const releaseTermination = createDeferredCore();
@@ -274,10 +277,18 @@ describe("prepared model catalog worker generation mismatch", () => {
           for (const failure of initial) {
             expect(failure).toMatchObject({ name: "PreparedModelCatalogGenerationMismatchError" });
           }
-          expect(await outcome).toMatchObject({
+          const replacementResult = await outcome;
+          expect(replacementResult).toMatchObject({
             modelCatalog: {
               entries: expect.arrayContaining([
-                expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
+                expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+              ]),
+            },
+          });
+          expect(replacementResult).not.toMatchObject({
+            modelCatalog: {
+              entries: expect.arrayContaining([
+                expect.objectContaining({ id: "account-scoped-model" }),
               ]),
             },
           });

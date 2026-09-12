@@ -7,6 +7,7 @@ import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 let root: string;
@@ -45,11 +46,28 @@ it.each(
       db.exec(
         "PRAGMA user_version = 3; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('source preserved');",
       );
-      if (scenario.readError) {
+      if (scenario.readError && mode === "versions") {
         db.exec("CREATE TABLE agent_databases (not_path TEXT);");
       }
     } finally {
       db.close();
+    }
+    const input = {
+      stateDir,
+      targetStateDir: path.join(fixture, "candidate"),
+      candidateRoot: path.join(fixture, "package"),
+      config: {},
+    };
+    const admitted =
+      mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
+    if (scenario.readError && mode === "snapshot") {
+      // Inventory succeeds first; the instrumented snapshot owns the failed read and cleanup.
+      const malformed = openNodeSqliteDatabase(source);
+      try {
+        malformed.exec("CREATE TABLE agent_databases (not_path TEXT);");
+      } finally {
+        malformed.close();
+      }
     }
     const sentinel = path.join(cache, "unrelated.txt");
     await fs.writeFile(sentinel, "unrelated preserved");
@@ -95,10 +113,8 @@ it.each(
       {
         input: JSON.stringify({
           mode,
-          stateDir,
-          targetStateDir: path.join(fixture, "candidate"),
-          candidateRoot: path.join(fixture, "package"),
-          config: {},
+          ...input,
+          ...admitted,
         }),
         env: { XDG_CACHE_HOME: cache },
         timeoutMs: 30_000,

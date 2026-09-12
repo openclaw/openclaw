@@ -44,10 +44,22 @@ export function createSubagentRegistryContextCleanup(config: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
       });
-      if (options?.isCurrent?.() === false) {
-        return;
+      let failure: { error: unknown } | undefined;
+      try {
+        if (options?.isCurrent?.() !== false) {
+          await engine.onSubagentEnded?.(params);
+        }
+      } catch (error) {
+        failure = { error };
       }
-      await engine.onSubagentEnded?.(params);
+      try {
+        await engine.dispose?.();
+      } catch (error) {
+        failure ??= { error };
+      }
+      if (failure) {
+        throw failure.error;
+      }
     });
   }
 

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isCronSelfRemovalCurrent, type CronActiveJobMarker } from "../active-jobs.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
@@ -143,17 +144,19 @@ function retireServiceCronRunTriggerStateInDatabase(params: {
   const job = loadedCronStoreFromRows(loadCronRows(database, storeKey, new Set([jobId]))).store
     .jobs[0];
   const startedAtMs = job?.state.runningAtMs;
-  if (startedAtMs === undefined) {
+  if (!job || startedAtMs === undefined) {
     return;
   }
-  // An owner edit can terminalize the receipt before its completed task is
-  // reconciled. The selected task's exact receipt still owns those pending facts.
-  const { receiptId } = findCronTaskRunRecoveryInDatabase({
-    database,
-    jobId,
-    storeKey,
-    startedAt: startedAtMs,
-  });
+  // Owner edits close execution authority before scheduler reconciliation.
+  // Only legacy markers without a receipt association need task-history fallback.
+  const receiptId =
+    job.state.runningReceiptId ??
+    findCronTaskRunRecoveryInDatabase({
+      database,
+      jobId,
+      storeKey,
+      startedAt: startedAtMs,
+    }).receiptId;
   if (receiptId) {
     retireCronRunTriggerStateInDatabase({
       database,
@@ -246,7 +249,7 @@ export function cronRunReceiptPersistHooks(params: {
   const deferTerminal = terminal && isCronRunReceiptSettlementPending(params.handle);
   return {
     beforeWrite: (database) => {
-      const unavailableError = `cron job agent is unavailable: ${params.handle.agentId}`;
+      const unavailableError = describeUnavailableCronAgent(params.handle.agentId);
       const recordsUnavailableGuard =
         terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
       if (

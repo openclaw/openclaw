@@ -1,11 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   loadChatMetadata,
   revalidateChatMetadata,
   peekChatMetadata,
   beginChatMetadataPublication,
   subscribeChatMetadata,
-  type ChatMetadataResult,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
@@ -63,6 +63,7 @@ export function retireChatMetadataRequests(host: ChatPageHost): void {
   host.chatModelCatalog = [];
   host.chatModelCatalogError = null;
   host.chatModelCatalogRefreshFailed = undefined;
+  host.chatModelCatalogPendingProviders = undefined;
   host.chatModelsLoading = false;
   host.chatAccountSelection = null;
 }
@@ -247,6 +248,7 @@ async function loadChatModelCatalog(
         host.chatAccountSelection = result.accountSelection ?? null;
         host.chatModelCatalogError = null;
         host.chatModelCatalogRefreshFailed = result.refreshFailed;
+        host.chatModelCatalogPendingProviders = result.pendingProviders;
         return true;
       },
       (error: unknown) => {

@@ -1645,11 +1645,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("insets only the bundled logo and keeps the user edge neutral", async () => {
+  it("keeps custom avatar sizing and the user edge neutral", async () => {
     const page = await openBrowserPage(430, 720);
     try {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <img class="chat-avatar assistant chat-avatar--logo" src="/apple-touch-icon.png" alt="Logo" />
         <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
         <img class="chat-avatar user" src="/avatar/user" alt="User" />
       </body></html>`);
@@ -1670,14 +1669,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       );
 
       expect(avatars).toEqual([
-        {
-          width: 36,
-          height: 36,
-          boxSizing: "border-box",
-          objectFit: "contain",
-          padding: "2px",
-          borderWidth: "1px",
-        },
         {
           width: 36,
           height: 36,

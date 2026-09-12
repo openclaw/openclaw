@@ -1,8 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
+import { prepareConfigForDisabledInstall } from "./enable.js";
 import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
-import { persistPluginInstall, prepareConfigForDisabledInstall } from "./install-persistence.js";
+import { persistPluginInstall } from "./install-persistence.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 type BundledPluginConfigEnablement =
@@ -44,9 +46,11 @@ export async function installBundledPluginSource(params: {
   bundledSource: BundledPluginSource;
   warning?: string;
   invalidateRuntimeCache?: boolean;
-  runtime?: RuntimeEnv;
+  runtime?: Pick<RuntimeEnv, "log">;
   beforePersistentApply?: () => void;
-}): Promise<{ pluginId: string; warnings: string[] }> {
+  applyRuntime?: Parameters<typeof persistPluginInstall>[0]["applyRuntime"];
+  beforePersistentEffect?: Parameters<typeof persistPluginInstall>[0]["beforePersistentEffect"];
+}): Promise<{ pluginId: string; warnings: string[]; config: OpenClawConfig }> {
   // Bundled plugins with required config are recorded but not enabled until config validates.
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
   const configEnablement = resolveBundledPluginConfigEnablement({
@@ -68,7 +72,7 @@ export async function installBundledPluginSource(params: {
   const warnings = [params.warning, configWarning].filter((warning): warning is string =>
     Boolean(warning),
   );
-  await persistPluginInstall({
+  const config = await persistPluginInstall({
     ...params,
     snapshot: {
       ...params.snapshot,
@@ -84,5 +88,5 @@ export async function installBundledPluginSource(params: {
     enable: shouldEnable,
     ...(warnings.length > 0 ? { warningMessage: warnings.join("\n") } : {}),
   });
-  return { pluginId: params.bundledSource.pluginId, warnings };
+  return { pluginId: params.bundledSource.pluginId, warnings, config };
 }

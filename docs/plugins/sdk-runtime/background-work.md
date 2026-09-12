@@ -97,7 +97,7 @@ Start agent work in the background: hook-dispatched turns for external content, 
       toolsAlsoAllow: ["my_plugin_progress"],
       promptMode: "minimal", // optional bounded subagent prompt
       provider: "openai", // optional override
-      model: "gpt-5.6-sol", // optional override
+      model: "gpt-6-astra", // optional override
       deliver: false,
       completionDelivery: "current-requester", // optional, before_dispatch hooks only
     });

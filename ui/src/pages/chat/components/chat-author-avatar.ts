@@ -1,12 +1,17 @@
 import { html, nothing, type TemplateResult } from "lit";
 import {
   identityAvatarClass,
+  renderAgentIdentityAvatar,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
   type IdentityAvatarView,
 } from "../../../components/identity-avatar-view.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
-import type { IdentityAvatarInput, ResolvedIdentityAvatar } from "../../../lib/identity-avatar.ts";
+import {
+  resolveAvatar,
+  type IdentityAvatarInput,
+  type ResolvedIdentityAvatar,
+} from "../../../lib/identity-avatar.ts";
 
 function renderInitialsAvatar(
   avatar: Extract<ResolvedIdentityAvatar, { kind: "initials" }>,
@@ -41,10 +46,20 @@ function renderResolvedAvatar(view: IdentityAvatarView): TemplateResult {
 /** Small author marker shared by transcript bubbles and the pending-send queue. */
 export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
+  className = "chat-author-avatar",
 ): TemplateResult | typeof nothing {
   const label = formatSenderLabel(sender);
   if (!sender || !label) {
     return nothing;
+  }
+  if (sender.identity?.type === "agent") {
+    const avatar = resolveAvatar(sender);
+    return html`<span class=${className} role="img" aria-label=${label} title=${label}>
+      ${renderAgentIdentityAvatar({
+        id: sender.identity.id,
+        avatar: avatar.kind === "profile" ? avatar.url : null,
+      })}
+    </span>`;
   }
   const view = resolveIdentityAvatarView(sender);
   const resolved = renderResolvedAvatar(view);

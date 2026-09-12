@@ -18,6 +18,7 @@ import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider
 import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderResolveConfigContext,
 } from "./provider-types.js";
 
 /** Resolved realtime voice provider plus provider-normalized config. */
@@ -46,7 +47,9 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
-  surface?: "browser-session" | "gateway-relay" | "bridge";
+  surface?: RealtimeVoiceProviderResolveConfigContext["surface"];
+  autoRespondToAudio?: RealtimeVoiceProviderResolveConfigContext["autoRespondToAudio"];
+  requiredCapabilities?: RealtimeVoiceProviderResolveConfigContext["requiredCapabilities"];
   noRegisteredProviderMessage?: string;
 };
 
@@ -132,8 +135,14 @@ export function resolveConfiguredRealtimeVoiceProvider(
       // Per-call overrides are applied before provider normalization so provider
       // implementations can validate and coerce them consistently.
       return (
-        provider.resolveConfig?.({ cfg, rawConfig: rawConfigWithOverrides }) ??
-        rawConfigWithOverrides
+        provider.resolveConfig?.({
+          cfg,
+          rawConfig: rawConfigWithOverrides,
+          agentId: params.agentId,
+          surface: params.surface,
+          autoRespondToAudio: params.autoRespondToAudio,
+          requiredCapabilities: params.requiredCapabilities,
+        }) ?? rawConfigWithOverrides
       );
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) =>

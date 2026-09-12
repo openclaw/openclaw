@@ -34,7 +34,6 @@ import {
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
 import {
-  BOARD_WIDGET_SNAPSHOT_COLUMNS,
   createBoardWidgetContentFields,
   parseDescriptor,
   parseManifest,
@@ -49,6 +48,7 @@ import {
   type SelectedBoardTabRow,
   type SelectedBoardWidgetSnapshotRow,
 } from "./sqlite-board-codec.js";
+import { getBoardReadQueries } from "./sqlite-board-read-queries.js";
 
 type BoardDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -138,26 +138,9 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
-      const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-      const tabRows = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("board_tabs")
-          .selectAll()
-          .where("session_key", "=", sessionKey)
-          .orderBy("position", "asc")
-          .orderBy("tab_id", "asc"),
-      ).rows as SelectedBoardTabRow[];
-      const selectedWidgetRows = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("board_widgets")
-          .select(BOARD_WIDGET_SNAPSHOT_COLUMNS)
-          .where("session_key", "=", sessionKey)
-          .orderBy("tab_id", "asc")
-          .orderBy("position", "asc")
-          .orderBy("name", "asc"),
-      ).rows as SelectedBoardWidgetSnapshotRow[];
+      const queries = getBoardReadQueries(database.db);
+      const tabRows = queries.tabs(sessionKey).rows;
+      const selectedWidgetRows = queries.widgets(sessionKey).rows;
       const parsedWidgetRows = selectedWidgetRows.map((row) => ({
         row,
         manifest: parseManifest(row.manifest),
@@ -322,15 +305,7 @@ function deleteRemovedTabs(
 }
 
 function hasSession(database: BoardDatabaseHandle, sessionKey: string): boolean {
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  const row = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select("entry_json")
-      .where("session_key", "=", sessionKey)
-      .limit(1),
-  ).rows[0];
+  const row = getBoardReadQueries(database.db).session(sessionKey).rows[0];
   if (!row) {
     return false;
   }

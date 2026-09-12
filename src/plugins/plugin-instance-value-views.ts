@@ -58,7 +58,7 @@ function hasProxyPrototype(object: object): boolean {
   return false;
 }
 
-function isPluginData(value: unknown, seen = new Set<object>()): boolean {
+function isPluginData(value: unknown, seen?: Set<object>): boolean {
   if (!value || typeof value !== "object") {
     return typeof value !== "function";
   }
@@ -74,10 +74,11 @@ function isPluginData(value: unknown, seen = new Set<object>()): boolean {
   ) {
     return true;
   }
-  if (seen.has(value)) {
+  if (seen?.has(value)) {
     return true;
   }
-  seen.add(value);
+  const visited = seen ?? new Set<object>();
+  visited.add(value);
   const native = Array.isArray(value)
     ? Array
     : types.isMap(value)
@@ -94,19 +95,48 @@ function isPluginData(value: unknown, seen = new Set<object>()): boolean {
   if (
     prototype !== null &&
     (typeof constructor !== "function" ||
-      Function.prototype.toString.call(constructor) !== Function.prototype.toString.call(native) ||
+      (constructor !== native &&
+        Function.prototype.toString.call(constructor) !==
+          Function.prototype.toString.call(native)) ||
       Object.getOwnPropertyDescriptor(constructor, "prototype")?.value !== prototype)
   ) {
     return false;
   }
-  const entries = native === Map || native === Set ? native.prototype.entries : undefined;
-  return (
-    Reflect.ownKeys(value).every((key) => {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-      return "value" in descriptor && isPluginData(descriptor.value, seen);
-    }) &&
-    (!entries || [...Reflect.apply(entries, value, [])].every((entry) => isPluginData(entry, seen)))
-  );
+  let nested: object[] | undefined;
+  // A callable or accessor already requires a view. Check direct members before
+  // walking large data graphs attached to tool metadata and execution contexts.
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!("value" in descriptor) || typeof descriptor.value === "function") {
+      return false;
+    }
+    if (descriptor.value && typeof descriptor.value === "object") {
+      (nested ??= []).push(descriptor.value);
+    }
+  }
+  if (nested) {
+    for (const child of nested) {
+      if (!isPluginData(child, visited)) {
+        return false;
+      }
+    }
+  }
+  // Stream collection members so an early callable does not materialize every
+  // entry, and Set members do not allocate duplicate key/value pairs.
+  if (native === Map) {
+    for (const [key, entry] of Map.prototype.entries.call(value)) {
+      if (!isPluginData(key, visited) || !isPluginData(entry, visited)) {
+        return false;
+      }
+    }
+  } else if (native === Set) {
+    for (const entry of Set.prototype.values.call(value)) {
+      if (!isPluginData(entry, visited)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 const arrayCallbacks = new Set([
@@ -169,14 +199,14 @@ function restorePluginArgumentViews(
   args: unknown[],
   originals: WeakMap<object, object>,
 ): unknown[] {
-  const nodes = new Map<object, { parents: Set<object>; descriptors?: PropertyDescriptorMap }>();
+  // Parents are plain records or arrays; a Set represents multiple parents.
+  const parents = new Map<object, object | Set<object> | undefined>();
   const replacements = new Map<object, object>();
   const visit = (value: unknown, parent?: object) => {
     if (!value || typeof value !== "object") {
       return;
     }
-    let node = nodes.get(value);
-    if (!node) {
+    if (!parents.has(value)) {
       let original = originals.get(value);
       // Collapse only this instance's object views; callable restoration keeps its separate guard.
       while (original && typeof original === "object") {
@@ -199,38 +229,47 @@ function restorePluginArgumentViews(
           return;
         }
       }
-      const descriptors: PropertyDescriptorMap | undefined = original
-        ? undefined
-        : Object.getOwnPropertyDescriptors(value);
+      const keys = original ? undefined : Reflect.ownKeys(value);
       // Caller methods and accessors can depend on this exact object's identity.
       // Keep their containers opaque instead of cloning them to restore a nested handle.
-      if (
-        descriptors &&
-        Reflect.ownKeys(descriptors).some((key) => {
-          const descriptor = descriptors[key]!;
-          return !("value" in descriptor) || typeof descriptor.value === "function";
-        })
-      ) {
-        return;
+      if (keys) {
+        for (const key of keys) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+          if (!("value" in descriptor) || typeof descriptor.value === "function") {
+            return;
+          }
+        }
       }
-      node = { parents: new Set(), descriptors };
-      nodes.set(value, node);
+      parents.set(value, parent);
       if (original) {
         replacements.set(value, original);
       } else {
-        for (const key of Reflect.ownKeys(descriptors!)) {
-          visit(descriptors![key]!.value, value);
+        // All own members are data properties, and this synchronous walk runs no
+        // caller code that could change them between inspection and reading.
+        for (const key of keys!) {
+          visit(Reflect.get(value, key), value);
         }
       }
     }
     if (parent) {
-      node.parents.add(parent);
+      const previous = parents.get(value);
+      if (!previous) {
+        parents.set(value, parent);
+      } else if (previous !== parent) {
+        // Most data is a tree; only shared children need a parent collection.
+        if (previous instanceof Set) {
+          previous.add(parent);
+        } else {
+          parents.set(value, new Set([previous, parent]));
+        }
+      }
     }
   };
   args.forEach((value) => visit(value));
   // Copy only changed ancestors; visiting all parents also preserves cycles and shared children.
   for (const value of replacements.keys()) {
-    for (const parent of nodes.get(value)!.parents) {
+    const owners = parents.get(value);
+    for (const parent of owners instanceof Set ? owners : owners ? [owners] : []) {
       if (!replacements.has(parent)) {
         replacements.set(
           parent,
@@ -240,8 +279,10 @@ function restorePluginArgumentViews(
     }
   }
   for (const [value, replacement] of replacements) {
-    const descriptors = nodes.get(value)!.descriptors;
-    if (descriptors) {
+    if (!originals.has(value)) {
+      // The synchronous, data-only walk executes no caller code. Read descriptors
+      // only for copied ancestors instead of retaining them for the entire input.
+      const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(value);
       for (const key of Reflect.ownKeys(descriptors)) {
         const descriptor = descriptors[key]!;
         descriptor.value = replacements.get(descriptor.value) ?? descriptor.value;

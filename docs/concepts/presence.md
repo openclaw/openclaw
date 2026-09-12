@@ -25,6 +25,7 @@ Presence entries are structured objects with fields like:
 
 - `instanceId` (optional but strongly recommended): stable client identity (usually `connect.client.instanceId`)
 - `host`: human-friendly host name
+- `clientId`: client type from the accepted connection, separate from its display name; the people card uses this to distinguish **Terminal** from a native **App**
 - `ip`: best-effort IP address. The [geolocation plugin](/plugins/geolocation) resolves it to a coarse city where one is available
 - `version`: client version string
 - `deviceFamily` / `modelIdentifier`: hardware hints

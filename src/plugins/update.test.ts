@@ -155,7 +155,8 @@ vi.mock("../state/claw-package-lifecycle-lease.js", () => ({
   ) => withClawPackageLifecycleLeaseMock(artifact, operation, options),
 }));
 
-vi.mock("./bundled-sources.js", () => ({
+vi.mock("./bundled-sources.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bundled-sources.js")>()),
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSourcesMock(...args),
 }));
 

@@ -468,7 +468,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         const engine = new SystemAgentChatEngine({
           surface: "gateway",
-          deps: { gatewayHostLifecycle: context.hostLifecycle },
+          deps: {
+            gatewayHostLifecycle: context.hostLifecycle,
+            applyPluginRuntime: context.applyPluginLifecycleChange,
+          },
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,
           ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
@@ -492,7 +495,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             welcome = onboardingWelcome.text;
             welcomeQuestion = onboardingWelcome.question;
           } else if (params.welcomeVariant === "new-agent") {
-            welcome = buildNewAgentWelcome({ engine });
+            welcome = await buildNewAgentWelcome({ engine });
           } else {
             const overview = await engine.loadOverview();
             const facts = loadSystemAgentGreetingFacts();

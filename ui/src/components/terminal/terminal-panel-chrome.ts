@@ -20,6 +20,7 @@ import {
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 type TerminalPanelViewportParams = {
   activeId: string | null;
+  tabsInHeader?: boolean;
   connecting: boolean;
   error: { text: string; retry?: () => void } | null;
   uploadController: TerminalPanelUploadController;
@@ -71,6 +72,7 @@ export function renderTerminalPanelHeader(
 
 export function renderTerminalPanelViewport({
   activeId,
+  tabsInHeader = false,
   connecting,
   error,
   uploadController,
@@ -95,7 +97,8 @@ export function renderTerminalPanelViewport({
       class="tp-viewport"
       name=${activeId ?? "terminal"}
       active
-      aria-labelledby=${activeId ? `terminal-tab-${activeId}` : nothing}
+      aria-labelledby=${activeId && !tabsInHeader ? `terminal-tab-${activeId}` : nothing}
+      aria-label=${tabsInHeader ? t("terminal.title") : nothing}
       @dragenter=${uploadController.handleDragEnter}
       @dragover=${uploadController.handleDragOver}
       @dragleave=${uploadController.handleDragLeave}
@@ -115,6 +118,14 @@ export function renderTerminalPanelViewport({
             })
           : nothing
       }
+      <input
+        class="tp-file-input"
+        type="file"
+        multiple
+        aria-hidden="true"
+        tabindex="-1"
+        @change=${uploadController.handleFileSelection}
+      />
       ${renderTerminalUploadLayer(uploadController)}
     </wa-tab-panel>
   `;

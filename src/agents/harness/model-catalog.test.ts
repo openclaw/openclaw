@@ -112,7 +112,8 @@ describe("agent harness model catalog", () => {
         workspaceDir: "/tmp/workspace",
         defaultProvider: "openai",
         defaultModel: "openai/gpt-5.6-sol",
-        snapshot,
+        snapshot: { entries: [], routeVariants: [] },
+        preparedSnapshot: snapshot,
         pluginRegistry: registryWithCatalog(
           async () => (includeHostRow ? [native, host] : [native]) as never,
         ),

@@ -436,8 +436,9 @@ defineDiscordVoiceTests(
             expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
           }
         } finally {
-          entry.stop();
+          const stopped = entry.stop();
           hostTurn.resolve({ payloads: [] });
+          await stopped;
           await submission;
           await new Promise<void>((resolve) => {
             setImmediate(resolve);

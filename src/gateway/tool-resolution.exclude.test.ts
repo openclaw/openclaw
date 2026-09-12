@@ -274,7 +274,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
   });
 
-  it("denies loopback tools after the scheduled owner account is removed", () => {
+  it("rejects loopback tool construction after the scheduled owner account is removed", () => {
     const resolveToolPolicy = vi.fn(() => ({ allow: ["read"] }));
     hoisted.getLoadedChannelPluginMock.mockReturnValue({
       config: {
@@ -305,25 +305,29 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       surface: "loopback",
       scheduledToolPolicy,
     });
-    const removed = resolveGatewayScopedTools({
-      cfg: {
-        channels: {
-          discord: {
-            accounts: {
-              delivery: {},
+    expect(configured.tools.map((tool) => tool.name)).toEqual(["read"]);
+    hoisted.createOpenClawToolsMock.mockClear();
+    expect(() =>
+      resolveGatewayScopedTools({
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                delivery: {},
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      sessionKey: "agent:main:cron:run-1",
-      runtimePolicySessionKey: "agent:main:cron:run-1",
-      accountId: "delivery",
-      surface: "loopback",
-      scheduledToolPolicy,
-    });
+        } as OpenClawConfig,
+        sessionKey: "agent:main:cron:run-1",
+        runtimePolicySessionKey: "agent:main:cron:run-1",
+        accountId: "delivery",
+        surface: "loopback",
+        scheduledToolPolicy,
+      }),
+    ).toThrow('Scheduled account "creator" is unavailable');
 
-    expect(configured.tools.map((tool) => tool.name)).toEqual(["read"]);
-    expect(removed.tools).toEqual([]);
+    expect(hoisted.createOpenClawToolsMock).not.toHaveBeenCalled();
+    expect(resolveToolPolicy).toHaveBeenCalledTimes(1);
     expect(resolveToolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "creator",

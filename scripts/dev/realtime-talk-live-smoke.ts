@@ -397,7 +397,7 @@ async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
       details: { model: OPENAI_REALTIME_MODEL, error: shortError(error) },
     };
   } finally {
-    bridge.close();
+    await bridge.close();
   }
 }
 
@@ -531,8 +531,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
         throw error;
       } finally {
         closed = true;
-        bridge.close();
-        bridge.close();
+        await Promise.all([bridge.close(), bridge.close()]);
         bridgeRef.current = undefined;
         await delay(100);
       }

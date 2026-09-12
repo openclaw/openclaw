@@ -14,7 +14,6 @@ import {
   connectOpenAIQuicksilverSideband,
   type OpenAIQuicksilverSocketFactory,
 } from "./realtime-quicksilver-sideband.js";
-import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
 import {
   createCallResponse,
   emitSideband,
@@ -118,7 +117,7 @@ describe("GPT-Live gateway relay bridge", () => {
       expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("error");
       expect(harness.peer.close).toHaveBeenCalledOnce();
     } finally {
-      harness.bridge.close();
+      await harness.bridge.close();
     }
   });
 
@@ -145,7 +144,7 @@ describe("GPT-Live gateway relay bridge", () => {
       expect(peer.sendAudio).toHaveBeenCalledOnce();
       expect(peer.sendAudio).toHaveBeenCalledWith(Buffer.from([0x30, 0x31]));
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   });
 
@@ -155,8 +154,8 @@ describe("GPT-Live gateway relay bridge", () => {
     const testBridge = bridge as unknown as TestableGatewayBridge;
     await waitForPeerStart();
     bridge.sendAudio(Buffer.from([0x41, 0x42]));
-    bridge.close();
-    bridge.close();
+    await bridge.close();
+    await bridge.close();
 
     expect(testBridge.pendingAudio).toHaveLength(0);
     expect(onClose).toHaveBeenCalledOnce();
@@ -191,7 +190,9 @@ describe("GPT-Live gateway relay bridge", () => {
     const bridgeRef: { current?: OpenAIQuicksilverGatewayBridge } = {};
     const harness = createPendingPeerBridge({
       onClose,
-      onError: () => bridgeRef.current?.close(),
+      onError: () => {
+        void bridgeRef.current?.close();
+      },
     });
     bridgeRef.current = harness.bridge;
     await harness.waitForPeerStart();
@@ -225,7 +226,7 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(() => harness.triggerPeerError(new Error("media peer failed"))).toThrow(callbackError);
     const retainedAudioBytes = testBridge.pendingAudio.length;
     const closeReason = onClose.mock.calls[0]?.[0];
-    harness.bridge.close();
+    await harness.bridge.close();
     harness.resolvePeer();
 
     await connectionRejected;
@@ -372,7 +373,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
-        model: OPENAI_GPT_LIVE_MODELS[0],
+        model: "gpt-live-1-codex",
         voice: "cove",
         instructions: "Speak briefly.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
@@ -476,7 +477,7 @@ describe("GPT-Live gateway relay bridge", () => {
     ).toHaveLength(2);
     expect(connectedSocket.sent[1]).toContain("I’ll check that request.");
 
-    bridge.close();
+    await bridge.close();
     expect(closePeer).toHaveBeenCalledOnce();
     expect(connectedSocket.closed).toBe(true);
     expect(onClose).toHaveBeenCalledWith("completed");

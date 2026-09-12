@@ -52,4 +52,18 @@ describe("BoundedBuffer", () => {
     expect(buffer.drain()).toEqual(drained);
     expect(onOverflow).toHaveBeenCalledTimes(overflowCalls);
   });
+
+  it("drains the retained FIFO after sustained overflow and can then be reused", () => {
+    const buffer = new BoundedBuffer<number | undefined>(3, { mode: "drop-oldest" });
+    for (let value = 0; value < 5_000; value += 1) {
+      buffer.push(value);
+    }
+    buffer.push(undefined);
+
+    expect(buffer.drain()).toEqual([4_998, 4_999, undefined]);
+    expect(buffer.drain()).toEqual([]);
+    buffer.push(1);
+    buffer.push(2);
+    expect(buffer.drain()).toEqual([1, 2]);
+  });
 });

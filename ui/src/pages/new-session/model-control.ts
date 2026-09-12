@@ -21,10 +21,14 @@ import {
 } from "../../lib/chat/model-select-state.ts";
 import { resolveThinkingProfileForSession } from "../../lib/chat/thinking.ts";
 import {
+  invalidateModelCatalogCache,
+  type ModelCatalogReadScope,
+} from "../../lib/model-catalog-cache.ts";
+import {
   loadModelCatalog,
+  peekModelCatalog,
   resolveModelCatalogState,
   subscribeModelCatalogChanges,
-  type ModelCatalogReadScope,
 } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
@@ -45,13 +49,9 @@ type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snaps
 type GatewayAgentRuntime = NonNullable<GatewayAgentRow["agentRuntime"]> & {
   cloudPlacementSupported?: boolean;
 };
-type NewSessionMetadataStatus = ChatModelCatalogState["status"];
-type NewSessionMetadataState = {
+type NewSessionMetadataState = ChatModelCatalogState & {
   catalog: ModelCatalogEntry[];
   accountSelection?: ChatAccountSelection;
-  refreshFailed?: boolean;
-  hasSnapshot: boolean;
-  status: NewSessionMetadataStatus;
 };
 type NewSessionMetadataLoadOptions = {
   agent?: GatewayAgentRow;
@@ -183,6 +183,12 @@ export class NewSessionModelControl {
 
   private startMetadataRequest(client: NewSessionMetadataClient, scope: ModelCatalogReadScope) {
     this.metadataRequest?.abort();
+    const cached = peekModelCatalog(client, scope);
+    if (cached) {
+      this.metadataRequest = undefined;
+      this.publishMetadataCatalog(cached);
+      return Promise.resolve(cached);
+    }
     const controller = new AbortController();
     this.metadataRequest = controller;
     const ownsRequest = () =>
@@ -268,6 +274,9 @@ export class NewSessionModelControl {
   }
 
   invalidate(resetSelection = false) {
+    if (!resetSelection && this.metadataClient) {
+      invalidateModelCatalogCache(this.metadataClient, this.metadataScope);
+    }
     this.clearDraftAccount();
     this.clearMetadataSubscription();
     this.catalogTargets.clear();
@@ -616,6 +625,7 @@ export class NewSessionModelControl {
         // ready catalog until the selected agent can supply its concrete defaults.
         hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
         refreshFailed: this.metadataState.refreshFailed,
+        pendingProviders: this.metadataState.pendingProviders,
         status:
           !agentDefaultsAvailable && this.metadataState.status !== "error"
             ? "loading"
@@ -636,13 +646,13 @@ export class NewSessionModelControl {
         effectiveFastMode:
           this.fastMode ?? (selectedTarget?.entry ?? defaultTarget?.entry)?.effectiveFastMode,
       },
-      modelOverrides: { [sessionKey]: this.effectiveModel },
+      modelOverrides: { [sessionKey]: this.effectiveModel || null },
       modelPickerTargetGroups: this.catalogTargets.groups(),
       modelSwitching: false,
       sending: options.sending,
       sessionKey,
       selectedSession: undefined,
-      sessionsResult: sourceResult,
+      sessionsResult: agentDefaultsAvailable ? sourceResult : null,
       stream: null,
       thinkingDefaults,
       thinkingSession: thinkingTarget,

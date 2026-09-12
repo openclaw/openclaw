@@ -236,7 +236,11 @@ describe("update plugin lifecycle lease boundaries", () => {
       if (!needsTargetRuntime) {
         vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
           record("plugin-update");
-          return { ...successfulPluginUpdate, changed: false };
+          return {
+            ...successfulPluginUpdate,
+            assessment: { kind: "no-payload-repair" as const },
+            changed: false,
+          };
         });
       }
       vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {

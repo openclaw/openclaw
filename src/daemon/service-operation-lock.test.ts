@@ -5,7 +5,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
+import {
+  withGatewayServiceOperationLock,
+  withSystemdServiceReadBinding,
+} from "./service-operation-lock.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -140,4 +143,122 @@ it("serializes the same systemd unit across alternate definition homes", async (
     await Promise.all([first, second]);
   }
   expect(secondEntered).toBe(true);
+});
+
+function readBinding() {
+  return {
+    unit: "openclaw-gateway.service",
+    managerUid: 1000,
+    destination: ":1.0",
+    verify: vi.fn(),
+    query: vi.fn(async () => []),
+    close: vi.fn(async () => {}),
+  };
+}
+
+it("retains one read binding across nested operations and closes after the outer interval", async () => {
+  const env = await fixture();
+  const binding = readBinding();
+  const create = vi.fn(async () => binding);
+  await withGatewayServiceOperationLock(env, async () => {
+    await withSystemdServiceReadBinding(env, create, async (first) => {
+      expect(first).toBe(binding);
+      await withGatewayServiceOperationLock(env, async () => {
+        await withSystemdServiceReadBinding(env, create, async (nested) =>
+          expect(nested).toBe(first),
+        );
+      });
+      expect(binding.close).not.toHaveBeenCalled();
+    });
+    await withSystemdServiceReadBinding(env, create, async (second) =>
+      expect(second).toBe(binding),
+    );
+  });
+  expect(create).toHaveBeenCalledTimes(1);
+  expect(binding.close).toHaveBeenCalledTimes(1);
+});
+
+it("rejects a conflicting manager route instead of replacing an operation binding", async () => {
+  const env = await fixture();
+  const create = vi.fn(async () => readBinding());
+  await withGatewayServiceOperationLock(env, async () => {
+    await withSystemdServiceReadBinding(env, create, async () => {});
+    await expect(
+      withSystemdServiceReadBinding(
+        { ...env, DBUS_SESSION_BUS_ADDRESS: "unix:path=/different" },
+        create,
+        async () => {},
+      ),
+    ).rejects.toThrow("different manager");
+  });
+  expect(create).toHaveBeenCalledTimes(1);
+});
+
+it("joins pending reads before disposing their native binding", async () => {
+  const env = await fixture();
+  const binding = readBinding();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const owner = withGatewayServiceOperationLock(env, async () => {
+    void withSystemdServiceReadBinding(
+      env,
+      async () => binding,
+      async () => {
+        entered.resolve();
+        await release.promise;
+        expect(binding.close).not.toHaveBeenCalled();
+      },
+    );
+    await entered.promise;
+  });
+  await entered.promise;
+  await setImmediate();
+  expect(binding.close).not.toHaveBeenCalled();
+  release.resolve();
+  await owner;
+  expect(binding.close).toHaveBeenCalledTimes(1);
+});
+
+it("closes standalone read bindings without acquiring a mutation interval", async () => {
+  const env = await fixture();
+  const binding = readBinding();
+  await expect(
+    withSystemdServiceReadBinding(
+      env,
+      async () => binding,
+      async () => {
+        throw new Error("read failed");
+      },
+    ),
+  ).rejects.toThrow("read failed");
+  expect(binding.close).toHaveBeenCalledTimes(1);
+});
+
+it("expires a borrowing read without cancelling shared admission or running it later", async () => {
+  const env = await fixture();
+  const binding = readBinding();
+  const admission = createDeferred<typeof binding>();
+  const create = vi.fn(() => admission.promise);
+  const laterRead = vi.fn(async () => {});
+  await withGatewayServiceOperationLock(env, async () => {
+    const original = withSystemdServiceReadBinding(
+      env,
+      create,
+      async (value) => {
+        expect(value).toBe(binding);
+        expect(binding.close).not.toHaveBeenCalled();
+      },
+      performance.now() + 2000,
+    );
+    await expect(
+      withSystemdServiceReadBinding(env, create, laterRead, performance.now() + 20),
+    ).rejects.toThrow("admission deadline expired");
+    expect(laterRead).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledOnce();
+    expect(binding.close).not.toHaveBeenCalled();
+    admission.resolve(binding);
+    await original;
+    expect(laterRead).not.toHaveBeenCalled();
+  });
+  expect(binding.close).toHaveBeenCalledOnce();
 });

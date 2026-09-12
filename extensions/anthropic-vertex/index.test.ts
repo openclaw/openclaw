@@ -328,7 +328,7 @@ describe("anthropic-vertex provider plugin", () => {
       provider: "anthropic-vertex",
       modelId: "claude-fable-5",
     } as never);
-    expect(fableProfile?.defaultLevel).toBe("high");
+    expect(fableProfile?.defaultLevel).toBe("medium");
     expect(fableProfile?.preserveWhenCatalogReasoningFalse).toBe(true);
 
     const aliasProfile = provider.resolveThinkingProfile?.({
@@ -336,7 +336,7 @@ describe("anthropic-vertex provider plugin", () => {
       modelId: "production-claude",
       params: { canonicalModelId: "claude-fable-5" },
     } as never);
-    expect(aliasProfile?.defaultLevel).toBe("high");
+    expect(aliasProfile?.defaultLevel).toBe("medium");
   });
 
   it("restores Fable metadata for explicit Vertex catalog rows", async () => {

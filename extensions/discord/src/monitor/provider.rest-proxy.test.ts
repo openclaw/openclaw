@@ -1,8 +1,8 @@
-// Discord tests cover provider.rest proxy plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 
 const {
   undiciFetchMock,
@@ -121,10 +121,6 @@ function dispatchRequest(dispatcher: unknown, origin: string): void {
     throw new Error("expected attached dispatcher.dispatch");
   }
   target.dispatch({ origin, path: "/", method: "GET" }, {});
-}
-
-function createRuntimeSpies() {
-  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
 }
 
 function installUndiciRuntimeDeps(): void {

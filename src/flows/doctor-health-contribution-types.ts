@@ -17,6 +17,8 @@ import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
+  /** Source before the first write; later writes use cfgForPersistence. */
+  sourceConfigForWrite?: OpenClawConfig;
   pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;
@@ -24,6 +26,10 @@ type DoctorConfigResult = {
   confirmedConfigSource?: { path: string; hash: string };
   /** Repair panels held back until the atomic config write commits. */
   pendingChangePanels?: readonly string[];
+  /** Billing changes reported once after the model migration is durable. */
+  modelBillingRouteWarnings?: readonly string[];
+  /** Successful retirement pass awaiting the config-write/no-change boundary. */
+  modelRetirementRepairRan?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;

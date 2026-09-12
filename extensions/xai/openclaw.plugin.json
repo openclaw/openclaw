@@ -29,6 +29,10 @@
     {
       "endpointClass": "xai-native",
       "hosts": ["api.x.ai"]
+    },
+    {
+      "endpointClass": "custom",
+      "baseUrls": ["https://cli-chat-proxy.grok.com/v1"]
     }
   ],
   "providerRequest": {

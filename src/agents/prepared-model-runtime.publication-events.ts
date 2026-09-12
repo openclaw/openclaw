@@ -22,7 +22,8 @@ export function createCatalogAttemptReporter(
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
 ): {
-  published: () => void;
+  started: (providers: readonly string[]) => void;
+  published: (providers?: readonly string[]) => void;
   failed: (error: unknown) => never;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
 } {
@@ -31,11 +32,22 @@ export function createCatalogAttemptReporter(
     owner.catalogAttempt && isDeepStrictEqual(owner.catalogAttempt.source, source)
       ? owner.catalogAttempt
       : { source };
+  let pendingProviders: readonly string[] = [];
   return {
+    started: (providers) => {
+      pendingProviders = providers;
+      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+    },
     withRefreshStatus: (catalog) => {
+      Object.defineProperty(catalog, "pendingProviders", {
+        enumerable: true,
+        configurable: true,
+        get: () => (pendingProviders.length ? pendingProviders : undefined),
+      });
       // Keep the status live on retained inventory without copying an error into its successor.
       Object.defineProperty(catalog, "refreshFailed", {
         enumerable: true,
+        configurable: true,
         get: () =>
           attempt.error !== undefined ||
           catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready") ||
@@ -43,13 +55,17 @@ export function createCatalogAttemptReporter(
       });
       return catalog;
     },
-    published: () => {
+    published: (providers) => {
+      pendingProviders = providers
+        ? pendingProviders.filter((provider) => !providers.includes(provider))
+        : [];
       delete attempt.error;
       owner.catalogAttempt = attempt;
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
     },
     failed: (error) => {
       if (isCurrent() && !(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+        pendingProviders = [];
         const attemptError = toStringifiedError(error);
         attempt.error = attemptError;
         owner.catalogAttempt = attempt;

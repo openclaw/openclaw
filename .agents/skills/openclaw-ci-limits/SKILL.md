@@ -311,7 +311,12 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   routing, deadlines and all caps unchanged. This adds zero jobs or registrations.
   Compiler-only AWS evidence does not prove CI timing; validate the complete job
   through exact-head native CI before claiming an improvement.
-- `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+- Current-target `build-artifacts` uses the existing 16-class after a complete
+  four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
+  The SDK memory owner keeps declarations serial when two heaps do not fit.
+  Frozen or unclassified targets retain 32-class; hosted fallbacks, job counts,
+  concurrency and deadlines stay unchanged. Measured compute fit does not prove
+  queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid

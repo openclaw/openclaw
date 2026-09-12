@@ -8,10 +8,21 @@ import { execFileUtf8 } from "../daemon/exec-file.js";
 import { inspectSystemLaunchDaemonOwnership } from "../daemon/launchd-system.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import { openSystemdPrivatePeer } from "../daemon/systemd-peer-native.js";
 import { defaultRuntime } from "../runtime.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
+// These diagnostics model unavailable transports, not the runner's real user manager.
+vi.mock("../daemon/systemd-peer-native.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-peer-native.js")>()),
+  openSystemdBroker: vi
+    .fn()
+    .mockRejectedValue(new Error("Synthetic user-manager broker unavailable")),
+  openSystemdPrivatePeer: vi
+    .fn()
+    .mockRejectedValue(new Error("Unexpected private-peer opening in unavailable-broker fixture")),
+}));
 vi.mock("../daemon/exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
@@ -196,4 +207,5 @@ it.each([
     await expect.soft(maintenance).rejects.toThrow(hint);
     expect.soft(output).toContain(hint);
   }
+  expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
 });

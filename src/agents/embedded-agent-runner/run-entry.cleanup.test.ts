@@ -61,6 +61,7 @@ it.each(cleanupCases)(
                   readDeliveryEvidence: () => ({
                     hasDirectlySentBlockReply: false,
                     hasBlockReplyPipelineOutput: false,
+                    hasRetryBlockedDelivery: false,
                   }),
                 },
           sessionOverride: { kind: "preserve" },

@@ -46,7 +46,10 @@ function singleJobListCases(jobs: CronJob[], match: Record<string, unknown>) {
   }));
 }
 
-export function buildCronMocks(baseTime: number, options: { richAttention?: boolean } = {}) {
+export function buildCronMocks(
+  baseTime: number,
+  options: { richAttention?: boolean; secondAgentId?: string } = {},
+) {
   const richAttention = options.richAttention === true;
   const minute = 60_000;
   const hour = 60 * minute;
@@ -196,7 +199,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     : [];
   const healthyJob: CronJob = {
     id: "mock-cron-release-digest",
-    agentId: "main",
+    agentId: options.secondAgentId ?? "main",
     name: "Publish release digest",
     description: "Summarize merged changes for the engineering channel.",
     enabled: true,

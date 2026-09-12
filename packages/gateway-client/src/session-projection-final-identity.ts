@@ -105,40 +105,59 @@ function hasTerminalStopReason(message: unknown): boolean {
   );
 }
 
-function hasCompletedRunSnapshotContext(
-  entry: TerminalProjectionEntry,
+/**
+ * Completed-run snapshot-context check over one snapshot: indexes are built in a
+ * single sweep and reused across every candidate row of a reconciliation pass.
+ */
+function createCompletedRunSnapshotContextCheck(
   snapshot: readonly TerminalProjectionEntry[],
   runId: string | null,
-): boolean {
-  if (!runId || entry.identity?.runId !== runId) {
-    return false;
-  }
-  const entryIndex = snapshot.indexOf(entry);
-  if (entryIndex < 0) {
-    return false;
-  }
-  const hasEarlierUser = snapshot
-    .slice(0, entryIndex)
-    .some((candidate) => candidate.identity?.role === "user" && candidate.identity.runId === runId);
-  const hasLaterAssistant = snapshot
-    .slice(entryIndex + 1)
-    .some(
-      (candidate) => candidate.identity?.role === "assistant" && candidate.identity.runId === runId,
+): (entry: TerminalProjectionEntry) => boolean {
+  let snapshotIndexes: Map<TerminalProjectionEntry, number> | undefined;
+  let firstUserIndex = -1;
+  let lastAssistantIndex = -1;
+  return (entry: TerminalProjectionEntry): boolean => {
+    if (!runId || entry.identity?.runId !== runId) {
+      return false;
+    }
+    if (!snapshotIndexes) {
+      const indexes = new Map<TerminalProjectionEntry, number>();
+      snapshot.forEach((candidate, index) => {
+        if (candidate.identity?.runId === runId) {
+          // Keep indexOf's first-occurrence identity when a snapshot repeats an entry.
+          if (!indexes.has(candidate)) {
+            indexes.set(candidate, index);
+          }
+          if (candidate.identity.role === "user" && firstUserIndex < 0) {
+            firstUserIndex = index;
+          } else if (candidate.identity.role === "assistant") {
+            lastAssistantIndex = index;
+          }
+        }
+      });
+      snapshotIndexes = indexes;
+    }
+    const entryIndex = snapshotIndexes.get(entry);
+    return (
+      entryIndex !== undefined &&
+      firstUserIndex >= 0 &&
+      firstUserIndex < entryIndex &&
+      lastAssistantIndex <= entryIndex
     );
-  return hasEarlierUser && !hasLaterAssistant;
+  };
 }
 
 /** Terminal evidence shared by snapshot promotion and live replay reconciliation. */
 function hasTerminalProjectionEvidence(
   entry: TerminalProjectionEntry,
-  snapshot: readonly TerminalProjectionEntry[],
   runId: string | null,
+  hasCompletedRunSnapshotContext: (entry: TerminalProjectionEntry) => boolean,
 ): boolean {
   const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
   return (
     metadata?.runTerminal === true ||
     (entry.identity?.runId === runId && hasTerminalStopReason(entry.message)) ||
-    hasCompletedRunSnapshotContext(entry, snapshot, runId)
+    hasCompletedRunSnapshotContext(entry)
   );
 }
 
@@ -197,7 +216,8 @@ export function findUniqueSnapshotTerminalMatch(
     current.identity.id ||
     current.identity.sequence !== null ||
     !run ||
-    run.status === "streaming"
+    run.status === "streaming" ||
+    matches.length === 0
   ) {
     return null;
   }
@@ -230,9 +250,10 @@ function findUniqueTerminalContentMatch<T extends TerminalProjectionEntry>(
   snapshot: readonly TerminalProjectionEntry[],
   runId: string | null,
 ): T | null {
+  const hasCompletedRunSnapshotContext = createCompletedRunSnapshotContextCheck(snapshot, runId);
   const candidates = matches.filter(
     (entry) =>
-      hasTerminalProjectionEvidence(entry, snapshot, runId) &&
+      hasTerminalProjectionEvidence(entry, runId, hasCompletedRunSnapshotContext) &&
       readFinalContentIdentity(entry.message) === content,
   );
   return candidates.length === 1 ? (candidates[0] ?? null) : null;

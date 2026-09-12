@@ -101,12 +101,7 @@ describe("buildStatusAllReportLines", () => {
         port: 18789,
         portUsage: null,
         tailscaleMode: "off",
-        tailscale: {
-          backendState: null,
-          dnsName: null,
-          ips: [],
-          error: null,
-        },
+        tailscaleDns: null,
         tailscaleHttpsUrl: null,
         skillStatus: null,
         pluginCompatibility: [],

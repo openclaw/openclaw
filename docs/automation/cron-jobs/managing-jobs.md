@@ -82,6 +82,15 @@ Each admin management request records its method, run, operational instance, and
 
 ### CLI management
 
+For older automations missing creator account metadata, run `openclaw doctor --fix`.
+Doctor reconciles the account only when the stored creator identity proves it,
+and reports the repair. The matching creator session can then update an agent
+prompt without supplying a new tool cap. Existing tool permissions and creator
+attribution stay intact; capless jobs retain their legacy execution policy.
+An explicit permission edit still requires matching owner authority. Jobs whose
+stored identity cannot prove an account need authenticated administrator recovery;
+Doctor does not infer ownership from delivery settings or the current caller.
+
 ```bash
 # List enabled jobs
 openclaw automations list

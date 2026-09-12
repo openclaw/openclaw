@@ -1,14 +1,9 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { PreparedProviderModelAccess } from "../commands/models/auth-model-policy.js";
 import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
-import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createProviderBrowserAuthSession,
   ProviderBrowserSignInUnavailableError,
@@ -25,6 +20,7 @@ import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
 } from "../shared/provider-auth-result.js";
+import { formatProviderLoginCommand } from "../shared/provider-login-command.js";
 import { buildCommandChoiceReply, createLoginChoicePrompt } from "../wizard/command-choice.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { ReplyPayload } from "./reply-payload.js";
@@ -37,6 +33,15 @@ export type {
 export type { PreparedProviderModelAccess } from "../commands/models/auth-model-policy.js";
 export type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
 export { ProviderAuthConfigApplyError, ProviderCredentialsSavedError };
+export {
+  decideProviderLoginSessionAdoption,
+  isProviderLoginPatchPersisted,
+} from "../config/sessions/auth-profile-override-provenance.js";
+export {
+  formatProviderLoginCompletion,
+  formatProviderLoginFailure,
+} from "../auto-reply/provider-login-recovery.js";
+export { formatProviderLoginCommand };
 
 type ProviderAuthLoginFlowRuntime = typeof import("../commands/models/auth.js");
 
@@ -49,51 +54,32 @@ type ProviderChannelLoginPreparation =
       choice: ProviderChannelLoginChoice;
     };
 
-type ProviderLoginSessionEntry = Pick<
-  SessionEntry,
-  | "sessionId"
-  | "providerOverride"
-  | "modelProvider"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
->;
-
-type ProviderLoginSessionAdoption =
-  | { status: "unchanged" }
-  | {
-      status: "patch";
-      patch: {
-        authProfileOverride: string;
-        authProfileOverrideSource: "user";
-        authProfileOverrideCompactionCount: undefined;
-      };
-    }
-  | { status: "rejected" };
-
 const PROVIDER_LOGIN_FLOW_TTL_MS = 15 * 60_000;
 
 type ProviderLoginFlowRecord = {
+  providerLabel: string;
   expiresAt: number;
   signal: AbortSignal;
   cancel: (message?: string) => void;
-  pendingModelAccess?: {
-    prepared: PreparedProviderModelAccess;
-    prompt: ReturnType<
-      typeof createLoginChoicePrompt<
-        PreparedProviderModelAccess["prompt"]["options"][number]["value"]
-      >
-    >;
-    terminalMessage: string;
-  };
+};
+
+type ProviderModelAccessRecord = {
+  expiresAt: number;
+  prepared: PreparedProviderModelAccess;
+  prompt: ReturnType<typeof createLoginChoicePrompt<"all" | "keep">>;
+};
+
+type ProviderLoginFlowRegistry = {
+  logins: Map<string, ProviderLoginFlowRecord>;
+  modelAccess: Map<string, ProviderModelAccessRecord>;
 };
 
 type ProviderLoginFlowReservation =
-  | { status: "active" }
+  | { status: "active"; providerLabel: string }
   | { status: "reserved"; record: ProviderLoginFlowRecord };
 
-export function createProviderLoginFlowRegistry(): Map<string, ProviderLoginFlowRecord> {
-  return new Map();
+export function createProviderLoginFlowRegistry(): ProviderLoginFlowRegistry {
+  return { logins: new Map(), modelAccess: new Map() };
 }
 
 const loadProviderAuthLoginFlowRuntime = createLazyRuntimeModule(
@@ -106,94 +92,22 @@ const bindProviderAuthLoginFlowRuntime = createLazyRuntimeMethodBinder(
 export const runModelsAuthLoginFlow: ProviderAuthLoginFlowRuntime["runModelsAuthLoginFlowCore"] =
   bindProviderAuthLoginFlowRuntime((runtime) => runtime.runModelsAuthLoginFlowCore);
 
-function matchesLoginSnapshot(
-  current: ProviderLoginSessionEntry,
-  snapshot: ProviderLoginSessionEntry,
-): boolean {
-  return (
-    current.sessionId === snapshot.sessionId &&
-    current.authProfileOverride === snapshot.authProfileOverride &&
-    current.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    current.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
-  );
-}
-
-function resolvePersistedModelProvider(entry: ProviderLoginSessionEntry): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(entry.providerOverride ?? entry.modelProvider);
-  return provider || undefined;
-}
-
-/** Decide one session-profile adoption from the authoritative row read immediately before write. */
-export function decideProviderLoginSessionAdoption(params: {
-  currentModelProvider: string | undefined;
-  loginProvider: string;
-  nextProfileId: string | undefined;
-  snapshot: ProviderLoginSessionEntry | undefined;
-  current: ProviderLoginSessionEntry | undefined;
-}): ProviderLoginSessionAdoption {
-  if (!params.nextProfileId) {
-    return { status: "rejected" };
-  }
-  if (
-    !params.currentModelProvider ||
-    normalizeLowercaseStringOrEmpty(params.currentModelProvider) !==
-      normalizeLowercaseStringOrEmpty(params.loginProvider) ||
-    !params.current
-  ) {
-    return { status: "unchanged" };
-  }
-  const currentProvider = resolvePersistedModelProvider(params.current);
-  const snapshotProvider = params.snapshot
-    ? resolvePersistedModelProvider(params.snapshot)
-    : undefined;
-  if (
-    (currentProvider &&
-      currentProvider !== normalizeLowercaseStringOrEmpty(params.loginProvider)) ||
-    (params.snapshot && currentProvider !== snapshotProvider)
-  ) {
-    return { status: "unchanged" };
-  }
-  if (params.snapshot) {
-    if (!matchesLoginSnapshot(params.current, params.snapshot)) {
-      return { status: "rejected" };
-    }
-  } else {
-    const source = resolveCollapsedSessionAuthPinSource(params.current);
-    if (source === "user" && params.current.authProfileOverride !== params.nextProfileId) {
-      return { status: "rejected" };
-    }
-  }
-  const needsPatch =
-    params.current.authProfileOverride !== params.nextProfileId ||
-    params.current.authProfileOverrideSource !== "user" ||
-    params.current.authProfileOverrideCompactionCount !== undefined;
-  return needsPatch
-    ? {
-        status: "patch",
-        patch: {
-          authProfileOverride: params.nextProfileId,
-          authProfileOverrideSource: "user",
-          authProfileOverrideCompactionCount: undefined,
-        },
-      }
-    : { status: "unchanged" };
-}
-
 export function reserveProviderLoginFlow(params: {
-  flows: Map<string, ProviderLoginFlowRecord>;
+  flows: ProviderLoginFlowRegistry;
   flowKey: string;
+  providerLabel: string;
   now?: number;
   replacementMessage?: string;
   signal?: AbortSignal;
 }): ProviderLoginFlowReservation {
   const now = params.now ?? Date.now();
-  const activeFlow = params.flows.get(params.flowKey);
+  const activeFlow = params.flows.logins.get(params.flowKey);
   if (activeFlow && activeFlow.expiresAt > now) {
-    return { status: "active" };
+    return { status: "active", providerLabel: activeFlow.providerLabel };
   }
   if (activeFlow) {
     activeFlow.cancel();
-    params.flows.delete(params.flowKey);
+    params.flows.logins.delete(params.flowKey);
   }
   const abortController = new AbortController();
   const signal = AbortSignal.any([
@@ -202,6 +116,7 @@ export function reserveProviderLoginFlow(params: {
     ...(params.signal ? [params.signal] : []),
   ]);
   const record: ProviderLoginFlowRecord = {
+    providerLabel: params.providerLabel,
     expiresAt: now + PROVIDER_LOGIN_FLOW_TTL_MS,
     signal,
     cancel: (message?: string) =>
@@ -214,80 +129,136 @@ export function reserveProviderLoginFlow(params: {
   signal.addEventListener(
     "abort",
     () => {
-      if (params.flows.get(params.flowKey) === record) {
-        params.flows.delete(params.flowKey);
+      if (params.flows.logins.get(params.flowKey) === record) {
+        params.flows.logins.delete(params.flowKey);
       }
     },
     { once: true },
   );
-  params.flows.set(params.flowKey, record);
+  params.flows.logins.set(params.flowKey, record);
   return { status: "reserved", record };
 }
 
 export function releaseProviderLoginFlow(params: {
-  flows: Map<string, ProviderLoginFlowRecord>;
+  flows: ProviderLoginFlowRegistry;
   flowKey: string;
   record: ProviderLoginFlowRecord;
 }): void {
-  if (params.flows.get(params.flowKey) === params.record) {
-    params.flows.delete(params.flowKey);
+  if (params.flows.logins.get(params.flowKey) === params.record) {
+    params.flows.logins.delete(params.flowKey);
   }
   params.record.cancel();
 }
 
 export function offerProviderLoginModelAccess(params: {
-  record: ProviderLoginFlowRecord;
+  flows: ProviderLoginFlowRegistry;
+  flowKey: string;
   prepared: PreparedProviderModelAccess;
   terminalMessage: string;
 }): ProviderLoginReply {
-  params.record.signal.throwIfAborted();
+  const signal = AbortSignal.timeout(PROVIDER_LOGIN_FLOW_TTL_MS);
   const prompt = createLoginChoicePrompt(
     {
       ...params.prepared.prompt,
       message: `${params.terminalMessage}\n\n${params.prepared.prompt.message}`,
     },
-    params.record.signal,
+    signal,
+    params.prepared.provider,
   );
-  params.record.pendingModelAccess = {
+  const record: ProviderModelAccessRecord = {
+    expiresAt: Date.now() + PROVIDER_LOGIN_FLOW_TTL_MS,
     prepared: params.prepared,
     prompt,
-    terminalMessage: params.terminalMessage,
   };
+  params.flows.modelAccess.set(params.flowKey, record);
+  signal.addEventListener(
+    "abort",
+    () => {
+      if (params.flows.modelAccess.get(params.flowKey) === record) {
+        params.flows.modelAccess.delete(params.flowKey);
+      }
+    },
+    { once: true },
+  );
   return prompt.reply;
 }
 
 export async function answerProviderLoginModelAccess(params: {
-  flows: Map<string, ProviderLoginFlowRecord>;
+  flows: ProviderLoginFlowRegistry;
   flowKey: string;
+  agentId: string;
   command: string;
   runtime: RuntimeEnv;
+  readConfig: () => OpenClawConfig;
   signal?: AbortSignal;
   assertCurrent: (config?: OpenClawConfig) => void;
 }): Promise<ProviderLoginReply | undefined> {
-  const record = params.flows.get(params.flowKey);
-  const pending = record?.pendingModelAccess;
-  if (!record || !pending || record.signal.aborted || record.expiresAt <= Date.now()) {
+  const match = /^\/login (?:access|choice [a-f0-9]+ \d+) (\S+)$/u.exec(params.command.trim());
+  const provider = match?.[1];
+  if (!provider) {
     return undefined;
   }
-  const assertCurrent = (config?: OpenClawConfig) => {
+  const assertAuthority = (config = params.readConfig()) => {
     params.signal?.throwIfAborted();
-    record.signal.throwIfAborted();
     params.assertCurrent(config);
-    if (params.flows.get(params.flowKey) !== record) {
+  };
+  assertAuthority();
+  const {
+    completeProviderModelAccess,
+    prepareProviderModelAccess,
+    ProviderModelPolicyChangedError,
+  } = await import("../commands/models/auth-model-policy.js");
+  const renew = (message: string, config = params.readConfig()): ProviderLoginReply => {
+    assertAuthority();
+    assertAuthority(config);
+    const resolved = resolveProviderChannelLoginChoice(provider, { config });
+    const providerLabel =
+      resolved.status === "resolved" && resolved.choice.providerId === provider
+        ? resolved.choice.providerLabel
+        : resolved.status === "ambiguous" &&
+            resolved.choices.every((choice) => choice.providerId === provider)
+          ? resolved.choices[0]?.providerLabel
+          : undefined;
+    if (!providerLabel) {
+      return {
+        text: "This connection is no longer available. Send /models to choose another provider.",
+      };
+    }
+    const prepared = prepareProviderModelAccess({
+      config,
+      agentId: params.agentId,
+      provider,
+      providerLabel,
+    });
+    return prepared
+      ? offerProviderLoginModelAccess({ ...params, prepared, terminalMessage: message })
+      : {
+          text: `All ${providerLabel} models are already allowed. Send /models to choose a model.`,
+        };
+  };
+  const record = params.flows.modelAccess.get(params.flowKey);
+  if (!record || record.expiresAt <= Date.now() || record.prepared.provider !== provider) {
+    return renew(
+      "Choose model access using your current restrictions. You do not need to sign in again.",
+    );
+  }
+  const assertCurrent = (config?: OpenClawConfig) => {
+    assertAuthority(config);
+    if (params.flows.modelAccess.get(params.flowKey) !== record || record.expiresAt <= Date.now()) {
       throw new Error("This model access choice is no longer available.");
     }
   };
   // Authorization precedes token consumption; the answering command owns all effects.
   assertCurrent();
-  const answer = pending.prompt.answer(params.command);
+  const answer = record.prompt.answer(params.command);
   if (!answer) {
-    return undefined;
+    return renew(
+      "Choose model access using your current restrictions. You do not need to sign in again.",
+    );
   }
   try {
-    const { completeProviderModelAccess } = await import("../commands/models/auth-model-policy.js");
-    assertCurrent();
-    const message = await completeProviderModelAccess({
-      prepared: pending.prepared,
+    const outcome = await completeProviderModelAccess({
+      prepared: record.prepared,
       prompter: {
         select: async ({ options }) => {
           const option = options.find((entry) => entry.value === answer.value);
@@ -301,29 +272,42 @@ export async function answerProviderLoginModelAccess(params: {
       assertCurrent,
     });
     return {
-      text: `${pending.terminalMessage}\n\n${message}`,
+      text: `${outcome.message}\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.`,
     };
   } catch (error) {
-    return {
-      text: `${pending.terminalMessage}\n\nModel access could not be updated: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    assertCurrent();
+    if (error instanceof ProviderModelPolicyChangedError) {
+      return renew(
+        "Your model restrictions changed. Choose again using the current restrictions.",
+        error.config,
+      );
+    }
+    params.runtime.error(error instanceof Error ? error.message : String(error));
+    return buildCommandChoiceReply(
+      "Your model-access choice could not be applied. Choose model access again.",
+      [
+        {
+          label: "Choose model access",
+          action: { type: "command", command: `/login access ${provider}` },
+        },
+      ],
+    );
   } finally {
-    record.pendingModelAccess = undefined;
-    releaseProviderLoginFlow({ flows: params.flows, flowKey: params.flowKey, record });
+    if (params.flows.modelAccess.get(params.flowKey) === record) {
+      params.flows.modelAccess.delete(params.flowKey);
+    }
   }
 }
 
 export function cancelProviderLoginFlow(params: {
-  flows: Map<string, ProviderLoginFlowRecord>;
+  flows: ProviderLoginFlowRegistry;
   flowKey: string;
-}): boolean {
-  const record = params.flows.get(params.flowKey);
-  if (!record) {
-    return false;
-  }
-  params.flows.delete(params.flowKey);
-  record.cancel("Provider login cancelled from chat.");
-  return true;
+}): "login" | "model-access" | "both" | undefined {
+  const record = params.flows.logins.get(params.flowKey);
+  const pending = params.flows.modelAccess.delete(params.flowKey);
+  params.flows.logins.delete(params.flowKey);
+  record?.cancel("Provider login cancelled from chat.");
+  return record ? (pending ? "both" : "login") : pending ? "model-access" : undefined;
 }
 
 export async function prepareProviderChannelLogin(params: {
@@ -336,7 +320,8 @@ export async function prepareProviderChannelLogin(params: {
   workspaceDir?: string;
   signal?: AbortSignal;
   hasAdminScope?: boolean;
-  cancelLogin?: () => boolean;
+  refreshAuth: () => Promise<void>;
+  cancelLogin?: () => ReturnType<typeof cancelProviderLoginFlow>;
   answerChoice?: (command: string) => Promise<ProviderLoginReply | undefined>;
 }): Promise<ProviderChannelLoginPreparation | null> {
   const match = params.commandText.trim().match(/^\/login(?:\s+(.+))?$/u);
@@ -345,17 +330,21 @@ export async function prepareProviderChannelLogin(params: {
   }
   params.signal?.throwIfAborted();
   if (
-    !params.commandAuthorized ||
-    !params.senderIsOwner ||
-    (!params.hasAdminScope &&
-      !params.config.commands?.ownerAllowFrom?.some((owner) =>
-        normalizeOptionalString(String(owner)),
-      ))
+    !params.hasAdminScope &&
+    !params.config.commands?.ownerAllowFrom?.some((owner) => normalizeOptionalString(String(owner)))
   ) {
     return {
       status: "rejected",
       reply: {
-        text: "Only a configured OpenClaw owner/admin can start provider login from this channel.",
+        text: "No chat owner is configured. Ask the OpenClaw owner to add your chat account to `commands.ownerAllowFrom` in the OpenClaw configuration, then send `/login` again.",
+      },
+    };
+  }
+  if (!params.commandAuthorized || !params.senderIsOwner) {
+    return {
+      status: "rejected",
+      reply: {
+        text: "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
       },
     };
   }
@@ -367,22 +356,44 @@ export async function prepareProviderChannelLogin(params: {
       },
     };
   }
+  if (match[1]?.trim().toLowerCase() === "refresh") {
+    try {
+      await params.refreshAuth();
+      return {
+        status: "reply",
+        reply: { text: "Sign-in status refreshed. Send /models to see available models." },
+      };
+    } catch {
+      return {
+        status: "reply",
+        reply: {
+          text: "Your saved connections could not be applied. Send /login refresh to try again. You do not need to sign in again.",
+        },
+      };
+    }
+  }
   if (match[1]?.trim().toLowerCase() === "cancel") {
+    const cancelled = params.cancelLogin?.();
     return {
       status: "reply",
       reply: {
-        text: params.cancelLogin?.()
-          ? "Provider login cancelled for this chat."
-          : "No provider login is active in this chat.",
+        text:
+          cancelled === "model-access"
+            ? "Model-access choice cancelled. Your saved connection is unchanged. Send /models to choose a model."
+            : cancelled === "both"
+              ? "Sign-in and model-access choice cancelled. Send /login to connect a provider."
+              : cancelled
+                ? "Provider login cancelled for this chat."
+                : "No provider login is active in this chat.",
       },
     };
   }
-  if (/^choice(?:\s|$)/u.test(match[1]?.trim() ?? "")) {
+  if (/^(?:choice|access)(?:\s|$)/u.test(match[1]?.trim() ?? "")) {
     const reply = await params.answerChoice?.(params.commandText.trim());
     return {
       status: "reply",
       reply: reply ?? {
-        text: "This model access choice is no longer available. Send /login to sign in again.",
+        text: "This model access choice is no longer available. Open Models to change which models are allowed.",
       },
     };
   }
@@ -500,6 +511,23 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
   };
 }
 
+export async function refreshProviderLoginAuthState(params: {
+  agentId: string;
+  readConfig: () => OpenClawConfig;
+  assertCurrent: (config: OpenClawConfig) => void;
+}): Promise<void> {
+  const readConfig = () => {
+    const config = params.readConfig();
+    params.assertCurrent(config);
+    return config;
+  };
+  readConfig();
+  const { refreshModelAuthStateAfterMutation } = await import("../gateway/model-auth-refresh.js");
+  readConfig();
+  await refreshModelAuthStateAfterMutation(readConfig, "login", params.agentId);
+  readConfig();
+}
+
 export async function runProviderChannelLoginFlow(params: {
   choice: ProviderChannelLoginChoice;
   agentId: string;
@@ -572,6 +600,8 @@ export async function runProviderChannelLoginFlow(params: {
       ownerPluginId: choice.pluginId,
       credentialOnly: true,
       onModelAccessRequested: params.onModelAccessRequested,
+      refreshAfterLogin: (agentId) =>
+        refreshProviderLoginAuthState({ agentId, readConfig, assertCurrent }),
       assertCurrent,
       agent: params.agentId,
       config: readConfig(),
@@ -599,42 +629,6 @@ export async function runProviderChannelLoginFlow(params: {
   }
 }
 
-export function formatProviderLoginCommand(choice: ProviderChannelLoginChoice): string {
-  return `/login ${choice.command}`;
-}
-
-export function formatProviderLoginCompletion(
-  choice: ProviderChannelLoginChoice,
-  authRefresh: ModelsAuthLoginFlowResult["authRefresh"],
-  sessionSwitchFailed = false,
-  sessionLabel = "session",
-): string {
-  const sessionFailure = `this ${sessionLabel} could not switch to the newly authenticated profile. Retry \`${formatProviderLoginCommand(choice)}\`, or select the profile manually.`;
-  if (authRefresh === "refreshed") {
-    return sessionSwitchFailed
-      ? `${choice.providerLabel} login completed, but ${sessionFailure}`
-      : `${choice.providerLabel} login complete. Try your request again now.`;
-  }
-  const message =
-    authRefresh === "gateway-rejected"
-      ? `${choice.providerLabel} credentials saved, but the Gateway could not apply the auth update. Check the Gateway logs, restart the Gateway, then use /models.`
-      : `${choice.providerLabel} credentials saved, but the Gateway could not be reached to apply them. Restart the Gateway, then use /models.`;
-  return sessionSwitchFailed ? `${message} Also, ${sessionFailure}` : message;
-}
-
-export function formatProviderLoginFailure(
-  choice: ProviderChannelLoginChoice,
-  error: unknown,
-): string {
-  if (error instanceof ProviderAuthConfigApplyError) {
-    return `${choice.providerLabel} credentials saved, but provider settings could not be applied. Review the provider settings and check the Gateway logs before trying again.`;
-  }
-  if (error instanceof ProviderCredentialsSavedError) {
-    return `${choice.providerLabel} credentials were saved, but sign-in did not finish. Send \`${formatProviderLoginCommand(choice)}\` to retry.`;
-  }
-  return `${choice.providerLabel} login did not complete. Send \`${formatProviderLoginCommand(choice)}\` to try again.`;
-}
-
 function formatProviderLoginControlUiHandoff(choice: ProviderChannelLoginChoice): string {
   if (choice.mode === "setup") {
     return `${choice.label} needs provider setup. Open Control UI → Models → Configure Models, then choose “${choice.label}”.`;
@@ -653,7 +647,7 @@ export function buildProviderLoginChoicesReply(
           label: provider.label,
           action: {
             type: "command" as const,
-            command: `/login ${formatProviderOAuthLoginRef(provider)}`,
+            command: formatProviderLoginCommand(formatProviderOAuthLoginRef(provider)),
           },
         }))
       : resolution.choices
@@ -662,7 +656,7 @@ export function buildProviderLoginChoicesReply(
             label: choice.label,
             action: {
               type: "command" as const,
-              command: `/login ${formatProviderLoginChoiceRef(choice)}`,
+              command: formatProviderLoginCommand(formatProviderLoginChoiceRef(choice)),
             },
           }));
   if (buttons.length === 0) {
@@ -678,18 +672,6 @@ export function buildProviderLoginChoicesReply(
       ? "Choose a provider to sign in:"
       : resolution.status === "ambiguous"
         ? "Choose how to connect:"
-        : "Unsupported login provider. Available provider access commands:";
+        : "No provider matched that name. Available connections:";
   return buildCommandChoiceReply(heading, buttons);
-}
-
-/** A persisted row proves a patch only when it carries the exact login profile we wrote. */
-export function isProviderLoginPatchPersisted(
-  persisted: ProviderLoginSessionEntry,
-  nextProfileId: string,
-): boolean {
-  return (
-    persisted.authProfileOverride === nextProfileId &&
-    persisted.authProfileOverrideSource === "user" &&
-    persisted.authProfileOverrideCompactionCount === undefined
-  );
 }

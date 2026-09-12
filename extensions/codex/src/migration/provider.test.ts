@@ -1577,10 +1577,10 @@ describe("buildCodexMigrationProvider", () => {
     );
     expect(configState.agents?.defaults?.models?.["openai/gpt-5.4-mini"]).toEqual({});
     expect(configState.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({});
-    expect(configState.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toEqual({});
+    expect(configState.agents?.defaults?.models?.["openai/gpt-6-astra"]).toEqual({});
     expect(configState.agents?.defaults?.model).toEqual({
       fallbacks: [],
-      primary: "openai/gpt-5.6-sol",
+      primary: "openai/gpt-6-astra",
     });
   });
 
@@ -1993,11 +1993,11 @@ describe("buildCodexMigrationProvider", () => {
         details: expect.objectContaining({
           path: ["agents", "defaults"],
           value: expect.objectContaining({
-            model: { primary: "openai/gpt-5.6-sol" },
+            model: { primary: "openai/gpt-6-astra" },
             models: expect.objectContaining({
               "openai/gpt-5.4-mini": {},
               "openai/gpt-5.5": {},
-              "openai/gpt-5.6-sol": {},
+              "openai/gpt-6-astra": {},
             }),
           }),
         }),

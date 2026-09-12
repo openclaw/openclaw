@@ -2,6 +2,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 
 /** One collection owns each physical store's bounded snapshot, including its agent windows. */
 export function createStatusSessionStoreReader(
@@ -14,6 +15,9 @@ export function createStatusSessionStoreReader(
     stores,
     read(storePath: string, agentId?: string) {
       const path = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
+      if (agentId && readAgentDatabaseAdmissionRefusal(agentId)) {
+        return { path, count: 0, recent: [] };
+      }
       let store = stores.get(path);
       if (!store) {
         store = readSummary(
@@ -29,9 +33,9 @@ export function createStatusSessionStoreReader(
 }
 
 /** Reads each physical store once, retaining retired agent namespaces in the aggregate. */
-export function readStatusSessionStores(
+export function readStatusSessionStores<Agent extends { id: string; name?: string }>(
   cfg: OpenClawConfig,
-  agents: ReadonlyArray<{ id: string; name?: string }>,
+  agents: readonly Agent[],
   recentLimit: number,
 ) {
   const reader = createStatusSessionStoreReader(

@@ -6,6 +6,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "../packages/normalization-core/src/stable-stringify.ts";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mts";
+import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
 const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
@@ -171,7 +172,7 @@ export function main(argv: string[] = process.argv.slice(2)) {
   const paths = listChangedPaths(args);
 
   for (const filePath of paths) {
-    if (!RELEASE_METADATA_PATHS.has(filePath)) {
+    if (!RELEASE_METADATA_PATHS.has(filePath) && !isReleaseChangelogPath(filePath)) {
       fail(`${filePath}: not a release metadata path; run the normal changed gate`);
     }
   }

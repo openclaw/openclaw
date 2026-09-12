@@ -71,12 +71,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     port: number;
     portUsage: Awaited<ReturnType<typeof inspectPortUsage>> | null;
     tailscaleMode: string;
-    tailscale: {
-      backendState: null;
-      dnsName: string | null;
-      ips: string[];
-      error: null;
-    };
+    tailscaleDns: string | null;
     tailscaleHttpsUrl: string | null;
     skillStatus: ReturnType<typeof buildWorkspaceSkillStatus> | null;
     pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
@@ -178,12 +173,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
       port,
       portUsage,
       tailscaleMode: overview.tailscaleMode,
-      tailscale: {
-        backendState: null,
-        dnsName: overview.tailscaleDns,
-        ips: [],
-        error: null,
-      },
+      tailscaleDns: overview.tailscaleDns,
       tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
       skillStatus,
       pluginCompatibility,
@@ -237,7 +227,6 @@ export async function buildStatusAllReportData(params: {
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
     updateRows: buildStatusUpdateRows(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
-    tailscaleBackendState: diagnosis.tailscale.backendState,
   });
 
   return {

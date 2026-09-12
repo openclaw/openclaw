@@ -58,6 +58,166 @@ describe("npm lifecycle policy preflight", () => {
 });
 
 describe("package update recovery safety", () => {
+  it.each([
+    { spec: "./candidate.tgz", before: "old-build", after: "new-build", noop: false },
+    {
+      spec: "https://example.test/candidate.tgz",
+      before: "old-build",
+      after: "new-build",
+      noop: false,
+    },
+    { spec: "./candidate.tgz", before: undefined, after: "new-build", noop: false },
+    { spec: "./candidate.tgz", before: "old-build", after: undefined, noop: false },
+    { spec: "./candidate.tgz", before: undefined, after: undefined, noop: false },
+    { spec: "./candidate.tgz", before: "same-build", after: "same-build", noop: true },
+    { spec: "openclaw@1.0.0", before: "old-build", after: "new-build", noop: true },
+    ...[
+      "candidate.tar",
+      "openclaw@candidate.tar",
+      "gist:123456abcdef",
+      "openclaw@gist:123456abcdef",
+      "gitlab:owner/repository",
+      "bitbucket:owner/repository",
+      "https://example.test/candidate",
+      "unknown:opaque",
+      "./candidate",
+      "../candidate",
+      "/tmp/candidate",
+      ".",
+      "..",
+      "~/candidate",
+      ".candidate",
+      "candidate/nested/directory",
+      "C:/candidate",
+      "file:./candidate",
+      "openclaw@file:./candidate",
+      "openclaw@./candidate",
+      "openclaw@.candidate",
+      "@scope/openclaw@file:../candidate",
+      "@scope/openclaw@/tmp/candidate",
+      "owner/repository",
+      "owner/repository#main",
+      "git@host:owner/repository.git",
+      "openclaw@owner/repository",
+      "openclaw@git@host:owner/repository.git",
+      "github:owner/repository",
+      "git+ssh://git@host/owner/repository.git",
+    ].map((spec) => ({ spec, before: "old-build", after: "new-build", noop: false })),
+    ...[
+      "openclaw@npm:@scope/fork@^1",
+      "npm:@scope/fork@latest",
+      "openclaw@npm:openclaw@1.0.0",
+    ].flatMap((spec) => [
+      { spec, before: "old-build", after: "new-build", noop: false },
+      { spec, before: "same-build", after: "same-build", noop: true },
+      { spec, before: undefined, after: undefined, noop: false },
+    ]),
+    ...[
+      "@scope/openclaw",
+      "@scope/openclaw@1.0.0",
+      "@scope/openclaw@latest",
+      "openclaw",
+      "openclaw@next",
+      "openclaw@canary!",
+      "openclaw@-canary",
+      "openclaw@~canary",
+      "@scope/openclaw@(canary)",
+      "openclaw@^1.0.0",
+      "openclaw@>=1 <3",
+      "@scope/candidate.tar",
+    ].map((spec) => ({ spec, before: "old-build", after: "new-build", noop: true })),
+  ])(
+    "honors staged identity for $spec ($before -> $after)",
+    async ({ spec, before, after, noop }) => {
+      await withTestDir({ prefix: "openclaw-artifact-identity-" }, async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const writeIdentity = async (root: string, buildId?: string) => {
+          await writePackageRoot(root, "1.0.0");
+          if (buildId) {
+            await fs.writeFile(
+              path.join(root, "dist", "build-info.json"),
+              JSON.stringify({ buildId }),
+            );
+            await writePackageDistInventory(root);
+          }
+        };
+        await writeIdentity(packageRoot, before);
+        const installedPaths = [
+          "package.json",
+          "dist/index.js",
+          "dist/build-info.json",
+          PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+        ];
+        const installedBytesBefore = await Promise.all(
+          installedPaths.map((relativePath) =>
+            fs.readFile(path.join(packageRoot, relativePath)).catch(() => null),
+          ),
+        );
+        const validateCandidate = vi.fn(async () => [
+          { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
+        ]);
+        const beforeActivate = vi.fn(async () => {});
+        const runStep = vi.fn(async ({ name, argv }: { name: string; argv: string[] }) => {
+          if (name === "global update pack") {
+            const packDestinationIndex = argv.indexOf("--pack-destination");
+            const packDir = argv[packDestinationIndex + 1];
+            if (packDestinationIndex < 0 || !packDir) {
+              throw new Error("missing pack destination");
+            }
+            await fs.writeFile(path.join(packDir, "candidate.tgz"), "fixture package");
+            return { name, command: argv.join(" "), cwd: packDir, durationMs: 0, exitCode: 0 };
+          }
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (prefixIndex < 0 || !stagePrefix) {
+            throw new Error("missing stage prefix");
+          }
+          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          await writeIdentity(stageRoot, after);
+          return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
+        });
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          packageName: "openclaw",
+          installSpec: spec,
+          timeoutMs: 1000,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          validateCandidate,
+          beforeActivate,
+        });
+        if (noop) {
+          expect(result.reason).toBe("already-current");
+          expect(validateCandidate).not.toHaveBeenCalled();
+        } else {
+          expect(result.reason).toBeUndefined();
+          expect(validateCandidate).toHaveBeenCalledOnce();
+          expect(result.failedStep?.name).toBe("canary");
+        }
+        expect(beforeActivate).not.toHaveBeenCalled();
+        expect(runStep.mock.calls.flatMap(([call]) => call.argv)).not.toContain("--force");
+        await expect(
+          Promise.all(
+            installedPaths.map((relativePath) =>
+              fs.readFile(path.join(packageRoot, relativePath)).catch(() => null),
+            ),
+          ),
+        ).resolves.toEqual(installedBytesBefore);
+        expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+          '"version":"1.0.0"',
+        );
+        if (before) {
+          expect(
+            JSON.parse(await fs.readFile(path.join(packageRoot, "dist", "build-info.json"), "utf8"))
+              .buildId,
+          ).toBe(before);
+        }
+      });
+    },
+  );
+
   it.each(["validation", "activation", "transaction"] as const)(
     "refuses an unsupported layout before mutation when %s requires staging",
     async (hook) => {
@@ -117,6 +277,13 @@ describe("package update recovery safety", () => {
         const packageRoot = path.join(globalRoot, "openclaw");
         const launcher = path.join(prefix, "bin", "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
+        if (outcome === "already current") {
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "build-info.json"),
+            JSON.stringify({ buildId: "same-build" }),
+          );
+          await writePackageDistInventory(packageRoot);
+        }
         await fs.mkdir(path.dirname(launcher), { recursive: true });
         await fs.writeFile(launcher, "old launcher\n");
         let transaction: PackageUpdateTransaction | undefined;
@@ -141,6 +308,13 @@ describe("package update recovery safety", () => {
               stageRoot,
               outcome === "already current" || outcome === "wrong target" ? "1.0.0" : "2.0.0",
             );
+            if (outcome === "already current") {
+              await fs.writeFile(
+                path.join(stageRoot, "dist", "build-info.json"),
+                JSON.stringify({ buildId: "same-build" }),
+              );
+              await writePackageDistInventory(stageRoot);
+            }
             await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
             stageLauncher = path.join(stagePrefix, "bin", "openclaw");
             await fs.writeFile(stageLauncher, "new launcher\n");

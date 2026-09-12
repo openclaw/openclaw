@@ -158,7 +158,13 @@ export function renderChatModelAccountControl(params: {
         ? [{ value: "loading", label: t("common.loading"), disabled: true }]
         : []),
       ...(currentInventory.nextCursor
-        ? [{ value: "more", label: t("profilePage.modelAccounts.loadMore") }]
+        ? [
+            {
+              value: "more",
+              label: t("profilePage.modelAccounts.loadMore"),
+              disabled: currentInventory.loading,
+            },
+          ]
         : []),
       ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
     ];
@@ -246,7 +252,8 @@ export function renderChatModelAccountControl(params: {
                 data-chat-model-keywords=${option.description?.toLocaleLowerCase() ?? ""}
                 data-chat-model-provider-label="account"
                 ?hidden=${!currentInventory.open}
-                ?disabled=${option.disabled || params.disabled}
+                aria-disabled=${option.disabled ? "true" : nothing}
+                ?disabled=${params.disabled || (option.disabled && option.value !== "more")}
                 @mouseenter=${(event: MouseEvent) => {
                   // SAFETY: Bound to each account option button's mouseenter event.
                   const row = event.currentTarget as HTMLButtonElement;

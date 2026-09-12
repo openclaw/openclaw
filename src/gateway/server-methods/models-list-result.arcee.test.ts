@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import { resolveModelWithRegistry } from "../../agents/embedded-agent-runner/model.registry-resolution.js";
 import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
-import { resolveConfiguredModelCatalogOverrides } from "../../agents/model-catalog-route.js";
+import { createConfiguredModelCatalogOverridesResolver } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
@@ -188,10 +188,13 @@ it("keeps exact authored identities ahead of provider-owned wire aliases", () =>
       providers: { arcee: { baseUrl: "https://api.arcee.ai/api/v1", models } },
     },
   };
+  const resolveOverrides = createConfiguredModelCatalogOverridesResolver({ cfg });
   for (const { id } of models) {
-    expect(
-      resolveConfiguredModelCatalogOverrides({ cfg, entry: { provider: "arcee", id } }),
-    ).toMatchObject({ name: "Exact row", contextWindow: 65536, reasoning: true });
+    expect(resolveOverrides({ provider: "arcee", id })).toMatchObject({
+      name: "Exact row",
+      contextWindow: 65536,
+      reasoning: true,
+    });
   }
   expect(
     findConfiguredProviderModel({ models }, "arcee", "trinity-large-thinking", normalize),

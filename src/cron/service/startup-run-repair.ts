@@ -62,6 +62,7 @@ export function markInterruptedStartupRun(params: {
   );
 
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
   job.state.lastRunAtMs = runningAtMs;
   job.state.lastRunStatus = "error";
   job.state.lastStatus = "error";

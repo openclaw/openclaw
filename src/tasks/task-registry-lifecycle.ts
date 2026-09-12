@@ -2,7 +2,6 @@ import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
   appendTaskEvent,
@@ -21,7 +20,7 @@ import {
   setTaskRegistryListenerStarter,
   setTaskRegistryListenerStop,
 } from "./task-registry-state.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
 // Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.

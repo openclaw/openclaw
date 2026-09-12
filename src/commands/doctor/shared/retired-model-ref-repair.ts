@@ -159,6 +159,7 @@ export function createRetiredModelRefRepairResolver(params: {
             if (!view) {
               view = createModelAuthAvailabilityResolver({
                 cfg: params.cfg,
+                agentId,
                 agentDir,
                 workspaceDir,
                 env,
@@ -434,16 +435,14 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
       continue;
     }
     const retainAlias = decision.reason === "retirement" && decision.retirementScope === "route";
-    // A shared map can remain on the old route for API accounts. Materialize
-    // the retired owner's settings locally, with authored successor values winning.
+    // Local source policy outranks inherited successor settings; an authored local successor wins.
+    // Retained source aliases stay on their original authentication route.
     const settings = [
-      inherited,
-      models?.[modelRef],
+      retainAlias ? modelSettingsWithoutAlias(inherited) : inherited,
       params.inheritedModels?.[decision.modelRef],
+      retainAlias ? modelSettingsWithoutAlias(models?.[modelRef]) : models?.[modelRef],
       models?.[decision.modelRef],
     ]
-      // A retained model owns its alias; copying it would rebind healthy account selections.
-      .map((value, index) => (retainAlias && index < 2 ? modelSettingsWithoutAlias(value) : value))
       .filter((value) => value !== undefined)
       .reduce<unknown>(mergeAgentModelEntryForConfig, undefined);
     if (JSON.stringify(settings) === JSON.stringify(models?.[decision.modelRef])) {

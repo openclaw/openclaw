@@ -40,7 +40,7 @@ describe("tool-policy", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
     expect(coding?.allow).toContain("automations");
-    expect(coding?.allow).not.toContain("gateway");
+    expect(coding?.allow).toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 

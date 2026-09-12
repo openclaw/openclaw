@@ -78,7 +78,7 @@ function isMarkedCapturePath(candidate: string): boolean {
 
 const CAPTURE_SUFFIX = ".update-captures";
 
-function resolveUpdateCaptureRoot(stateDir: string): string {
+export function resolveUpdateCaptureRoot(stateDir: string): string {
   return `${path.resolve(stateDir)}${CAPTURE_SUFFIX}`;
 }
 
