@@ -6,6 +6,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
@@ -432,6 +433,7 @@ export type EmbeddedAgentParams = {
     itemId?: string;
   }) => void;
   onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
+  onRunProgress?: RunEmbeddedAgentParams["onRunProgress"];
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;

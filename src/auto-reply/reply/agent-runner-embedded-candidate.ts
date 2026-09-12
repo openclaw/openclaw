@@ -337,6 +337,9 @@ export async function runEmbeddedFallbackCandidate(
           });
           return eventHandler(event);
         },
+        // Backend progress belongs to the immutable reply operation captured by this
+        // candidate. A late callback can only refresh that retired owner, never a successor.
+        onRunProgress: () => turn.replyOperation?.recordActivity(),
         // Flush-before-tool requires a handler even when regular block streaming is off.
         onBlockReply: params.presentation.blockReplyHandler,
         onBlockReplyFlush:
