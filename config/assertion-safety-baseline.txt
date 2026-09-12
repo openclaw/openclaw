@@ -1378,7 +1378,6 @@ extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	7
 extensions/xiaomi/onboard.ts	1
 extensions/xiaomi/speech-provider.ts	2
-extensions/zai/detect.ts	1
 extensions/zai/index.ts	2
 extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3
