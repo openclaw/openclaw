@@ -46,7 +46,7 @@ export async function runTuiCliAction(
   }
   const timeoutMs = parseTimeoutMs(opts.timeoutMs);
   if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
-    defaultRuntime.error(`warning: invalid --timeout-ms "${opts.timeoutMs}"; ignoring`);
+    throw new Error("--timeout-ms must be a positive integer.");
   }
   const historyLimit = parseStrictPositiveInteger(opts.historyLimit ?? "200");
   if (historyLimit === undefined) {
