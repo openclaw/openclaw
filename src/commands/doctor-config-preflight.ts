@@ -60,6 +60,7 @@ import {
 import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
+import { isLegacyPackageUpdateDoctorPass } from "./doctor/shared/update-phase.js";
 
 const loadState = createLazyRuntimeModule(() => import("../infra/state-migrations.state-dir.js"));
 
@@ -412,12 +413,14 @@ export async function runDoctorConfigPreflight(
     }
 
     let baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+    // Legacy parents have no later repair handoff; the planner still fully validates plugins.
     let automaticConfigRepair =
       activeConfigRepair ??
       ((gatewayStartupCheckpointRequired ||
         (stateMigrationsRequested && options.migrateLegacyConfig !== false)) &&
       !snapshot.valid &&
-      !shouldSkipPluginValidationForDoctorConfigPreflight() &&
+      (!shouldSkipPluginValidationForDoctorConfigPreflight() ||
+        (!gatewayStartupCheckpointRequired && isLegacyPackageUpdateDoctorPass(process.env))) &&
       !resolveIsConfigReadOnly(process.env) &&
       !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot })
         ? planScopedConfigRepair(snapshot)
