@@ -282,9 +282,12 @@ function repairStateSchema(
   } finally {
     if (db.isOpen) {
       db.exec("PRAGMA foreign_keys = ON;");
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      // Rollback cleanup may have closed the handle after an unrecoverable
+      // transaction failure; double-close throws ERR_INVALID_STATE and would
+      // discard the diagnostic warnings returned by the catch above.
+      db.close();
     }
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
     if (!ownershipRefused) {
       ensureOpenClawStatePermissions(pathname, env);
     }
