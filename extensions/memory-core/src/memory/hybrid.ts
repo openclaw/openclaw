@@ -1,5 +1,4 @@
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyImportanceMultiplier } from "./importance.js";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
@@ -60,25 +59,7 @@ type HybridKeywordResult<TSource extends HybridSource = HybridSource> = {
   provenance?: MemoryEntryProvenance;
 };
 
-export function buildFtsQuery(raw: string): string | null {
-  const tokens = normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []);
-  if (tokens.length === 0) {
-    return null;
-  }
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" AND ");
-}
-
-export function bm25RankToScore(rank: number): number {
-  if (!Number.isFinite(rank)) {
-    return 1 / (1 + 999);
-  }
-  if (rank < 0) {
-    const relevance = -rank;
-    return relevance / (1 + relevance);
-  }
-  return 1 / (1 + rank);
-}
+export { buildFtsQuery } from "./keyword-query.js";
 
 export function scoreExactPathTieForTemporalDecay(contentScore: number): number {
   return (1 + Math.max(0, Math.min(1, contentScore))) / 2;

@@ -27,7 +27,7 @@ import {
   configureMemoryCoreDreamingState,
   writeMemoryCoreWorkspaceEntry,
 } from "./src/dreaming-state.js";
-import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
+import { bm25RankToScore, buildFtsQuery } from "./src/memory/keyword-query.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
 import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
 import {

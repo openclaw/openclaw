@@ -933,6 +933,9 @@
       ],
       "openclaw/plugin-sdk/memory-core-host-engine-knn": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-knn.d.ts"
+      ],
+      "openclaw/plugin-sdk/memory-core-host-engine-indexing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-indexing.d.ts"
       ]
     }
   }

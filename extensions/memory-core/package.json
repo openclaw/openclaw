@@ -26,6 +26,12 @@
     }
   },
   "openclaw": {
+    "build": {
+      "workerEntries": [
+        "./src/memory/manager-search.worker.ts",
+        "./src/memory/manager-index.worker.ts"
+      ]
+    },
     "extensions": [
       "./index.ts"
     ]

@@ -1,10 +1,6 @@
 // Narrow IO/runtime facade re-exported for memory host helpers.
 
 export {
-  CHARS_PER_TOKEN_ESTIMATE,
-  estimateStringChars,
-} from "@openclaw/normalization-core/cjk-chars";
-export {
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
 } from "../../../../src/infra/sqlite-wal.js";

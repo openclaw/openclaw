@@ -2,9 +2,7 @@
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { extractCuratedEntryRecallMetadata } from "openclaw/plugin-sdk/memory-core-host-engine-curated";
 import {
-  enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
   isEmbeddingBatchUnavailableError,
   type EmbeddingInput,
@@ -14,17 +12,12 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
-  chunkMarkdown,
-  hashText,
   isFileMissingError,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
-  remapChunkLines,
   retryTransientMemoryRead,
   runWithConcurrency,
-  stripMemoryAnnotationCarriers,
   type MemoryChunk,
-  type MemoryEntryProvenance,
   type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -40,6 +33,7 @@ import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
+import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
 import { readMemoryDatabaseRevision } from "./manager-db.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
@@ -52,16 +46,15 @@ import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.
 import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
-  filterNonEmptyMemoryChunks,
   isSplittableMemoryEmbeddingBatchError,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
+import { resolveChunkProvenance } from "./manager-index-preparation.js";
 import {
   resolveMemoryIndexProviderIdentities,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
 import {
   MemoryManagerSyncOps,
   type MemoryIndexWorkItem,
@@ -1011,7 +1004,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           triggers: null,
           projectKey: null,
         };
-        chunk.provenance = this.resolveChunkProvenance(
+        chunk.provenance = resolveChunkProvenance(
           entry,
           options.source,
           chunk,
@@ -1041,109 +1034,32 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         this.dirty = true;
         return null;
       }
-      // Hash, chunk, and embed one immutable read; publication validates it again.
-      const snapshot = options.source === "memory" ? { ...entry, hash: hashText(content) } : entry;
-      const normalizedEntryPath = entry.path.replaceAll("\\", "/");
-      const perEntry =
-        options.source === "memory" &&
-        (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
-      const indexingContent =
-        options.source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
-      // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
-      const sourceLines =
-        options.source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
-      const chunkOptions = { ...this.settings.chunking, perEntry };
-      const baseChunks = filterNonEmptyMemoryChunks(
-        options.source === "sessions"
-          ? chunkSessionContentAtResetBoundary({
-              content: indexingContent,
-              cutoffLine: (() => {
-                const cutoff = readSessionResetRecallCutoffMetadata(entry);
-                return cutoff.state === "valid" ? cutoff.cutoffLine : undefined;
-              })(),
-              lineMap: entry.lineMap,
-              chunking: chunkOptions,
-            })
-          : chunkMarkdown(indexingContent, chunkOptions),
-      );
-      for (const chunk of baseChunks) {
-        chunk.provenance = this.resolveChunkProvenance(
-          entry,
-          options.source,
-          chunk,
-          pathClassification.originClass,
-        );
-      }
-      // Fragments inherit one entry's metadata; parse each source span once,
-      // not once per fragment of a long line or oversized entry.
-      const recallMetadata = new Map<
-        string,
-        ReturnType<typeof extractCuratedEntryRecallMetadata>
-      >();
-      const chunks = (
-        generation?.kind === "semantic"
-          ? enforceEmbeddingMaxInputTokens(
-              generation.provider,
-              baseChunks,
-              EMBEDDING_BATCH_MAX_TOKENS,
-            )
-          : baseChunks
-      ).map((chunk): IndexedMemoryChunk => {
-        const start = chunk.entryStartLine ?? chunk.startLine;
-        const end = chunk.entryEndLine ?? chunk.endLine;
-        const span = `${start}:${end}`;
-        let metadata = recallMetadata.get(span);
-        if (!metadata) {
-          metadata = extractCuratedEntryRecallMetadata({
-            curatedRoot: pathClassification.curatedRoot,
-            projectScopeEligible:
-              options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
-            sourceLines: sourceLines.slice(start - 1, end),
-          });
-          recallMetadata.set(span, metadata);
-        }
-        return Object.assign(chunk, metadata);
+      const cutoff = readSessionResetRecallCutoffMetadata(entry);
+      const prepared = await prepareMemoryIndexInWorker({
+        entry: {
+          path: entry.path,
+          mtimeMs: entry.mtimeMs,
+          lineMap: entry.lineMap,
+          lineProvenance: entry.lineProvenance,
+        },
+        source: options.source,
+        content,
+        pathClassification,
+        chunking: this.settings.chunking,
+        cutoffLine: cutoff.state === "valid" ? cutoff.cutoffLine : undefined,
+        provider:
+          generation?.kind === "semantic"
+            ? { id: generation.provider.id, maxInputTokens: generation.provider.maxInputTokens }
+            : undefined,
+        hardMaxInputTokens: EMBEDDING_BATCH_MAX_TOKENS,
       });
-      if (options.source === "sessions" && "lineMap" in entry) {
-        remapChunkLines(chunks, entry.lineMap);
-      }
-      return { entry: snapshot, source: options.source, chunks };
-    });
-  }
-
-  private resolveChunkProvenance(
-    entry: MemoryIndexEntry,
-    source: MemorySource,
-    chunk: MemoryChunk,
-    pathOriginClass: MemoryEntryProvenance["originClass"],
-  ): MemoryEntryProvenance {
-    const lineProvenance = entry.lineProvenance?.slice(chunk.startLine - 1, chunk.endLine) ?? [];
-    if (source === "sessions" && lineProvenance.length > 0) {
-      const originPriority = ["owner", "agent", "system", "untrusted"] as const;
-      const originClass = originPriority.findLast((origin) =>
-        lineProvenance.some((item) => item.originClass === origin),
-      );
-      const sessionKinds = new Set(lineProvenance.map((item) => item.sessionKind));
-      const supersedesKeys = new Set(
-        lineProvenance.flatMap((item) => (item.supersedesKey ? [item.supersedesKey] : [])),
-      );
       return {
-        originClass: originClass ?? "untrusted",
-        sessionKind:
-          sessionKinds.size === 1 ? (lineProvenance[0]?.sessionKind ?? "unknown") : "unknown",
-        observedAt: Math.max(...lineProvenance.map((item) => item.observedAt)),
-        ...(supersedesKeys.size === 1 ? { supersedesKey: [...supersedesKeys][0] } : {}),
+        entry:
+          prepared.contentHash !== undefined ? { ...entry, hash: prepared.contentHash } : entry,
+        source: options.source,
+        chunks: prepared.chunks,
       };
-    }
-
-    // Workspace memory files are inside the operator trust boundary: any
-    // filesystem writer already owns the host. Defaulting them untrusted would
-    // silently make handwritten persona memory ineligible for dreaming.
-    return {
-      originClass: pathOriginClass,
-      sessionKind: "unknown",
-      observedAt: Math.max(0, Math.floor(entry.mtimeMs)),
-    };
+    });
   }
 
   protected override async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {

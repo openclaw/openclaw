@@ -16,10 +16,6 @@ type MemoryEmbeddingChunk = {
   embeddingInput?: EmbeddingInput;
 };
 
-export function filterNonEmptyMemoryChunks<T extends MemoryEmbeddingChunk>(chunks: T[]): T[] {
-  return chunks.filter((chunk) => chunk.text.trim().length > 0);
-}
-
 export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   chunks: T[],
   maxTokens: number,

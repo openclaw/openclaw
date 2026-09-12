@@ -3,7 +3,6 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
-  filterNonEmptyMemoryChunks,
   isSplittableMemoryEmbeddingBatchError,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -95,12 +94,6 @@ describe("memory embedding policy", () => {
       1, 1,
     ]);
     expect(buildMemoryEmbeddingBatches(structuredChunks, 11)).toEqual([structuredChunks]);
-  });
-
-  it("filters empty chunks before embedding", () => {
-    const chunks = filterNonEmptyMemoryChunks([chunk("\n\n"), chunk("hello"), chunk("   ")]);
-
-    expect(chunks.map((entry) => entry.text)).toEqual(["hello"]);
   });
 
   it("retries transient rate limit and 5xx errors", async () => {
