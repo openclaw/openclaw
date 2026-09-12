@@ -943,7 +943,14 @@ export async function runExecProcess({
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
-      ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
+      ...(opts.sandbox
+        ? {
+            cleanupOwnership: "external" as const,
+            // The local child is a backend transport, not the sandbox workload.
+            // Preserve the backend-prepared launch instead of applying local wrappers.
+            exactEnv: true as const,
+          }
+        : {}),
       scopeKey: opts.scopeKey,
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,

@@ -361,13 +361,18 @@ For eligible Linux child spawns, OpenClaw wraps the command in a short
 `1000`, then `exec`s the real command. This is unprivileged: a process may
 always raise its own OOM score.
 
-Covered child process surfaces:
+Covered Gateway-owned child process surfaces:
 
-- Supervisor-managed command children
+- Supervisor-managed command children, excluding sandbox backend transports
 - PTY shell children
 - MCP stdio server children
 - Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
+
+Sandbox backends own the workload lifecycle and resource policy beyond their
+local transport process. OpenClaw therefore launches prepared Docker, Podman,
+SSH, OpenShell, and plugin-provided sandbox transports without the OOM-score
+wrapper.
 
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
 the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or
