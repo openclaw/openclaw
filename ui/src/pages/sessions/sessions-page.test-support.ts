@@ -13,7 +13,7 @@ import type {
 } from "../../lib/sessions/index.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { sessionsPageListQuery } from "./list-query.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
 import type { SessionsRouteData } from "./route.ts";
 import "./sessions-page.ts";
 
@@ -228,7 +228,7 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
-  const query = sessionsPageListQuery(context, {
+  const query = buildSessionsListQuery(context, {
     limit: 50,
     includeGlobal: true,
     includeUnknown: false,

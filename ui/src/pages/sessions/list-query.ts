@@ -16,7 +16,7 @@ type SessionsPageListFilters = {
   search?: string;
 };
 
-export function sessionsPageListQuery(
+export function buildSessionsListQuery(
   context: Pick<ApplicationContext, "agentSelection">,
   filters: SessionsPageListFilters,
 ): SessionListOptions {
