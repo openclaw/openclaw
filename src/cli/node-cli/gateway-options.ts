@@ -71,7 +71,14 @@ export function resolveNodeGatewayOptions(
 ) {
   const baselineHost = pair?.host ?? config?.gateway?.host ?? "127.0.0.1";
   const baselinePort = pair?.port ?? config?.gateway?.port ?? 18789;
-  const host = normalizeOptionalString(options.host) || baselineHost;
+  // An explicitly empty or whitespace-only --host is operator error, not "use
+  // the default host": it would otherwise silently connect to the baseline
+  // (pair/config/loopback) endpoint. Omit the option to select the baseline.
+  const explicitHost = options.host;
+  if (explicitHost !== undefined && !normalizeOptionalString(explicitHost)) {
+    throw new Error("--host must not be blank");
+  }
+  const host = normalizeOptionalString(options.host) ?? baselineHost;
   const port = options.port === undefined ? baselinePort : parsePort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;

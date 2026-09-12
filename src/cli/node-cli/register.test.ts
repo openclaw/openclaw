@@ -122,6 +122,18 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("rejects an explicit blank node run host instead of falling back to the default", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "run", "--host", ""], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--host must not be blank"),
+    );
+    expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("uses an explicit valid node run port", async () => {
     const program = createProgram();
 
