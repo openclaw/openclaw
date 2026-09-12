@@ -56,9 +56,9 @@ const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
     reply: { type: "string" },
-    command: { type: "string" },
+    command: { type: ["string", "null"] },
   },
-  required: ["reply"],
+  required: ["reply", "command"],
   additionalProperties: false,
 } as const;
 
@@ -102,6 +102,7 @@ export async function planSystemAgentCommandWithConfiguredModel(params: {
       type: "json_schema",
       json_schema: {
         name: "openclaw_system_agent_plan",
+        strict: true,
         schema: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
       },
     },

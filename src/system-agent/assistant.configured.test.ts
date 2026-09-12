@@ -251,13 +251,14 @@ describe("OpenClaw configured-model planner", () => {
             type: "json_schema",
             json_schema: {
               name: "openclaw_system_agent_plan",
+              strict: true,
               schema: {
                 type: "object",
                 properties: {
                   reply: { type: "string" },
-                  command: { type: "string" },
+                  command: { type: ["string", "null"] },
                 },
-                required: ["reply"],
+                required: ["reply", "command"],
                 additionalProperties: false,
               },
             },
