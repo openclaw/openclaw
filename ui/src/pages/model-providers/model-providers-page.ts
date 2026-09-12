@@ -105,6 +105,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
           ? {
               ...data,
               models: current.models,
+              automaticUtilityModel: current.automaticUtilityModel,
               providerOutcomes: current.providerOutcomes,
               catalogError: current.catalogError,
             }
@@ -613,10 +614,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       asConfigRecord(runtimeState.configForm ?? runtimeState.configSnapshot?.config) ??
       asConfigRecord(data.config) ??
       {};
-    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const configuredDefaults = {
       ...config.defaults,
-      ...readModelBehaviorConfig(agentsDefaults),
+      ...readModelBehaviorConfig(asConfigRecord(asConfigRecord(configObject.agents)?.defaults)),
     };
     const defaults = this.defaultsDraft ?? configuredDefaults;
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
