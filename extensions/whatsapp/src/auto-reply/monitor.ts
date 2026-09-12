@@ -225,10 +225,12 @@ export async function monitorWebChannel(
       const shouldDebounce = (msg: WebInboundCallbackMessage) => {
         const text = msg.payload.commandBody ?? msg.payload.body;
         const hasMedia = Boolean(msg.payload.media?.path || msg.payload.media?.type);
+        const mediaKind = msg.payload.media?.kind;
         const hasBatchableImage =
           account.batchInboundImages === true &&
-          (msg.payload.media?.kind === "image" ||
-            msg.payload.media?.type?.toLowerCase().startsWith("image/") === true);
+          (mediaKind !== undefined
+            ? mediaKind === "image"
+            : msg.payload.media?.type?.toLowerCase().startsWith("image/") === true);
         const allowDebounce = !(msg.payload.location || msg.quote?.id || msg.quote?.body);
         if (hasBatchableImage && !text.trim()) {
           return allowDebounce;

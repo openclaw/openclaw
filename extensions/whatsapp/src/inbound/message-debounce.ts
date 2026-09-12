@@ -63,11 +63,25 @@ export function createWhatsAppInboundMessageDebouncer(options: {
       pendingKeys.delete(entry.debounceKey);
     }
   };
-  const orderEntries = (entries: WhatsAppQueuedInboundMessage[]) =>
-    entries.toSorted((a, b) => {
+  const hasImageMedia = (entry: WhatsAppQueuedInboundMessage) =>
+    resolveMediaItems(entry).some((media) =>
+      media.kind !== undefined
+        ? media.kind === "image"
+        : media.type?.toLowerCase().startsWith("image/") === true,
+    );
+  const orderEntries = (entries: WhatsAppQueuedInboundMessage[]) => {
+    const preserveReceiveOrder = entries.some(hasImageMedia);
+    return entries.toSorted((a, b) => {
+      if (preserveReceiveOrder) {
+        const receiveOrderDiff = (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
+        if (receiveOrderDiff !== 0) {
+          return receiveOrderDiff;
+        }
+      }
       const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
       return timestampDiff !== 0 ? timestampDiff : (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
+  };
   const resolveMediaItems = (entry: WhatsAppQueuedInboundMessage): WhatsAppInboundMediaPayload[] =>
     entry.payload.mediaItems?.length
       ? entry.payload.mediaItems

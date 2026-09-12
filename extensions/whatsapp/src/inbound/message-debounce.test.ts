@@ -68,4 +68,52 @@ describe("WhatsApp inbound message debounce", () => {
     ]);
     expect(combined?.event).toMatchObject({ id: "text-3", isBatched: true });
   });
+
+  it("preserves receive order for image batches when timestamps arrive out of order", async () => {
+    vi.useFakeTimers();
+    const delivered: AdmittedWebInboundCallbackMessage[] = [];
+    const debouncer = createWhatsAppInboundMessageDebouncer({
+      resolveDebounceMs: () => 100,
+      onMessage: async (message) => {
+        delivered.push(message);
+      },
+      shouldDebounce: () => true,
+      markRead: async () => undefined,
+      onPendingWorkChanged: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+
+    await debouncer.enqueue({
+      ...createTestWebInboundMessage({
+        event: { id: "first-received", timestamp: 20 },
+        payload: {
+          body: "first",
+          media: { path: "/tmp/first.jpg", type: "image/jpeg", kind: "image" },
+        },
+      }),
+      receiveOrder: 1,
+    });
+    await debouncer.enqueue({
+      ...createTestWebInboundMessage({
+        event: { id: "second-received", timestamp: 10 },
+        payload: {
+          body: "second",
+          media: { path: "/tmp/second.jpg", type: "image/jpeg", kind: "image" },
+        },
+      }),
+      receiveOrder: 2,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await debouncer.drain();
+
+    expect(delivered[0]?.payload.body).toBe("first\nsecond");
+    expect(delivered[0]?.payload.mediaItems?.map((media) => media.path)).toEqual([
+      "/tmp/first.jpg",
+      "/tmp/second.jpg",
+    ]);
+    expect(delivered[0]?.event.id).toBe("second-received");
+  });
 });

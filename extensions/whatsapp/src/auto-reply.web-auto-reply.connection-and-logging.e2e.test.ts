@@ -914,6 +914,26 @@ describe("web auto-reply connection", () => {
         shouldDebounce?.(
           createTestWebInboundMessage({
             payload: {
+              body: "",
+              media: { path: "/tmp/photo-as-document.jpg", type: "image/jpeg", kind: "document" },
+            },
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        shouldDebounce?.(
+          createTestWebInboundMessage({
+            payload: {
+              body: "",
+              media: { path: "/tmp/sticker.webp", type: "image/webp", kind: "sticker" },
+            },
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        shouldDebounce?.(
+          createTestWebInboundMessage({
+            payload: {
               body: "/status",
               media: { path: "/tmp/command.jpg", type: "image/jpeg", kind: "image" },
             },
