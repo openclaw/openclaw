@@ -611,62 +611,87 @@ suite.define(() => {
     }
   });
 
-  it("keeps a visible Desktop connected when another split pane takes focus", async () => {
-    const context = await suite.newBrowserContext({
-      serviceWorkers: "block",
-      viewport: { width: 2200, height: 1000 },
-    });
-    try {
-      const page = await context.newPage();
-      await installMockGateway(page, retainedDesktopScenario());
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
-      await waitForControlUiGatewayReady(page);
-      const rfb = await installScriptedRfbServer(page);
-      await openChatSidePanelType(page, "Desktop");
-      const desktop = page.locator("openclaw-desktop-panel").first();
-      await expect.poll(() => rfb.events()).toEqual(["authenticated:1"]);
-      await desktop.locator("canvas").waitFor({ state: "visible" });
+  it.each([false, true])(
+    "keeps a visible Desktop connected when another split pane takes focus (automatic: %s)",
+    async (automatic) => {
+      const context = await suite.newBrowserContext({
+        serviceWorkers: "block",
+        viewport: { width: 2200, height: 1000 },
+      });
+      try {
+        const page = await context.newPage();
+        const scenario = retainedDesktopScenario();
+        if (automatic) {
+          scenario.deferredMethods = ["desktop.observe"];
+          scenario.methodResponses = {
+            ...scenario.methodResponses,
+            "sessions.describe": {
+              session: {
+                key: RETAINED_DESKTOP_SESSION_KEY,
+                sessionId: RETAINED_DESKTOP_SESSION_KEY,
+                kind: "direct",
+                updatedAt: 1000,
+                placement: { state: "active", environmentId: retainedDesktopEnvironment.id },
+              },
+            },
+          };
+        }
+        const gateway = await installMockGateway(page, scenario);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
+        await waitForControlUiGatewayReady(page);
+        const rfb = await installScriptedRfbServer(page);
+        if (automatic) {
+          await gateway.waitForRequest("desktop.observe");
+          await gateway.resolveDeferred("desktop.observe");
+        } else {
+          await openChatSidePanelType(page, "Desktop");
+        }
+        const desktop = page.locator("openclaw-desktop-panel").first();
+        await expect.poll(() => rfb.events()).toEqual(["authenticated:1"]);
+        await desktop.locator("canvas").waitFor({ state: "visible" });
 
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
-      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-      await expect.poll(() => panes.count()).toBe(2);
-      await panes.last().locator(".agent-chat__composer-combobox textarea").click();
-      await expect
-        .poll(() =>
-          panes.last().evaluate((pane) => (pane as HTMLElement & { active: boolean }).active),
-        )
-        .toBe(true);
-      await expect
-        .poll(() =>
-          panes.first().evaluate((pane) => (pane as HTMLElement & { active: boolean }).active),
-        )
-        .toBe(false);
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      expect(await desktop.locator("canvas").isVisible()).toBe(true);
-      expect(await rfb.events()).not.toContain("closed:1");
+        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+        await expect.poll(() => panes.count()).toBe(2);
+        await panes.last().locator(".agent-chat__composer-combobox textarea").click();
+        await expect
+          .poll(() =>
+            panes.last().evaluate((pane) => (pane as HTMLElement & { active: boolean }).active),
+          )
+          .toBe(true);
+        await expect
+          .poll(() =>
+            panes.first().evaluate((pane) => (pane as HTMLElement & { active: boolean }).active),
+          )
+          .toBe(false);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        expect(await desktop.locator("canvas").isVisible()).toBe(true);
+        expect(await rfb.events()).not.toContain("closed:1");
 
-      await panes.first().locator(".side-panel__minimize").click();
-      await expect.poll(() => rfb.events()).toContain("closed:1");
-      expect(await desktop.locator("canvas").count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+        await panes.first().locator(".side-panel__minimize").click();
+        await expect.poll(() => rfb.events()).toContain("closed:1");
+        expect(await desktop.locator("canvas").count()).toBe(0);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
 
   it("tears down retained Desktop work on presentation loss", async () => {
     const context = await suite.newBrowserContext({ serviceWorkers: "block" });
     try {
       const page = await context.newPage();
+      await seedRetainedDesktopSlot(page);
       const gateway = await installMockGateway(page, retainedDesktopScenario());
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
       await gateway.deferNext("environments.status");
-      await openChatSidePanelType(page, "Desktop");
+      await clickSidebarTab(page, "Desktop");
 
       const desktop = page.locator("openclaw-desktop-panel");
       await gateway.waitForRequest("environments.status");
@@ -676,7 +701,7 @@ suite.define(() => {
       await gateway.resolveDeferred("environments.status", retainedDesktopEnvironment);
       await gateway.waitForRequest("desktop.observe", { after: observeCount });
 
-      await openChatSidePanelType(page, "Files");
+      await clickSidebarTab(page, "Files");
       await gateway.resolveDeferred("desktop.observe", {
         transport: "rfb",
         wsPath: "/desktop/observe?token=stale",

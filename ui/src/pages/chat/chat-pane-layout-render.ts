@@ -6,6 +6,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import "../../plugins/control-ui-contributions.ts";
@@ -152,7 +153,18 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopPresented =
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
-    const desktopSource = resolveChatPaneDesktopTarget(selectedSession);
+    // Automatic reveals must use their verified target, never a stale roster/default desktop.
+    const discoveredDesktopSource = this.activeSessionResources.desktopSource(
+      state.client,
+      state.sessionKey,
+      scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      state.connectionEpoch,
+      selectedSession,
+    );
+    const desktopSource =
+      discoveredDesktopSource !== undefined
+        ? discoveredDesktopSource
+        : resolveChatPaneDesktopTarget(selectedSession);
     const desktopFocusKey = JSON.stringify([
       state.sessionKey,
       this.connectionGeneration,
