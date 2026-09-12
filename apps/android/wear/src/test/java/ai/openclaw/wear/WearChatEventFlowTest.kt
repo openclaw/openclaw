@@ -1192,39 +1192,18 @@ class WearChatEventFlowTest {
         assertTrue("Explicit context navigation is not a new reply", SemanticsProperties.Disabled !in context.config)
         if (navigate) {
           assertEquals(true, context.config[SemanticsActions.OnClick].action?.invoke())
-          assertEquals(
-            true,
-            flow
-              .appAction("Other chat")
-              .config[SemanticsActions.OnClick]
-              .action
-              ?.invoke(),
-          )
+          flow.clickAppAction("Other chat")
           flow.idle()
           assertEquals("agent:main:other", flow.state.selectedSession?.key)
         } else {
           flow.abortFails = true
-          assertEquals(
-            true,
-            flow
-              .appAction("Abort run")
-              .config[SemanticsActions.OnClick]
-              .action
-              ?.invoke(),
-          )
+          flow.clickAppAction("Abort run")
           flow.idle()
           assertEquals("A failed Abort retains the pending owner", firstRun, flow.state.pendingReply?.runId)
           assertTrue(SemanticsProperties.Disabled in flow.appAction("Type").config)
           assertTrue(SemanticsProperties.Disabled !in flow.appAction("Abort run").config)
           flow.abortFails = false
-          assertEquals(
-            true,
-            flow
-              .appAction("Abort run")
-              .config[SemanticsActions.OnClick]
-              .action
-              ?.invoke(),
-          )
+          flow.clickAppAction("Abort run")
           flow.idle()
           assertEquals("Pending-only Abort targets the owned send", listOf(firstRun, firstRun), flow.abortRuns)
         }
@@ -1347,14 +1326,7 @@ class WearChatEventFlowTest {
       assertTrue(flow.state.sending)
       flow.abortAccepted = false
       flow.abortGate = oldAbortGate
-      assertEquals(
-        true,
-        flow
-          .appAction("Abort run")
-          .config[SemanticsActions.OnClick]
-          .action
-          ?.invoke(),
-      )
+      flow.clickAppAction("Abort run")
       flow.idle()
       assertEquals(rejectedRun, flow.state.pendingAbortRunId)
       rejectedGate.complete(Unit)
@@ -1728,14 +1700,7 @@ class WearChatEventFlowTest {
       flow.submitFromApp("Hello")
       val ownRun = flow.runId
       flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
-      assertEquals(
-        true,
-        flow
-          .appAction("Abort run")
-          .config[SemanticsActions.OnClick]
-          .action
-          ?.invoke(),
-      )
+      flow.clickAppAction("Abort run")
       flow.idle()
       assertEquals(ownRun, flow.state.pendingReply?.runId)
       assertNull(speech.lastSpokenText)
@@ -1924,14 +1889,7 @@ class WearChatEventFlowTest {
         flow.abortAccepted = mode.startsWith("confirmed")
         flow.abortFails = mode == "failed"
         flow.abortGate = CompletableDeferred()
-        assertEquals(
-          true,
-          flow
-            .appAction("Abort run")
-            .config[SemanticsActions.OnClick]
-            .action
-            ?.invoke(),
-        )
+        flow.clickAppAction("Abort run")
         assertTrue("The explicit action still stops current playback immediately", speech.isStopped)
         assertEquals(ownRun, flow.state.pendingReply?.runId)
         if (mode == "confirmed-foreign") flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
@@ -1970,14 +1928,7 @@ class WearChatEventFlowTest {
         flow.abortGate = CompletableDeferred()
         flow.abortAccepted = mode == "confirmed"
         flow.abortFails = mode == "failed"
-        assertEquals(
-          true,
-          flow
-            .appAction("Abort run")
-            .config[SemanticsActions.OnClick]
-            .action
-            ?.invoke(),
-        )
+        flow.clickAppAction("Abort run")
         flow.historyMessages = """[{"id":"partial","role":"assistant","content":"Partial reply","idempotencyKey":"$ownRun:assistant"}]"""
         // Gateway broadcasts the aborted terminal before its Abort RPC responds.
         flow.emit("aborted", eventRunId = ownRun)
@@ -2055,14 +2006,7 @@ class WearChatEventFlowTest {
       val context = flow.appAction("Session: Test chat")
       assertTrue(SemanticsProperties.Disabled !in context.config)
       assertEquals(true, context.config[SemanticsActions.OnClick].action?.invoke())
-      assertEquals(
-        true,
-        flow
-          .appAction("Other chat")
-          .config[SemanticsActions.OnClick]
-          .action
-          ?.invoke(),
-      )
+      flow.clickAppAction("Other chat")
       flow.idle()
       assertEquals("agent:main:other", flow.state.selectedSession?.key)
       assertNull(flow.state.pendingAbortRunId)
@@ -2287,14 +2231,7 @@ class WearChatEventFlowTest {
           flow.abortGate = CompletableDeferred()
           flow.abortAccepted = result == "confirmed"
           flow.abortFails = result == "failed"
-          assertEquals(
-            true,
-            flow
-              .appAction("Abort run")
-              .config[SemanticsActions.OnClick]
-              .action
-              ?.invoke(),
-          )
+          flow.clickAppAction("Abort run")
           flow.idle()
           assertTrue(speech.isStopped)
           assertEquals("RPC scope remains session-wide", listOf<String?>(null), flow.abortRuns)
@@ -2354,14 +2291,7 @@ class WearChatEventFlowTest {
             put("runId", "foreign-live")
             put("text", "Foreign still live")
           }
-        assertEquals(
-          true,
-          flow
-            .appAction("Abort run")
-            .config[SemanticsActions.OnClick]
-            .action
-            ?.invoke(),
-        )
+        flow.clickAppAction("Abort run")
         flow.idle()
         assertEquals(listOf<String?>(null), flow.abortRuns)
         assertEquals(ownRun, flow.state.pendingReply?.runId)
@@ -2417,14 +2347,7 @@ class WearChatEventFlowTest {
       flow.submitFromApp("Hello")
       val ownRun = flow.runId
       flow.emit("delta", eventRunId = null, text = "Anonymous live")
-      assertEquals(
-        true,
-        flow
-          .appAction("Abort run")
-          .config[SemanticsActions.OnClick]
-          .action
-          ?.invoke(),
-      )
+      flow.clickAppAction("Abort run")
       flow.idle()
       assertEquals(ownRun, flow.state.pendingReply?.runId)
       assertNull(flow.state.replyCompletion)
@@ -2453,14 +2376,7 @@ class WearChatEventFlowTest {
       flow.emit("aborted", eventRunId = ownRun)
       assertEquals(WearReplyOutcome.Aborted, flow.state.replyCompletion?.outcome)
       flow.historyRun = null
-      assertEquals(
-        true,
-        flow
-          .appAction("Abort run")
-          .config[SemanticsActions.OnClick]
-          .action
-          ?.invoke(),
-      )
+      flow.clickAppAction("Abort run")
       flow.idle()
       assertEquals(listOf<String?>(null), flow.abortRuns)
       assertEquals(WearReplyOutcome.Aborted, flow.state.replyCompletion?.outcome)
@@ -2484,14 +2400,7 @@ class WearChatEventFlowTest {
             engine.speak("Existing speech", TextToSpeech.QUEUE_FLUSH, Bundle(), "existing")
             val firstHistory = CompletableDeferred<Unit>()
             flow.historyGate = firstHistory
-            assertEquals(
-              true,
-              flow
-                .appAction("Abort run")
-                .config[SemanticsActions.OnClick]
-                .action
-                ?.invoke(),
-            )
+            flow.clickAppAction("Abort run")
             flow.idle()
             assertEquals(listOf<String?>(null), flow.abortRuns)
             assertEquals(false, flow.state.replyAbort?.awaitingAck)
@@ -2505,14 +2414,7 @@ class WearChatEventFlowTest {
             flow.abortGate = secondAck
             flow.abortAccepted = secondResult == "confirmed"
             flow.abortFails = secondResult == "failed"
-            assertEquals(
-              true,
-              flow
-                .appAction("Abort run")
-                .config[SemanticsActions.OnClick]
-                .action
-                ?.invoke(),
-            )
+            flow.clickAppAction("Abort run")
             flow.idle()
             assertEquals(listOf(null, ownRun.takeIf { targeted }), flow.abortRuns)
             assertEquals(ownRun, flow.state.pendingAbortRunId)
@@ -2570,14 +2472,7 @@ class WearChatEventFlowTest {
           flow.abortGate = CompletableDeferred()
           flow.abortAccepted = mode == "confirmed"
           flow.abortFails = mode == "failed"
-          assertEquals(
-            true,
-            flow
-              .appAction("Abort run")
-              .config[SemanticsActions.OnClick]
-              .action
-              ?.invoke(),
-          )
+          flow.clickAppAction("Abort run")
           flow.idle()
           assertTrue(speech.isStopped)
         }
@@ -2718,6 +2613,10 @@ class WearChatEventFlowTest {
       )
       shadowOf(activity).receiveResult(launch.intent, Activity.RESULT_OK, result)
       idle()
+    }
+
+    fun clickAppAction(label: String) {
+      assertEquals(true, appAction(label).config[SemanticsActions.OnClick].action?.invoke())
     }
 
     fun appAction(label: String): SemanticsNode {
