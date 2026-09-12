@@ -416,6 +416,14 @@ async function hasWorkspaceUserContentEvidence(
       // continue
     }
   }
+  // Readable custom skills are independent user-content evidence that survives
+  // a root-listing failure (e.g. a 0300 searchable-but-unlistable root): the
+  // probe only needs search on the root plus read on the skills subdirectory.
+  // Probe them before the exact-entry lookup so an EACCES on the root cannot
+  // hide readable skills from survival/completion decisions.
+  if (await hasWorkspaceSkillEvidence(dir)) {
+    return true;
+  }
   // The exact-entry lookup distinguishes an absent optional file from one that
   // exists but cannot be listed/read. An operational lookup failure (EACCES/EIO)
   // stays an unknown outcome: it is neither absence nor positive user-content
@@ -423,10 +431,7 @@ async function hasWorkspaceUserContentEvidence(
   // not count it as configured (that could persist false completion and remove
   // BOOTSTRAP.md), while disappearance detection must not count it as empty
   // (that could reseed/clear an existing workspace).
-  if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
-    return true;
-  }
-  return await hasWorkspaceSkillEvidence(dir);
+  return await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
 }
 
 async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {

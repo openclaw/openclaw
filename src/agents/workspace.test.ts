@@ -412,6 +412,41 @@ describe("ensureAgentWorkspace", () => {
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("preserves readable custom-skill survival evidence under an unlistable root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-skill-eacces-"));
+    try {
+      const tempDir = path.join(rootDir, "workspace");
+      await fs.mkdir(tempDir, { recursive: true });
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+      // Only a readable custom skill survives; the root becomes searchable but
+      // unlistable (0300). The exact-entry lookup on the root now raises EACCES,
+      // but the skill probe only needs search on the root and read on the skills
+      // subdirectory — it must still establish workspace survival so a recent
+      // attestation is not mistaken for a vanished workspace.
+      await fs.rm(tempDir, { recursive: true, force: true });
+      await fs.mkdir(path.join(tempDir, "skills", "local-skill"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "skills", "local-skill", "SKILL.md"), "---\n");
+      await fs.chmod(tempDir, 0o300);
+      try {
+        await expect(
+          ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+        ).resolves.toMatchObject({ dir: tempDir });
+      } finally {
+        await fs.chmod(tempDir, 0o700);
+      }
+      expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a recently attested workspace when only non-skill skills leftovers survive", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
