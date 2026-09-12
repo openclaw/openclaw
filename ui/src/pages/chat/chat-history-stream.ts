@@ -1,3 +1,5 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -103,6 +105,20 @@ function runProjectionsUnchanged(
   );
 }
 
+function hasExactHistoryTerminal(state: ChatState, runId: string): boolean {
+  return state.chatMessages.some((message) => {
+    const identity = readSessionMessageIdentity(message);
+    const metadata = asNullableRecord(asNullableRecord(message)?.["__openclaw"]);
+    return (
+      identity?.role === "assistant" &&
+      !identity.isImported &&
+      (identity.id !== null || identity.sequence !== null) &&
+      identity.runId === runId &&
+      metadata?.runTerminal === true
+    );
+  });
+}
+
 export function readRunProjections(state: ChatState, sessionKey: string, agentId?: string) {
   return getChatSessionProjection(
     state,
@@ -147,7 +163,13 @@ export function applyHistoryRun(params: {
   } = params;
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
-    const terminalRunId = sessionInfo?.lastRunId;
+    if (!sessionInfo) {
+      return;
+    }
+    const localRunId = state.chatRunId?.trim();
+    const terminalRunId =
+      sessionInfo.lastRunId ??
+      (localRunId && hasExactHistoryTerminal(state, localRunId) ? localRunId : undefined);
     const knownRun = terminalRunId ? currentRunProjections[terminalRunId] : undefined;
     if (
       terminalRunId &&
