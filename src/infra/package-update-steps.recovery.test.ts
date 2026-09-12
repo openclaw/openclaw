@@ -156,11 +156,19 @@ describe("package update recovery safety", () => {
         const beforeActivate = vi.fn(async () => {});
         const runStep = vi.fn(async ({ name, argv }: { name: string; argv: string[] }) => {
           if (name === "global update pack") {
-            const packDir = argv[argv.indexOf("--pack-destination") + 1];
+            const packDestinationIndex = argv.indexOf("--pack-destination");
+            const packDir = argv[packDestinationIndex + 1];
+            if (packDestinationIndex < 0 || !packDir) {
+              throw new Error("missing pack destination");
+            }
             await fs.writeFile(path.join(packDir, "candidate.tgz"), "fixture package");
             return { name, command: argv.join(" "), cwd: packDir, durationMs: 0, exitCode: 0 };
           }
-          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (prefixIndex < 0 || !stagePrefix) {
+            throw new Error("missing stage prefix");
+          }
           const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
           await writeIdentity(stageRoot, after);
           return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
