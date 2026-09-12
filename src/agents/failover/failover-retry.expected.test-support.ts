@@ -8,6 +8,8 @@ export const failoverRetryExpectations = {
   "openai-responses-incomplete-terminal-stream": true,
   "openai-responses-eof-with-unresolved-tools": true,
   "openai-responses-completed-with-unresolved-tools": false,
+  "google-sse-eof-incomplete-frame": true,
+  "google-sse-malformed-json-frame": false,
   "proxy-incomplete-terminal-stream": true,
   "billing-context-input-length-model-limit": false,
   "retry-go-usage-limit": false,
