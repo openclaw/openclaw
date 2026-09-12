@@ -62,6 +62,7 @@ const featureMethods = [
   ...defaultControlUiFeatureMethods,
   "desktop.observe",
   "environments.list",
+  "environments.status",
   "browser.request",
 ];
 const pane = (page: Page) => page.locator(".chat-pane-cache__pane--active");
@@ -90,13 +91,14 @@ async function assertNoProvisioning(gateway: MockGatewayControls) {
 
 suite.define(() => {
   it.each([
-    { width: 1280, staleRoster: false, reclaimOnReload: false },
-    { width: 390, staleRoster: false, reclaimOnReload: false },
-    { width: 1280, staleRoster: true, reclaimOnReload: false },
-    { width: 1280, staleRoster: false, reclaimOnReload: true },
+    { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
+    { width: 390, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
+    { width: 1280, staleRoster: true, reclaimOnReload: false, swapOnReload: false },
+    { width: 1280, staleRoster: false, reclaimOnReload: true, swapOnReload: false },
+    { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: true },
   ])(
-    "reveals a running desktop on direct entry at width $width (stale roster: $staleRoster, reclaim: $reclaimOnReload) and respects reload",
-    async ({ width, staleRoster, reclaimOnReload }) => {
+    "reveals a running desktop on direct entry at width $width (stale roster: $staleRoster, reclaim: $reclaimOnReload, swap: $swapOnReload) and respects reload",
+    async ({ width, staleRoster, reclaimOnReload, swapOnReload }) => {
       await suite.withPage(
         { serviceWorkers: "block", viewport: { width, height: 900 } },
         async ({ page }) => {
@@ -109,6 +111,7 @@ suite.define(() => {
               "sessions.list": list(!staleRoster),
               ...(staleRoster ? { "sessions.describe": { session: row } } : {}),
               "environments.list": inventory,
+              "environments.status": inventory.environments[0],
               "desktop.observe": {
                 transport: "rfb",
                 wsPath: "/desktop/observe?proof=1",
@@ -141,6 +144,23 @@ suite.define(() => {
             path: path.join(suite.artifactDir, `direct-desktop-${width}.png`),
             animations: "disabled",
           });
+          if (swapOnReload) {
+            await pane(page).locator(".chat-panel-swap").click();
+            await page.reload();
+            await ready(page);
+            await desktopTab(page).waitFor();
+            await gateway.waitForRequest("desktop.observe");
+            await installScriptedRfbServer(page);
+            await gateway.resolveDeferred("desktop.observe");
+            await pane(page).locator(".desktop-surface canvas").waitFor();
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "desktop-swap-reload.png"),
+              animations: "disabled",
+            });
+            expect(await desktopTab(page).count()).toBe(1);
+            await assertNoProvisioning(gateway);
+            return;
+          }
           if (reclaimOnReload) {
             await dockChatSidePanel(page, "bottom");
             await gateway.setSessionsListResponse(list(false));
@@ -181,6 +201,7 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": list(false),
             "environments.list": inventory,
+            "environments.status": inventory.environments[0],
             "desktop.observe": {
               transport: "rfb",
               wsPath: "/desktop/observe?proof=1",
@@ -390,7 +411,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat/main/resource-demo`);
         await ready(page);
-        await pane(page).getByRole("tab", { name: "Browser", exact: true }).waitFor();
+        await pane(page).locator("openclaw-browser-panel[embedded] .bp").waitFor();
         expect(await pane(page).locator("openclaw-browser-panel").count()).toBe(1);
         const reads = await gateway.getRequests("browser.request", { path: "/tabs" });
         expect(reads.length).toBeGreaterThan(0);
@@ -401,6 +422,22 @@ suite.define(() => {
             query: { profile: "session-profile" },
           });
         }
+        await assertNoProvisioning(gateway);
+        await pane(page).locator("openclaw-browser-panel .bp-shot").waitFor();
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "browser-active.png"),
+          animations: "disabled",
+        });
+        await pane(page).locator(".chat-panel-swap").click();
+        await page.reload();
+        await ready(page);
+        await pane(page).locator("openclaw-browser-panel[embedded] .bp").waitFor();
+        await pane(page).locator("openclaw-browser-panel .bp-shot").waitFor();
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "browser-swap-reload.png"),
+          animations: "disabled",
+        });
+        expect(await pane(page).locator("openclaw-browser-panel").count()).toBe(1);
         await assertNoProvisioning(gateway);
       },
     );

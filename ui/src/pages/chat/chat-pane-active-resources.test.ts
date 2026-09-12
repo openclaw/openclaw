@@ -5,7 +5,15 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { ChatPaneActiveResources, type ActiveResourceOwner } from "./chat-pane-active-resources.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
-import { openSlot, sidebarActivePanel, type SidebarLayout } from "./sidebar-layout.ts";
+import {
+  closeSlot,
+  ensureSidebarConversation,
+  isSidebarSlotVisible,
+  openSlot,
+  promoteSidebarPanel,
+  sidebarActivePanel,
+  type SidebarLayout,
+} from "./sidebar-layout.ts";
 
 const key = "agent:main:resource-test";
 const session = {
@@ -96,6 +104,72 @@ function fixture() {
 }
 
 describe("session active resource discovery", () => {
+  it.each(["conversation-only", "after-resource-swap"])(
+    "discovers resources in a saved %s layout",
+    async (kind) => {
+      const f = fixture();
+      let layout = ensureSidebarConversation(f.owner.layout());
+      if (kind === "after-resource-swap") {
+        layout = closeSlot(promoteSidebarPanel(openSlot(layout, "desktop"), "desktop"), "desktop");
+      }
+      f.setLayout(normalizeSidebarLayout({ ...layout, open: false }));
+      f.controller.sync(f.owner);
+      await settle();
+      expect(f.slots().toSorted()).toEqual(["browser", "conversation", "desktop"]);
+      expect(f.owner.layout().open).toBe(true);
+    },
+  );
+
+  it.each(["environment", "reclaimed", "session instance"])(
+    "fences a published desktop immediately when its %s changes",
+    async (change) => {
+      const f = fixture();
+      f.owner.browserAvailable = false;
+      f.owner.placement = activePlacement;
+      f.owner.sessionId = "session-id";
+      const source = () =>
+        f.controller.desktopSource(
+          f.owner.client,
+          key,
+          f.owner.agentId,
+          f.owner.connectionEpoch,
+          f.owner,
+        );
+      f.controller.sync(f.owner);
+      await settle();
+      expect(source()).toBe("worker-1");
+      f.owner.placement = { ...activePlacement, updatedAtMs: 99, lastTranscriptAckCursor: 10 };
+      expect(source()).toBe("worker-1");
+      const pending = createDeferred<unknown>();
+      f.request.mockImplementationOnce(async () => pending.promise);
+      if (change === "session instance") {
+        f.owner.sessionId = "replacement-session";
+      } else if (change === "reclaimed") {
+        f.owner.placement = { ...activePlacement, state: "reclaimed" };
+      } else {
+        f.owner.placement = { ...activePlacement, environmentId: "worker-2" };
+      }
+      // Rendering precedes the next sync() call; it must not reuse the old target.
+      expect(source()).toBeNull();
+      f.controller.sync(f.owner);
+      await settle();
+      expect(source()).toBeNull();
+      pending.resolve({ session: undefined });
+      await settle();
+      expect(source()).toBeNull();
+    },
+  );
+
+  it("preserves focused side-tool presentation when another resource becomes active", async () => {
+    const f = fixture();
+    f.setLayout({ ...openSlot(f.owner.layout(), "workspace"), expanded: true, expandedSide: true });
+    f.controller.sync(f.owner);
+    await settle();
+    expect(f.slots().toSorted()).toEqual(["browser", "desktop", "workspace"]);
+    expect(isSidebarSlotVisible(f.owner.layout(), "workspace")).toBe(true);
+    expect(isSidebarSlotVisible(f.owner.layout(), "conversation")).toBe(false);
+  });
+
   it.each([false, true])(
     "retains a probe when the superseded reconciliation fails (latest completes first: %s)",
     async (latestCompletesFirst) => {
@@ -353,14 +427,26 @@ describe("session active resource discovery", () => {
     f.controller.sync(f.owner);
     await settle();
     expect(
-      f.controller.desktopSource(f.owner.client, key, f.owner.agentId, f.owner.connectionEpoch),
+      f.controller.desktopSource(
+        f.owner.client,
+        key,
+        f.owner.agentId,
+        f.owner.connectionEpoch,
+        f.owner,
+      ),
     ).toBe("worker-1");
     f.request.mockResolvedValueOnce({ session: { ...session, placement: { state: "local" } } });
     f.controller.invalidate();
     f.controller.sync(f.owner);
     await settle();
     expect(
-      f.controller.desktopSource(f.owner.client, key, f.owner.agentId, f.owner.connectionEpoch),
+      f.controller.desktopSource(
+        f.owner.client,
+        key,
+        f.owner.agentId,
+        f.owner.connectionEpoch,
+        f.owner,
+      ),
     ).toBeNull();
     expect(f.commit).toHaveBeenCalledTimes(1);
     expect(f.owner.requestUpdate).toHaveBeenCalledTimes(2);
@@ -377,7 +463,13 @@ describe("session active resource discovery", () => {
     await settle();
     expect(f.commit).not.toHaveBeenCalled();
     expect(
-      f.controller.desktopSource(f.owner.client, key, f.owner.agentId, f.owner.connectionEpoch),
+      f.controller.desktopSource(
+        f.owner.client,
+        key,
+        f.owner.agentId,
+        f.owner.connectionEpoch,
+        f.owner,
+      ),
     ).toBeUndefined();
   });
 
@@ -436,7 +528,13 @@ describe("session active resource discovery", () => {
       await settle();
       expect(f.commit).not.toHaveBeenCalled();
       expect(
-        f.controller.desktopSource(f.owner.client, key, f.owner.agentId, f.owner.connectionEpoch),
+        f.controller.desktopSource(
+          f.owner.client,
+          key,
+          f.owner.agentId,
+          f.owner.connectionEpoch,
+          f.owner,
+        ),
       ).toBeUndefined();
     },
   );

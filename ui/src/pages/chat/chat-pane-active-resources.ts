@@ -19,6 +19,7 @@ import {
   openSlot,
   sidebarActivePanel,
   sidebarMainPanel,
+  sidebarSidePanels,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
@@ -61,6 +62,20 @@ function placementResourceIdentity(placement: GatewaySessionRow["placement"]) {
   ];
 }
 
+type ResourceIdentitySource = Pick<
+  GatewaySessionRow,
+  "sessionId" | "execNode" | "archived" | "placement"
+>;
+
+function resourceIdentityForSession(session: ResourceIdentitySource | undefined): string {
+  return JSON.stringify([
+    session?.sessionId,
+    session?.execNode,
+    session?.archived === true,
+    placementResourceIdentity(session?.placement),
+  ]);
+}
+
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
 export class ChatPaneActiveResources {
   private generation = 0;
@@ -78,6 +93,7 @@ export class ChatPaneActiveResources {
         agentId?: string;
         connectionEpoch: number;
         source: string | null;
+        resourceIdentity: string;
       }
     | undefined;
 
@@ -183,11 +199,14 @@ export class ChatPaneActiveResources {
     sessionKey: string,
     agentId: string | undefined,
     connectionEpoch: number,
+    session: ResourceIdentitySource | undefined,
   ): string | null | undefined {
     if (this.desktop?.sessionKey !== sessionKey || this.desktop.agentId !== agentId) {
       return undefined;
     }
-    return this.desktop.client === client && this.desktop.connectionEpoch === connectionEpoch
+    return this.desktop.client === client &&
+      this.desktop.connectionEpoch === connectionEpoch &&
+      this.desktop.resourceIdentity === resourceIdentityForSession(session)
       ? this.desktop.source
       : null;
   }
@@ -201,14 +220,12 @@ export class ChatPaneActiveResources {
       }
       return;
     }
+    const identity = resourceIdentityForSession(owner);
     const signature = JSON.stringify([
       owner.sessionKey,
       owner.agentId,
       owner.connectionEpoch,
-      owner.sessionId,
-      owner.execNode,
-      owner.archived === true,
-      placementResourceIdentity(owner.placement),
+      identity,
       owner.desktopAvailable,
       owner.browserAvailable,
       owner.browserTab,
@@ -231,12 +248,14 @@ export class ChatPaneActiveResources {
         this.desktop = undefined;
       } else if (
         this.desktop.client !== owner.client ||
-        this.desktop.connectionEpoch !== owner.connectionEpoch
+        this.desktop.connectionEpoch !== owner.connectionEpoch ||
+        this.desktop.resourceIdentity !== identity
       ) {
         this.desktop = {
           ...this.desktop,
           client: owner.client,
           connectionEpoch: owner.connectionEpoch,
+          resourceIdentity: identity,
           source: null,
         };
       }
@@ -262,7 +281,8 @@ export class ChatPaneActiveResources {
     // Older profiles already encode a deliberate minimized dock without the new marker.
     return (
       layout.resourceAutoOpenDismissed === true ||
-      (layout.open === false && layout.columns.some((column) => column.panels.length > 0))
+      (layout.open === false &&
+        sidebarSidePanels(layout).some((panel) => panel.slot !== "conversation"))
     );
   }
 
@@ -280,6 +300,7 @@ export class ChatPaneActiveResources {
       sessionKey: owner.sessionKey,
       agentId: owner.agentId,
       connectionEpoch: owner.connectionEpoch,
+      resourceIdentity: resourceIdentityForSession(owner),
       source,
     };
     if (source !== null) {
@@ -308,6 +329,7 @@ export class ChatPaneActiveResources {
       next.open = layout.open;
     }
     next.expanded = layout.expanded;
+    next.expandedSide = layout.expandedSide;
     owner.commit(next);
   }
 
