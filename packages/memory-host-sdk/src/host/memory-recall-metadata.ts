@@ -152,6 +152,7 @@ function readCuratedMemoryCandidates(params: {
   const active = params.activeProjectKeys
     ? new Set(params.activeProjectKeys.map((key) => key.trim()).filter(Boolean))
     : undefined;
+  const projectKeyPrefilter = active && active.size <= 64 ? [...active] : undefined;
   const results: ReturnType<typeof readCuratedCandidateBatch> = [];
   let cursor: { importance: number | null; path: string; id: string } | undefined;
   const batchSize = Math.max(64, limit);
@@ -164,6 +165,7 @@ function readCuratedMemoryCandidates(params: {
       cursor,
       requireProject: params.requireProject,
       requireTriggers: params.requireTriggers,
+      projectKeyPrefilter,
     });
     if (rows.length === 0) {
       break;
@@ -204,6 +206,7 @@ function readCuratedCandidateBatch(params: {
   cursor?: { importance: number | null; path: string; id: string };
   requireProject: boolean;
   requireTriggers: boolean;
+  projectKeyPrefilter?: readonly string[];
 }) {
   let query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(params.db)
     .selectFrom("memory_index_chunks as chunk")
@@ -232,6 +235,19 @@ function readCuratedCandidateBatch(params: {
   }
   if (params.requireTriggers) {
     query = query.where("metadata.triggers", "is not", null);
+  }
+  const projectKeyPrefilter = params.projectKeyPrefilter;
+  if (projectKeyPrefilter && params.cursor) {
+    // After an unfilled first batch, prune rows without any active-key substring.
+    // Matching rows still need exact split/trimmed-key checks in JS.
+    query = query.where((eb) =>
+      eb.or([
+        eb("metadata.project_key", "is", null),
+        ...projectKeyPrefilter.map((key) =>
+          eb(eb.fn<number>("instr", [eb.ref("metadata.project_key"), eb.val(key)]), ">", 0),
+        ),
+      ]),
+    );
   }
   if (params.cursor) {
     const cursor = params.cursor;
