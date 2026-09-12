@@ -63,7 +63,6 @@ import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
-import { prepareGatewayReceiverHandoff } from "./request-start.js";
 
 /** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
@@ -538,10 +537,10 @@ export async function attachAuthenticatedGatewayConnect(
     }
     return;
   }
-  const handoffReceiver = prepareGatewayReceiverHandoff(socket, role);
-  if (!handoffReceiver) {
-    const message = "unsupported Gateway WebSocket receiver";
-    markHandshakeFailure("unsupported-websocket-receiver", {});
+  const handoffReceiver = context.handler.prepareAuthenticatedReceive(role);
+  if (!handoffReceiver.ok) {
+    const { cause, message } = handoffReceiver.error;
+    markHandshakeFailure(cause, {});
     sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message);
     await releasePendingNodePairingCleanup();
     close(1011, message);
@@ -557,7 +556,7 @@ export async function attachAuthenticatedGatewayConnect(
   }
   // Only registered operators use bounded router starts. Node lifecycle traffic,
   // workers and preauth retain native yielding and their existing queue/drain rules.
-  handoffReceiver();
+  handoffReceiver.value();
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
   logWs("in", "connect", {

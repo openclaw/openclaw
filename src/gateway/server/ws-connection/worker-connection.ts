@@ -29,8 +29,8 @@ import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
+import { raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
-import { raiseGatewayReceiverPayloadLimit } from "./request-start.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   dispatchWorkerRequest,

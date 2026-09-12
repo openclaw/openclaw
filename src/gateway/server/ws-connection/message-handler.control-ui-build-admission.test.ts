@@ -17,6 +17,7 @@ import {
 import { rawDataToString } from "../../../infra/ws.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { prepareGatewayReceiverHandoff } from "../ws-receiver.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -199,6 +200,7 @@ describe("Control UI build admission over WebSocket", () => {
       };
       attachGatewayWsMessageHandler({
         socket,
+        prepareAuthenticatedReceive: (role) => prepareGatewayReceiverHandoff(socket, role),
         connectionWork,
         upgradeReq: request as IncomingMessage,
         ingressAttribution: {
