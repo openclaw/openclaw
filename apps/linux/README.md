@@ -94,6 +94,14 @@ to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 
+Use **Connection Settings** in the native tray menu to edit a remote connection.
+Opening settings reads only the saved address and transport settings; it does not
+resolve credentials, and token and password fields stay empty. **Retry** reconnects
+to the saved remote Gateway with freshly resolved credentials without rewriting
+configuration or installing or starting a local service. Opening the remote
+dashboard does not prove Gateway availability or successful authentication; check
+the dashboard for HTTP errors, authentication prompts, and Gateway readiness.
+
 After connecting, Model Setup discovers AI access available to the selected
 Gateway and shows it as a choice. Discovery never imports or copies an account,
 and the companion never selects, tests, installs, or saves a provider until you

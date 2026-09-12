@@ -19,6 +19,28 @@ pub struct GatewaySnapshot {
 }
 
 impl GatewaySnapshot {
+    pub(crate) fn remote_opening() -> Self {
+        Self {
+            phase: "remoteOpening",
+            installed: false,
+            running: false,
+            reachable: false,
+            status: "Opening remote dashboard".to_string(),
+            detail: Some(
+                "Gateway authentication and readiness are shown in the dashboard.".to_string(),
+            ),
+        }
+    }
+
+    pub(crate) fn remote_error(detail: impl Into<String>) -> Self {
+        Self {
+            phase: "remoteError",
+            status: "Remote connection unavailable".to_string(),
+            detail: Some(detail.into()),
+            ..Self::remote_opening()
+        }
+    }
+
     pub fn unconfigured() -> Self {
         Self {
             phase: "unconfigured",

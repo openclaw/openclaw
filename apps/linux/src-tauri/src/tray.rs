@@ -4,7 +4,7 @@ use crate::quickchat;
 use crate::DesktopState;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager};
@@ -12,6 +12,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 const OPEN_ID: &str = "open-dashboard";
+const CONNECTION_SETTINGS_ID: &str = "connection-settings";
 const QUICKCHAT_ID: &str = "quickchat";
 const CHECK_UPDATES_ID: &str = "check-for-updates";
 const UPDATE_ACTION_ID: &str = "update-action";
@@ -30,7 +31,7 @@ const QUIT_ID: &str = "quit";
 pub struct TrayHandles {
     _tray: TrayIcon<tauri::Wry>,
     status: MenuItem<tauri::Wry>,
-    status_line: Mutex<StatusLine>,
+    status_line: Arc<Mutex<StatusLine>>,
     update_action: MenuItem<tauri::Wry>,
     quickchat_shortcut: Option<CheckMenuItem<tauri::Wry>>,
     start: MenuItem<tauri::Wry>,
@@ -41,6 +42,9 @@ pub struct TrayHandles {
 struct StatusLine {
     gateway: String,
     pending_count: usize,
+    installed: bool,
+    running: bool,
+    reachable: bool,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -85,23 +89,44 @@ impl TrayHandles {
     pub fn update(&self, snapshot: &GatewaySnapshot) {
         let mut status_line = self.status_line.lock().expect("tray status mutex poisoned");
         status_line.gateway.clone_from(&snapshot.status);
+        status_line.installed = snapshot.installed;
+        status_line.running = snapshot.running;
+        status_line.reachable = snapshot.reachable;
         if !snapshot.reachable {
             status_line.pending_count = 0;
         }
-        let _ = self.status.set_text(status_line.text());
-        let _ = self
-            .start
-            .set_enabled(snapshot.installed && !snapshot.running && !snapshot.reachable);
-        let _ = self
-            .stop
-            .set_enabled(snapshot.installed && snapshot.running);
-        let _ = self.restart.set_enabled(snapshot.installed);
+        drop(status_line);
+        self.refresh_status(self._tray.app_handle());
     }
 
     pub fn update_pending_count(&self, count: usize) {
-        let mut status_line = self.status_line.lock().expect("tray status mutex poisoned");
-        status_line.pending_count = count;
-        let _ = self.status.set_text(status_line.text());
+        self.status_line
+            .lock()
+            .expect("tray status mutex poisoned")
+            .pending_count = count;
+        self.refresh_status(self._tray.app_handle());
+    }
+
+    fn refresh_status(&self, app: &AppHandle) {
+        let state = Arc::clone(&self.status_line);
+        let status = self.status.clone();
+        let start = self.start.clone();
+        let stop = self.stop.clone();
+        let restart = self.restart.clone();
+        let _ = app.run_on_main_thread(move || {
+            let current = state.lock().expect("tray status mutex poisoned");
+            let (text, installed, running, reachable) = (
+                current.text(),
+                current.installed,
+                current.running,
+                current.reachable,
+            );
+            drop(current);
+            let _ = status.set_text(text);
+            let _ = start.set_enabled(installed && !running && !reachable);
+            let _ = stop.set_enabled(installed && running);
+            let _ = restart.set_enabled(installed);
+        });
     }
 
     pub fn set_quickchat_shortcut_checked(&self, checked: bool) {
@@ -201,6 +226,7 @@ pub fn build(
         .separator()
         .text(QUICKCHAT_ID, "Quick Chat")
         .text(OPEN_ID, "Open Dashboard")
+        .text(CONNECTION_SETTINGS_ID, "Connection Settings")
         .text(CHECK_UPDATES_ID, "Check for Updates")
         .item(&update_action)
         .item(&start_at_login);
@@ -295,10 +321,13 @@ pub fn build(
     Ok(TrayHandles {
         _tray: tray,
         status,
-        status_line: Mutex::new(StatusLine {
+        status_line: Arc::new(Mutex::new(StatusLine {
             gateway: "Checking…".to_string(),
             pending_count: 0,
-        }),
+            installed: false,
+            running: false,
+            reachable: false,
+        })),
         update_action,
         quickchat_shortcut,
         start,
@@ -316,8 +345,35 @@ pub fn show_window(app: &AppHandle) {
 }
 
 pub fn open_dashboard(app: &AppHandle) {
-    show_window(app);
-    app.state::<GatewayOperationQueue>().submit_connect();
+    #[cfg(target_os = "linux")]
+    {
+        let current_app = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            let state = current_app.state::<DesktopState>();
+            if state.is_quitting() {
+                return;
+            }
+            let presented = state.present_remote_dashboard(&current_app);
+            show_window(&current_app);
+            match presented {
+                Ok(true) => {}
+                Ok(false) => current_app
+                    .state::<GatewayOperationQueue>()
+                    .submit_connect(),
+                Err(error) => {
+                    eprintln!("{error}");
+                    crate::notify::notify(&current_app, "OpenClaw", &error);
+                }
+            }
+        }) {
+            eprintln!("Could not open the dashboard: {error}");
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        show_window(app);
+        app.state::<GatewayOperationQueue>().submit_connect();
+    }
 }
 
 fn handle_menu(
@@ -330,11 +386,15 @@ fn handle_menu(
 ) {
     match id {
         QUIT_ID => {
-            state.quit();
-            app.exit(0);
+            state.quit(app);
         }
         QUICKCHAT_ID => quickchat::toggle_quickchat(app),
         OPEN_ID => open_dashboard(app),
+        CONNECTION_SETTINGS_ID => {
+            if let Err(error) = state.show_connection_settings(app) {
+                eprintln!("Could not open Connection Settings: {error}");
+            }
+        }
         CHECK_UPDATES_ID => {
             show_window(app);
             crate::updater::spawn_check(app.clone());

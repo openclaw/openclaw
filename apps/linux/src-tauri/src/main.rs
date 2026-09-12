@@ -23,13 +23,13 @@ use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot, ReadyGateway};
 use gateway_operation_queue::{GatewayOperation, GatewayOperationQueue};
 use installer::InstallChannel;
-use remote_gateway::{RemoteConnectionSource, RemoteGatewayRequest};
+use remote_gateway::{RemoteConnectionSource, RemoteGatewayRequest, TunnelRoute};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::webview::{NewWindowResponse, WebviewBuilder};
+use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, Manager, State, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
@@ -308,12 +308,23 @@ mod native_browser_tests {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct RemoteDashboardPresentation {
+    webview: tauri::Webview,
+    target: Url,
+    selection: u64,
+    generation: u64,
+}
+
 #[derive(Default)]
 struct NavigationState {
-    // One lock owns both fields so the intent check and WebView navigation cannot interleave.
+    // Navigation commits run on the main thread; workers only prepare connections.
     remote_dashboard: bool,
     watch_generation: u64,
     onboarding_pending: bool,
+    remote_snapshot: Option<GatewaySnapshot>,
+    #[cfg(target_os = "linux")]
+    remote_presentation: Option<RemoteDashboardPresentation>,
 }
 
 impl NavigationState {
@@ -388,8 +399,9 @@ struct DesktopInner {
     pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
     local_url: Url,
     tray: Mutex<Option<Arc<tray::TrayHandles>>>,
-    remote_tunnel: Mutex<Option<remote_gateway::SshTunnel>>,
+    remote_tunnels: remote_gateway::TunnelManager,
     quitting: AtomicBool,
+    ssh_shutdown_complete: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -407,8 +419,9 @@ impl DesktopState {
                 pending_approvals: Mutex::new(pending_approvals::PendingApprovalState::default()),
                 local_url,
                 tray: Mutex::new(None),
-                remote_tunnel: Mutex::new(None),
+                remote_tunnels: remote_gateway::TunnelManager::default(),
                 quitting: AtomicBool::new(false),
+                ssh_shutdown_complete: AtomicBool::new(false),
             }),
         }
     }
@@ -433,14 +446,83 @@ impl DesktopState {
         self.with_tray(|tray| tray.refresh_update_action(app));
     }
 
-    pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
-        self.connect_selected(app, false)
+    #[cfg(target_os = "linux")]
+    pub(crate) fn present_remote_dashboard(&self, app: &AppHandle) -> Result<bool, String> {
+        let navigation = self.inner.navigation.lock().expect("navigation");
+        if self.is_quitting() {
+            return Ok(true);
+        }
+        let Some(presentation) = navigation.remote_presentation.as_ref() else {
+            // Settings and failed child restoration still own remote navigation.
+            return Ok(navigation.remote_dashboard);
+        };
+        if !navigation.remote_dashboard || navigation.watch_generation != presentation.generation {
+            return Ok(true);
+        }
+        // A passive open must not replace the owner of in-flight native requests.
+        app.state::<GatewayOperationQueue>()
+            .while_current(presentation.selection, || {
+                presentation
+                    .webview
+                    .navigate(presentation.target.clone())
+                    .map(|_| true)
+                    .map_err(|_| {
+                        "Could not reload the remote dashboard. Open Connection Settings to retry."
+                            .to_string()
+                    })
+            })
+            .unwrap_or(Ok(true))
+    }
+
+    fn on_main<T: Send + 'static>(
+        &self,
+        app: &AppHandle,
+        action: impl FnOnce(DesktopState, AppHandle) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let (sender, receiver) = mpsc::channel();
+        let state = self.clone();
+        let current_app = app.clone();
+        app.run_on_main_thread(move || {
+            let _ = sender.send(action(state, current_app));
+        })
+        .map_err(|_| "The desktop event loop is unavailable.".to_string())?;
+        receiver
+            .recv()
+            .map_err(|_| "The desktop operation was interrupted.".to_string())?
+    }
+
+    pub fn connect(&self, app: &AppHandle, selection: u64) -> Result<GatewaySnapshot, String> {
+        let result = self.connect_selected(app, false, selection);
+        if let Err(error) = &result {
+            if remote_gateway::saved_settings()?.is_some() {
+                return self.remote_failure(app, error.clone(), selection, None);
+            }
+        }
+        result
+    }
+
+    fn retry_remote(&self, app: &AppHandle, selection: u64) -> Result<GatewaySnapshot, String> {
+        let _operation = self.inner.operation.lock().expect("Gateway operation");
+        let result = remote_gateway::load_saved_remote()
+            .and_then(|request| {
+                request.ok_or_else(|| {
+                    "No remote Gateway is saved. Edit the connection settings.".to_string()
+                })
+            })
+            .and_then(|request| {
+                self.connect_remote_locked(app, request, RemoteConnectionSource::Saved, selection)
+            });
+        match result {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => self.remote_failure(app, error, selection, None),
+        }
     }
 
     fn connect_selected(
         &self,
         app: &AppHandle,
         explicit_local: bool,
+        selection: u64,
     ) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
@@ -449,8 +531,21 @@ impl DesktopState {
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
         if !explicit_local {
             if let Some(remote) = remote_gateway::load_saved_remote()? {
-                return self.connect_remote_locked(app, remote, RemoteConnectionSource::Saved);
+                return self.connect_remote_locked(
+                    app,
+                    remote,
+                    RemoteConnectionSource::Saved,
+                    selection,
+                );
             }
+            self.on_main(app, move |state, app| {
+                let mut navigation = state.inner.navigation.lock().expect("navigation");
+                app.state::<GatewayOperationQueue>()
+                    .while_current(selection, || {
+                        navigation.permit_local(true, None);
+                    });
+                Ok(())
+            })?;
         }
         let cli = self.resolve_cli();
         if !explicit_local && !remote_gateway::has_configured_gateway()? {
@@ -472,11 +567,7 @@ impl DesktopState {
             Err(error) => return Err(error.to_string()),
         };
         if explicit_local {
-            self.inner
-                .remote_tunnel
-                .lock()
-                .map_err(|_| "Remote Gateway tunnel lock is unavailable.".to_string())?
-                .take();
+            self.inner.remote_tunnels.clear();
         }
         let ready = gateway::ensure_ready(&cli)?;
         self.finish_local_connection(app, cli, ready)
@@ -569,47 +660,58 @@ impl DesktopState {
         cli: OpenClawCli,
         ready: ReadyGateway,
     ) -> Result<GatewaySnapshot, String> {
-        app.state::<gateway_ws::GatewayClient>()
-            .configure(app, ready.gateway_ws);
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
-        self.update_tray(&ready.snapshot);
         if navigated {
+            app.state::<gateway_ws::GatewayClient>()
+                .configure(app, ready.gateway_ws);
+            self.update_tray(&ready.snapshot);
             self.start_watchdog(app.clone(), cli);
         }
         Ok(ready.snapshot)
     }
 
-    pub fn connect_explicit_local(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
-        let mut navigation = self
-            .inner
-            .navigation
-            .lock()
-            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
-        navigation.permit_local(true, None);
-        // First-run setup owns the pending bootstrap reply. Replacing its page
-        // drops the error callback and leaves a reconnect screen with no watchdog.
-        if !self.main_window_has_local_content(&main_window(app)?) {
-            let mut url = self.inner.local_url.clone();
-            url.query_pairs_mut()
-                .clear()
-                .append_pair("mode", "reconnecting");
-            self.navigate_locked(app, url, false)?;
-        }
-        drop(navigation);
-        self.connect_selected(app, true)
+    pub fn connect_explicit_local(
+        &self,
+        app: &AppHandle,
+        selection: u64,
+    ) -> Result<GatewaySnapshot, String> {
+        self.on_main(app, |state, app| {
+            state
+                .inner
+                .navigation
+                .lock()
+                .expect("navigation")
+                .permit_local(true, None);
+            // Keep the first-run page that owns the pending bootstrap reply.
+            if !state.main_window_has_local_content(&main_window(&app)?) {
+                let mut url = state.inner.local_url.clone();
+                url.query_pairs_mut()
+                    .clear()
+                    .append_pair("mode", "reconnecting");
+                state.navigate_locked(&app, url, false)?;
+            }
+            Ok(())
+        })?;
+        self.connect_selected(app, true, selection)
     }
 
     pub(crate) fn connect_remote(
         &self,
         app: &AppHandle,
         request: RemoteGatewayRequest,
+        selection: u64,
     ) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
             .operation
             .lock()
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
-        self.connect_remote_locked(app, request, RemoteConnectionSource::Submitted)
+        let result =
+            self.connect_remote_locked(app, request, RemoteConnectionSource::Submitted, selection);
+        if let Err(error) = &result {
+            let _ = self.remote_failure(app, error.clone(), selection, None);
+        }
+        result
     }
 
     fn connect_remote_locked(
@@ -617,22 +719,48 @@ impl DesktopState {
         app: &AppHandle,
         mut request: RemoteGatewayRequest,
         source: RemoteConnectionSource,
+        selection: u64,
     ) -> Result<GatewaySnapshot, String> {
-        remote_gateway::validate_request(&request)?;
-        let mut active_tunnel = self
+        if self.is_quitting() {
+            return Err("OpenClaw is quitting.".to_string());
+        }
+        let view_generation = self
             .inner
-            .remote_tunnel
+            .navigation
             .lock()
-            .map_err(|_| "Remote Gateway tunnel lock is unavailable.".to_string())?;
-        active_tunnel.take();
+            .expect("navigation")
+            .watch_generation;
+        remote_gateway::validate_request(&request)?;
+        let work = if request.transport == "ssh" || self.inner.remote_tunnels.has_route() {
+            Some(self.inner.remote_tunnels.begin()?)
+        } else {
+            None
+        };
+        let reusable = (request.transport == "ssh")
+            .then(|| self.inner.remote_tunnels.reusable(&request))
+            .flatten();
         let (tunnel, gateway_url) = if request.transport == "ssh" {
-            let saved_url = request
-                .url
-                .as_deref()
-                .map(remote_gateway::normalize_gateway_url)
-                .transpose()?;
-            let (tunnel, url) = remote_gateway::start_tunnel(&request, saved_url.as_ref())?;
-            (Some(tunnel), url)
+            if let Some(route) = &reusable {
+                (None, route.url.clone())
+            } else {
+                let saved_url = request
+                    .url
+                    .as_deref()
+                    .map(remote_gateway::normalize_gateway_url)
+                    .transpose()?;
+                let (tunnel, url) =
+                    remote_gateway::start_tunnel(&request, saved_url.as_ref(), || {
+                        self.is_quitting()
+                            || self
+                                .inner
+                                .navigation
+                                .lock()
+                                .expect("navigation")
+                                .watch_generation
+                                != view_generation
+                    })?;
+                (Some(tunnel), url)
+            }
         } else {
             let raw = request
                 .url
@@ -643,28 +771,72 @@ impl DesktopState {
         remote_gateway::resolve_remote_tls_fingerprint(&mut request, &gateway_url)?;
         let target = remote_gateway::dashboard_url(&gateway_url)?;
         let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
+        if self.is_quitting()
+            || self
+                .inner
+                .navigation
+                .lock()
+                .expect("navigation")
+                .watch_generation
+                != view_generation
+        {
+            return Err("The connection was superseded by navigation.".to_string());
+        }
         remote_gateway::save_config_at(
             &remote_gateway::config_path()?,
             &request,
             &gateway_url,
             source,
         )?;
-        *active_tunnel = tunnel;
-        drop(active_tunnel);
-
-        app.state::<gateway_ws::GatewayClient>()
-            .configure(app, remote_ws_config(&request, &gateway_url));
-        self.navigate_authenticated_remote(app, target, script)?;
-        let snapshot = GatewaySnapshot {
-            phase: "connected",
-            installed: false,
-            running: false,
-            reachable: true,
-            status: "Connected to remote Gateway".to_string(),
-            detail: None,
-        };
-        self.update_tray(&snapshot);
-        Ok(snapshot)
+        let pending = Arc::new(Mutex::new(tunnel));
+        let commit_pending = Arc::clone(&pending);
+        let result = self.on_main(app, move |state, app| {
+            if state.is_quitting()
+                || state
+                    .inner
+                    .navigation
+                    .lock()
+                    .expect("navigation")
+                    .watch_generation
+                    != view_generation
+            {
+                return Err("The connection was superseded by navigation.".to_string());
+            }
+            if request.transport == "ssh" {
+                state.inner.remote_tunnels.publish(
+                    &mut commit_pending.lock().expect("pending SSH"),
+                    TunnelRoute {
+                        id: 0,
+                        selection,
+                        request: request.clone(),
+                        url: gateway_url.clone(),
+                    },
+                    reusable.as_ref().map(|route| route.id),
+                    true,
+                )?;
+            } else {
+                *commit_pending.lock().expect("pending SSH") = state.inner.remote_tunnels.take();
+            }
+            app.state::<gateway_ws::GatewayClient>()
+                .configure(&app, remote_ws_config(&request, &gateway_url));
+            // The submitting view will be destroyed. Its IPC reply cannot own
+            // completion, and a listening SSH port does not prove Gateway health.
+            let snapshot = GatewaySnapshot::remote_opening();
+            {
+                let mut navigation = state.inner.navigation.lock().expect("navigation");
+                navigation.select_remote();
+                navigation.remote_snapshot = Some(snapshot.clone());
+            }
+            state.update_tray(&snapshot);
+            state.navigate_authenticated_remote(&app, target, script, selection)?;
+            Ok(snapshot)
+        });
+        // Includes retired and cancelled children. No native thread or state
+        // lock waits for a subprocess to exit.
+        let retired = pending.lock().expect("pending SSH").take();
+        drop(retired);
+        drop(work);
+        result
     }
 
     fn navigate_authenticated_remote(
@@ -672,6 +844,7 @@ impl DesktopState {
         app: &AppHandle,
         dashboard: Url,
         script: String,
+        selection: u64,
     ) -> Result<(), String> {
         let window = app
             .get_window("main")
@@ -679,48 +852,246 @@ impl DesktopState {
         let size = window
             .inner_size()
             .map_err(|_| "Could not measure the Gateway window.".to_string())?;
-        let mut navigation = self
+        let generation = self
             .inner
             .navigation
             .lock()
-            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
+            .expect("navigation")
+            .watch_generation;
         let old_webview = app
             .get_webview("main")
             .ok_or_else(|| "Main dashboard view is unavailable.".to_string())?;
-        navigation.select_remote();
         // Keep the native window alive: only its child changes so tray ownership,
         // geometry and close-to-tray behavior survive auth-bound script injection.
         old_webview
             .close()
             .map_err(|_| "Could not replace the Gateway dashboard view.".to_string())?;
         let browser_app = app.clone();
-        let builder = WebviewBuilder::new("main", WebviewUrl::External(dashboard))
+        let load_state = self.clone();
+        let builder = WebviewBuilder::new("main", WebviewUrl::External(dashboard.clone()))
             .initialization_script(script)
+            .on_page_load(move |view, payload| {
+                let state = load_state.clone();
+                let app = view.app_handle().clone();
+                let loaded = matches!(payload.event(), PageLoadEvent::Finished);
+                let callback_app = app.clone();
+                let on_load = move || {
+                    let mut navigation = state.inner.navigation.lock().expect("navigation");
+                    if state.is_quitting()
+                        || navigation.watch_generation != generation
+                        || navigation
+                            .remote_snapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| snapshot.phase == "remoteError")
+                    {
+                        return;
+                    }
+                    let snapshot = callback_app.state::<GatewayOperationQueue>().while_current(
+                        selection,
+                        || {
+                            let mut snapshot = GatewaySnapshot::remote_opening();
+                            if loaded {
+                                // Document loading does not prove HTTP or authenticated readiness.
+                                snapshot.phase = "remoteDashboard";
+                                snapshot.status = "Remote dashboard".to_string();
+                            }
+                            navigation.remote_snapshot = Some(snapshot.clone());
+                            snapshot
+                        },
+                    );
+                    drop(navigation);
+                    if let Some(snapshot) = snapshot {
+                        state.update_tray(&snapshot);
+                    }
+                };
+                // Wry may invoke this inline while navigation holds its owner guards.
+                #[cfg(target_os = "linux")]
+                gtk::glib::idle_add_once(on_load);
+                #[cfg(not(target_os = "linux"))]
+                let _ = app.run_on_main_thread(on_load);
+            })
             .on_new_window(move |url, _features| {
                 open_external_browser(&browser_app, &url);
                 NewWindowResponse::Deny
             })
             .auto_resize();
-        if window
-            .add_child(builder, LogicalPosition::new(0, 0), size)
-            .is_err()
+        let remote_webview = match window.add_child(builder, LogicalPosition::new(0, 0), size) {
+            Ok(webview) => webview,
+            Err(_) => {
+                self.inner
+                    .navigation
+                    .lock()
+                    .expect("navigation")
+                    .cancel_watchdog();
+                let browser_app = app.clone();
+                let mut local = self.inner.local_url.clone();
+                local
+                    .query_pairs_mut()
+                    .append_pair("mode", "connectionSettings");
+                let restore = WebviewBuilder::new("main", WebviewUrl::External(local))
+                    .on_new_window(move |url, _features| {
+                        open_external_browser(&browser_app, &url);
+                        NewWindowResponse::Deny
+                    })
+                    .auto_resize();
+                let _ = window.add_child(restore, LogicalPosition::new(0, 0), size);
+                return Err(
+                    "Could not open the remote Gateway dashboard. Try connecting again."
+                        .to_string(),
+                );
+            }
+        };
+        #[cfg(target_os = "linux")]
         {
-            navigation.remote_dashboard = false;
-            let browser_app = app.clone();
-            let restore = WebviewBuilder::new("main", WebviewUrl::App("index.html".into()))
-                .on_new_window(move |url, _features| {
-                    open_external_browser(&browser_app, &url);
-                    NewWindowResponse::Deny
-                })
-                .auto_resize();
-            let _ = window.add_child(restore, LogicalPosition::new(0, 0), size);
-            return Err(
-                "Could not open the remote Gateway dashboard. Try connecting again.".to_string(),
-            );
+            let mut navigation = self.inner.navigation.lock().expect("navigation");
+            if !self.is_quitting()
+                && navigation.remote_dashboard
+                && navigation.watch_generation == generation
+            {
+                app.state::<GatewayOperationQueue>()
+                    .while_current(selection, || {
+                        navigation.remote_presentation = Some(RemoteDashboardPresentation {
+                            webview: remote_webview,
+                            target: dashboard,
+                            selection,
+                            generation,
+                        });
+                    });
+            }
         }
-        drop(navigation);
+        #[cfg(not(target_os = "linux"))]
+        drop(remote_webview);
         tray::show_window(app);
         Ok(())
+    }
+
+    fn remote_failure(
+        &self,
+        app: &AppHandle,
+        error: String,
+        selection: u64,
+        child: Option<u64>,
+    ) -> Result<GatewaySnapshot, String> {
+        self.on_main(app, move |state, app| {
+            let snapshot = GatewaySnapshot::remote_error(error);
+            if state.is_quitting()
+                || !app
+                    .state::<GatewayOperationQueue>()
+                    .selection_is_current(selection)
+                || child.is_some_and(|child| !state.inner.remote_tunnels.route_is_current(child))
+            {
+                return Ok(snapshot);
+            }
+            state
+                .inner
+                .navigation
+                .lock()
+                .expect("navigation")
+                .remote_snapshot = Some(snapshot.clone());
+            state.update_tray(&snapshot);
+            Ok(snapshot)
+        })
+    }
+
+    pub(crate) fn show_connection_settings(&self, app: &AppHandle) -> Result<(), String> {
+        app.state::<GatewayOperationQueue>().invalidate_recovery();
+        // Called on the native event thread. Keep the transport alive while
+        // replacing only the dashboard with the local correction form.
+        self.inner
+            .navigation
+            .lock()
+            .expect("navigation")
+            .select_remote();
+        let mut url = self.inner.local_url.clone();
+        url.query_pairs_mut()
+            .clear()
+            .append_pair("mode", "connectionSettings");
+        self.navigate_locked(app, url, true)
+    }
+
+    fn start_tunnel_monitor(&self, app: AppHandle) {
+        let state = self.clone();
+        thread::spawn(move || {
+            while !state.is_quitting() {
+                if let Some((route, recover)) = state.inner.remote_tunnels.exited() {
+                    if recover {
+                        app.state::<GatewayOperationQueue>()
+                            .submit_recovery(route.selection, route.id);
+                    } else {
+                        let _ = state.remote_failure(&app,
+                            "The SSH connection closed again. Open Connection Settings to retry or edit it.".to_string(),
+                            route.selection, Some(route.id));
+                    }
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        });
+    }
+
+    fn recover_remote(
+        &self,
+        app: &AppHandle,
+        selection: u64,
+        child_id: u64,
+    ) -> Result<GatewaySnapshot, String> {
+        let _operation = self.inner.operation.lock().expect("Gateway operation");
+        let Some(route) = self.inner.remote_tunnels.route(child_id) else {
+            return Ok(GatewaySnapshot::remote_opening());
+        };
+        let cancelled = || {
+            self.is_quitting()
+                || !app
+                    .state::<GatewayOperationQueue>()
+                    .selection_is_current(selection)
+                || !self.inner.remote_tunnels.route_is_current(child_id)
+        };
+        if cancelled() {
+            return Ok(GatewaySnapshot::remote_opening());
+        }
+        let _work = self.inner.remote_tunnels.begin()?;
+        let tunnel = remote_gateway::start_tunnel(&route.request, Some(&route.url), cancelled);
+        match tunnel {
+            Err(error) => self.remote_failure(app, error, selection, Some(child_id)),
+            Ok((tunnel, url)) => {
+                let pending = Arc::new(Mutex::new(Some(tunnel)));
+                let commit_pending = Arc::clone(&pending);
+                let result = self.on_main(app, move |state, app| {
+                    let published =
+                        app.state::<GatewayOperationQueue>()
+                            .while_current(selection, || {
+                                state.inner.remote_tunnels.publish(
+                                    &mut commit_pending.lock().expect("pending SSH"),
+                                    TunnelRoute { url, ..route },
+                                    Some(child_id),
+                                    false,
+                                )
+                            });
+                    let Some(published) = published else {
+                        return Ok(GatewaySnapshot::remote_opening());
+                    };
+                    published?;
+                    // Same route, same document and native client generation. A
+                    // replacement gets no further automatic retry until user intent.
+                    app.state::<gateway_ws::GatewayClient>().resume_reconnect();
+                    let mut snapshot = GatewaySnapshot::remote_opening();
+                    snapshot.status = "Remote dashboard".to_string();
+                    state
+                        .inner
+                        .navigation
+                        .lock()
+                        .expect("navigation")
+                        .remote_snapshot = Some(snapshot.clone());
+                    state.update_tray(&snapshot);
+                    Ok(snapshot)
+                });
+                let retired = pending.lock().expect("pending SSH").take();
+                drop(retired);
+                match result {
+                    Ok(snapshot) => Ok(snapshot),
+                    Err(error) => self.remote_failure(app, error, selection, Some(child_id)),
+                }
+            }
+        }
     }
 
     pub fn show_error(&self, app: &AppHandle, _error: &str) {
@@ -729,12 +1100,27 @@ impl DesktopState {
         tray::show_window(app);
     }
 
-    pub fn quit(&self) {
-        self.inner.quitting.store(true, Ordering::SeqCst);
-        self.cancel_watchdog();
-        if let Ok(mut tunnel) = self.inner.remote_tunnel.lock() {
-            tunnel.take();
+    pub fn quit(&self, app: &AppHandle) {
+        self.quit_with_code(app, 0);
+    }
+
+    fn quit_with_code(&self, app: &AppHandle, code: i32) {
+        if self.inner.quitting.swap(true, Ordering::SeqCst) {
+            return;
         }
+        self.cancel_watchdog();
+        app.state::<GatewayOperationQueue>().invalidate_recovery();
+        self.inner.remote_tunnels.close();
+        let state = self.clone();
+        let app = app.clone();
+        thread::spawn(move || {
+            state.inner.remote_tunnels.wait_closed();
+            state
+                .inner
+                .ssh_shutdown_complete
+                .store(true, Ordering::SeqCst);
+            app.exit(code);
+        });
     }
 
     fn is_quitting(&self) -> bool {
@@ -828,7 +1214,7 @@ impl DesktopState {
         }
     }
 
-    // Caller holds the navigation lock, keeping the final arbitration check and navigation atomic.
+    // Called on the event thread after arbitration, without holding state locks.
     fn navigate_locked(
         &self,
         app: &AppHandle,
@@ -853,27 +1239,39 @@ impl DesktopState {
         reveal_window: bool,
         dashboard: bool,
     ) -> Result<bool, String> {
-        let mut navigation = self
-            .inner
-            .navigation
-            .lock()
-            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
-        if !navigation.permit_local(force, expected_generation) {
-            return Ok(false);
-        }
-        let onboarding_was_pending = dashboard && navigation.onboarding_pending;
-        let url = if dashboard {
-            navigation.prepare_dashboard_url(target)?
-        } else {
-            Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?
-        };
-        if let Err(error) = self.navigate_locked(app, url, reveal_window) {
-            if onboarding_was_pending {
-                navigation.mark_onboarding_pending();
+        let target = target.to_string();
+        self.on_main(app, move |state, app| {
+            let mut navigation = state.inner.navigation.lock().expect("navigation");
+            if state.is_quitting() || !navigation.permit_local(force, expected_generation) {
+                return Ok(false);
             }
-            return Err(error);
-        }
-        Ok(true)
+            let onboarding_was_pending = dashboard && navigation.onboarding_pending;
+            let url = if dashboard {
+                navigation.prepare_dashboard_url(&target)?
+            } else {
+                Url::parse(&target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?
+            };
+            drop(navigation);
+            if let Err(error) = state.navigate_locked(&app, url, reveal_window) {
+                if onboarding_was_pending {
+                    state
+                        .inner
+                        .navigation
+                        .lock()
+                        .expect("navigation")
+                        .mark_onboarding_pending();
+                }
+                return Err(error);
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let mut navigation = state.inner.navigation.lock().expect("navigation");
+                if !navigation.remote_dashboard {
+                    navigation.remote_presentation = None;
+                }
+            }
+            Ok(true)
+        })
     }
 
     fn show_local(
@@ -1192,15 +1590,49 @@ fn build_info(app: AppHandle) -> BuildInfo {
 
 #[tauri::command]
 async fn bootstrap(
+    state: State<'_, DesktopState>,
     operations: State<'_, GatewayOperationQueue>,
     explicit_local: Option<bool>,
-) -> Result<GatewaySnapshot, String> {
-    let operation = if explicit_local == Some(true) {
+    connection_settings: Option<bool>,
+    remote_retry: Option<bool>,
+) -> Result<BootstrapReply, String> {
+    if connection_settings == Some(true) {
+        operations.invalidate_recovery();
+        state.cancel_watchdog();
+        return Ok(BootstrapReply::Settings {
+            remote: remote_gateway::saved_settings()?,
+            detail: state
+                .inner
+                .navigation
+                .lock()
+                .expect("navigation")
+                .remote_snapshot
+                .as_ref()
+                .filter(|snapshot| snapshot.phase == "remoteError")
+                .and_then(|snapshot| snapshot.detail.clone()),
+        });
+    }
+    let operation = if remote_retry == Some(true) {
+        GatewayOperation::RetryRemote
+    } else if explicit_local == Some(true) {
         GatewayOperation::ConnectExplicitLocal
     } else {
         GatewayOperation::Connect
     };
-    operations.execute(operation).await
+    operations
+        .execute(operation)
+        .await
+        .map(BootstrapReply::Gateway)
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum BootstrapReply {
+    Gateway(GatewaySnapshot),
+    Settings {
+        remote: Option<remote_gateway::RemoteSettings>,
+        detail: Option<String>,
+    },
 }
 
 #[tauri::command]
@@ -1321,19 +1753,25 @@ fn main() {
         let error_state = state.clone();
         // Every caller of the operation mutex enters this queue so UI source cannot reorder work.
         app.manage(GatewayOperationQueue::new(
-            move |operation| match operation {
-                GatewayOperation::Connect => operation_state.connect(&operation_app),
+            move |operation, selection| match operation {
+                GatewayOperation::Connect => operation_state.connect(&operation_app, selection),
                 GatewayOperation::ConnectExplicitLocal => {
-                    operation_state.connect_explicit_local(&operation_app)
+                    operation_state.connect_explicit_local(&operation_app, selection)
                 }
                 GatewayOperation::ConnectRemote(request) => {
-                    operation_state.connect_remote(&operation_app, request)
+                    operation_state.connect_remote(&operation_app, request, selection)
+                }
+                GatewayOperation::RetryRemote => {
+                    operation_state.retry_remote(&operation_app, selection)
                 }
                 GatewayOperation::Install(channel) => {
                     operation_state.install_cli(&operation_app, channel)
                 }
                 GatewayOperation::Action(action) => {
                     operation_state.gateway_action(&operation_app, action)
+                }
+                GatewayOperation::RecoverRemote { child_id } => {
+                    operation_state.recover_remote(&operation_app, selection, child_id)
                 }
             },
             move |error| error_state.show_error(&error_app, error),
@@ -1354,6 +1792,7 @@ fn main() {
         app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
         state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
+        state.start_tunnel_monitor(app.handle().clone());
         Ok(())
     });
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -1417,13 +1856,18 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("OpenClaw desktop app failed");
     app.run(|app, event| {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+            if let Some(state) = app.try_state::<DesktopState>() {
+                if !state.inner.ssh_shutdown_complete.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                    state.quit_with_code(app, code.unwrap_or(0));
+                }
+            }
+        }
         #[cfg(target_os = "linux")]
         if matches!(event, tauri::RunEvent::Exit) {
             if let Some(bridge) = app.try_state::<gateway_sleep_logind::SleepBridge>() {
                 bridge.shutdown();
-            }
-            if let Some(state) = app.try_state::<DesktopState>() {
-                state.quit();
             }
         }
         #[cfg(not(target_os = "linux"))]

@@ -16,6 +16,7 @@ const elements = {
   footerMode: document.querySelector("#footer-mode"),
   gatewayList: document.querySelector("#gateway-list"),
   discoveryStatus: document.querySelector("#discovery-status"),
+  editConnection: document.querySelector("#edit-connection"),
   installButton: document.querySelector("#install-button"),
   installControls: document.querySelector("#install-controls"),
   installLog: document.querySelector("#install-log"),
@@ -38,6 +39,7 @@ const elements = {
   remoteUrlField: document.querySelector("#remote-url-field"),
   setupBack: document.querySelector("#setup-back"),
   setupContinue: document.querySelector("#setup-continue"),
+  setupNavigation: document.querySelector(".setup-navigation"),
   statusDot: document.querySelector("#status-dot"),
   title: document.querySelector("#title"),
   updateAction: document.querySelector("#update-action"),
@@ -59,6 +61,7 @@ let firstRunPhase = null;
 let selectedConnection = "local";
 let remoteTransport = "direct";
 let remoteConnectionPending = false;
+let editingConnection = false;
 
 function show(element, visible) {
   element.classList.toggle("hidden", !visible);
@@ -82,6 +85,7 @@ function render({
   }
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
+  show(elements.editConnection, false);
   show(elements.welcomeScreen, false);
   show(elements.connectionChoices, false);
   show(elements.discovery, true);
@@ -282,6 +286,8 @@ async function connect() {
         elements.channel.value = "dev";
       }
       renderWelcome();
+    } else if (snapshot.phase === "remoteError") {
+      renderRemoteRetry(snapshot.detail);
     }
   } catch (error) {
     renderRetry(friendlyError(error));
@@ -313,6 +319,9 @@ function renderConnectionChoices() {
 }
 
 function selectConnection(connection) {
+  if (editingConnection && connection !== "remote") {
+    return;
+  }
   selectedConnection = connection;
   const isRemote = connection === "remote";
   elements.connectionLocal.classList.toggle("selected", !isRemote);
@@ -404,7 +413,7 @@ async function connectRemoteGateway() {
   remoteConnectionPending = true;
   elements.remoteConnect.disabled = true;
   elements.setupContinue.disabled = true;
-  showRemoteFeedback("Checking your Gateway connection…", false);
+  showRemoteFeedback("Preparing the remote dashboard…", false);
 
   try {
     await invoke("connect_remote_gateway", {
@@ -415,7 +424,7 @@ async function connectRemoteGateway() {
       password: elements.remotePassword.value || null,
       remotePort: isDirect ? null : remotePort,
     });
-    showRemoteFeedback("Gateway connected. Opening OpenClaw…", false);
+    showRemoteFeedback("Opening the remote dashboard…", false);
   } catch (error) {
     const message = friendlyError(error);
     if (/auth|token|password|unauthori[sz]ed|forbidden|401|403/i.test(message)) {
@@ -433,6 +442,75 @@ function showRemoteFeedback(message, isError) {
   elements.remoteFeedback.textContent = message;
   elements.remoteFeedback.classList.toggle("error", isError);
   show(elements.remoteFeedback, true);
+}
+
+function renderRemoteRetry(message) {
+  editingConnection = true;
+  renderAction(
+    {
+      actionLabel: "Retry",
+      description: message || "Open Connection Settings to check the remote Gateway.",
+      dot: "error",
+      eyebrow: "REMOTE GATEWAY",
+      title: "Connection needs attention",
+    },
+    retryRemote,
+  );
+  show(elements.discovery, false);
+  show(elements.editConnection, true);
+}
+
+async function retryRemote() {
+  elements.primaryAction.disabled = true;
+  try {
+    // Retry the saved route, resolving credentials afresh without saving the
+    // editor's empty secret fields or selecting a local service.
+    const snapshot = await invoke("bootstrap", { remoteRetry: true });
+    if (snapshot.phase === "remoteError") {
+      renderRemoteRetry(snapshot.detail);
+    }
+  } catch (error) {
+    renderRemoteRetry(friendlyError(error));
+  } finally {
+    elements.primaryAction.disabled = false;
+  }
+}
+
+async function editConnection() {
+  editingConnection = true;
+  render({
+    description: "Update the remote Gateway address or authentication.",
+    dot: "idle",
+    eyebrow: "REMOTE GATEWAY",
+    title: "Connection Settings",
+  });
+  show(elements.connectionChoices, true);
+  show(elements.connectionLocal, false);
+  elements.connectionLocal.disabled = true;
+  show(elements.connectionRemote, false);
+  show(elements.setupNavigation, false);
+  selectConnection("remote");
+  elements.remoteToken.value = "";
+  elements.remotePassword.value = "";
+  elements.remoteAuth.open = false;
+  try {
+    const settings = await invoke("bootstrap", { connectionSettings: true });
+    const remote = settings.remote;
+    selectRemoteTransport(remote?.transport === "ssh" ? "ssh" : "direct");
+    elements.remoteUrl.value = remote?.url || "";
+    elements.remoteSshTarget.value = remote?.sshTarget || "";
+    elements.remotePort.value = remote?.remotePort || 18789;
+    if (settings.detail) {
+      showRemoteFeedback(settings.detail, true);
+    }
+    if (remote) {
+      primaryAction = retryRemote;
+      elements.primaryAction.textContent = "Retry";
+      show(elements.actionControls, true);
+    }
+  } catch (error) {
+    showRemoteFeedback(friendlyError(error), true);
+  }
 }
 
 async function install() {
@@ -528,6 +606,9 @@ for (const input of [
 elements.primaryAction.addEventListener("click", () => {
   void primaryAction?.();
 });
+elements.editConnection.addEventListener("click", () => {
+  void editConnection();
+});
 elements.updateAction.addEventListener("click", () => {
   void updateAction?.();
 });
@@ -593,7 +674,9 @@ void refreshGateways();
 window.setInterval(() => void refreshGateways(), 2000);
 
 const mode = new URLSearchParams(window.location.search).get("mode");
-if (mode === "missingCli") {
+if (mode === "connectionSettings") {
+  await editConnection();
+} else if (mode === "missingCli") {
   render({
     description: "Install the OpenClaw CLI to connect to a local Gateway.",
     dot: "idle",

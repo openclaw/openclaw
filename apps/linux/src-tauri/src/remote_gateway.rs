@@ -7,6 +7,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Url;
@@ -22,6 +23,195 @@ impl Drop for SshTunnel {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct TunnelRoute {
+    pub id: u64,
+    pub selection: u64,
+    pub request: RemoteGatewayRequest,
+    pub url: Url,
+}
+
+struct ManagedTunnel {
+    route: TunnelRoute,
+    child: Option<SshTunnel>,
+    recover: bool,
+}
+
+#[derive(Default)]
+struct TunnelState {
+    closing: bool,
+    preparing: usize,
+    next_id: u64,
+    active: Option<ManagedTunnel>,
+}
+
+#[derive(Default)]
+pub(crate) struct TunnelManager {
+    state: Mutex<TunnelState>,
+    idle: Condvar,
+}
+
+// Registration precedes spawn; shutdown waits only for owned SSH work, not
+// unrelated operations queued behind an installer.
+pub(crate) struct TunnelWork<'a>(&'a TunnelManager);
+
+impl Drop for TunnelWork<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().expect("tunnel state");
+        state.preparing -= 1;
+        self.0.idle.notify_all();
+    }
+}
+
+impl TunnelManager {
+    pub fn begin(&self) -> Result<TunnelWork<'_>, String> {
+        let mut state = self.state.lock().expect("tunnel state");
+        if state.closing {
+            return Err("OpenClaw is quitting.".to_string());
+        }
+        state.preparing += 1;
+        Ok(TunnelWork(self))
+    }
+
+    pub fn has_route(&self) -> bool {
+        self.state.lock().expect("tunnel state").active.is_some()
+    }
+
+    pub fn reusable(&self, request: &RemoteGatewayRequest) -> Option<TunnelRoute> {
+        let mut state = self.state.lock().expect("tunnel state");
+        let active = state.active.as_mut()?;
+        if active.route.request.ssh_target != request.ssh_target
+            || active
+                .route
+                .request
+                .remote_port
+                .unwrap_or(DEFAULT_GATEWAY_PORT)
+                != request.remote_port.unwrap_or(DEFAULT_GATEWAY_PORT)
+            || request.url.as_deref().is_some_and(|url| {
+                normalize_gateway_url(url).ok().as_ref() != Some(&active.route.url)
+            })
+            || active.child.as_mut()?.child.try_wait().ok()?.is_some()
+        {
+            return None;
+        }
+        Some(active.route.clone())
+    }
+
+    pub fn route_is_current(&self, id: u64) -> bool {
+        let state = self.state.lock().expect("tunnel state");
+        !state.closing
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.route.id == id)
+    }
+
+    pub fn route(&self, id: u64) -> Option<TunnelRoute> {
+        let state = self.state.lock().expect("tunnel state");
+        state
+            .active
+            .as_ref()
+            .filter(|active| active.route.id == id)
+            .map(|active| active.route.clone())
+    }
+
+    pub fn publish(
+        &self,
+        child: &mut Option<SshTunnel>,
+        mut route: TunnelRoute,
+        replacing: Option<u64>,
+        recover: bool,
+    ) -> Result<TunnelRoute, String> {
+        let mut state = self.state.lock().expect("tunnel state");
+        if state.closing
+            || replacing.is_some_and(|id| {
+                !state
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.route.id == id)
+            })
+        {
+            return Err("The SSH connection was superseded.".to_string());
+        }
+        if child.is_none() {
+            let active = state
+                .active
+                .as_mut()
+                .ok_or("The SSH connection is unavailable.")?;
+            if !active
+                .child
+                .as_mut()
+                .is_some_and(|tunnel| matches!(tunnel.child.try_wait(), Ok(None)))
+            {
+                return Err("The SSH connection closed. Retry the connection.".to_string());
+            }
+            active.route.request = route.request;
+            active.route.selection = route.selection;
+            active.recover = recover;
+            return Ok(active.route.clone());
+        }
+        state.next_id = state.next_id.wrapping_add(1);
+        route.id = state.next_id;
+        let old = state.active.replace(ManagedTunnel {
+            route: route.clone(),
+            child: child.take(),
+            recover,
+        });
+        // Return the retired child to the preparing worker for kill/wait.
+        *child = old.and_then(|active| active.child);
+        Ok(route)
+    }
+
+    pub fn exited(&self) -> Option<(TunnelRoute, bool)> {
+        let mut state = self.state.lock().expect("tunnel state");
+        if state.closing {
+            return None;
+        }
+        let active = state.active.as_mut()?;
+        // Only an observed child exit authorizes automatic recovery.
+        if active.child.as_mut()?.child.try_wait().ok()?.is_none() {
+            return None;
+        }
+        let child = active.child.take();
+        let recover = std::mem::replace(&mut active.recover, false);
+        let route = active.route.clone();
+        drop(state);
+        drop(child);
+        Some((route, recover))
+    }
+
+    pub fn clear(&self) {
+        let old = {
+            let mut state = self.state.lock().expect("tunnel state");
+            state.preparing += 1;
+            state.active.take()
+        };
+        let _work = TunnelWork(self);
+        drop(old);
+    }
+
+    pub fn take(&self) -> Option<SshTunnel> {
+        self.state
+            .lock()
+            .expect("tunnel state")
+            .active
+            .take()
+            .and_then(|active| active.child)
+    }
+
+    pub fn close(&self) {
+        self.state.lock().expect("tunnel state").closing = true;
+    }
+
+    pub fn wait_closed(&self) {
+        self.clear();
+        let mut state = self.state.lock().expect("tunnel state");
+        while state.preparing != 0 {
+            state = self.idle.wait(state).expect("tunnel state");
+        }
     }
 }
 
@@ -444,6 +634,53 @@ pub(crate) fn load_saved_remote() -> Result<Option<RemoteGatewayRequest>, String
     load_saved_remote_at(&config_path()?)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteSettings {
+    transport: String,
+    url: Option<String>,
+    ssh_target: Option<String>,
+    remote_port: Option<u16>,
+}
+
+pub(crate) fn saved_settings() -> Result<Option<RemoteSettings>, String> {
+    saved_settings_at(&config_path()?)
+}
+
+fn saved_settings_at(path: &Path) -> Result<Option<RemoteSettings>, String> {
+    let Some(root) = read_config(path)? else {
+        return Ok(None);
+    };
+    if root.pointer("/gateway/mode").and_then(Value::as_str) != Some("remote") {
+        return Ok(None);
+    }
+    let remote = root.pointer("/gateway/remote");
+    let string = |key| {
+        remote
+            .and_then(|remote| remote.get(key))
+            .and_then(Value::as_str)
+    };
+    // This is a projection, not a connection attempt. Never resolve or return
+    // credentials, even when their provider is broken.
+    let url = string("url").and_then(|raw| {
+        let mut url = Url::parse(raw).ok()?;
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_query(None);
+        url.set_fragment(None);
+        Some(url.to_string())
+    });
+    Ok(Some(RemoteSettings {
+        transport: string("transport").unwrap_or("direct").to_string(),
+        url,
+        ssh_target: string("sshTarget").map(str::to_string),
+        remote_port: remote
+            .and_then(|remote| remote.get("remotePort"))
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok()),
+    }))
+}
+
 fn load_saved_remote_at(path: &Path) -> Result<Option<RemoteGatewayRequest>, String> {
     let Some(root) = read_config(path)? else {
         return Ok(None);
@@ -654,7 +891,11 @@ fn available_port(preferred: u16, target: &str) -> Result<u16, String> {
 pub(crate) fn start_tunnel(
     request: &RemoteGatewayRequest,
     saved_url: Option<&Url>,
+    cancelled: impl Fn() -> bool,
 ) -> Result<(SshTunnel, Url), String> {
+    if cancelled() {
+        return Err("The SSH connection was superseded.".to_string());
+    }
     let raw_target = request
         .ssh_target
         .as_deref()
@@ -686,7 +927,10 @@ pub(crate) fn start_tunnel(
     if let Some(ssh_port) = ssh_port {
         command.args(["-p", &ssh_port.to_string()]);
     }
-    let mut child = command
+    if cancelled() {
+        return Err("The SSH connection was superseded.".to_string());
+    }
+    let child = command
         .args([
             "-o",
             "BatchMode=yes",
@@ -716,30 +960,34 @@ pub(crate) fn start_tunnel(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("Could not start the SSH tunnel: {error}"))?;
+    let mut tunnel = SshTunnel { child };
     let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
     let local_address = SocketAddr::from(([127, 0, 0, 1], local_port));
     loop {
-        if TcpStream::connect_timeout(&local_address, Duration::from_millis(150)).is_ok() {
-            let url = Url::parse(&format!("ws://127.0.0.1:{local_port}"))
-                .map_err(|_| "Could not construct local SSH tunnel URL.".to_string())?;
-            return Ok((SshTunnel { child }, url));
+        if cancelled() {
+            return Err("The SSH connection was superseded.".to_string());
         }
-        if let Some(exit) = child
+        if let Some(exit) = tunnel
+            .child
             .try_wait()
             .map_err(|error| format!("Could not inspect SSH tunnel: {error}"))?
         {
-            let output = child
-                .wait_with_output()
-                .map_err(|error| format!("Could not inspect SSH tunnel failure: {error}"))?;
-            let detail = crate::cli::output_tail(&output.stderr)
+            let mut stderr = Vec::new();
+            if let Some(mut pipe) = tunnel.child.stderr.take() {
+                let _ = pipe.read_to_end(&mut stderr);
+            }
+            let detail = crate::cli::output_tail(&stderr)
                 .unwrap_or_else(|| format!("SSH exited with {exit}."));
             return Err(format!(
                 "SSH connection failed: {detail}. Verify the host key and SSH key authentication."
             ));
         }
+        if TcpStream::connect_timeout(&local_address, Duration::from_millis(150)).is_ok() {
+            let url = Url::parse(&format!("ws://127.0.0.1:{local_port}"))
+                .map_err(|_| "Could not construct local SSH tunnel URL.".to_string())?;
+            return Ok((tunnel, url));
+        }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
             return Err(
                 "SSH tunnel did not become ready. Verify the host and SSH key.".to_string(),
             );
@@ -1082,6 +1330,14 @@ mod tests {
                     .expect("insecure secret fixture");
                 assert!(load_saved_remote_at(&path).is_err());
                 assert_eq!(read_config(&path).unwrap().unwrap(), config);
+                let before_settings = fs::read(&path).expect("saved bytes");
+                let settings = serde_json::to_value(saved_settings_at(&path).unwrap().unwrap())
+                    .expect("credential-free settings");
+                assert_eq!(settings["url"], config["gateway"]["remote"]["url"]);
+                assert!(settings.get("token").is_none());
+                assert!(settings.get("password").is_none());
+                assert!(settings.get("secrets").is_none());
+                assert_eq!(fs::read(&path).unwrap(), before_settings);
 
                 // Explicit submission replaces the ref even when the value matches its last resolution.
                 let mut input = request();
@@ -1204,6 +1460,110 @@ mod tests {
                 fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_child_exit_is_reported_once_and_replacement_does_not_churn() {
+        fn pending_child() -> (Option<SshTunnel>, std::process::ChildStdin) {
+            let mut child = Command::new("/bin/cat")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .expect("owned child");
+            let input = child.stdin.take().expect("child input");
+            (Some(SshTunnel { child }), input)
+        }
+        fn exit(manager: &TunnelManager) -> (TunnelRoute, bool) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(event) = manager.exited() {
+                    return event;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "owned child exit was not observed"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        let manager = TunnelManager::default();
+        let work = manager.begin().expect("register preparation");
+        let url = Url::parse("ws://127.0.0.1:18789").unwrap();
+        let route = TunnelRoute {
+            id: 0,
+            selection: 7,
+            request: request(),
+            url: url.clone(),
+        };
+        let (mut child, input) = pending_child();
+        let first = manager
+            .publish(&mut child, route, None, true)
+            .expect("publish initial child");
+        assert!(child.is_none());
+        assert!(
+            manager.exited().is_none(),
+            "live child must not authorize recovery"
+        );
+        drop(input);
+        let (dead, recover) = exit(&manager);
+        assert_eq!(dead.id, first.id);
+        assert!(recover);
+        assert!(
+            manager.exited().is_none(),
+            "one child exit must queue only once"
+        );
+
+        let (mut replacement, input) = pending_child();
+        let second = manager
+            .publish(&mut replacement, dead, Some(first.id), false)
+            .expect("publish replacement");
+        assert!(!manager.route_is_current(first.id));
+        assert_eq!(second.url, url);
+        drop(input);
+        let (dead, recover) = exit(&manager);
+        assert_eq!(dead.id, second.id);
+        assert!(!recover, "a failed replacement must require explicit Retry");
+        assert!(manager.exited().is_none());
+
+        let (mut stale, _input) = pending_child();
+        assert!(manager
+            .publish(&mut stale, dead, Some(first.id), true)
+            .is_err());
+        assert!(
+            stale.is_some(),
+            "cancelled child must return to its preparing owner"
+        );
+        drop(stale);
+        drop(work);
+        manager.close();
+        assert!(manager.begin().is_err(), "shutdown must exclude new spawns");
+        manager.wait_closed();
+        assert!(!manager.has_route());
+    }
+
+    #[test]
+    fn shutdown_ack_waits_for_preparing_ssh_owner() {
+        use std::sync::{mpsc, Arc};
+        let manager = Arc::new(TunnelManager::default());
+        let work = manager.begin().expect("in-flight SSH preparation");
+        manager.close();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let closing = Arc::clone(&manager);
+        let waiter = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            closing.wait_closed();
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(done_rx.try_recv().is_err());
+        drop(work);
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("SSH shutdown acknowledgement");
+        waiter.join().unwrap();
     }
 
     fn existing_json5_config(path: &Path) {
