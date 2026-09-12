@@ -112,7 +112,7 @@ const StateDatabaseDiscoverySchema = z.object({
   spellings: z.tuple([z.string()], z.string()),
 });
 type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
-export const UpdateCandidateStateInventorySchema = z
+const UpdateCandidateStateInventorySchema = z
   .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
   .transform((entries) => new Map(entries));
 export const UpdateCandidateSnapshotInventorySchema = z.object({
