@@ -8,6 +8,7 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemoryIndexIdentityState,
   type MemorySearchManager,
   type MemorySearchResult,
   type MemorySource,
@@ -217,7 +218,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           providerKeyKnown: this.providerInitialized,
         });
       }
-      if (repairedIndexIdentity.status !== "valid") {
+      if (
+        repairedIndexIdentity.status !== "valid" &&
+        !this.canServeLexicalDuringChunkingUpgrade(repairedIndexIdentity)
+      ) {
         return [];
       }
       // No watcher can observe later edits after kernel capacity exhaustion.
@@ -240,6 +244,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       }
       // Bootstrap and identity repair may publish a new generation. Acquire the
       // read lease only after those writers finish so first search cannot wait on itself.
+      let keywordOnlyUpgrade = false;
       for (let identityAttempt = 0; identityAttempt < 2; identityAttempt += 1) {
         releaseGeneration = await acquireMemoryIndexReadGeneration(
           this.settings.store.databasePath,
@@ -252,6 +257,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           providerKeyKnown: this.providerInitialized,
         });
         if (leasedIdentity.status === "valid") {
+          break;
+        }
+        if (this.canServeLexicalDuringChunkingUpgrade(leasedIdentity)) {
+          // The rebuild keeps failing (e.g. embedding quota exhaustion), so the
+          // leased generation stays on the old chunking version. Serve keyword
+          // results from it instead of returning nothing (issue #144493).
+          keywordOnlyUpgrade = true;
           break;
         }
         const release = releaseGeneration;
@@ -296,7 +308,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           activeProjectKeys: opts?.activeProjectKeys,
         });
 
-      const keywordOnly = embeddingBootstrapKeywordOnly || !this.provider || opts?.lexicalOnly;
+      const keywordOnly =
+        embeddingBootstrapKeywordOnly || keywordOnlyUpgrade || !this.provider || opts?.lexicalOnly;
       const loadKeywordResults = async () => {
         const results =
           (keywordOnly || hybrid.enabled) && this.fts.enabled && this.fts.available
@@ -482,6 +495,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         await releaseGeneration?.();
       }
     });
+  }
+
+  // An OpenClaw-owned chunking_version mismatch with a working FTS index can
+  // still serve lexical results from the last published generation — don't
+  // block search on the embedding rebuild (issue #144493).
+  private canServeLexicalDuringChunkingUpgrade(identity: MemoryIndexIdentityState): boolean {
+    return (
+      identity.status === "mismatched" &&
+      identity.owner === "openclaw" &&
+      identity.code === "chunking_version" &&
+      this.fts.enabled &&
+      this.fts.available
+    );
   }
 
   private hasIndexedContent(): boolean {

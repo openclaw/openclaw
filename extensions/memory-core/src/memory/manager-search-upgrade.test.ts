@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -112,5 +114,79 @@ describe("memory search after a chunking upgrade", () => {
       chunkingVersion: MEMORY_CHUNKING_VERSION,
       model: "new-model",
     });
+  });
+
+  it("returns lexical results while a failing upgrade keeps the rebuild pending", async () => {
+    // batch-test routes document embeddings through the provider runtime, so
+    // both injection points below sit on the rebuild's actual embedding path.
+    const cfg = fixture.createConfig({ provider: "batch-test", batchEnabled: true });
+    const dbPath = await seedIndex(cfg);
+    const manager = await fixture.getFreshManager(cfg);
+
+    // Change a file so the rebuild requires new embeddings, then make every
+    // embedding call fail (simulating quota exhaustion per issue #144493).
+    const memoryFile = [fixture.paths.memory, "2026-01-12.md"].join("/");
+    await fs.appendFile(memoryFile, "\nNew line requiring re-embedding.\n");
+    fixture.provider.providerRuntimeBatchFailuresRemaining = 999;
+    fixture.provider.embedBatchFailuresRemaining = 999;
+
+    try {
+      // An ordinary search must degrade to keyword hits from the leased
+      // published generation instead of returning nothing.
+      const results = await manager.search("alpha");
+      expect(results).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: expect.stringContaining("2026-01-12") }),
+        ]),
+      );
+      expect(manager.status().custom?.indexIdentity).toMatchObject({
+        status: "mismatched",
+        code: "chunking_version",
+        owner: "openclaw",
+      });
+      expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+    } finally {
+      fixture.provider.providerRuntimeBatchFailuresRemaining = 0;
+      fixture.provider.embedBatchFailuresRemaining = 0;
+    }
+  });
+
+  it("keeps removed extra paths excluded while a chunking upgrade stays pending", async () => {
+    // Seed the published index while an extra path is still configured.
+    const extraDir = path.join(fixture.paths.root, "excluded-upgrade");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "excluded.md"), "alpha excluded secret workspace notes");
+    const seededCfg = fixture.createConfig({
+      provider: "batch-test",
+      batchEnabled: true,
+      extraPaths: [extraDir],
+    });
+    const dbPath = await seedIndex(seededCfg);
+
+    // Removing the extra path changes the corpus; a stale chunking version
+    // must not mask that scope change, or excluded snippets would stay
+    // searchable while the rebuild is pending (issue #144493 follow-up).
+    const narrowedCfg = fixture.createConfig({
+      provider: "batch-test",
+      batchEnabled: true,
+    });
+    const manager = await fixture.getFreshManager(narrowedCfg);
+    const memoryFile = [fixture.paths.memory, "2026-01-12.md"].join("/");
+    await fs.appendFile(memoryFile, "\nNew line requiring re-embedding.\n");
+    fixture.provider.providerRuntimeBatchFailuresRemaining = 999;
+    fixture.provider.embedBatchFailuresRemaining = 999;
+
+    try {
+      await expect(manager.search("alpha", { lexicalOnly: true })).resolves.toEqual([]);
+      expect(manager.status().custom?.indexIdentity).toMatchObject({
+        status: "mismatched",
+        code: "scope",
+        owner: "configuration",
+      });
+      expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+    } finally {
+      fixture.provider.providerRuntimeBatchFailuresRemaining = 0;
+      fixture.provider.embedBatchFailuresRemaining = 0;
+    }
   });
 });

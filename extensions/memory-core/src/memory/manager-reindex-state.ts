@@ -172,6 +172,39 @@ export function resolveMemoryIndexIdentityState(params: {
     return openClawIndexMismatch("provenance_version", "index provenance classifier changed");
   }
   if (meta.chunkingVersion !== MEMORY_CHUNKING_VERSION) {
+    // A pending chunking upgrade may still serve the published lexical corpus,
+    // but only while that corpus itself is unchanged: a sources/scope/tokenizer
+    // drift under a stale chunking version must classify as configuration-owned
+    // so the lexical fallback cannot expose excluded paths (issue #144493).
+    if (
+      configuredMetaSourcesDiffer({
+        meta,
+        configuredSources: params.configuredSources,
+      })
+    ) {
+      return configuredIndexMismatch(
+        "sources",
+        "index sources changed during a pending chunking upgrade",
+      );
+    }
+    if (meta.scopeHash !== params.configuredScopeHash) {
+      return configuredIndexMismatch(
+        "scope",
+        "index scope changed during a pending chunking upgrade",
+      );
+    }
+    if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
+      return configuredIndexMismatch(
+        "chunking",
+        "index chunking settings changed during a pending chunking upgrade",
+      );
+    }
+    if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
+      return configuredIndexMismatch(
+        "fts_tokenizer",
+        "index FTS tokenizer changed during a pending chunking upgrade",
+      );
+    }
     return openClawIndexMismatch("chunking_version", "index chunking implementation changed");
   }
   const expectedModel =

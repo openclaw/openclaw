@@ -198,7 +198,13 @@ async function finalizeMemorySearchToolQuery(params: {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
   const status = params.status ?? active.manager.status();
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
-  if (pausedIndexIdentity) {
+  // During a failed chunking upgrade the manager deliberately serves keyword
+  // results from the last published generation. Accept them and let the
+  // existing staleness reporting surface the pending upgrade instead of
+  // declaring memory search unavailable (issue #144493).
+  const chunkingUpgradeLexical =
+    pausedIndexIdentity?.owner === "openclaw" && pausedIndexIdentity.code === "chunking_version";
+  if (pausedIndexIdentity && !chunkingUpgradeLexical) {
     return {
       searchStartedAt: startedAt,
       status,
