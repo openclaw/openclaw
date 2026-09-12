@@ -36,7 +36,10 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
+import type {
+  GatewayModelCatalogLoadParams,
+  GatewayModelCatalogSnapshot,
+} from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { projectSessionActor } from "./session-identity-projection.js";
@@ -5496,12 +5499,14 @@ describe("resolveGatewayModelSupportsImages", () => {
         },
       ],
     });
-    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) => {
-      if (params?.readOnly !== true) {
-        throw new Error("full catalog discovery must not start during attachment admission");
-      }
-      return preparedSnapshot;
-    });
+    const loadGatewayModelCatalogSnapshot = vi.fn(
+      async (params?: GatewayModelCatalogLoadParams) => {
+        if (params?.readOnly !== true) {
+          throw new Error("full catalog discovery must not start during attachment admission");
+        }
+        return preparedSnapshot;
+      },
+    );
 
     await expect(
       resolveGatewayModelSupportsImages({
@@ -5519,20 +5524,20 @@ describe("resolveGatewayModelSupportsImages", () => {
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
 
-  test("falls back to live discovery for models absent from the prepared catalog", async () => {
-    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
+  test("falls back to provider-scoped live discovery for absent models", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: GatewayModelCatalogLoadParams) =>
       createModelCatalogSnapshot({
         agentId: "qa",
-        entries: params?.readOnly
-          ? []
-          : [
+        entries: params?.providerDiscoveryProviderIds
+          ? [
               {
                 id: "vendor/runtime-vision-model",
                 name: "Runtime Vision Model",
                 provider: "openrouter",
                 input: ["text", "image"],
               },
-            ],
+            ]
+          : [],
       }),
     );
 
@@ -5551,12 +5556,14 @@ describe("resolveGatewayModelSupportsImages", () => {
     });
     expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
       agentId: "qa",
-      readOnly: false,
+      providerDiscoveryProviderIds: ["openrouter"],
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
     });
   });
 
-  test("falls back to live discovery for provisional prepared text-only metadata", async () => {
-    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
+  test("rechecks provisional text-only metadata with provider-scoped live discovery", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: GatewayModelCatalogLoadParams) =>
       createModelCatalogSnapshot({
         agentId: "qa",
         entries: [
@@ -5564,7 +5571,7 @@ describe("resolveGatewayModelSupportsImages", () => {
             id: "vendor/runtime-vision-model",
             name: "Runtime Vision Model",
             provider: "openrouter",
-            input: params?.readOnly ? ["text"] : ["text", "image"],
+            input: params?.providerDiscoveryProviderIds ? ["text", "image"] : ["text"],
           },
         ],
       }),
@@ -5585,7 +5592,9 @@ describe("resolveGatewayModelSupportsImages", () => {
     });
     expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
       agentId: "qa",
-      readOnly: false,
+      providerDiscoveryProviderIds: ["openrouter"],
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
     });
   });
 

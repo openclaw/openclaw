@@ -452,6 +452,53 @@ describe("gateway prepared model catalog", () => {
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
   });
 
+  it("retries provider-scoped discovery when its published owner is replaced", async () => {
+    const staleConfig = ownerConfig("main", { logging: { level: "info" } });
+    const currentConfig = ownerConfig("main", { logging: { level: "debug" } });
+    const staleCatalog = {
+      entries: [{ provider: "openai", id: "stale", name: "Stale" }],
+      routeVariants: [],
+    } satisfies ModelCatalogSnapshot;
+    const currentCatalog = {
+      entries: [{ provider: "openai", id: "current", name: "Current" }],
+      routeVariants: [],
+    } satisfies ModelCatalogSnapshot;
+    let replaced = false;
+    const staleOwner = { ...ownerSnapshot(staleConfig), isCurrent: () => !replaced };
+    const currentOwner = ownerSnapshot(currentConfig);
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () =>
+      replaced ? currentOwner : staleOwner,
+    );
+    const loadPreparedModelCatalogSnapshot = vi.fn(async ({ config }) => {
+      if (config === staleConfig) {
+        replaced = true;
+        return staleCatalog;
+      }
+      return currentCatalog;
+    });
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => staleConfig,
+        loadPreparedModelCatalogSnapshot,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+        providerDiscoveryProviderIds: ["openai"],
+        readOnly: true,
+        scopedLiveProviderDiscovery: true,
+      }),
+    ).resolves.toMatchObject({ config: currentConfig, entries: currentCatalog.entries });
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
+    expect(loadPreparedModelCatalogSnapshot).toHaveBeenLastCalledWith({
+      agentId: "main",
+      agentDir: "/tmp/gateway-agent",
+      config: currentConfig,
+      providerDiscoveryProviderIds: ["openai"],
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
+      workspaceDir: "/tmp/gateway-workspace",
+    });
+  });
+
   it("rejects an ambiguous owner without an authoritative agent identity", async () => {
     const config = {
       agents: {

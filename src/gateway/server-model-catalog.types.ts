@@ -15,3 +15,14 @@ export type GatewayModelCatalogSnapshot = ModelCatalogSnapshot & {
   workspaceDir: string;
   config: OpenClawConfig;
 };
+
+export type GatewayModelCatalogLoadParams = {
+  agentId?: string;
+  agentDir?: string;
+  readOnly?: boolean;
+  workspaceDir?: string;
+  /** Restricts request-scoped discovery to these provider identities. */
+  providerDiscoveryProviderIds?: readonly string[];
+  /** Allows request-scoped live provider discovery without publishing another full catalog. */
+  scopedLiveProviderDiscovery?: boolean;
+};
