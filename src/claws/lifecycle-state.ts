@@ -24,12 +24,14 @@ import {
   ClawRemoveError,
   cleanupClawAgentFilesystem,
   deletionEffects,
+  planClawWorkspaceRemoval,
   readClawRemoveCronInventory,
   releaseClawRemoveRows,
   removeClawWorkspaceFile,
   workspaceContainsUntrackedEntries,
 } from "./lifecycle-delete-support.js";
 import { removeClawMcpServers } from "./lifecycle-mcp-removal.js";
+import { planClawAgentReferenceRemoval } from "./lifecycle-reference-removal.js";
 import {
   CLAW_REMOVE_PLAN_SCHEMA_VERSION,
   CLAW_REMOVE_RESULT_SCHEMA_VERSION,
@@ -39,6 +41,7 @@ import {
   type ClawRemovePlan,
   type ClawRemovePlanAction,
 } from "./lifecycle-remove-contract.js";
+import { planClawAgentStateRetention } from "./lifecycle-remove-retention.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
 import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
@@ -109,6 +112,7 @@ export async function buildClawRemovePlan(
   }
   const actions: ClawRemovePlanAction[] = [];
   if (record) {
+    const retainHistoricalAgentState = record.install.agentOrigin === "adopted";
     const packageCleanup = filterReferencedCleanup(options.referencedCleanup, "package");
     const mcpCleanup = filterReferencedCleanup(options.referencedCleanup, "mcp");
     const packageDecisions = await planClawPackageRemovals(record.install, record.packages, {
@@ -166,6 +170,15 @@ export async function buildClawRemovePlan(
       record.install.workspace,
       trackedWorkspacePaths,
     );
+    // An adopted directory predates the Claw. Once every declared file in it is managed it looks
+    // indistinguishable from one this install created, so origin decides retention, not contents.
+    const workspaceRemoval = planClawWorkspaceRemoval({
+      sharedWorkspace,
+      sharedWith: effects.workspaceSharedWith,
+      adopted: record.workspaceOrigin.adopted,
+      modified: workspaceHasModifiedFiles,
+      untracked: workspaceHasUntrackedEntries,
+    });
     const { attachedJobs, monitors, inspectionUnavailable } = await readClawRemoveCronInventory(
       record.install.agentId,
       options,
@@ -175,12 +188,20 @@ export async function buildClawRemovePlan(
         .filter((cron) => cron.status !== "removed" && cron.schedulerJobId)
         .map((cron) => cron.schedulerJobId),
     );
+    const referencePlan = planClawAgentReferenceRemoval({
+      agentId: record.install.agentId,
+      pruned: effects.pruned,
+      adopted: retainHistoricalAgentState,
+      modified: record.agentState === "modified",
+    });
+    const [referenceBlocker] = referencePlan.blockers;
+    blockers.push(...referencePlan.blockers);
     actions.push({
       kind: "agent",
       id: record.install.agentId,
       action: "remove",
       target: `agents.entries[${JSON.stringify(record.install.agentId)}]`,
-      blocked: record.agentState === "modified",
+      blocked: record.agentState === "modified" || referenceBlocker !== undefined,
       details: {
         expectedState: record.agentState,
         configDigest: record.install.agentConfigDigest,
@@ -190,80 +211,33 @@ export async function buildClawRemovePlan(
         ),
         ownedPaths: record.install.agentOwnedPaths,
       },
-      ...(record.agentState === "modified" ? { reason: "Agent config digest changed." } : {}),
+      ...(record.agentState === "modified"
+        ? { reason: "Agent config digest changed." }
+        : referenceBlocker
+          ? { reason: referenceBlocker.message }
+          : {}),
     });
-    if (effects.pruned.removedBindings > 0) {
-      actions.push({
-        kind: "configBinding",
-        id: record.install.agentId,
-        action: "remove",
-        target: `bindings[agentId=${record.install.agentId}]`,
-        blocked: record.agentState === "modified",
-        details: { count: effects.pruned.removedBindings },
-      });
-    }
-    if (effects.pruned.removedAllow > 0) {
-      actions.push({
-        kind: "agentAllow",
-        id: record.install.agentId,
-        action: "remove",
-        target: `tools.agentToAgent.allow[${record.install.agentId}]`,
-        blocked: record.agentState === "modified",
-        details: { count: effects.pruned.removedAllow },
-      });
-    }
+    actions.push(...referencePlan.actions);
     if (effects.workspace) {
       actions.push({
         kind: "workspace",
         id: record.install.agentId,
-        action:
-          sharedWorkspace || workspaceHasModifiedFiles || workspaceHasUntrackedEntries
-            ? "retain"
-            : "trash",
         target: effects.workspace,
         blocked: record.agentState === "modified",
-        details: {
-          retained: sharedWorkspace || workspaceHasModifiedFiles || workspaceHasUntrackedEntries,
-          sharedWith: effects.workspaceSharedWith,
-        },
-        ...(sharedWorkspace
-          ? { reason: "Workspace contains state owned by another agent." }
-          : workspaceHasModifiedFiles
-            ? { reason: "Workspace contains locally modified Claw-managed files." }
-            : workspaceHasUntrackedEntries
-              ? { reason: "Workspace contains files or directories not managed by this Claw." }
-              : {}),
+        ...workspaceRemoval,
       });
     }
-    if (effects.agentDir) {
-      actions.push({
-        kind: "agentState",
-        id: record.install.agentId,
-        action: sharedAgentDir ? "retain" : "trash",
-        target: effects.agentDir,
-        blocked: record.agentState === "modified",
-        ...(sharedAgentDir
-          ? { reason: "Agent directory contains state owned by another agent." }
-          : {}),
-      });
-    }
-    actions.push({
-      kind: "sessionIndex",
-      id: record.install.agentId,
-      action: "delete",
-      target: `session store entries for agent:${record.install.agentId}`,
-      blocked: record.agentState === "modified",
-    });
-    actions.push({
-      kind: "sessionTranscripts",
-      id: record.install.agentId,
-      action: sharedSessionsDir ? "retain" : "trash",
-      target: effects.sessionsDir,
-      blocked: record.agentState === "modified",
-      ...(sharedSessionsDir
-        ? { reason: "Session directory contains state owned by another agent." }
-        : {}),
-    });
+    actions.push(
+      ...planClawAgentStateRetention({
+        agentId: record.install.agentId,
+        agentDir: effects.agentDir,
+        sessionsDir: effects.sessionsDir,
+        retainHistoricalAgentState,
+        sharedAgentDir,
+        sharedSessionsDir,
+        modified: record.agentState === "modified",
+      }),
+    );
     for (const job of attachedJobs.filter((candidate) => !ownedSchedulerJobIds.has(candidate.id))) {
       if (monitors.some((monitor) => isDeepStrictEqual(monitor, job))) {
         actions.push({
@@ -461,6 +435,8 @@ export async function applyClawRemovePlan(
   ) {
     throw new ClawRemoveError("remove_changed", "Claw-owned state changed after remove planning.");
   }
+  const workspaceWasAdopted = record.workspaceOrigin.adopted;
+  const retainHistoricalAgentState = record.install.agentOrigin === "adopted";
   const packageDecisions = await planClawPackageRemovals(record.install, record.packages, {
     ...options,
     deps: options.packageDeps,
@@ -606,10 +582,13 @@ export async function applyClawRemovePlan(
       const purgeSessions =
         options.purgeSessions ??
         (await import("../config/sessions/cleanup-service.js")).purgeAgentSessionStoreEntries;
-      const purgeFailed = await purgeSessions(configBeforeDelete, agentId, {
-        env: options.env,
-        runDatabaseCleanup: configRemoval.runDatabaseCleanup,
-      });
+      // Agent adoption owns managed config and resources, never history that predates adoption.
+      const purgeFailed = retainHistoricalAgentState
+        ? false
+        : await purgeSessions(configBeforeDelete, agentId, {
+            env: options.env,
+            runDatabaseCleanup: configRemoval.runDatabaseCleanup,
+          });
       assertCurrent();
       if (purgeFailed) {
         return partial(
@@ -663,9 +642,11 @@ export async function applyClawRemovePlan(
             stateDatabase: options,
             assertCurrent,
             retainWorkspace:
+              workspaceWasAdopted ||
               workspaceHasRemainingEntries ||
               bootstrap?.action === "retainedModified" ||
               workspaceFiles.some((file) => file.action === "retainedModified"),
+            retainHistoricalAgentState,
           })),
         );
       }
@@ -676,6 +657,7 @@ export async function applyClawRemovePlan(
         configRemoval.assertCurrent,
         completeDeletion,
         options,
+        retainHistoricalAgentState,
       );
       return {
         ...result,

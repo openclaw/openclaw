@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
+import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 import * as workspace from "./workspace.js";
 
 const {
@@ -13,6 +14,7 @@ const {
   DEFAULT_BOOTSTRAP_FILENAME,
   ensureAgentWorkspace,
   seedWorkspaceBootstrap,
+  WorkspaceBootstrapSeedConflictError,
 } = workspace;
 
 async function expectPathMissing(filePath: string): Promise<void> {
@@ -252,5 +254,29 @@ describe("bootstrap publication atomicity", () => {
       const stat = await fs.stat(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
       expect(stat.mode & 0o777).toBe(0o600);
     }
+  });
+
+  it("refuses a pre-existing BOOTSTRAP.md in conflict mode without stamping the seed state", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const stateOptions = {
+      env: { OPENCLAW_STATE_DIR: await makeTempWorkspace("openclaw-state-") },
+    };
+    const content = Buffer.from("# BOOTSTRAP\n");
+    await fs.writeFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), content);
+
+    // A caller that never wrote the file must not adopt it as its seed, and the identical bytes
+    // must not turn into a bootstrapSeededAt stamp that a later seed would read as consumed.
+    await expect(
+      seedWorkspaceBootstrap({ dir: tempDir, content, existingFile: "conflict", stateOptions }),
+    ).rejects.toBeInstanceOf(WorkspaceBootstrapSeedConflictError);
+    expect(
+      // readWorkspaceStateSnapshot is synchronous on this base and awaited on newer ones; resolve both.
+      (await Promise.resolve(readWorkspaceStateSnapshot(tempDir, stateOptions))).setup
+        .bootstrapSeededAt,
+    ).toBeUndefined();
+
+    await expect(seedWorkspaceBootstrap({ dir: tempDir, content, stateOptions })).resolves.toBe(
+      "already-seeded",
+    );
   });
 });

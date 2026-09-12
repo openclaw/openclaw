@@ -18,6 +18,11 @@ import type { ClawUpdatePlan } from "./update-plan.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
 
+// applyClawUpdatePlan rejects a fresh agent action whose desiredDigest does not match
+// the target config (update_changed); tests on the real apply path need the actual
+// digest of the shared fixture's addPlan.agent.config, not a placeholder string.
+const targetAgentDigest = `sha256:${createHash("sha256").update(stableStringify(addPlan.agent.config)).digest("hex")}`;
+
 describe("applyClawUpdatePlan", () => {
   it("rejects consent that does not match the preview before rebuilding", async () => {
     const updatePlan = plan([]);
@@ -104,6 +109,36 @@ describe("applyClawUpdatePlan", () => {
     ).rejects.toMatchObject({ code: "update_changed" });
   });
 
+  it("rejects a materialized agent config that differs from the consented target", async () => {
+    const updatePlan = plan([
+      {
+        kind: "agent",
+        id: "worker",
+        action: "change",
+        target: 'agents.entries["worker"]',
+        blocked: false,
+        reason: "target changed",
+        desiredDigest: targetAgentDigest,
+      },
+    ]);
+    const changedAddPlan = structuredClone(addPlan);
+    changedAddPlan.agent.config.name = "Changed after consent";
+
+    await expect(
+      applyClawUpdatePlan(
+        updatePlan,
+        { targetManifest: manifest, targetSource: source },
+        {
+          config: {},
+          ...consent(updatePlan),
+          rebuildPlan: vi.fn(async () => updatePlan),
+          buildAddPlan: vi.fn(async () => changedAddPlan),
+          readInstall: vi.fn(() => install),
+        },
+      ),
+    ).rejects.toMatchObject({ code: "update_changed" });
+  });
+
   it("compare-writes the owned agent and advances root provenance", async () => {
     const currentAgent = { id: "worker", name: "Worker" };
     const currentDigest = `sha256:${createHash("sha256").update(stableStringify(currentAgent)).digest("hex")}`;
@@ -116,7 +151,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
-        desiredDigest: "sha256:target-agent",
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
@@ -170,6 +205,7 @@ describe("applyClawUpdatePlan", () => {
         target: 'agents.entries["worker"]',
         blocked: false,
         reason: "restore agent",
+        desiredDigest: targetAgentDigest,
       },
       {
         kind: "cronJob",
@@ -356,6 +392,7 @@ describe("applyClawUpdatePlan", () => {
           target: 'agents.entries["worker"]',
           blocked: false,
           reason: "restore agent",
+          desiredDigest: targetAgentDigest,
         },
         {
           kind: "cronJob",
@@ -807,6 +844,7 @@ describe("applyClawUpdatePlan", () => {
             target: 'agents.entries["worker"]',
             blocked: false,
             reason: "target changed",
+            desiredDigest: targetAgentDigest,
           },
         );
       }
@@ -899,6 +937,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
@@ -940,6 +979,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: {} } };

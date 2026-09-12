@@ -1,4 +1,5 @@
 import { access, mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -8,7 +9,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { persistClawInstallRecord, readClawInstallRecord } from "./provenance.js";
-import { makeProvenancePlan, stateEnv } from "./provenance.test-helpers.js";
+import { makeProvenancePlan, readInstallRow, stateEnv } from "./provenance.test-helpers.js";
+import { readClawWorkspaceFiles } from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -214,5 +216,35 @@ describe("Claw add legacy plan resume", () => {
       planIntegrity: boundedPlan.planIntegrity,
       status: "complete",
     });
+  });
+});
+
+describe("applyClawAddPlan workspace collision revalidation", () => {
+  it("fails closed before any workspace effect when live config now has an overlapping agent", async () => {
+    const root = tempDirs.make("openclaw-claw-loadconfig-collision-");
+    const parent = join(root, "parent");
+    await mkdir(parent, { recursive: true });
+    // Nothing else is configured at plan time: the plan itself has no blockers.
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      { workspace: join(parent, "child") },
+    );
+    expect(plan.blockers).toEqual([]);
+    const env = stateEnv(root);
+
+    // Between planning and applying, a different process configures "other" at the parent
+    // directory. readConfig stands in for a fresh (unpinned) disk read of that race.
+    await expect(
+      applyClawAddPlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env,
+        readConfig: async () => ({ agents: { entries: { other: { workspace: parent } } } }),
+      }),
+    ).rejects.toMatchObject({ code: "workspace_collision" });
+
+    expect(readInstallRow("worker", root)).toBeUndefined();
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual([]);
+    await expect(access(plan.agent.workspace)).rejects.toThrow();
   });
 });
