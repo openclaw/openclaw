@@ -159,6 +159,7 @@ export const restorePersistedInstalledPluginIndexIfCurrentMock: Mock<RestorePers
     return true;
   });
 export const loadPluginManifestRegistryMock: UnknownMock = vi.fn();
+export const loadPluginMetadataSnapshotMock = vi.fn(createPluginsCliMetadataSnapshot);
 export const buildPluginSnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginInspectReportMock: UnknownMock = vi.fn();
@@ -482,40 +483,48 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOrigina
   };
 });
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  const load = (params: Parameters<typeof actual.loadPluginMetadataSnapshot>[0]) => {
-    const records = clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords);
-    const manifestRegistry = loadPluginManifestRegistryMock({
-      ...params,
+function createPluginsCliMetadataSnapshot(
+  params: Parameters<
+    (typeof import("../plugins/plugin-metadata-snapshot.js"))["loadPluginMetadataSnapshot"]
+  >[0],
+) {
+  const records = clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords);
+  const manifestRegistry = loadPluginManifestRegistryMock({
+    ...params,
+    installRecords: records,
+  }) as import("../plugins/manifest-registry.js").PluginManifestRegistry;
+  const plugins = manifestRegistry.plugins;
+  return {
+    index: createTestInstalledPluginIndex({
+      policyHash: "test",
       installRecords: records,
-    }) as import("../plugins/manifest-registry.js").PluginManifestRegistry;
-    const plugins = manifestRegistry.plugins;
-    return {
-      index: createTestInstalledPluginIndex({
-        policyHash: "test",
-        installRecords: records,
-        plugins: plugins.map((plugin) => ({
-          pluginId: plugin.id,
-          installOwner: plugin.id,
-          origin: plugin.origin,
-          rootDir: plugin.rootDir,
-          manifestPath: plugin.manifestPath,
-          manifestHash: "test",
-          startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          compat: [],
-          enabled: true,
-        })),
-      }),
-      manifestRegistry,
-      plugins,
-      byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-      diagnostics: [],
-      normalizePluginId: (id: string) => id,
-    };
+      plugins: plugins.map((plugin) => ({
+        pluginId: plugin.id,
+        installOwner: plugin.id,
+        origin: plugin.origin,
+        rootDir: plugin.rootDir,
+        manifestPath: plugin.manifestPath,
+        manifestHash: "test",
+        startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        compat: [],
+        enabled: true,
+      })),
+    }),
+    manifestRegistry,
+    plugins,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    diagnostics: [],
+    normalizePluginId: (id: string) => id,
   };
-  return { ...actual, loadPluginMetadataSnapshot: load, resolvePluginMetadataSnapshot: load };
-});
+}
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (...args: Parameters<typeof loadPluginMetadataSnapshotMock>) =>
+    loadPluginMetadataSnapshotMock(...args),
+  resolvePluginMetadataSnapshot: (...args: Parameters<typeof loadPluginMetadataSnapshotMock>) =>
+    loadPluginMetadataSnapshotMock(...args),
+}));
 
 vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
@@ -532,9 +541,15 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/status.js", () => ({
-  withPluginDiagnosticsReportForInspection: (
+  withPluginDiagnosticsReportForInspection: async (
     ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
-  ) => withPluginDiagnosticsReportForInspectionMock(...args),
+  ) => {
+    try {
+      return await withPluginDiagnosticsReportForInspectionMock(...args);
+    } finally {
+      await retirePluginDiagnosticsMock();
+    }
+  },
   buildPluginSnapshotReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
   ) =>
@@ -948,6 +963,7 @@ export function resetPluginsCliTestState() {
   readPersistedInstalledPluginIndexMock.mockReset();
   restorePersistedInstalledPluginIndexIfCurrentMock.mockReset();
   loadPluginManifestRegistryMock.mockReset();
+  loadPluginMetadataSnapshotMock.mockReset().mockImplementation(createPluginsCliMetadataSnapshot);
   buildPluginSnapshotReportMock.mockReset();
   buildPluginRegistrySnapshotReportMock.mockReset();
   buildPluginInspectReportMock.mockReset();

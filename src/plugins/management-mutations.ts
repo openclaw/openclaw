@@ -74,11 +74,6 @@ function withManagedPluginMutation<T>(
   params: ManagedPluginMutationOptions,
   run: (beforePersistentApply: () => void) => Promise<T>,
 ): Promise<T> {
-  try {
-    assertConfigWriteAllowedInCurrentMode({ env: params.env });
-  } catch (error) {
-    throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
-  }
   return withPluginLifecycleLease(
     { env: params.env ?? process.env, signal: params.signal },
     (lease) => {
@@ -125,6 +120,11 @@ export async function installManagedPlugin(
   warnings?: string[];
   application?: PluginRuntimeApplication;
 }> {
+  try {
+    assertConfigWriteAllowedInCurrentMode({ env: params.env });
+  } catch (error) {
+    throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
+  }
   const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
   return await withManagedPluginMutation(params, async (beforePersistentApply) => {
