@@ -20,7 +20,7 @@ function errorMessage(error: unknown): string {
 }
 
 export async function loadUsageRouteData(
-  context: ApplicationContext,
+  context: Pick<ApplicationContext, "gateway" | "agentSelection">,
   options: RouteLoaderOptions,
   snapshot: UsageRouteSnapshot,
 ): Promise<UsageRouteData> {

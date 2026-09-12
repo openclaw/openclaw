@@ -155,27 +155,30 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   const element = await createAgentSelect({
     identityById: { alpha: createIdentity("alpha", { avatar: invalidAvatar }) },
   });
-  const failedImage = element.querySelector<HTMLImageElement>("img.agent-select__avatar");
+  const failedImage = element.querySelector<HTMLImageElement>(".agent-select__avatar img");
   expect(failedImage).not.toBeNull();
   failedImage?.dispatchEvent(new Event("error"));
   await element.updateComplete;
-  expect(element.querySelector("img.agent-select__avatar")).toBeNull();
-  expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-    "A",
+  expect(element.querySelector(".agent-select__avatar img")).toBeNull();
+  await waitForFast(() =>
+    expect(
+      element.querySelector(".agent-select__avatar .identity-avatar__agent-face"),
+    ).not.toBeNull(),
   );
+  expect(element.querySelector(".agent-select__avatar")?.classList).toContain("is-fallback");
 
   element.accessibleLabel = "Choose another agent";
   await element.updateComplete;
-  expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+  expect(element.querySelector(".agent-select__avatar img")).toBeNull();
 
   element.identityById = { alpha: createIdentity("alpha", { avatar: replacementAvatar }) };
   await element.updateComplete;
-  expect(element.querySelector("img.agent-select__avatar")?.getAttribute("src")).toBe(
+  expect(element.querySelector(".agent-select__avatar img")?.getAttribute("src")).toBe(
     replacementAvatar,
   );
   failedImage?.dispatchEvent(new Event("error"));
   await element.updateComplete;
-  expect(element.querySelector("img.agent-select__avatar")?.getAttribute("src")).toBe(
+  expect(element.querySelector(".agent-select__avatar img")?.getAttribute("src")).toBe(
     replacementAvatar,
   );
 });
