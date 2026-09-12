@@ -2,6 +2,12 @@
 // Exposes read-only channel/account state to status and server-method surfaces.
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 
+export type ChannelRuntimeSnapshotOptions = {
+  channelId?: ChannelId;
+  /** Controls read recorded state without invoking fallible diagnostic inspectors. */
+  inspectAccounts?: boolean;
+};
+
 /** Snapshot of channel runtime state keyed by channel and account id. */
 export type ChannelRuntimeSnapshot = {
   /** Host admission is paused; status must use captured facts without invoking plugin callbacks. */
