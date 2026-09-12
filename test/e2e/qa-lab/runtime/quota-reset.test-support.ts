@@ -71,12 +71,12 @@ type HeldUsageResponse = {
   releaseReason?: "explicit" | "deadline" | "aborted";
 };
 
-export function syntheticAccessToken(expires = Date.UTC(2036, 0, 1)) {
+export function syntheticAccessToken(expires = Date.UTC(2036, 0, 1), accountId = ACCOUNT_ID) {
   return [
     { alg: "none" },
     {
       "https://api.openai.com/auth": {
-        chatgpt_account_id: ACCOUNT_ID,
+        chatgpt_account_id: accountId,
         chatgpt_user_id: "quota-test-user",
         chatgpt_plan_type: "pro",
       },
@@ -102,7 +102,7 @@ function assistantTexts(history: ChatHistory): string[] {
     );
 }
 
-async function startQuotaProvider(source: BlockSource) {
+async function startQuotaProvider(source: BlockSource, responseText: string) {
   let phase: Phase = "healthy";
   let nextSuccessObserver: (() => void) | undefined;
   let nextUsageHold: { arrived: Deferred<HeldUsageResponse>; released: Deferred<void> } | undefined;
@@ -219,7 +219,7 @@ async function startQuotaProvider(source: BlockSource) {
       headers,
     };
   };
-  const successEvents = (marker = MARKER) => {
+  const successEvents = (marker = responseText) => {
     const observe = nextSuccessObserver;
     nextSuccessObserver = undefined;
     observe?.();
@@ -341,6 +341,19 @@ async function startQuotaProvider(source: BlockSource) {
             expires_in: 3600,
           });
         }
+      } else if (requestPath === "/catalog/models") {
+        json(200, {
+          models: [
+            {
+              slug: "gpt-5.5",
+              display_name: "Quota fixture model",
+              visibility: "list",
+              show_in_picker: true,
+              context_window: 128_000,
+              max_output_tokens: 4096,
+            },
+          ],
+        });
       } else if (requestPath.endsWith("/models")) {
         json(200, { models: [] });
       } else if (requestPath.endsWith("/responses")) {
@@ -349,7 +362,7 @@ async function startQuotaProvider(source: BlockSource) {
           const event = failure();
           json(event.status, { error: event.error }, event.headers);
         } else {
-          const events = successEvents(backup ? BACKUP_MARKER : MARKER);
+          const events = successEvents(backup ? BACKUP_MARKER : responseText);
           responses.push({ phase, path: requestPath, value: events });
           response.writeHead(200, { "content-type": "text/event-stream" });
           for (const event of events) {
@@ -436,17 +449,27 @@ export async function createQuotaResetFixture(
     scopedCooldown = false,
     includeBackup = false,
     limitGatewayFileSize = false,
+    runtime = "codex",
+    enableIsolatedTool = false,
+    includeAlternateProfile = false,
+    responseText = MARKER,
+    controlUi = false,
   }: {
     source: BlockSource;
     expiresDuringBlock?: boolean;
     scopedCooldown?: boolean;
     includeBackup?: boolean;
     limitGatewayFileSize?: boolean;
+    runtime?: "openclaw" | "codex";
+    enableIsolatedTool?: boolean;
+    includeAlternateProfile?: boolean;
+    responseText?: string;
+    controlUi?: boolean;
   },
 ) {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => context.onTestFinished(cleanup));
   const root = tempDirs.make("openclaw-quota-reset-");
-  const provider = await startQuotaProvider(source);
+  const provider = await startQuotaProvider(source, responseText);
   context.onTestFinished(() => provider.stop());
   const clockFile = path.join(root, "clock-offset");
   await fs.writeFile(clockFile, "0");
@@ -463,6 +486,9 @@ export async function createQuotaResetFixture(
   const preload = new URL("./quota-reset-preload.mjs", import.meta.url);
   preload.searchParams.set("fixture", provider.baseUrl);
   preload.searchParams.set("clock", clockFile);
+  if (controlUi) {
+    preload.searchParams.set("catalog", "1");
+  }
   if (limitGatewayFileSize) {
     preload.searchParams.set("storageFault", storageFaultFile);
   }
@@ -493,7 +519,8 @@ export async function createQuotaResetFixture(
       OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
     },
     config: {
-      gateway: { controlUi: { enabled: false } },
+      gateway: { controlUi: { enabled: controlUi } },
+      ...(enableIsolatedTool ? { tools: { alsoAllow: ["llm-task"] } } : {}),
       ...(scopedCooldown || includeBackup
         ? {
             models: {
@@ -543,8 +570,11 @@ export async function createQuotaResetFixture(
         : {}),
       plugins: {
         enabled: true,
-        allow: ["codex", "openai"],
+        allow: ["codex", "openai", ...(enableIsolatedTool ? ["llm-task"] : [])],
         entries: {
+          ...(enableIsolatedTool
+            ? { "llm-task": { enabled: true, llm: { allowAuthProfileOverride: true } } }
+            : {}),
           codex: {
             enabled: true,
             config: {
@@ -569,7 +599,7 @@ export async function createQuotaResetFixture(
         defaults: {
           model: { primary: MODEL, fallbacks: includeBackup ? [BACKUP_MODEL] : [] },
           models: {
-            [MODEL]: { agentRuntime: { id: "codex" } },
+            [MODEL]: { agentRuntime: { id: runtime } },
             ...(includeBackup ? { [BACKUP_MODEL]: { agentRuntime: { id: "openclaw" } } } : {}),
           },
           ...(scopedCooldown ? { utilityModel: `openai/${UTILITY_MODEL_ID}` } : {}),
@@ -586,11 +616,25 @@ export async function createQuotaResetFixture(
   // Doctor imports without refreshing a credential outside its one-day warning window.
   const expires = expiresDuringBlock ? Date.now() + 2 * 86_400_000 : Date.UTC(2036, 0, 1);
   const access = syntheticAccessToken(expires);
+  const alternateProfileId = "openai:quota-alternate";
+  const alternateAccess = syntheticAccessToken(expires, "quota-alternate-account");
   await gateway.state.writeText(
     "agents/main/agent/auth-profiles.json",
     JSON.stringify({
       version: 1,
       profiles: {
+        ...(includeAlternateProfile
+          ? {
+              [alternateProfileId]: {
+                type: "oauth",
+                provider: "openai",
+                access: alternateAccess,
+                refresh: "synthetic-alternate-refresh",
+                expires,
+                accountId: "quota-alternate-account",
+              },
+            }
+          : {}),
         [PROFILE_ID]: {
           type: "oauth",
           provider: "openai",
@@ -673,6 +717,9 @@ export async function createQuotaResetFixture(
     provider,
     sessionKey,
     access,
+    profileId: PROFILE_ID,
+    alternateProfileId,
+    alternateAccess,
     advanceClock,
     clock: {
       get offset() {
