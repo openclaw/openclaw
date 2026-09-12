@@ -3,6 +3,7 @@
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
@@ -545,7 +546,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
               // ui.prefs is a deliberately narrow hashless LWW surface enforced by
               // hasHashlessPatchLwwStructure in the gateway. Serialization still
               // matters: a pending whole-config save must commit before this merge.
-              client.request("config.patch", {
+              client.request<ConfigPatchAck>("config.patch", {
                 raw: JSON.stringify({ ui: { prefs: batch } }),
                 ...(batch.sidebarEntries !== undefined
                   ? { replacePaths: ["ui.prefs.sidebarEntries"] }
@@ -554,6 +555,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
               }),
             {
               waitForWritesResumed: true,
+              configWriteAck: (ack) => ack,
               canDispatch: () => {
                 if (writer.canPatch === false) {
                   return false;

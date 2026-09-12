@@ -1,7 +1,7 @@
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
-import { hintForPath, pathKey } from "../lib/config-form-utils.ts";
+import { hintForPath, isSensitiveLeafValue, pathKey } from "../lib/config-form-utils.ts";
 
 export {
   hintForPath,
@@ -31,8 +31,6 @@ export function configFieldId(path: Array<string | number>, suffix: string): str
   return `config-field-${key}-${suffix}`;
 }
 
-const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
-
 export function redactedPlaceholder(): string {
   return t("configForm.redactedPlaceholder");
 }
@@ -57,17 +55,6 @@ function enterSensitiveScanNode(state: SensitiveScanState, depth: number): boole
     return false;
   }
   return true;
-}
-
-function isEnvVarPlaceholder(value: string): boolean {
-  return ENV_VAR_PLACEHOLDER_PATTERN.test(value.trim());
-}
-
-function isSensitiveLeafValue(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.trim().length > 0 && !isEnvVarPlaceholder(value);
-  }
-  return value !== undefined && value !== null;
 }
 
 function isHintSensitive(hint: ConfigUiHint | undefined): boolean {

@@ -1077,7 +1077,7 @@ describe("config write coordinator", () => {
     ]);
   });
 
-  it("config.apply skips the teardown flush behind a pending apply", async () => {
+  it("config.apply chains the final form edit from its acknowledged revision during teardown", async () => {
     vi.useFakeTimers();
     const firstApply = deferred<unknown>();
     let setCalls = 0;
@@ -1109,12 +1109,17 @@ describe("config write coordinator", () => {
     const applyPromise = runtimeConfig.apply();
     await vi.advanceTimersByTimeAsync(0);
 
-    // The gateway is about to restart; a post-apply write is meaningless.
+    // Apply can hot-reload without disconnecting this client.
     runtimeConfig.patchForm(["count"], 3);
     runtimeConfig.dispose();
     firstApply.resolve({});
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     await applyPromise;
-    expect(setCalls).toBe(0);
+    expect(setCalls).toBe(1);
+    expect(request).toHaveBeenCalledWith("config.set", {
+      raw: '{\n  "count": 3\n}\n',
+      baseHash: "hash-2",
+    });
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-9");
   });
 });
