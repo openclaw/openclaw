@@ -1,8 +1,8 @@
 import type { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info";
 import type { GATEWAY_SERVER_CAPS, ConnectParams } from "@openclaw/gateway-protocol/frame-guards";
 
-const MODEL_CATALOG_SNAPSHOT: typeof GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT &
-  typeof GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT = "model-catalog-snapshot";
+const MODEL_CATALOG_SNAPSHOT: typeof GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT =
+  "model-catalog-snapshot" satisfies typeof GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT;
 
 /** A requested snapshot opts in only after the server advertises its connect field. */
 export function resolveModelCatalogConnect(params: {
