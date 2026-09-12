@@ -239,6 +239,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       cfg: this.params.cfg,
       agentId: this.params.entry.route.agentId,
       defaultModel: this.realtimeConfig?.model,
+      useProviderDefaultModel: true,
       surface: "gateway-relay",
       autoRespondToAudio: !isDiscordAgentProxyVoiceMode(this.params.mode),
       isProviderAvailable: (provider) =>
@@ -652,7 +653,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   private handleBridgeEvent(event: RealtimeVoiceBridgeEvent): void {
     if (
       !(event.direction === "client" && event.type === "session.continuity.reset") &&
-      !event.type.endsWith("audio.delta")
+      !event.type.endsWith("audio.delta") &&
+      event.type !== "output_audio.rtp"
     ) {
       this.markProviderGenerationObserved();
     }

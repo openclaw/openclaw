@@ -77,7 +77,9 @@ Auto-join example:
 
 ### GPT-Live in Discord
 
-Discord can use the same GPT-Live model and voice as Talk. For the Codex
+Discord can use the same GPT-Live model and voice as Talk. Unpinned Discord
+configurations keep the provider's existing default; select GPT-Live explicitly.
+For the Codex
 GPT-Live route with `cove`, sign in with
 `openclaw models auth login --provider openai`, then configure:
 

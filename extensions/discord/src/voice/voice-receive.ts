@@ -556,6 +556,7 @@ export class DiscordVoiceReceive {
     signal?: AbortSignal;
   }): Promise<string> {
     const { context, entry, message, toolsAllow, userId } = params;
+    let currentContext: DiscordVoiceIngressContext = context;
     params.signal?.throwIfAborted();
     if (params.signal) {
       const admitted = await this.resolveDiscordVoiceIngressContext(entry, userId);
@@ -563,10 +564,12 @@ export class DiscordVoiceReceive {
       if (
         !this.params.isEntryCurrent(entry) ||
         !admitted ||
+        admitted.isCurrent?.() === false ||
         admitted.senderIsOwner !== context.senderIsOwner
       ) {
         throw new Error("Discord voice speaker authorization changed before delegation");
       }
+      currentContext = admitted;
     }
     logger.info(
       `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
@@ -579,7 +582,7 @@ export class DiscordVoiceReceive {
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       runtime: this.params.runtime,
-      context,
+      context: currentContext,
       toolsAllow,
       ...(params.signal ? { signal: params.signal } : {}),
       admissionAllowFrom: this.params.admissionAllowFrom,

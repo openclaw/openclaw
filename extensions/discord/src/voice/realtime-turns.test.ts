@@ -118,6 +118,7 @@ defineDiscordVoiceTests(
       expect(providerOptions.configuredProviderId).toBeUndefined();
       expect(providerOptions.agentId).toBe("agent-1");
       expect(providerOptions.defaultModel).toBe("gpt-realtime-2");
+      expect(providerOptions.useProviderDefaultModel).toBe(true);
       expect(requireRecord(providerOptions.providerConfigs, "provider configs").openai).toEqual({
         model: "provider-default",
         voice: "marin",

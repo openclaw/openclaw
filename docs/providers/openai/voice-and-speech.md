@@ -207,7 +207,7 @@ sidebarTitle: "Voice and speech"
     Explicit model choices and voices supported by that model stay in effect;
     an explicit GPT-Live model is audio-only. Requests requiring video or forced
     agent-consult replies retain `gpt-realtime-2.1` when no model is pinned.
-    Direct tool bridges, Discord's default agent-proxy mode, and Azure
+    Direct tool bridges, Discord voice without an explicit model, and Azure
     deployments retain their existing defaults. An explicit GPT-Live model in
     Discord uses the shared Gateway relay bridge and provider-owned delegation.
     Installing an update does not rewrite saved configuration or switch an

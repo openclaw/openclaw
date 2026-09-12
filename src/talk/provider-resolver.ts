@@ -46,6 +46,8 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   assertProviderAvailable?: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
+  /** Retain the provider's default when adding a transport to an existing consumer. */
+  useProviderDefaultModel?: boolean;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
   surface?: RealtimeVoiceProviderResolveConfigContext["surface"];
   autoRespondToAudio?: RealtimeVoiceProviderResolveConfigContext["autoRespondToAudio"];
@@ -124,9 +126,11 @@ export function resolveConfiguredRealtimeVoiceProvider(
     resolveProviderConfig: ({ provider, cfg, rawConfig }) => {
       // Provider config resolution should see the default model as if it came
       // from config, while explicit provider config still wins.
+      const defaultModel =
+        params.defaultModel ?? (params.useProviderDefaultModel ? provider.defaultModel : undefined);
       const rawConfigWithModel =
-        params.defaultModel && rawConfig.model === undefined
-          ? { ...rawConfig, model: params.defaultModel }
+        defaultModel && rawConfig.model === undefined
+          ? { ...rawConfig, model: defaultModel }
           : rawConfig;
       const rawConfigWithOverrides = {
         ...rawConfigWithModel,

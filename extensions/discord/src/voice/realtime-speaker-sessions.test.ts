@@ -15,6 +15,7 @@ defineDiscordVoiceTests(
     emitFinalRealtimeUserTranscript,
     lastAgentCommandArgs,
     lastRealtimeBridge,
+    realtimeBridgeAt,
     loggerWarnMock,
     sentUserMessages,
     createClient,
@@ -454,6 +455,13 @@ defineDiscordVoiceTests(
           "Voice is busy",
         );
         clock.mockReturnValue(now + 60_001);
+        for (let index = 0; index < 8; index += 1) {
+          // WebRTC transport silence keeps arriving after the speaker stops.
+          realtimeBridgeAt(index).bridgeParams.onEvent?.({
+            direction: "server",
+            type: "output_audio.rtp",
+          });
+        }
         beginSpeakerTurn(entry, { userId: "owner", senderIsOwner: true }).close();
         const owner = lastRealtimeBridge();
         expect(retired.session.close).toHaveBeenCalledOnce();

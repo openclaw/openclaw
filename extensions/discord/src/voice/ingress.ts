@@ -18,6 +18,7 @@ const logger = createSubsystemLogger("discord/voice");
 
 export type DiscordVoiceIngressContext = {
   extraSystemPrompt?: string;
+  isCurrent?: () => boolean;
   senderIsOwner: boolean;
   speakerLabel: string;
 };
@@ -102,6 +103,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
   }
   return {
     extraSystemPrompt: buildDiscordGroupSystemPrompt(access.channelConfig),
+    isCurrent: access.isCurrent,
     senderIsOwner: speaker.senderIsOwner,
     speakerLabel: speaker.label,
   };
@@ -135,7 +137,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       fetchGuildName: params.fetchGuildName,
       speakerContext: params.speakerContext,
     }));
-  if (!context) {
+  if (!context || context.isCurrent?.() === false) {
     return null;
   }
   params.signal?.throwIfAborted();

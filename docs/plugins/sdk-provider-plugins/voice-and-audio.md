@@ -149,6 +149,11 @@ Register each capability inside `register(api)` alongside your existing
     provider's discovery default for the configured Talk agent and provider
     settings, excluding an explicit model; readiness and capabilities use the
     effective model overrides.
+    Consumers adding a new transport without changing existing model defaults
+    can pass `useProviderDefaultModel: true` to
+    `resolveConfiguredRealtimeVoiceProvider(...)`. This fills an absent model
+    from the selected provider's `defaultModel` before surface-specific
+    resolution; explicit configured models and request overrides still win.
     Optional `talk.catalog` inputs `provider` and `model` resolve capabilities
     for a specific realtime launch without changing saved configuration.
     Gateway audio consumers such as Discord use

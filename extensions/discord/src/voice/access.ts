@@ -37,7 +37,12 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
   admissionAllowFrom?: string[];
   sender: { id: string; name?: string; tag?: string };
 }): Promise<
-  { ok: true; channelConfig?: DiscordChannelConfigResolved | null } | { ok: false; message: string }
+  | {
+      ok: true;
+      channelConfig?: DiscordChannelConfigResolved | null;
+      isCurrent?: () => boolean;
+    }
+  | { ok: false; message: string }
 > {
   const policy = await initialParams.readPolicy?.();
   if (policy?.isCurrent() === false) {
@@ -140,6 +145,6 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
     modeWhenAccessGroupsOff: "configured",
   });
   return commandAuthorized
-    ? { ok: true, channelConfig }
+    ? { ok: true, channelConfig, ...(policy ? { isCurrent: policy.isCurrent } : {}) }
     : { ok: false, message: "You are not authorized to use this command." };
 }
