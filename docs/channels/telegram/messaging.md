@@ -37,6 +37,10 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
   `channels.telegram.dm.threadReplies` and `channels.telegram.direct.<chatId>.threadReplies` were removed. Run `openclaw doctor --fix` after upgrading if your config still has those keys. DM topic routing now follows Telegram `getMe.has_topics_enabled` (controlled by BotFather threaded mode): topics-enabled bots use thread-scoped DM sessions when Telegram sends `message_thread_id`; other DMs stay on the flat session.
 </Note>
 
+Changes to `replyToMode`, `streaming`, and `textChunkLimit` apply to the next
+assembled turn without reconnecting Telegram, including account overrides.
+Active turns keep their captured delivery settings.
+
 ## Message behavior
 
 <AccordionGroup>
@@ -192,7 +196,7 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
     `all` (DMs + groups, including ambient room events), `direct` (DMs only), `group-all` (every group message except ambient room events, no DMs), `group-mentions` (groups when the bot is mentioned; **no DMs** — default), `off` / `none` (disabled).
 
     <Note>
-    The default scope (`group-mentions`) does not fire ack reactions in DMs or ambient room events. Use `direct` or `all` for DMs; only `all` acknowledges ambient room events. This value is read at Telegram provider startup, so a gateway restart is needed for the change to take effect.
+    The default scope (`group-mentions`) does not fire ack reactions in DMs or ambient room events. Use `direct` or `all` for DMs; only `all` acknowledges ambient room events. This value is captured for each assembled turn, so changes apply without restarting the Gateway or reconnecting Telegram.
     </Note>
 
   </Accordion>

@@ -10,6 +10,12 @@ sidebarTitle: "Access control"
 
 Who may talk to the Telegram bot, in DMs and in groups, and what they may make it do.
 
+Changes to `dmPolicy`, `allowFrom`, `groupAllowFrom`, and `groupPolicy` apply to
+new admissions without reconnecting Telegram, at both the channel root and under
+`accounts.<accountId>`. An already admitted turn keeps its captured settings.
+Account creation/removal, tokens, transport settings, and native command
+registration still refresh the channel.
+
 ## Access control and activation
 
 ### Group bot identity
