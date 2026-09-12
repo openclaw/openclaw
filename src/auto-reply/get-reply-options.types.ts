@@ -100,6 +100,8 @@ export type TurnAdoptionLifecycle = {
   onSettled?: () => void;
   /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
+  /** Queue-owned synchronous write that must succeed before cancellation is acknowledged. */
+  onCancellationRequested?: () => void;
   /** Stable cancellation owner for collect-mode batches. */
   ownerKey?: string;
   abortSignal?: AbortSignal;

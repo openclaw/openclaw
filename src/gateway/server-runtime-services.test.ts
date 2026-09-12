@@ -28,6 +28,9 @@ import {
   waitForFast,
 } from "./server-runtime-services.test-harness.js";
 
+// oxfmt-ignore
+vi.mock("./server-followup-queue-recovery.js", () => ({ scheduleRestoredFollowupQueueRecovery: () => () => {} }));
+
 const {
   activateGatewayScheduledServices,
   scheduleGatewayIdleTask,
@@ -266,10 +269,11 @@ describe("server-runtime-services", () => {
     expect(services.heartbeatRunner.updateConfig).toBe(hoisted.heartbeatRunner.updateConfig);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
-    expect(log.child).toHaveBeenNthCalledWith(1, "delivery-recovery");
-    expect(log.child).toHaveBeenNthCalledWith(2, "session-delivery-recovery");
-    const deliveryLog = log.child.mock.results[0]?.value;
-    const sessionDeliveryLog = log.child.mock.results[1]?.value;
+    expect(log.child).toHaveBeenNthCalledWith(1, "followup-queue-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(2, "delivery-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(3, "session-delivery-recovery");
+    // oxfmt-ignore
+    const deliveryLog = log.child.mock.results[1]?.value, sessionDeliveryLog = log.child.mock.results[2]?.value;
     if (!deliveryLog || !sessionDeliveryLog) {
       throw new Error("Expected delivery recovery log children");
     }
@@ -407,8 +411,8 @@ describe("server-runtime-services", () => {
     expect(firstStopped).toBe(false);
     expect(secondStopped).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledWith(
+    expect(log.child.mock.results[1]?.value.warn).toHaveBeenCalledOnce();
+    expect(log.child.mock.results[1]?.value.warn).toHaveBeenCalledWith(
       "delivery recovery is still pending after 5000ms; waiting before runtime teardown",
     );
 
@@ -417,7 +421,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(firstStopped).toBe(false);
     expect(secondStopped).toBe(false);
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
+    expect(log.child.mock.results[1]?.value.warn).toHaveBeenCalledOnce();
 
     if (!resolveDrain) {
       throw new Error("Expected outbound retry drain resolver to be initialized");
