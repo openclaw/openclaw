@@ -3304,6 +3304,7 @@ export const en: TranslationMap & {
       finished: "{done} completed · {failed} failed",
       completed: "{done} completed",
       childOutcome: "Child runs finished. Check the conversation for the final response.",
+      childOutcomeProcessing: "Child runs finished. The parent is processing their results.",
       details: "Child details",
       detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
       otherGroups: "{count} more active groups",

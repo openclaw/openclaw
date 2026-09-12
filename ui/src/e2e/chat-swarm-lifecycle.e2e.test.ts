@@ -72,6 +72,8 @@ suite.define(() => {
         // The collector summary owns completion even while child rows are stale.
         const completedParent = {
           ...parent,
+          status: "running",
+          hasActiveRun: true,
           updatedAt: 2,
           swarm: {
             groups: [
@@ -114,14 +116,44 @@ suite.define(() => {
         );
         await summary.focus();
         await page.keyboard.press("Enter");
-        await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(true);
-        expect(
-          await widget
-            .getByText("Child runs finished. Check the conversation for the final response.")
-            .isVisible(),
-        ).toBe(true);
+        await expect
+          .poll(() =>
+            widget
+              .getByText("Child runs finished. The parent is processing their results.")
+              .isVisible(),
+          )
+          .toBe(true);
         await page.screenshot({
           path: path.join(proofDir, "completed-details.png"),
+          animations: "disabled",
+        });
+
+        // When the parent turn also settles, the card directs to the final response.
+        const settledParent = {
+          ...completedParent,
+          status: "done",
+          hasActiveRun: false,
+          updatedAt: 3,
+        };
+        await gateway.setMethodResponse("sessions.describe", { session: settledParent });
+        await gateway.setMethodResponse(
+          "sessions.list",
+          chatSessionListResponse([settledParent, ...children]),
+        );
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          agentId: "main",
+          reason: "swarm",
+        });
+        await expect
+          .poll(() =>
+            widget
+              .getByText("Child runs finished. Check the conversation for the final response.")
+              .isVisible(),
+          )
+          .toBe(true);
+        await page.screenshot({
+          path: path.join(proofDir, "settled-details.png"),
           animations: "disabled",
         });
         await page.keyboard.press("Space");
