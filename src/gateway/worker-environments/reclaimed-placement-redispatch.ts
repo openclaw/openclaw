@@ -13,48 +13,39 @@ export function createReclaimedPlacementRedispatch(params: {
 }) {
   return async (
     placement: ReclaimedWorkerPlacement,
-    options: { assertCurrent: () => void; signal?: AbortSignal },
+    { assertCurrent, signal }: { assertCurrent: () => void; signal?: AbortSignal },
   ) => {
-    options.signal?.throwIfAborted();
-    options.assertCurrent();
+    signal?.throwIfAborted();
+    assertCurrent();
     const previousEnvironment = params.environments.get(placement.environmentId);
     if (!previousEnvironment) {
       throw new Error(
         `Reclaimed worker placement has no environment record: ${placement.environmentId}`,
       );
     }
+    const { profileId, providerId, profileSnapshot, nodeDeviceId } = previousEnvironment;
+    const { sessionId, sessionKey, agentId, executionMode } = placement;
+    const identity = { sessionId, sessionKey, agentId, executionMode };
     let devicePlacement: Awaited<ReturnType<WorkerDevicePlacementRequirementResolver>> | undefined;
-    if (previousEnvironment.nodeDeviceId) {
+    if (nodeDeviceId) {
       if (!params.resolveDevicePlacementRequirement) {
         throw new Error("Node-backed redispatch has no authoritative runtime requirement");
       }
-      devicePlacement = await params.resolveDevicePlacementRequirement({
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        executionMode: placement.executionMode,
-      });
+      devicePlacement = await params.resolveDevicePlacementRequirement(identity);
     }
     return await params.dispatch(
       {
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        profileId: previousEnvironment.profileId,
-        executionMode: placement.executionMode,
+        ...identity,
+        profileId,
         ...(devicePlacement ? { devicePlacement } : {}),
-        ...(previousEnvironment.providerId === DEVICE_WORKER_PROVIDER_ID &&
-        previousEnvironment.nodeDeviceId
-          ? { deviceId: previousEnvironment.nodeDeviceId }
+        ...(providerId === DEVICE_WORKER_PROVIDER_ID && nodeDeviceId
+          ? { deviceId: nodeDeviceId }
           : {}),
-        inheritedProfile: {
-          providerId: previousEnvironment.providerId,
-          profileSnapshot: previousEnvironment.profileSnapshot,
-        },
+        inheritedProfile: { providerId, profileSnapshot },
       },
       undefined,
-      options.assertCurrent,
-      options.signal,
+      assertCurrent,
+      signal,
     );
   };
 }
