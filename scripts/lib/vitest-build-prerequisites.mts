@@ -190,6 +190,15 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
+  {
+    file: "src/gateway/server.chat-cli-auth.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
   ...[
     "src/gateway/server-sidecar-retention.test.ts",
     "src/gateway/server.config-patch.test.ts",
