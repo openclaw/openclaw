@@ -8,7 +8,7 @@ import { shouldIncludeProgressCardToolForOpenClawTools } from "./openclaw-tools.
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 const PROGRESS_CARD_SYSTEM_PROMPT =
-  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Update or clear existing cards as needed.";
+  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Keep it current while work is active or blocked. When the task is complete, call progress_card with {} to clear the card before your final reply. Put the completion summary in that reply, not in a completed card.";
 
 function isAgentMainSession(params: {
   agentId: string;

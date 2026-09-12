@@ -15,13 +15,13 @@ The card is durable session state. A reconnect or page reload reads the latest c
 
 ## Adoption
 
-Create a card only for substantial work with at least two meaningful sequential steps. Skip greetings, quick questions, and single-step requests; do not invent steps to justify a card. The checklist remains optional: eligible work can use Markdown, a plan, or both. Existing cards can still be updated when progress meaningfully changes or cleared when requested.
+Create a card only for substantial work with at least two meaningful sequential steps. Skip greetings, quick questions, and single-step requests; do not invent steps to justify a card. The checklist remains optional: eligible work can use Markdown, a plan, or both. Keep existing cards current while work is active or blocked. When the task is complete, clear the card before the final reply and put the completion summary in that reply.
 
 OpenClaw adds a short progress-card reminder only for non-main, non-sub-agent sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
 
 The reminder says:
 
-> Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Update or clear existing cards as needed.
+> Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Keep it current while work is active or blocked. When the task is complete, call progress_card with {} to clear the card before your final reply. Put the completion summary in that reply, not in a completed card.
 
 The reminder does not override tool policy. `tools.updatePlan: false` or a matching `tools.deny` entry still removes `progress_card` from the run entirely.
 
@@ -77,11 +77,13 @@ The Gateway removes invisible Unicode and bidirectional control characters from 
 
 ## Clear a card
 
-Call `progress_card` with both parts absent or empty to remove the current card:
+When the task is complete, call `progress_card` with both parts absent or empty before the final reply to remove the current card:
 
 ```json
 {}
 ```
+
+Completion cleanup is agent-driven: marking every step `completed` does not remove the card. Keep the card for unfinished or blocked work, rather than clearing it merely because a turn ends.
 
 An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
 
