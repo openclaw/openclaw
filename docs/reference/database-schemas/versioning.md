@@ -54,13 +54,15 @@ that pending receipt; ordinary history retains its existing 64-receipt bound and
 deletes retirement rows with their receipts.
 
 Rows written before this association was recorded retain their legacy recovery
-fallback. The association adds no SQL table, column, or schema version and is
-omitted from public job state and the public state-patch schema.
+fallback. The association adds no SQL table, column, or schema version. Current
+builds omit it from public job state and the public state-patch schema.
 
 A missing table or row means no recorded retirement; earlier edits cannot be
 reconstructed from the final job definition. Older compatible readers ignore the
-companion but do not enforce this protection. Finish active runs before downgrading
-if their edited watcher state must be preserved.
+companion but do not enforce this protection. To preserve edited watcher state,
+complete active runs and pending scheduler reconciliation on the current build
+before downgrading. A terminal task or receipt can still leave job state
+unreconciled.
 
 Worker preparation uses the same-version rule for the bare nullable
 `worker_environments.preparation_purpose TEXT` column in the shared state
