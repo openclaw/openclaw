@@ -291,9 +291,12 @@ export function createRedactPatternMatchFilter(
     const start = offset + 3;
     delimiter.lastIndex = start;
     const end = delimiter.exec(text)?.index ?? text.length;
-    // Colons and @ keep credentials eligible, including incomplete URL userinfo.
-    if (hasScheme && !/[:@]/.test(text.slice(start, end))) {
-      ranges.push({ start, end });
+    const token = text.slice(start, end);
+    // Screen the whole token for userinfo, even after the host/path cutoff.
+    if (hasScheme && !/[:@]/.test(token)) {
+      // Queries, fragments, and opening Markdown punctuation stay credential-eligible.
+      const cutoff = token.search(/[?#([{]/);
+      ranges.push({ start, end: cutoff === -1 ? end : start + cutoff });
     }
     offset = end;
   }

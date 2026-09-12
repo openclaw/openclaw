@@ -188,6 +188,38 @@ describe("registered Control UI chat redaction", () => {
 
   it.each([
     ["bare credential", secret, masked],
+    ["URL fragment", `https://example.test/#${secret}`, `https://example.test/#${masked}`],
+    [
+      "unknown URL query",
+      `https://example.test/?foo=.${secret}`,
+      `https://example.test/?foo=.${masked}`,
+    ],
+    [
+      "adjacent Markdown label",
+      `https://example.test/[${secret}](target)`,
+      `https://example.test/[${masked}](target)`,
+    ],
+    [
+      "adjacent parenthesis",
+      `https://example.test/(${secret})`,
+      `https://example.test/(${masked})`,
+    ],
+    ["adjacent brace", `https://example.test/{${secret}}`, `https://example.test/{${masked}}`],
+    [
+      "URL inside query",
+      `https://example.test/?next=https://example.test/path-${secret}`,
+      `https://example.test/?next=https://example.test/path-${masked}`,
+    ],
+    [
+      "URL inside fragment",
+      `https://example.test/#https://example.test/path-${secret}`,
+      `https://example.test/#https://example.test/path-${masked}`,
+    ],
+    [
+      "at-sign beyond query cutoff",
+      `https://example.test/path-${secret}?foo=@`,
+      `https://example.test/path-${masked}?foo=@`,
+    ],
     ["s3 password", `s3://user:${secret}@bucket`, `s3://user:${masked}@bucket`],
     ["s3 username", `s3://name-${secret}:pass@bucket`, `s3://name-${masked}:pass@bucket`],
     [
@@ -247,6 +279,9 @@ describe("registered Control UI chat redaction", () => {
       JSON.stringify(`${publicUrl} ${secret}`),
       JSON.stringify(`.${secret}`),
       JSON.stringify(`s3://user:${secret}@bucket`),
+      ...["#", "?foo=.", "[", "(", "{"].map((prefix) =>
+        JSON.stringify(`https://example.test/${prefix}${secret}`),
+      ),
       JSON.stringify("sk-abc123\u200B456789012345678"),
     ].join(" ");
     const accepted = await gateway.client.request<{ status: string; id: string }>(
@@ -272,6 +307,9 @@ describe("registered Control UI chat redaction", () => {
       expect(display.commandText).toContain('".***"');
       expect(display.commandText).toContain('"s3://user:***@bucket"');
       expect(display.commandText).not.toContain("sk-abc123");
+      for (const prefix of ["#", "?foo=.", "[", "(", "{"]) {
+        expect(display.commandText).toContain(`"https://example.test/${prefix}***"`);
+      }
       expect(display.commandText).not.toContain("456789012345678");
     } finally {
       await gateway.client.request("exec.approval.resolve", { id: accepted.id, decision: "deny" });
