@@ -291,6 +291,8 @@ Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
 ## Custom plugin UI
 
+Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.
+
 **Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
 and view replacements from user-installed plugins. It defaults to off and
 writes `gateway.controlUi.experimental.customPlugins`. Restart the Gateway and
