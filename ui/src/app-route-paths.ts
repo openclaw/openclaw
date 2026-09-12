@@ -336,7 +336,7 @@ export function memoryTabFromPath(pathname: string, basePath = ""): MemoryRouteT
   return segment === "memories" || segment === "dreams" || segment === "settings" ? segment : null;
 }
 
-export function isLegacyPluginsDiscoveryPath(pathname: string, basePath = ""): boolean {
+function isLegacyPluginsDiscoveryPath(pathname: string, basePath = ""): boolean {
   const normalizedPath = normalizePath(pathname);
   return normalizedPath === `${pathForRoute("plugin-settings", basePath)}/discover`;
 }
