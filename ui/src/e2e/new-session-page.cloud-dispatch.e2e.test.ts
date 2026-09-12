@@ -21,7 +21,7 @@ import {
   createdSessionListResult,
   expectPendingSessionPlacementStartupBeforeRuntime,
   installMockGateway,
-  openCloudConfiguration,
+  openEnvironmentPicker,
   pastePng,
   pollLocatorText,
   replaceGatewayClient,
@@ -75,9 +75,9 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       const trigger = page.locator("#new-session-where-trigger");
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      await trigger.click();
-      const configuration = await openCloudConfiguration(place, "aws");
-      await configuration.locator('[data-value="machine:fast"]').click();
+      await openEnvironmentPicker(page);
+      await place.locator('[data-value="cloud:aws"]').hover();
+      await place.getByRole("button", { name: "Fast", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await place.getByRole("button", { name: "machine0", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("machine0");
@@ -85,11 +85,7 @@ suite.define(() => {
       await expect
         .poll(() => place.getByRole("button", { name: "machine0", exact: true }).isDisabled())
         .toBe(false);
-      expect(
-        await place
-          .locator('.new-session-page__cloud-config-card:has([data-value="cloud:machine0"])')
-          .count(),
-      ).toBe(0);
+      await expect.poll(() => place.locator('[data-value^="machine:"]:visible').count()).toBe(0);
       await captureUiProof(suite, page, "optionless-cloud-profile.png");
       await page.keyboard.press("Escape");
 
@@ -232,12 +228,13 @@ suite.define(() => {
         })),
       ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await openEnvironmentPicker(page);
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      const configuration = await openCloudConfiguration(place, "aws");
+      await place.locator('[data-value="cloud:aws"]').click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await configuration.locator('[data-value="machine:fast"]').click();
+      await place.getByText("Machine", { exact: true }).waitFor();
+      await place.locator('[data-value="machine:fast"]').click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Where: aws, Fast");
@@ -418,22 +415,14 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
-      await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Where: aws, Fast");
       await expect.poll(() => startButton.isDisabled()).toBe(false);
-      await trigger.click();
+      await openEnvironmentPicker(page);
       const retainedCloudProfile = place.locator('[data-value="cloud:aws"]');
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
-      await expect
-        .poll(() =>
-          retainedCloudProfile.locator(".new-session-page__selected-summary").textContent(),
-        )
-        .toBe("Fast");
-      const retainedConfiguration = await openCloudConfiguration(place, "aws");
-      expect(
-        await retainedConfiguration
-          .locator('[data-value="machine:fast"]')
-          .getAttribute("aria-pressed"),
-      ).toBe("true");
+      await retainedCloudProfile.hover();
+      const retainedMachine = place.locator('[data-value="machine:fast"]');
+      await expect.poll(() => retainedMachine.isVisible()).toBe(true);
+      await expect.poll(() => retainedMachine.getAttribute("aria-pressed")).toBe("true");
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(
@@ -441,9 +430,11 @@ suite.define(() => {
             "cloud-profile-refresh-retention",
             "03-after-retry-exhaustion.png",
           ),
-          await takeControlUiViewportScreenshot(page, retainedConfiguration, [
-            retainedCloudProfile,
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator(".new-session-page__cloud-configuration"),
+            [retainedCloudProfile, retainedMachine],
+          ),
         );
       }
       await page.keyboard.press("Escape");

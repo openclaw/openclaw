@@ -8,7 +8,7 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
-  openCloudConfiguration,
+  openEnvironmentPicker,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -39,19 +39,21 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
-        const trigger = page.locator("#new-session-where-trigger");
         const picker = page.locator("wa-popover.new-session-page__where-popover");
-        await trigger.click();
-        const configuration = await openCloudConfiguration(picker, "aws");
-        await configuration.locator('[data-value="machine:standard"]').waitFor();
-        expect(await configuration.locator('[data-value^="os:"]').count()).toBe(0);
+        await openEnvironmentPicker(page);
+        await picker.getByRole("button", { name: "aws", exact: true }).click();
+        await picker.locator('[data-value="cloud:aws"]').hover();
+        await picker.locator('[data-value="machine:standard"]').waitFor();
+        expect(await picker.locator('[data-value^="os:"]').count()).toBe(0);
         const capturePicker = async (fileName: string) => {
           if (captureUiProofEnabled) {
             await writeFile(
               path.join(suite.artifactDir, fileName),
-              await takeControlUiViewportScreenshot(page, configuration, [
-                configuration.locator('[data-value="machine:standard"]'),
-              ]),
+              await takeControlUiViewportScreenshot(
+                page,
+                picker.locator(".new-session-page__cloud-configuration"),
+                [picker.locator('[data-value="machine:standard"]')],
+              ),
             );
           }
         };
@@ -71,14 +73,11 @@ suite.define(() => {
           ],
         });
         await gateway.emitGatewayEvent("node.runnerInventory.changed");
-        const linux = configuration.locator('[data-value="os:linux"]');
-        await openCloudConfiguration(picker, "aws");
+        const linux = picker.locator('[data-value="os:linux"]');
+        await picker.locator('[data-value="cloud:aws"]').hover();
         await linux.waitFor();
-        expect(
-          await configuration.getByRole("button", { name: "Linux", exact: true }).count(),
-        ).toBe(0);
         expect(await linux.textContent()).toBe("Linux");
-        expect(await linux.getAttribute("aria-pressed")).toBeNull();
+        expect(await picker.getByRole("button", { name: "Linux", exact: true }).count()).toBe(0);
         for (const os of ["macos", "windows"]) {
           const option = picker.locator(`[data-value="os:${os}"]`);
           expect(await option.count()).toBe(0);

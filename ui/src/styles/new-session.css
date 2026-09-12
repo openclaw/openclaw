@@ -815,8 +815,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   overflow-y: auto;
 }
 
-.new-session-page__environment-option,
-.new-session-page__connect-machine {
+.new-session-page__environment-option {
   min-height: 28px;
   gap: 8px;
   padding: 3px 8px;
@@ -837,9 +836,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-option .session-menu__icon,
-.new-session-page__connect-machine .session-menu__icon,
-.new-session-page__environment-option .session-menu__icon svg,
-.new-session-page__connect-machine .session-menu__icon svg {
+.new-session-page__environment-option .session-menu__icon svg {
   width: 14px;
   height: 14px;
 }
@@ -851,8 +848,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   font-size: var(--control-ui-text-sm);
 }
 
-.new-session-page__environment-picker > .session-menu__separator,
-.new-session-page__environment-picker > .new-session-page__connect-machine {
+.new-session-page__environment-picker > .session-menu__separator {
   flex-shrink: 0;
 }
 
@@ -870,10 +866,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.new-session-page__connect-machine .session-menu__icon {
-  color: var(--muted);
 }
 
 .connect-machine-dialog {

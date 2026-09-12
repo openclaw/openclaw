@@ -49,6 +49,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   timeoutMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
+  requirePluginHealth?: boolean;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
@@ -116,6 +117,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     timeoutMs: params.timeoutMs,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
+    requirePluginHealth: params.requirePluginHealth,
     env: params.env,
     supervisorKeepsAlive: true,
     settle: { probes: 12 },

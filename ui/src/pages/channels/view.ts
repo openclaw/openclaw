@@ -27,7 +27,6 @@ import { t } from "../../i18n/index.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { resolveChannelIconOwner } from "./plugin-presentation.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import {
@@ -63,7 +62,6 @@ export function renderChannels(props: ChannelsProps) {
       .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
-  const selectedIconPlugin = selected ? resolveChannelIconPlugin(props, selected) : undefined;
 
   return html`
     ${renderSettingsPage(html`
@@ -138,7 +136,6 @@ export function renderChannels(props: ChannelsProps) {
             channelId: selected,
             label: resolveChannelLabel(props, selected),
             pluginIconUrl: props.pluginIconUrls[selected],
-            preferPluginIcon: selectedIconPlugin?.hasIcon === true,
             props,
             data,
             onClose: () => props.onCloseDetail(),
@@ -152,8 +149,6 @@ export function renderChannels(props: ChannelsProps) {
             wizard: props.wizard,
             channelLabel: (channelId) => resolveChannelLabel(props, channelId),
             channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
-            channelHasPluginIcon: (channelId) =>
-              resolveChannelIconPlugin(props, channelId)?.hasIcon === true,
             multiselectValues: props.wizardMultiselect,
             onToggleMultiselect: props.onWizardToggleMultiselect,
             textValue: props.wizardTextValue,
@@ -199,12 +194,6 @@ export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): Ch
 
 function resolveChannelPlugin(props: ChannelsProps, key: string) {
   return props.pluginCatalog?.plugins.find((plugin) => plugin.id === key);
-}
-
-function resolveChannelIconPlugin(props: ChannelsProps, key: string) {
-  return props.pluginCatalog
-    ? resolveChannelIconOwner(props.pluginCatalog.plugins, key)
-    : undefined;
 }
 
 function resolveChannelLabel(props: ChannelsProps, key: string): string {
@@ -284,7 +273,6 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
     >
       ${renderChannelIcon(key, label, "tile", {
         pluginIconUrl: props.pluginIconUrls[key],
-        preferPluginIcon: resolveChannelIconPlugin(props, key)?.hasIcon === true,
       })}
       <div class="settings-row__text">
         <span class="settings-row__title">${label}</span>
@@ -313,7 +301,6 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
       >
         ${renderChannelIcon(key, label, "tile", {
           pluginIconUrl: props.pluginIconUrls[key],
-          preferPluginIcon: resolveChannelIconPlugin(props, key)?.hasIcon === true,
         })}
         <span class="settings-row__text">
           <span class="settings-row__title">${label}</span>

@@ -90,6 +90,7 @@ describe("maybeRestartService", () => {
     "initial-stopped",
     "initial-stopped-reachable",
     "initial-plugin-error",
+    "initial-plugin-unavailable",
     "initial-channel-error",
     "initial-readyz-error",
   ] as const)(
@@ -106,23 +107,41 @@ describe("maybeRestartService", () => {
           }
         },
       };
-      const initialFailure = change.startsWith("initial-");
-      if (initialFailure) {
+      const pluginOnly =
+        change === "initial-plugin-error" || change === "initial-plugin-unavailable";
+      const initialFailure = change.startsWith("initial-") && !pluginOnly;
+      if (change.startsWith("initial-")) {
         const health = await mocks.waitForGatewayHealthyRestart();
-        mocks.waitForGatewayHealthyRestart.mockResolvedValue({
+        const observedHealth = {
           ...health,
-          healthy: change === "initial-readyz-error" || change === "initial-stopped-reachable",
+          healthy:
+            pluginOnly ||
+            change === "initial-readyz-error" ||
+            change === "initial-stopped-reachable",
           runtime: {
             status: change.startsWith("initial-stopped") ? "stopped" : "running",
             pid: 8000,
           },
-          ...(change === "initial-plugin-error"
-            ? { activatedPluginErrors: [{ error: "failed" }] }
+          ...(change === "initial-plugin-error" || change.startsWith("initial-stopped")
+            ? {
+                activatedPluginErrors: [
+                  { id: "fixture", origin: "global", activated: true, error: "failed" },
+                ],
+              }
+            : {}),
+          ...(change === "initial-plugin-unavailable"
+            ? {
+                unavailablePlugins: [
+                  { id: "fixture", reason: "missing-extension-entry", detail: "Entry missing" },
+                ],
+              }
             : {}),
           ...(change === "initial-channel-error"
             ? { channelProbeErrors: [{ error: "failed" }] }
             : {}),
-        });
+        };
+        mocks.waitForGatewayHealthyRestart.mockResolvedValue(observedHealth);
+        mocks.inspectGatewayRestart.mockResolvedValue(observedHealth);
       }
       const controller = new AbortController();
       mocks.waitForGatewayHttpReadiness.mockImplementationOnce(async () => {
@@ -142,7 +161,13 @@ describe("maybeRestartService", () => {
         signal: controller.signal,
         requireRunningService: true,
         result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
-        serviceEnv: options.env,
+        serviceEnv: {
+          ...options.env,
+          ...(pluginOnly ? { OPENCLAW_PROFILE: "service-profile" } : {}),
+          ...(change === "initial-plugin-unavailable"
+            ? { OPENCLAW_CONTAINER_HINT: "service-box" }
+            : {}),
+        },
         gatewayPort: 18789,
         expectedVersion: gateway.version,
         expectedBuildId: gateway.buildId,
@@ -156,7 +181,7 @@ describe("maybeRestartService", () => {
           expect.objectContaining({ step: "gateway verification", status: "failed" }),
           expect.anything(),
         );
-      } else if (change !== "current") {
+      } else if (change === "aborted" || change === "revoked") {
         await expect(verification).rejects.toMatchObject({
           name: change === "aborted" ? "AbortError" : "Error",
         });
@@ -167,7 +192,25 @@ describe("maybeRestartService", () => {
           expect.anything(),
         );
       } else {
-        await expect(verification).resolves.toMatchObject({ ok: true });
+        const result = await verification;
+        expect(result.ok).toBe(true);
+        if (pluginOnly) {
+          const retry =
+            change === "initial-plugin-unavailable"
+              ? "openclaw --container service-box doctor --fix"
+              : "openclaw --profile service-profile doctor --fix";
+          expect(result.pluginWarnings).toEqual([
+            expect.objectContaining({
+              pluginId: "fixture",
+              message: expect.stringContaining("could not be loaded"),
+              guidance: [retry],
+            }),
+          ]);
+          expect(result.summary).toContain("plugin failures need a retry");
+          expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+            expect.objectContaining({ requirePluginHealth: false }),
+          );
+        }
         expect(onVerified).toHaveBeenCalledOnce();
       }
       expect(loadUpdateRecovery(admitted.runId, options)).toBeUndefined();

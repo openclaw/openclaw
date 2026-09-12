@@ -160,9 +160,9 @@ describe("cloud target menu", () => {
         selectedOs: "",
         selectedMachine: machine.id,
         submitting: false,
+        onSelect: vi.fn(),
         onSelectOs: vi.fn(),
         onSelectMachine: vi.fn(),
-        onSelect: vi.fn(),
       }),
       container,
     );
@@ -226,9 +226,9 @@ describe("cloud target menu", () => {
       selectedOs: "linux",
       selectedMachine: "small",
       submitting: false,
+      onSelect: vi.fn(),
       onSelectMachine,
       onSelectOs,
-      onSelect: vi.fn(),
     };
     render(renderCloudProfileMenuItems(params), container);
     container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
@@ -258,9 +258,9 @@ describe("cloud target menu", () => {
         selectedOs: "windows",
         selectedMachine: "",
         submitting: false,
+        onSelect: vi.fn(),
         onSelectMachine: vi.fn(),
         onSelectOs: vi.fn(),
-        onSelect: vi.fn(),
       }),
       container,
     );

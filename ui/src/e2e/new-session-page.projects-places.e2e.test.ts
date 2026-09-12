@@ -196,9 +196,8 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("system.info");
         const trigger = page.locator("#new-session-where-trigger");
-        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-          late === "system info" ? "Local" : "QA-Gateway",
-        );
+        const triggerLabel = trigger.locator(".new-session-page__trigger-label");
+        await pollLocatorText(triggerLabel).toBe(late === "system info" ? "Local" : "QA-Gateway");
         const place = page.locator("wa-popover.new-session-page__where-popover");
         const local = place.locator('[data-value="gateway"]');
         if (late === "recovery scope") {
@@ -222,6 +221,7 @@ suite.define(() => {
           await gateway.resolveDeferred("system.info", systemInfo);
           await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
         }
+        await pollLocatorText(triggerLabel).toBe("QA-Gateway");
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
         await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`, {
           surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
@@ -230,9 +230,7 @@ suite.define(() => {
 
         await page.keyboard.press("Escape");
         await replaceGatewayClient(page);
-        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-          "QA-Gateway",
-        );
+        await pollLocatorText(triggerLabel).toBe("QA-Gateway");
         await trigger.click();
         await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
       } finally {
@@ -367,9 +365,14 @@ suite.define(() => {
       expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
-      const cloud = where.locator('[data-value="cloud:aws"]');
+      const cloud = where.getByRole("button", { name: "aws", exact: true });
       await cloud.waitFor();
-      expect(await cloud.getAttribute("aria-disabled")).toBe("true");
+      expect(await cloud.isDisabled()).toBe(true);
+      await cloud.focus();
+      await page.keyboard.press("Enter");
+      expect(
+        await page.locator("#new-session-where-trigger").getAttribute("data-cloud-profile"),
+      ).toBeNull();
       await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");
 

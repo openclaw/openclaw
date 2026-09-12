@@ -36,6 +36,19 @@ export function installMockGateway(
   });
 }
 
+// The scale-in animation moves inventory rows after they first become visible.
+// Wait for its public completion event before hovering a nested details card.
+export async function openEnvironmentPicker(page: Page) {
+  const afterShow = page.locator("wa-popover.new-session-page__where-popover").evaluate(
+    (element) =>
+      new Promise<void>((resolve) => {
+        element.addEventListener("wa-after-show", () => resolve(), { once: true });
+      }),
+  );
+  await page.locator("#new-session-where-trigger").click();
+  await afterShow;
+}
+
 export const NEW_SESSION_MODEL_CATALOG = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
@@ -428,18 +441,6 @@ export async function openNewSessionPlusMenu(page: Page) {
   await composer.getByRole("button", { name: "Add attachment" }).click();
   await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
   return menu;
-}
-
-export async function openCloudConfiguration(picker: Locator, profileId: string) {
-  const card = picker.locator(
-    `.new-session-page__cloud-config-card:has([data-value="cloud:${profileId}"])`,
-  );
-  const configuration = card.locator(".new-session-page__cloud-configuration");
-  if (!(await configuration.isVisible())) {
-    await card.locator(`[data-value="cloud:${profileId}"]`).click();
-  }
-  await configuration.waitFor({ state: "visible" });
-  return configuration;
 }
 
 export async function navigateInApp(page: Page, routeId: string, search = "") {
