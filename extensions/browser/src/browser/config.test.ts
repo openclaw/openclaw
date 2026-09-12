@@ -715,6 +715,16 @@ describe("browser config", () => {
       expected: { allowedHostnames: ["example.com", "*.example.com"] },
     },
     {
+      name: "merges retired hostnameAllowlist into allowedHostnames without writing it back",
+      config: {
+        ssrfPolicy: {
+          allowedHostnames: ["localhost"],
+          hostnameAllowlist: ["*.example.com"],
+        },
+      } as unknown as BrowserConfig,
+      expected: { allowedHostnames: ["localhost", "*.example.com"] },
+    },
+    {
       name: "keeps configured profile cdpUrls out of the shared browser SSRF policy",
       config: withProfile("remote", {
         color: "#123456",
