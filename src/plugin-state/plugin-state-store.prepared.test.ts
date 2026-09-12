@@ -119,10 +119,14 @@ describe("plugin state prepared queries", () => {
     }
   });
 
-  it.each(["register", "registerIfAbsent"] as const)(
-    "reuses %s write and quota compilation with fresh bindings after reopening",
-    (operation) => {
-      const options = { namespace: "prepared-writes", maxEntries: 20 };
+  it.each([
+    ["register", "evict-oldest"],
+    ["register", "reject-new"],
+    ["registerIfAbsent", "evict-oldest"],
+  ] as const)(
+    "reuses %s %s write and quota compilation with fresh bindings after reopening",
+    (operation, overflowPolicy) => {
+      const options = { namespace: "prepared-writes", maxEntries: 20, overflowPolicy };
       const stores = [
         createPluginStateSyncKeyedStore<string>("discord", options),
         createPluginStateSyncKeyedStore<string>("telegram", options),

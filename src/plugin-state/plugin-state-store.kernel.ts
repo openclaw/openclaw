@@ -178,6 +178,34 @@ const pluginStateEntryQueries = new WeakMap<
   DatabaseSync,
   ReturnType<typeof prepareSqliteQuerySync<PluginStateEntryLookup, PluginStateRow>>
 >();
+const pluginStateEntryExistsQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof prepareSqliteQuerySync<PluginStateEntryLookup, { entry_key: string }>>
+>();
+
+function hasPluginStateEntry(db: DatabaseSync, params: PluginStateEntryLookup): boolean {
+  let query = pluginStateEntryExistsQueries.get(db);
+  if (!query) {
+    query = prepareSqliteQuerySync<PluginStateEntryLookup, { entry_key: string }>(
+      db,
+      (parameter) => {
+        const pluginId = parameter((value) => value.pluginId);
+        const namespace = parameter((value) => value.namespace);
+        const key = parameter((value) => value.key);
+        const now = parameter((value) => value.now);
+        return getPluginStateKysely(db)
+          .selectFrom("plugin_state_entries")
+          .select("entry_key")
+          .where("plugin_id", "=", pluginId)
+          .where("namespace", "=", namespace)
+          .where("entry_key", "=", key)
+          .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]));
+      },
+    );
+    pluginStateEntryExistsQueries.set(db, query);
+  }
+  return query(params).rows.length !== 0;
+}
 
 export function selectPluginStateEntry(
   db: DatabaseSync,
@@ -656,17 +684,16 @@ export function registerPluginStateEntry(
       retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS;
     }
   }
-  // Ordinary evicting writes enforce quotas after the upsert; they do not need
-  // to load the previous payload. Reject-new and batch counts still need existence.
+  // Quotas and batch counts need existence, never the previous JSON payload.
   const existing =
     retention || params.overflowPolicy === "reject-new"
-      ? selectPluginStateEntry(store.db, {
+      ? hasPluginStateEntry(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
           key: params.key,
           now,
         })
-      : undefined;
+      : false;
   if (!existing) {
     assertCanInsertPluginStateEntry({
       store,
