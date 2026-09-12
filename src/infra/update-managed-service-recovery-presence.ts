@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import { assertSupportedStateSchemaVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -22,6 +23,7 @@ export function hasManagedUpdateRecoveryRecord(pathname: string, runId: string):
     throw new Error("Managed recovery state is not a regular file.");
   }
   const prepared = prepareSqliteReadOnlyLocationSyncInProcess(pathname);
+  let outcome: { value: boolean } | { cause: unknown };
   try {
     const db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
     try {
@@ -59,12 +61,27 @@ export function hasManagedUpdateRecoveryRecord(pathname: string, runId: string):
       if (!current.isFile() || current.dev !== original.dev || current.ino !== original.ino) {
         throw new Error("Managed recovery state changed during inspection.");
       }
-      return present;
+      outcome = { value: present };
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();
     }
-  } finally {
-    prepared.cleanup();
+  } catch (cause) {
+    outcome = { cause };
   }
+  if (!prepared.cleanup()) {
+    // The exit retry is best-effort, not proof that this private copy was removed.
+    const readFailure =
+      "cause" in outcome
+        ? `${outcome.cause instanceof Error ? outcome.cause.message : String(outcome.cause)}; `
+        : "";
+    throw new Error(
+      `${readFailure}State database snapshot cleanup failed: ${path.dirname(prepared.location)}. Check directory permissions and available storage before retrying.`,
+      "cause" in outcome ? outcome : undefined,
+    );
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
 }
