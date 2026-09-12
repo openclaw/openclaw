@@ -135,8 +135,8 @@ export function registerBuiltDiscordComponentMessage(params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
   ttlMs?: number;
-}): void {
-  registerDiscordComponentEntries({
+}): Promise<void> {
+  return registerDiscordComponentEntries({
     entries: params.buildResult.entries,
     modals: params.buildResult.modals,
     messageId: params.messageId,
@@ -310,7 +310,7 @@ export async function sendDiscordComponentMessage(
   });
   await opts.onDeliveryResult?.(deliveryResult);
 
-  registerBuiltDiscordComponentMessage({
+  await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
     ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
@@ -360,7 +360,7 @@ export async function editDiscordComponentMessage(
     });
   }
 
-  registerBuiltDiscordComponentMessage({
+  await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
     ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),

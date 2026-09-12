@@ -447,7 +447,7 @@ describe("discord component registry", () => {
   ).href;
 
   it("registers and consumes component entries", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
       modals: [
         {
@@ -607,7 +607,7 @@ describe("discord component registry", () => {
     expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
     expect(confirm.consumptionGroupEntryIds).toEqual([confirm.id, cancel.id]);
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: result.entries,
       modals: [],
       messageId: "msg_1",
@@ -630,7 +630,7 @@ describe("discord component registry", () => {
     )) as typeof import("./components-registry.js");
 
     clearDiscordComponentEntriesForTest();
-    first.registerDiscordComponentEntries({
+    await first.registerDiscordComponentEntries({
       entries: [{ id: "btn_shared", kind: "button", label: "Shared" }],
       modals: [],
     });
@@ -666,7 +666,7 @@ describe("discord component registry", () => {
   it("expires component entries registered while the process clock is invalid", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_invalid_clock", kind: "button", label: "Invalid clock" }],
         modals: [],
         ttlMs: 1000,
@@ -686,7 +686,7 @@ describe("discord component registry", () => {
   it("expires component entries whose calculated expiry exceeds the Date range", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_overflow", kind: "button", label: "Overflow" }],
         modals: [],
         ttlMs: 1000,
@@ -738,7 +738,7 @@ describe("discord component registry", () => {
     const now = 1_700_000_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
         modals: [{ id: "mdl_1", title: "Details", fields: [] }],
         ttlMs: 1000,
@@ -747,7 +747,7 @@ describe("discord component registry", () => {
       dateNowSpy.mockRestore();
     }
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
+    expect(componentRegister).toHaveBeenCalledTimes(1);
     expect(componentRegister).toHaveBeenCalledWith(
       "btn_1",
       {
@@ -844,13 +844,13 @@ describe("discord component registry", () => {
       { sessionKey: undefined },
     );
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [componentEntry],
       modals: [modalEntry],
       ttlMs: 1000,
     });
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
+    expect(componentRegister).toHaveBeenCalledTimes(1);
     expect(modalRegister).toHaveBeenCalledTimes(1);
 
     const persistedComponent = componentRegister.mock.calls[0]?.[1] as
@@ -937,7 +937,7 @@ describe("discord component registry", () => {
       logging: { getChildLogger: () => ({ warn }) },
     } as never);
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [{ id: "btn_fallback", kind: "button", label: "Fallback" }],
       modals: [],
     });

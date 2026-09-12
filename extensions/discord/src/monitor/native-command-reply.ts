@@ -172,7 +172,7 @@ export async function deliverDiscordInteractionReply(params: {
             sent && typeof sent === "object" && "id" in sent && typeof sent.id === "string"
               ? sent.id
               : undefined;
-          registerDiscordComponentEntries({
+          await registerDiscordComponentEntries({
             entries: componentBuild.entries,
             modals: componentBuild.modals,
             messageId,
