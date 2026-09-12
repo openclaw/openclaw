@@ -11,11 +11,15 @@ import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
+export const configWriteCommittedSnapshot = Symbol("configWriteCommittedSnapshot");
+
 export type ConfigWriteResult = {
   persistedHash: string;
   persistedConfig: OpenClawConfig;
   /** Exact resolved source accepted before commit; absent for legacy custom writers. */
   persistedSourceConfig?: OpenClawConfig;
+  /** Internal receipt from the committed inputs, independent of later filesystem reads. */
+  [configWriteCommittedSnapshot]?: { hash: string; sourceConfig: OpenClawConfig };
 };
 
 export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown };

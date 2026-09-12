@@ -55,6 +55,7 @@ import {
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
+import { hashConfigRevision } from "./io.snapshot.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteInputBasis,
@@ -62,7 +63,11 @@ import type {
   InternalConfigWriteResult,
   ReadConfigFileSnapshotInternalResult,
 } from "./io.types.js";
-import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
+import {
+  ConfigRuntimeRefreshError,
+  configWriteCommittedSnapshot,
+  configWritePostCommitRollback,
+} from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
 import {
   ConfigWritePostCommitError,
@@ -340,7 +345,14 @@ export async function writeConfigFileFromContext(
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
   const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
-  const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
+  const includeFileHashes: Record<string, string> = {};
+  const includeFileTargets: Record<string, string> = {};
+  const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(
+    stampedOutputConfig,
+    includeFileHashes,
+    includeFileTargets,
+  );
+  const committedRevision = hashConfigRevision(json, includeFileHashes, includeFileTargets);
   // Compare resolved modes: an unchanged authored $include has no local mode literal.
   const gatewayModeAfter = resolveGatewayMode(sourceConfigForPreflight);
   const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
@@ -620,6 +632,10 @@ export async function writeConfigFileFromContext(
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
       persistedSourceConfig: sourceConfigForPreflight,
+      [configWriteCommittedSnapshot]: {
+        hash: committedRevision,
+        sourceConfig: sourceConfigForPreflight,
+      },
       [configWritePostCommitRollback]: (assertCurrent) => {
         assertCurrent();
         restoreConfigSnapshotAuditRecord({

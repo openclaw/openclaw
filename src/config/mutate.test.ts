@@ -15,6 +15,7 @@ import {
 import { hashConfigIncludeRaw } from "./includes.js";
 import { createConfigIO as createActualConfigIO } from "./io.factory.js";
 import type { ConfigWriteOptions } from "./io.js";
+import { configWriteCommittedSnapshot } from "./io.types.js";
 import {
   ConfigMutationConflictError,
   resolveConfigIncludeWriteBoundary,
@@ -685,20 +686,23 @@ describe("config mutate helpers", () => {
       }),
   );
 
-  it("reuses a provided snapshot and write options for replace", async () => {
+  it("replaceConfigFile preserves a legacy void writer's snapshot and write options", async () => {
     const snapshot = createSnapshot({
       hash: "hash-1",
       sourceConfig: { gateway: { auth: { mode: "token" } } },
     });
 
-    await replaceConfigFile({
+    const result = await replaceConfigFile({
       baseHash: snapshot.hash,
       nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
       snapshot,
       writeOptions: { expectedConfigPath: snapshot.path },
     });
 
-    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledAfter(ioMocks.writeConfigFile);
+    expect(result.persistedHash).toBeNull();
+    expect(result.nextConfig).toEqual({
+      gateway: { auth: { mode: "token", token: "minted" } },
+    });
     expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
       { gateway: { auth: { mode: "token", token: "minted" } } },
       {
@@ -998,7 +1002,7 @@ describe("config mutate helpers", () => {
     );
   });
 
-  it("returns config and revision from the same post-write snapshot", async () => {
+  it("replaceConfigFile returns the committed snapshot after an external edit", async () => {
     const snapshot = createSnapshot({
       hash: "hash-persisted",
       sourceConfig: { gateway: { auth: { mode: "token" } } },
@@ -1009,6 +1013,10 @@ describe("config mutate helpers", () => {
     ioMocks.writeConfigFile.mockResolvedValue({
       persistedSourceConfig,
       persistedHash: "hash-after",
+      [configWriteCommittedSnapshot]: {
+        hash: "committed-revision",
+        sourceConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
+      },
       persistedConfig: {
         gateway: { auth: { mode: "token", token: "minted" } },
         meta: { lastTouchedVersion: "test" },
@@ -1029,10 +1037,10 @@ describe("config mutate helpers", () => {
       writeOptions: { expectedConfigPath: snapshot.path },
     });
 
-    expect(result.persistedHash).toBe("newer-hash");
+    expect(result.persistedHash).toBe("committed-revision");
     expect(result.persistedSourceConfig).toBe(persistedSourceConfig);
     expect(result.nextConfig).toEqual({
-      gateway: { auth: { mode: "token", token: "newer" } },
+      gateway: { auth: { mode: "token", token: "minted" } },
     });
   });
 

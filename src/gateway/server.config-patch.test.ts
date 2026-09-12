@@ -521,7 +521,45 @@ describe("gateway config methods", () => {
     },
   );
 
-  it("config.set pairs the canonical config and revision while another writer waits", async () => {
+  it("config.set acknowledges an include config when an external edit invalidates the reread", async () => {
+    const configFactory = await import("../config/io.factory.js");
+    const original = await getCurrentConfigObject();
+    await writeJsonFile(path.join(path.dirname(original.path), "logging.json"), { level: "info" });
+    await writeJsonFile(original.path, {
+      ...original.config,
+      logging: { $include: "logging.json" },
+      gateway: { reload: { mode: "off" } },
+    });
+    invalidateConfigGetResponseCache();
+    const draft = await getCurrentConfigObject();
+    let committed: Awaited<ReturnType<typeof getCurrentConfigObject>> | undefined;
+    const createIO = configFactory.createConfigIO;
+    vi.spyOn(configFactory, "createConfigIO").mockImplementation((options) => {
+      const io = createIO(options);
+      return {
+        ...io,
+        writeConfigFile: async (...args) => {
+          const written = await io.writeConfigFile(...args);
+          if (io.configPath === original.path) {
+            invalidateConfigGetResponseCache();
+            committed = await getCurrentConfigObject();
+            await fs.writeFile(original.path, "{ external editor incomplete\n");
+          }
+          return written;
+        },
+      };
+    });
+    const result = await rpcReq(requireClient(), "config.set", {
+      raw: JSON.stringify({ ...draft.config, ui: { prefs: { locale: "fr" } } }),
+      baseHash: draft.hash,
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(committed?.config).toMatchObject({ logging: { level: "info" } });
+    expect(result.payload).toMatchObject({ config: committed?.config, hash: committed?.hash });
+    expect(await fs.readFile(original.path, "utf8")).toBe("{ external editor incomplete\n");
+  });
+
+  it("config.set pairs the committed config and revision while another writer waits", async () => {
     const configFactory = await import("../config/io.factory.js");
     const { KeyedAsyncQueue } = await import("../plugin-sdk/keyed-async-queue.js");
     const original = await getCurrentConfigObject();
@@ -537,7 +575,6 @@ describe("gateway config methods", () => {
     const canonicalRead = createDeferredCore();
     const releaseCanonicalRead = createDeferredCore();
     const competingLock = createDeferredCore();
-    let rootWritten = false;
     let pauseCanonicalRead = true;
     let observeCompetingLock = false;
     let competingWriterStarted = false;
@@ -545,7 +582,7 @@ describe("gateway config methods", () => {
     // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original with its queue receiver.
     const enqueue = KeyedAsyncQueue.prototype.enqueue;
 
-    // Retain real IO and locks; pause only the post-write receipt read so the
+    // Retain real IO and locks; pause only the committed writer return so the
     // competing authenticated request has a deterministic contention window.
     const ioObservation = vi
       .spyOn(configFactory, "createConfigIO")
@@ -555,18 +592,12 @@ describe("gateway config methods", () => {
           ...io,
           writeConfigFile: async (...args) => {
             const written = await io.writeConfigFile(...args);
-            if (io.configPath === original.path) {
-              rootWritten = true;
-            }
-            return written;
-          },
-          readConfigFileSnapshotForWrite: async (...args) => {
-            if (io.configPath === original.path && rootWritten && pauseCanonicalRead) {
+            if (io.configPath === original.path && pauseCanonicalRead) {
               pauseCanonicalRead = false;
               canonicalRead.resolve();
               await releaseCanonicalRead.promise;
             }
-            return await io.readConfigFileSnapshotForWrite(...args);
+            return written;
           },
         };
       });
@@ -623,6 +654,8 @@ describe("gateway config methods", () => {
       // distinguishable from both the submitted config and the writer result.
       const written = JSON.parse(await fs.readFile(original.path, "utf8"));
       expect(written.logging.level).toBe("debug");
+      invalidateConfigGetResponseCache();
+      const committed = await getCurrentConfigObject();
       await writeJsonFile(original.path, { ...written, ui: { prefs: { locale: "fr" } } });
       invalidateConfigGetResponseCache();
       const canonical = await getCurrentConfigObject();
@@ -667,8 +700,8 @@ describe("gateway config methods", () => {
       expect(secondResult.ok, secondResult.error?.message).toBe(true);
       expect(competingWriterStarted).toBe(true);
       expect({ config: firstResult.payload?.config, hash: firstResult.payload?.hash }).toEqual({
-        config: canonical.config,
-        hash: canonical.hash,
+        config: committed.config,
+        hash: committed.hash,
       });
       const after = await getCurrentConfigObject();
       expect({ config: secondResult.payload?.config, hash: secondResult.payload?.hash }).toEqual({
