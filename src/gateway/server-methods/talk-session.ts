@@ -279,6 +279,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           agentId,
           defaultModel: realtimeConfig.model,
           surface: "gateway-relay",
+          autoRespondToAudio: realtimeConfig.consultRouting !== "force-agent-consult",
         });
         const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
           ...resolution,

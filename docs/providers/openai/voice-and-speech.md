@@ -191,7 +191,21 @@ sidebarTitle: "Voice and speech"
 
     #### GPT-Live API
 
-    Set `talk.realtime.model` to `gpt-live-1` for the public
+    Talk selects GPT-Live automatically when no model is configured. An OpenAI
+    Platform key, API-key profile, or `OPENAI_API_KEY` selects `gpt-live-1` with
+    `marin`; a ChatGPT-only account selects `gpt-live-1-codex` with `cove`.
+    `talk.catalog` reports the default for the selected agent's accounts.
+    A configured Platform credential takes precedence over ChatGPT sign-in,
+    including when that credential needs repair.
+
+    Explicit model choices and voices supported by that model stay in effect. Talk requests requiring
+    video or forced agent-consult replies retain `gpt-realtime-2.1` when no
+    model is pinned. Direct tool bridges, including Discord's wake-name and
+    agent-proxy modes, and Azure deployments retain their existing defaults.
+    Installing an update does not rewrite saved configuration or switch an
+    active session; unpinned Talk sessions use the new default when started.
+
+    Set `talk.realtime.model` explicitly to `gpt-live-1` for the public
     [GPT-Live API](https://developers.openai.com/api/docs/guides/live). GPT-Live
     handles the spoken conversation while delegated tasks run through your
     configured OpenClaw agent. It can listen while speaking; interrupting speech
@@ -234,7 +248,10 @@ sidebarTitle: "Voice and speech"
     start during the SDP exchange. A Gateway sideband handles delegated work
     while browser media stays on WebRTC. Public transcript events are fragments,
     not completed turns. The Gateway owns persistence of bounded received-text
-    snapshots; clients display captions without saving another copy. Saving text
+    snapshots; clients display captions without saving another copy. Both live
+    captions and saved snapshots can span several exchanges by the same speaker;
+    they do not reconstruct chronological turns or cross-speaker timing.
+    Overlapping fragments do not identify a completed utterance. Saving text
     does not establish that speech or playback has finished. See OpenAI's
     [session guide](https://developers.openai.com/api/docs/guides/live-conversations)
     for the public session and voice contract.

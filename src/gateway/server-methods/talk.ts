@@ -271,6 +271,14 @@ function buildTalkCatalog(config: OpenClawConfig) {
   const realtimeProviderIds = Object.keys(realtimeConfig.providers);
   const realtimeSurface =
     realtimeConfig.transport === "gateway-relay" ? "gateway-relay" : "browser-session";
+  const realtimeResolveContext = {
+    cfg: config,
+    agentId: realtimeAgentId,
+    surface: realtimeSurface,
+    ...(realtimeSurface === "gateway-relay"
+      ? { autoRespondToAudio: realtimeConfig.consultRouting !== "force-agent-consult" }
+      : {}),
+  } as const;
   // Mirror talk.client.create's resolution inputs (agent scope + top-level model
   // override) so catalog readiness matches what session creation will actually do;
   // diverging here previously reported GPT-Live over OAuth as unconfigured.
@@ -282,13 +290,11 @@ function buildTalkCatalog(config: OpenClawConfig) {
     () => {
       assertSecretOwnerAvailable("capability", "talk:realtime");
       return resolveConfiguredRealtimeVoiceProvider({
-        cfg: config,
+        ...realtimeResolveContext,
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
         ...realtimeModelOverride,
-        agentId: realtimeAgentId,
         defaultModel: realtimeConfig.model,
-        surface: realtimeSurface,
       }).provider.id;
     },
   );
@@ -400,9 +406,19 @@ function buildTalkCatalog(config: OpenClawConfig) {
         const rawConfigWithModel = realtimeConfig.model
           ? { ...rawConfig, model: realtimeConfig.model }
           : rawConfig;
+        const defaultRawConfig = { ...rawConfig };
+        delete defaultRawConfig.model;
+        const defaultProviderConfig = available
+          ? (provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: defaultRawConfig }) ??
+            defaultRawConfig)
+          : defaultRawConfig;
         const providerConfig = available
-          ? (provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-            rawConfigWithModel)
+          ? rawConfigWithModel.model === undefined
+            ? defaultProviderConfig
+            : (provider.resolveConfig?.({
+                ...realtimeResolveContext,
+                rawConfig: rawConfigWithModel,
+              }) ?? rawConfigWithModel)
           : rawConfigWithModel;
         const capabilities: ReturnType<typeof resolveRealtimeVoiceProviderCapabilities> = available
           ? resolveRealtimeVoiceProviderCapabilities({
@@ -436,8 +452,10 @@ function buildTalkCatalog(config: OpenClawConfig) {
             capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
           ),
         };
-        if (provider.defaultModel) {
-          entry.defaultModel = provider.defaultModel;
+        const defaultModel =
+          normalizeOptionalString(defaultProviderConfig.model) ?? provider.defaultModel;
+        if (defaultModel) {
+          entry.defaultModel = defaultModel;
         }
         if (provider.models?.length) {
           entry.models = [...provider.models];

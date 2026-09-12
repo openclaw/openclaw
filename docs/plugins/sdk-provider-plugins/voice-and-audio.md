@@ -136,6 +136,16 @@ Register each capability inside `register(api)` alongside your existing
     An explicitly selected alias still overrides canonical config without inheriting
     settings from other aliases.
 
+    `resolveConfig` receives optional host context alongside `cfg` and `rawConfig`:
+    `agentId`, `surface` (`browser-session`, `gateway-relay`, or `bridge`),
+    `autoRespondToAudio`, and `requiredCapabilities.supportsVideoFrames`. Use this
+    context to choose account- and session-compatible defaults while preserving
+    explicit models. An omitted surface retains bridge behavior. Talk forwards
+    camera requirements before model selection and sets `autoRespondToAudio: false`
+    when Gateway relay policy controls responses. `talk.catalog` resolves the
+    provider's default with the same context and provider settings, excluding an
+    explicit model; readiness and capabilities use the effective model overrides.
+
     ```typescript
     api.registerRealtimeVoiceProvider({
       id: "acme-ai",
