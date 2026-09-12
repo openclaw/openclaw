@@ -72,22 +72,17 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
   return executeSqliteQuerySync(database, query).rows;
 }
 
-function participantRecordsBySessionKey(
+function participantRowsBySessionKey(
   database: DatabaseSync,
   sessionKeys?: readonly string[],
-): Map<string, SessionParticipantRecord[]> {
-  const records = new Map<string, SessionParticipantRecord[]>();
+): Map<string, SessionParticipantRow[]> {
+  const records = new Map<string, SessionParticipantRow[]>();
   if (!tableExists(database, SESSION_PARTICIPANTS_TABLE)) {
     return records;
   }
   for (const row of readParticipantRows(database, sessionKeys)) {
     const participants = records.get(row.session_key) ?? [];
-    participants.push({
-      identity: readParticipantIdentity(row.identity_namespace, row.actor_id),
-      contributionCount: row.contribution_count,
-      firstPromptedAt: row.first_prompted_at,
-      lastPromptedAt: row.last_prompted_at,
-    });
+    participants.push(row);
     records.set(row.session_key, participants);
   }
   return records;
@@ -95,14 +90,16 @@ function participantRecordsBySessionKey(
 
 function withProjectedParticipants(
   entry: SessionEntry,
-  records: readonly SessionParticipantRecord[],
+  records: readonly SessionParticipantRow[],
 ): SessionEntry {
   if (records.length === 0) {
     return entry;
   }
   return {
     ...entry,
-    participants: records.map(({ identity }) => ({ identity })),
+    participants: records.map((row) => ({
+      identity: readParticipantIdentity(row.identity_namespace, row.actor_id),
+    })),
     participantCount: records.length,
   };
 }
@@ -114,7 +111,7 @@ export function projectSqliteSessionParticipants(
 ): SessionEntry {
   return withProjectedParticipants(
     entry,
-    participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
+    participantRowsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
   );
 }
 
@@ -122,13 +119,21 @@ export function projectSqliteSessionParticipantsBatch(
   database: DatabaseSync,
   entries: ReadonlyMap<string, SessionEntry>,
 ): Map<string, SessionEntry> {
-  const records = participantRecordsBySessionKey(database, [...entries.keys()]);
+  const projectParticipants = createSqliteSessionParticipantProjector(database, [
+    ...entries.keys(),
+  ]);
   return new Map(
-    [...entries].map(([sessionKey, entry]) => [
-      sessionKey,
-      withProjectedParticipants(entry, records.get(sessionKey) ?? []),
-    ]),
+    [...entries].map(([sessionKey, entry]) => [sessionKey, projectParticipants(sessionKey, entry)]),
   );
+}
+
+/** Decode each session separately so a damaged identity does not reject unrelated exact reads. */
+export function createSqliteSessionParticipantProjector(
+  database: DatabaseSync,
+  sessionKeys: readonly string[],
+): (sessionKey: string, entry: SessionEntry) => SessionEntry {
+  const records = participantRowsBySessionKey(database, sessionKeys);
+  return (sessionKey, entry) => withProjectedParticipants(entry, records.get(sessionKey) ?? []);
 }
 
 export function listSessionParticipantsReadOnly(scope: {
@@ -140,9 +145,21 @@ export function listSessionParticipantsReadOnly(scope: {
   const resolved = resolveSqliteReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      participantRecordsBySessionKey(
-        database.db,
-        scope.sessionKey ? [scope.sessionKey] : undefined,
+      new Map(
+        [
+          ...participantRowsBySessionKey(
+            database.db,
+            scope.sessionKey ? [scope.sessionKey] : undefined,
+          ),
+        ].map(([sessionKey, rows]) => [
+          sessionKey,
+          rows.map((row) => ({
+            identity: readParticipantIdentity(row.identity_namespace, row.actor_id),
+            contributionCount: row.contribution_count,
+            firstPromptedAt: row.first_prompted_at,
+            lastPromptedAt: row.last_prompted_at,
+          })),
+        ]),
       ),
     toDatabaseOptions(resolved),
   );

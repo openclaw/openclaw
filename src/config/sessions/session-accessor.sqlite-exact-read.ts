@@ -1,3 +1,4 @@
+import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -7,6 +8,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
+import { readExactSessionEntryListBatch } from "./session-accessor.sqlite-entry-read.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
 import {
   resolveSqliteScope,
@@ -123,6 +125,12 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
         // suppress healthy logical targets after a warm handle was validated.
         assertCanonicalSqliteSessionKeysCurrent(database);
         const source = { agentId: database.agentId, path: database.path };
+        const rows =
+          group.projection === "list"
+            ? readExactSessionEntryListBatch(database, [
+                ...new Set(group.requests.flatMap((request) => request.sessionKeys)),
+              ])
+            : undefined;
         const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
         const readEntry = (sessionKey: string): Result<ExactSessionEntry | undefined, unknown> => {
           const cached = entries.get(sessionKey);
@@ -131,12 +139,16 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
           }
           let result: Result<ExactSessionEntry | undefined, unknown>;
           try {
-            const entry = readExactSessionEntryRowValidated(
-              database,
-              sessionKey,
-              group.projection,
-            )?.entry;
-            result = ok(entry ? { sessionKey, entry } : undefined);
+            // SQLite binds USV strings; retain the request spelling in the returned match.
+            const row = rows?.get(toUSVString(sessionKey));
+            if (row && !row.ok) {
+              result = row;
+            } else {
+              const entry = rows
+                ? row?.value
+                : readExactSessionEntryRowValidated(database, sessionKey, group.projection)?.entry;
+              result = ok(entry ? { sessionKey, entry } : undefined);
+            }
           } catch (error) {
             result = err(error);
           }

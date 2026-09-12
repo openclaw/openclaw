@@ -1,15 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import type { SqliteSessionOwnerRow } from "./session-accessor.sqlite-owner-projection.js";
 import {
+  createSqliteSessionParticipantProjector,
   projectSqliteSessionParticipants,
   projectSqliteSessionParticipantsBatch,
 } from "./session-accessor.sqlite-participant-projection.js";
@@ -229,6 +234,50 @@ export function readExactSessionEntryRow(
   }
   const entry = parseReadableSqliteSessionEntryRow(database, row, projection);
   return entry ? { entry, row } : undefined;
+}
+
+/** Reads exact metadata together while preserving per-row validation errors. */
+export function readExactSessionEntryListBatch(
+  database: OpenClawAgentDatabaseReader,
+  sessionKeys: readonly string[],
+): Map<string, Result<SessionEntry | undefined, unknown>> {
+  const entries = new Map<string, Result<SessionEntry | undefined, unknown>>();
+  const sessionKey = sessionKeys.length === 1 ? sessionKeys[0] : undefined;
+  if (sessionKey !== undefined) {
+    // Keep the prepared exact read when this group has no work to batch.
+    const boundKey = toUSVString(sessionKey);
+    try {
+      entries.set(boundKey, ok(readExactSessionEntryRow(database, sessionKey, "list")?.entry));
+    } catch (error) {
+      entries.set(boundKey, err(error));
+    }
+    return entries;
+  }
+  const projectParticipants = createSqliteSessionParticipantProjector(database.db, sessionKeys);
+  for (const row of iterateSqliteQuerySync(
+    database.db,
+    selectSessionEntryRows(database, "list")
+      .select(["current_session_id", "updated_at"])
+      .where("session_key", "in", sqliteStringSet(sessionKeys)),
+  )) {
+    try {
+      const parsed = parseReadableSessionEntryData(database, row, "list");
+      entries.set(
+        row.session_key,
+        ok(
+          parsed
+            ? validateDeliveryCanonicalSessionEntry(
+                row.session_key,
+                projectParticipants(row.session_key, parsed),
+              )
+            : undefined,
+        ),
+      );
+    } catch (error) {
+      entries.set(row.session_key, err(error));
+    }
+  }
+  return entries;
 }
 
 export function readExactSessionEntryJson(

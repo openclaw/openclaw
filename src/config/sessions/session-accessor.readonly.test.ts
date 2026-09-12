@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   cleanupTempDirs,
   makeTempDir,
@@ -62,6 +63,73 @@ afterEach(() => {
 });
 
 describe("session accessor readonly listing", () => {
+  it.each([5, 40])(
+    "batches %i exact rows and participants without changing requested keys",
+    (count) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-batch-") };
+      const scope = { agentId: "main", env, projection: "list" as const };
+      const keys = Array.from({ length: count }, (_, index) => `agent:main:row-${index}`);
+      keys[0] = "agent:main:row-\uFFFD";
+      for (const [index, sessionKey] of keys.entries()) {
+        replaceSessionEntrySync(
+          { ...scope, sessionKey },
+          { sessionId: `session-${index}`, updatedAt: 1 },
+        );
+        recordSessionParticipant(
+          { ...scope, sessionKey },
+          { identity: { type: "profile", id: `person-${index}` }, promptedAt: 1 },
+        );
+      }
+      // Both spellings bind to the same SQLite key, but each result retains its request spelling.
+      const requested = [
+        "agent:main:row-\uD800",
+        ...keys.toReversed(),
+        keys[0]!,
+        "agent:main:missing",
+      ];
+      expect(
+        loadExactSessionEntryReadOnly({ ...scope, sessionKey: keys[0]! })?.entry.sessionId,
+      ).toBe("session-0");
+      const database = openOpenClawAgentDatabase(scope);
+      const statements = trackSqliteStatementExecutions(
+        database.db,
+        ["entries", "participants"],
+        (sql) =>
+          sql.includes('from "session_nodes"')
+            ? "entries"
+            : sql.includes('from "session_participants"')
+              ? "participants"
+              : null,
+      );
+      try {
+        const results = loadExactSessionEntryCandidatesReadOnlyBatch(
+          requested.map((sessionKey) => ({ ...scope, sessionKeys: [sessionKey] })),
+        );
+        expect(results).toMatchObject(
+          requested.map((sessionKey) => ({
+            ok: true,
+            value: sessionKey.endsWith(":missing")
+              ? []
+              : [{ sessionKey, entry: { participantCount: 1 } }],
+          })),
+        );
+        expect(results[0]).toMatchObject({
+          value: [
+            {
+              entry: {
+                sessionId: "session-0",
+                participants: [{ identity: { type: "profile", id: "person-0" } }],
+              },
+            },
+          ],
+        });
+        expect(statements.counts).toEqual({ entries: 1, participants: 1 });
+      } finally {
+        statements.restore();
+      }
+    },
+  );
+
   it("resolves a registered exact store once per batch and observes its next owner", () => {
     const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-target-") };
     const storePath = path.join(env.OPENCLAW_STATE_DIR, "registered.sqlite");
