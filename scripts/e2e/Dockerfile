@@ -19,7 +19,7 @@ RUN apt-get update \
 RUN corepack enable
 RUN npm install -g tsx@4.23.12 --no-fund --no-audit
 
-COPY scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/
+COPY --chmod=0644 scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/
 COPY --chmod=0755 scripts/e2e/lib/prepublish-plugin-registry.sh /opt/openclaw-e2e/scripts/e2e/lib/
 COPY scripts/e2e/lib/plugins/npm-registry-server.mjs /opt/openclaw-e2e/scripts/e2e/lib/plugins/
 COPY scripts/lib/bounded-response.mjs /opt/openclaw-e2e/scripts/lib/

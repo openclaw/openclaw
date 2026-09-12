@@ -6570,6 +6570,13 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(dockerfile).toContain("procps");
   });
 
+  it("normalizes shared Docker E2E harness file permissions", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+    expect(dockerfile).toContain(
+      "COPY --chmod=0644 scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/",
+    );
+  });
+
   it("copies the pnpm lockfile into the runtime image before normalizing its permissions", () => {
     const dockerfile = readFileSync("Dockerfile", "utf8");
     const copy = "COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .";
