@@ -586,59 +586,67 @@ describe("plugin npm package manifest staging", () => {
     expect(generateCalls).toBe(1);
   });
 
-  it("overlays generated channel configs while packing and restores source manifest", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
-    const packageDir = join(repoDir, "extensions", "twitch");
-    mkdirSync(packageDir, { recursive: true });
-    const sourceManifest = {
-      id: "twitch",
-      channels: ["twitch"],
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-    };
-    writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);
-    writeGeneratedChannelMetadata(repoDir);
+  it.each([undefined, "providerCatalogEntry", "capabilityCatalogEntry"] as const)(
+    "overlays manifest-only channel configs and restores catalog metadata (%s)",
+    (catalogField) => {
+      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
+      const packageDir = join(repoDir, "extensions", "twitch");
+      mkdirSync(packageDir, { recursive: true });
+      const sourceManifest = {
+        id: "twitch",
+        ...(catalogField ? { [catalogField]: "./catalog.ts" } : {}),
+        channels: ["twitch"],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      };
+      writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);
+      writeGeneratedChannelMetadata(repoDir);
 
-    const resolved = resolveAugmentedPluginNpmManifest({
-      repoRoot: repoDir,
-      packageDir,
-    });
-    expect(resolved.changed).toBe(true);
-    expect(resolved.manifest).toEqual({
-      id: "twitch",
-      channels: ["twitch"],
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      channelConfigs: {
-        twitch: {
-          description: "Twitch chat integration",
-          label: "Twitch",
-          schema: {
-            type: "object",
-            required: ["channelName"],
-            properties: {
-              channelName: { type: "string" },
+      const resolved = resolveAugmentedPluginNpmManifest({
+        repoRoot: repoDir,
+        packageDir,
+      });
+      expect(resolved.changed).toBe(true);
+      expect(resolved.manifest).toEqual({
+        ...sourceManifest,
+        channelConfigs: {
+          twitch: {
+            description: "Twitch chat integration",
+            label: "Twitch",
+            schema: {
+              type: "object",
+              required: ["channelName"],
+              properties: {
+                channelName: { type: "string" },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    const originalText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
-    withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
-      const stagedManifest = JSON.parse(
-        readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8"),
+      const originalText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
+      const result = withAugmentedPluginNpmManifestForPackage(
+        { repoRoot: repoDir, packageDir },
+        (context) => {
+          const stagedManifest = JSON.parse(
+            readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8"),
+          );
+          expect(stagedManifest.channelConfigs.twitch.description).toBe("Twitch chat integration");
+          expect(context.packageJsonApplied).toBe(false);
+          if (catalogField) {
+            expect(stagedManifest[catalogField]).toBe("./catalog.ts");
+          }
+          return "overlay-ran";
+        },
       );
-      expect(stagedManifest.channelConfigs.twitch.description).toBe("Twitch chat integration");
-    });
-    expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalText);
-  });
+      expect(result).toBe("overlay-ran");
+      expect(existsSync(join(packageDir, "package.json"))).toBe(false);
+      expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalText);
+    },
+  );
 
   it("overlays package-local runtime metadata while packing and restores source package json", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-");

@@ -940,6 +940,7 @@ enum class GatewayMethod(
   SessionsStorageStatus("sessions.storage.status"),
   SessionsStorageRun("sessions.storage.run"),
   PluginsReload("plugins.reload"),
+  ClawsPackagesRemove("claws.packages.remove"),
 }
 
 enum class GatewayEvent(

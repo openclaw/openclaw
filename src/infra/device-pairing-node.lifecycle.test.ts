@@ -1,10 +1,8 @@
 // Capability approvals follow the paired-device lifecycle, not the device-auth request TTL.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";

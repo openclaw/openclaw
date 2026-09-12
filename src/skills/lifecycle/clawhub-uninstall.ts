@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -191,6 +192,8 @@ export async function applyClawHubSkillUninstall(
     rename?: typeof fs.rename;
     untrack?: typeof untrackClawHubSkill;
     beforePersistentApply?: () => void;
+    /** Compensation keeps the exact package lease, independently of canceled parent execution. */
+    beforeRollback?: () => void;
   } = {},
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const current = await planClawHubSkillUninstall({
@@ -212,8 +215,31 @@ export async function applyClawHubSkillUninstall(
     : undefined;
   const stagedDir = `${plan.targetDir}.openclaw-skill-remove-${randomUUID()}`;
   let staged = false;
+  let removed = false;
   let restoreTracking: (() => Promise<void>) | undefined;
   const rename = deps.rename ?? fs.rename;
+  const sourceIdentity = await fs.lstat(plan.targetDir, { bigint: true });
+  const assertRollbackCurrent = () => {
+    // Only this operation's unchanged staging may return to an unclaimed destination.
+    const stagedIdentity = lstatSync(stagedDir, { bigint: true });
+    if (
+      sourceIdentity.dev === 0n ||
+      sourceIdentity.ino === 0n ||
+      stagedIdentity.dev !== sourceIdentity.dev ||
+      stagedIdentity.ino !== sourceIdentity.ino ||
+      lstatSync(plan.targetDir, { throwIfNoEntry: false }) !== undefined
+    ) {
+      throw new Error(
+        `Skill ${JSON.stringify(plan.slug)} staging or destination changed during rollback.`,
+      );
+    }
+    deps.beforeRollback?.();
+  };
+  const restoreStaged = async () => {
+    assertRollbackCurrent();
+    await rename(stagedDir, plan.targetDir);
+    staged = false;
+  };
   try {
     deps.beforePersistentApply?.();
     await rename(plan.targetDir, stagedDir);
@@ -224,7 +250,7 @@ export async function applyClawHubSkillUninstall(
       deps.readFile ?? fs.readFile,
     );
     if (!stagedPlan.ok) {
-      await rename(stagedDir, plan.targetDir);
+      await restoreStaged();
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
     }
     deps.beforePersistentApply?.();
@@ -232,10 +258,13 @@ export async function applyClawHubSkillUninstall(
       plan.workspaceDir,
       plan.slug,
       deps.beforePersistentApply,
+      assertRollbackCurrent,
     );
     deps.beforePersistentApply?.();
     await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
+    removed = true;
     if (shouldDispatchChange) {
+      deps.beforePersistentApply?.();
       await dispatchCommittedSkillChangeBestEffort({
         action: "removed",
         source: "clawhub",
@@ -246,16 +275,23 @@ export async function applyClawHubSkillUninstall(
     return { ok: true };
   } catch (error) {
     const rollbackErrors: string[] = [];
-    try {
-      await restoreTracking?.();
-    } catch (rollbackError) {
-      rollbackErrors.push(`could not restore lockfile: ${String(rollbackError)}`);
-    }
-    if (staged) {
-      try {
-        await rename(stagedDir, plan.targetDir);
-      } catch (rollbackError) {
-        rollbackErrors.push(`could not restore skill directory: ${String(rollbackError)}`);
+    if (!removed) {
+      if (restoreTracking) {
+        try {
+          assertRollbackCurrent();
+          await restoreTracking();
+        } catch (rollbackError) {
+          rollbackErrors.push(`could not restore lockfile: ${String(rollbackError)}`);
+        }
+      }
+      if (staged) {
+        try {
+          await restoreStaged();
+        } catch (rollbackError) {
+          rollbackErrors.push(
+            `could not restore skill directory from ${stagedDir}: ${String(rollbackError)}`,
+          );
+        }
       }
     }
     return {

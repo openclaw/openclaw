@@ -85,13 +85,12 @@ actor RemoteTunnelManager {
                 await self.waitForRetirement()
                 return .retired(replacementGeneration)
             }
-            guard active.tunnel.isRunning,
-                  let local = active.tunnel.localPort
-            else {
+            guard active.tunnel.isRunning else {
                 let replacementGeneration = self.beginRetirement()
                 await self.waitForRetirement()
                 return .retired(replacementGeneration)
             }
+            let local = active.tunnel.localPort
             let pid = active.tunnel.processIdentifier
             let isListening = await PortGuardian.shared.isListening(port: Int(local), pid: pid)
             // PortGuardian suspends this actor. A concurrent stop or replacement
@@ -238,8 +237,7 @@ actor RemoteTunnelManager {
                 tunnel,
                 token: token,
                 configuration: configuration,
-                lifecycleGeneration: lifecycleGeneration,
-                fallbackPort: desiredPort)
+                lifecycleGeneration: lifecycleGeneration)
         }
     }
 
@@ -280,8 +278,7 @@ actor RemoteTunnelManager {
             tunnel,
             token: create.token,
             configuration: configuration,
-            lifecycleGeneration: create.lifecycleGeneration,
-            fallbackPort: configuration.preferredLocalPort ?? 18789))
+            lifecycleGeneration: create.lifecycleGeneration))
     }
 
     @discardableResult
@@ -319,8 +316,7 @@ actor RemoteTunnelManager {
         _ tunnel: RemotePortTunnel,
         token: UUID,
         configuration: RemotePortTunnel.Configuration,
-        lifecycleGeneration: UInt64,
-        fallbackPort: UInt16) async throws -> Route
+        lifecycleGeneration: UInt64) async throws -> Route
     {
         guard self.lifecycleGeneration == lifecycleGeneration else {
             await self.waitForRetirement()
@@ -353,7 +349,7 @@ actor RemoteTunnelManager {
         }
         self.createInFlight = nil
         self.tunnelGeneration &+= 1
-        let resolvedPort = tunnel.localPort ?? fallbackPort
+        let resolvedPort = tunnel.localPort
         let route = Route(localPort: resolvedPort, generation: tunnelGeneration)
         self.controlTunnel = ActiveTunnel(
             tunnel: tunnel,
@@ -371,7 +367,9 @@ actor RemoteTunnelManager {
         await self.stopAll()
     }
 
-    func stopAll() async {
+    func stopAll(ifCurrent: @Sendable () -> Bool = { true }) async {
+        // A queued reset cannot retire a successor selected before this actor admits it.
+        guard ifCurrent() else { return }
         // Invalidate every captured route before terminating processes. Delayed
         // health checks and create completions cannot resurrect this epoch.
         self.beginRetirement()

@@ -6,10 +6,12 @@ import {
   bindExecutionOwnerLifecycleMetadata,
   deleteExecutionOwnerLifecycleMetadata,
 } from "../audit/execution-owner-lifecycle-binding-store.js";
+import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -210,6 +212,23 @@ function getTaskRegistryKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<TaskRegistryStoreDatabase>(db);
 }
 
+type TaskRegistryQuery<Params> = ReturnType<typeof prepareSqliteQuerySync<Params, TaskRegistryRow>>;
+type TaskRegistryQueries = {
+  point?: TaskRegistryQuery<string>;
+  runtime?: TaskRegistryQuery<TaskRuntime>;
+  runtimeSource?: TaskRegistryQuery<{ runtime: TaskRuntime; sourceId: string }>;
+};
+const taskRegistryQueries = new WeakMap<DatabaseSync, TaskRegistryQueries>();
+
+function getTaskRegistryQueries(db: DatabaseSync): TaskRegistryQueries {
+  let queries = taskRegistryQueries.get(db);
+  if (!queries) {
+    queries = {};
+    taskRegistryQueries.set(db, queries);
+  }
+  return queries;
+}
+
 function selectTaskRows(db: DatabaseSync): TaskRegistryRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_runs")
@@ -223,14 +242,16 @@ function selectTaskRowsByOwnerKey(db: DatabaseSync, ownerKey: string): TaskRegis
   const selectColumns = TASK_RUN_SELECT_COLUMNS.join(", ");
   // This lookup gates duplicate media tasks. A table scan is intentional so a
   // stale secondary index cannot hide an existing task between integrity checks.
-  return db
-    .prepare(
-      `SELECT ${selectColumns}
+  return executeWithCachedStatement(
+    db,
+    `SELECT ${selectColumns}
        FROM task_runs NOT INDEXED
        WHERE owner_key = ?
        ORDER BY created_at ASC, task_id ASC`,
-    )
-    .all(ownerKey) as TaskRegistryRow[]; // SAFETY: The admitted handle has the canonical columns projected above.
+    [ownerKey],
+    // SAFETY: The admitted handle has the canonical columns projected above.
+    (statement) => statement.all(ownerKey) as TaskRegistryRow[],
+  );
 }
 
 function selectTaskRowsByRuntimeSourceId(
@@ -238,15 +259,45 @@ function selectTaskRowsByRuntimeSourceId(
   runtime: TaskRuntime,
   sourceId?: string,
 ): TaskRegistryRow[] {
-  let query = getTaskRegistryKysely(db)
-    .selectFrom("task_runs")
-    .select(TASK_RUN_SELECT_COLUMNS)
-    .where("runtime", "=", runtime);
-  if (sourceId !== undefined) {
-    query = query.where("source_id", "=", sourceId);
+  const queries = getTaskRegistryQueries(db);
+  if (sourceId === undefined) {
+    const read = (queries.runtime ??= prepareSqliteQuerySync<TaskRuntime, TaskRegistryRow>(
+      db,
+      (parameter) =>
+        getTaskRegistryKysely(db)
+          .selectFrom("task_runs")
+          .select(TASK_RUN_SELECT_COLUMNS)
+          .where(
+            "runtime",
+            "=",
+            parameter((value) => value),
+          )
+          .orderBy("created_at", "asc")
+          .orderBy("task_id", "asc"),
+    ));
+    return read(runtime).rows;
   }
-  return executeSqliteQuerySync(db, query.orderBy("created_at", "asc").orderBy("task_id", "asc"))
-    .rows;
+  const read = (queries.runtimeSource ??= prepareSqliteQuerySync<
+    { runtime: TaskRuntime; sourceId: string },
+    TaskRegistryRow
+  >(db, (parameter) =>
+    getTaskRegistryKysely(db)
+      .selectFrom("task_runs")
+      .select(TASK_RUN_SELECT_COLUMNS)
+      .where(
+        "runtime",
+        "=",
+        parameter((params) => params.runtime),
+      )
+      .where(
+        "source_id",
+        "=",
+        parameter((params) => params.sourceId),
+      )
+      .orderBy("created_at", "asc")
+      .orderBy("task_id", "asc"),
+  ));
+  return read({ runtime, sourceId }).rows;
 }
 
 /** Reads task records from the caller's shared-state transaction. */
@@ -259,13 +310,18 @@ export function listTaskRecordsByRuntimeSourceIdInDatabase(
 }
 
 export function readTaskRecord(db: DatabaseSync, taskId: string): TaskRecord | undefined {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
+  const queries = getTaskRegistryQueries(db);
+  const read = (queries.point ??= prepareSqliteQuerySync<string, TaskRegistryRow>(db, (parameter) =>
     getTaskRegistryKysely(db)
       .selectFrom("task_runs")
       .select(TASK_RUN_SELECT_COLUMNS)
-      .where("task_id", "=", taskId),
-  );
+      .where(
+        "task_id",
+        "=",
+        parameter((value) => value),
+      ),
+  ));
+  const row = read(taskId).rows[0];
   return row ? rowToTaskRecord(row) : undefined;
 }
 

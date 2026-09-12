@@ -272,6 +272,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderHostedTabIcon(tab: PanelHostedTab) {
+    if (tab.favicon) {
+      return html`<img class="tabstrip-tab__favicon" src=${tab.favicon} alt="" />`;
+    }
     let hostname = "";
     try {
       hostname = tab.url ? new URL(tab.url).hostname : "";

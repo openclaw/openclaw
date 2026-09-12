@@ -1,6 +1,10 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { writeProviderAuthConfig } from "../plugins/provider-auth-config.js";
 import {
   createPluginRegistryOwner,
   requireActivePluginChannelRegistry,
@@ -9,7 +13,9 @@ import {
 } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChannelKind } from "./config-reload-plan.js";
+import { startGatewayConfigReloader } from "./config-reload.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { restartGatewayChannels } from "./server-reload-channel-restart.js";
 
@@ -48,6 +54,139 @@ afterEach(async () => {
   manager = undefined;
   resetPluginRuntimeStateForTest();
   resetGatewayWorkAdmission();
+});
+
+it("the config watcher restarts a channel that can save provider settings after reload closes", async () => {
+  await withOpenClawTestState({ label: "channel-reload-login" }, async (state) => {
+    const initialConfig = {
+      gateway: { reload: { mode: "hybrid" as const } },
+      commands: { ownerAllowFrom: ["telegram:1"] },
+    };
+    await state.writeConfig(initialConfig);
+    const initial = await readConfigFileSnapshot();
+    expect(initial.valid, JSON.stringify(initial.issues)).toBe(true);
+    assert(initial.hash);
+    const login = createDeferred();
+    const restarted = createDeferred();
+    const saved = createDeferred();
+    const savedResult = saved.promise.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const watcherReady = createDeferred();
+    let starts = 0;
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "telegram" }),
+      gateway: {
+        startAccount: async ({ abortSignal }) => {
+          const stopped = new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          if (++starts === 2) {
+            restarted.resolve();
+            await login.promise;
+            try {
+              const snapshot = await readConfigFileSnapshot();
+              await writeProviderAuthConfig({
+                config: snapshot.config,
+                configSnapshot: snapshot,
+                configPatch: {
+                  models: {
+                    providers: {
+                      "lease-fixture": {
+                        baseUrl: "https://fixture.invalid/v1",
+                        api: "openai-completions",
+                        models: [{ id: "account-model", name: "Account model" }],
+                      },
+                    },
+                  },
+                },
+                credentialsSaved: true,
+              });
+              saved.resolve();
+            } catch (error) {
+              saved.reject(error);
+            }
+          }
+          await stopped;
+        },
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]));
+    const owner = createChannelManager({
+      getRuntimeConfig: () => initialConfig,
+      getPluginRegistry: requireActivePluginChannelRegistry,
+      channelLogs: {},
+      channelRuntimeEnvs: {},
+    });
+    await owner.startChannel("telegram");
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn((message: string) => restarted.reject(new Error(message))),
+    };
+    let assertReloadOwned: (() => void) | undefined;
+    const reloader = startGatewayConfigReloader({
+      initialConfig,
+      initialSnapshotRawHash: initial.hash,
+      initialAuthoredConfig: initial.parsed,
+      initialSnapshotValid: initial.valid,
+      initialSnapshotIssues: initial.issues,
+      watchPath: state.configPath,
+      readSnapshot: () => readConfigFileSnapshot(),
+      onWatcherReady: watcherReady.resolve,
+      onNoopConfigCommit: async () => {},
+      onHotReload: async (plan, next, ownership) => {
+        await withPluginLifecycleLease({}, async (lease) => {
+          assertReloadOwned = () => lease.assertOwned();
+        });
+        await reloadChannels(
+          owner,
+          requireActivePluginChannelRegistry,
+          plan.restartChannels,
+          log,
+          (surface) => {
+            throw new Error(`unexpected restart recovery: ${surface}`);
+          },
+        );
+        ownership.markRuntimeCommitted(next, plan);
+        return "applied";
+      },
+      onRestart: () => {
+        throw new Error("unexpected Gateway restart");
+      },
+      log,
+    });
+    try {
+      await withTestTimeout(watcherReady.promise, 10_000, "config watcher did not start");
+      await reloader.ready;
+      await state.writeConfig({ ...initialConfig, commands: { ownerAllowFrom: ["telegram:2"] } });
+      await withTestTimeout(
+        restarted.promise,
+        10_000,
+        "config watcher did not restart the channel",
+      );
+      await expect.poll(() => reloader.isReloading()).toBe(false);
+      assert(assertReloadOwned);
+      expect(assertReloadOwned).toThrow(
+        "plugin lifecycle lease core:plugin-lifecycle/global was lost",
+      );
+      login.resolve();
+      await expect(
+        withTestTimeout(savedResult, 10_000, "provider settings write did not settle"),
+      ).resolves.toBeUndefined();
+      const persisted = await readConfigFileSnapshot();
+      expect(persisted.config.models?.providers?.["lease-fixture"]).toMatchObject({
+        baseUrl: "https://fixture.invalid/v1",
+        models: [{ id: "account-model", name: "Account model" }],
+      });
+      expect(log.error).not.toHaveBeenCalled();
+    } finally {
+      login.resolve();
+      await reloader.stop();
+      await owner.stopChannel("telegram");
+    }
+  });
 });
 
 it("retries failed teardown before admitting a replacement", async () => {

@@ -52,7 +52,8 @@ vi.mock("./install-persistence.js", async (importOriginal) => ({
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
 }));
 
-vi.mock("./install-config-mutation.js", () => ({
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
     mocks.selectWriteOptions(writeOptions),

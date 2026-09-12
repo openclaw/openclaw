@@ -81,7 +81,7 @@ Speech, media understanding, generation, web search, and the low-level media uti
     // receiptImageBuffer is your own image bytes, not an SDK-provided value.
     const evidence = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
       provider: "codex",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
       input: [
         {
           type: "image",

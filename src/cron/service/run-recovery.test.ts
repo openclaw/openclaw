@@ -10,11 +10,11 @@ import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
-  inspectActiveCronRunReceipt,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {

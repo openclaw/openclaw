@@ -7,8 +7,8 @@ import {
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";

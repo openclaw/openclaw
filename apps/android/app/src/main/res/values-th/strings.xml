@@ -381,6 +381,7 @@
     <string name="native_33b31bc65885eb0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เล่นเสียง"</string>
     <string name="native_33b93476cf597a33" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เวลา"</string>
     <string name="native_33c8e8de41c3a351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ยังไม่ได้ยืนยัน"</string>
+    <string name="native_340bd53cf39d26fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"บันทึกคีย์ API แล้ว แตะรีเฟรชเพื่อนำไปใช้"</string>
     <string name="native_347de0eefc8c2b98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yield"</string>
     <string name="native_349f96d2f47c34bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"คัดลอกคำสั่งอนุมัติ"</string>
     <string name="native_34d29e78d246ae8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อบริการแล้ว"</string>
@@ -1078,7 +1079,6 @@
     <string name="native_9709a3b2e51f0ef3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ซ่อนแถบด้านข้าง"</string>
     <string name="native_973769a32161f8de" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พร้อมใช้งานบน Gateway นี้ Android สามารถเปิดหรือปิดใช้งานโดยรวมได้ ส่วนการตั้งค่าและการกำหนดค่ายังคงทำบนเดสก์ท็อปหรือ CLI"</string>
     <string name="native_973cbee2e75ade09" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่สามารถเล่นเสียงได้"</string>
-    <string name="native_976f2f9461eeb2c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"บันทึกคีย์ API แล้ว รีสตาร์ท Gateway เพื่อให้มีผล"</string>
     <string name="native_97a5e41b45ddd2b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"นำไปใช้"</string>
     <string name="native_97cbc43c27dd76ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่สามารถโหลดข้อมูลการใช้งานได้"</string>
     <string name="native_97f1b0890fc8e065" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ทำให้โหนดพร้อมใช้งานระหว่างที่มีงานดำเนินอยู่"</string>
@@ -1088,6 +1088,7 @@
     <string name="native_983f92956ac1a23e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อ่านไฟล์ 1 ไฟล์แล้ว"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่มีรายการบันทึกล่าสุด"</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway แบบกำหนดเอง"</string>
+    <string name="native_98a75b6c4b7f4dcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รีเฟรชข้อมูลการลงชื่อเข้าใช้แล้ว"</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปลี่ยนชื่อกลุ่ม"</string>
     <string name="native_98ed7669b6d1be9b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Update Goal"</string>
     <string name="native_992a0f626b0714b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่ทราบความพร้อมใช้งานของผู้ให้บริการ"</string>

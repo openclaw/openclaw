@@ -11,6 +11,7 @@ import {
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
+import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
@@ -136,6 +137,9 @@ export function renderUpdateRunReport(
   headline = bounded(headline, 500);
   const lines: string[] = [];
   for (const step of run.steps) {
+    if (step.snapshotCapacity) {
+      lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
+    }
     if (step.configWriteRefusal) {
       lines.push(formatUpdateDoctorConfigWriteRefusal(step.configWriteRefusal));
     }

@@ -74,7 +74,7 @@ Default agent-proxy voice-channel session example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         followUsersEnabled: true,
         followUsers: ["123456789012345678"],
         realtime: {
@@ -124,7 +124,7 @@ Realtime bidi example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2.1",
@@ -147,7 +147,7 @@ Voice as an extension of an existing Discord channel session:
       voice: {
         enabled: true,
         mode: "agent-proxy",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         agentSession: {
           mode: "target",
           target: "channel:123456789012345678",
@@ -184,7 +184,7 @@ Echo-heavy OpenAI Realtime example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2.1",

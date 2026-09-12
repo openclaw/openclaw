@@ -1,6 +1,8 @@
 // Owns managed plugin install, policy and uninstall mutations under the lifecycle lease.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PluginsReloadParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type {
+  PluginsInstallParams,
+  PluginsReloadParams,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -8,8 +10,11 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
+import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
+import { shortenHomePath } from "../utils.js";
 import {
   resolvePluginCapabilityConsent,
   type PluginCapabilityConsentAcknowledgment,
@@ -24,22 +29,28 @@ import {
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
 } from "./install-config-mutation.js";
-import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
+import {
+  loadConfigForInstall,
+  PluginInstallConfigError,
+  resolvePluginInstallRequestContext,
+} from "./install-config.js";
+import { resolveManagedPluginInstallRequest } from "./install-source-plan.js";
+import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   capturePluginRuntimeApplications,
+  PluginInstallPersistedError,
   type PluginLifecycleRuntimeApply,
   type PluginRuntimeApplication,
 } from "./lifecycle.js";
-import {
-  type ManagedPluginCatalogEntry,
-  loadOfficialCatalog,
-  resolveOfficialEntryById,
-} from "./management-catalog.js";
+import { type ManagedPluginCatalogEntry, loadOfficialCatalog } from "./management-catalog.js";
 import { readPluginMutationSnapshot, readPluginRuntimeConfig } from "./management-config.js";
-import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
+import type {
+  ManagedPluginInstallOptions,
+  installManagedPluginSource,
+} from "./management-install.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import {
   loadFreshManagedPluginMetadata,
@@ -47,14 +58,6 @@ import {
   listManagedPlugins,
 } from "./management-service.js";
 import { isBundledManifestOwner } from "./manifest-owner-policy.js";
-import {
-  getOfficialExternalPluginCatalogManifest,
-  listOfficialExternalPluginCatalogEntries,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
-  resolveOfficialExternalPluginInstallSources,
-  type OfficialExternalPluginCatalogEntry,
-} from "./official-external-plugin-catalog.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
@@ -85,91 +88,12 @@ function withManagedPluginMutation<T>(
   );
 }
 
-type ManagedPluginInstallRequest =
-  | {
-      source: "clawhub";
-      packageName: string;
-      version?: string;
-      acknowledgeInstallPolicyWarning?: true;
-      acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
-    }
-  | {
-      source: "official";
-      pluginId: string;
-      acknowledgeInstallPolicyWarning?: true;
-      acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
-    };
-
-function createSilentRuntime(): RuntimeEnv {
-  return {
-    log: () => undefined,
-    error: () => undefined,
-    exit: (code) => {
-      throw new ManagedPluginLifecycleError(`plugin lifecycle exited with code ${code}`);
-    },
-  };
-}
-
-function createInstallLogger(warnings: string[]) {
-  return {
-    info: () => undefined,
-    warn: (message: string) => warnings.push(message),
-  };
-}
-
-/** Explicitly declared runtime id, ignoring the entry-id fallback used for display. */
-function resolveDeclaredOfficialPluginId(
-  entry: OfficialExternalPluginCatalogEntry,
-): string | undefined {
-  const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  return (
-    normalizeOptionalString(manifest?.plugin?.id) ??
-    normalizeOptionalString(manifest?.channel?.id) ??
-    normalizeOptionalString(manifest?.providers?.[0]?.id)
-  );
-}
-
-function resolveOfficialEntryByClawHubPackage(
-  entries: readonly OfficialExternalPluginCatalogEntry[],
-  packageName: string,
-): OfficialExternalPluginCatalogEntry | undefined {
-  // Bundled identities remain the local trust anchor when a hosted feed omits
-  // its ClawHub candidate; hosted install/version metadata is never copied back.
-  return [...listOfficialExternalPluginCatalogEntries(), ...entries].find((entry) => {
-    return resolveOfficialExternalPluginInstallSources(entry).some(
-      (source) =>
-        source.source === "clawhub" && parseClawHubPluginSpec(source.spec)?.name === packageName,
-    );
-  });
-}
-
-function resolveHostedOfficialEntryByClawHubPackage(
-  entries: readonly OfficialExternalPluginCatalogEntry[],
-  packageName: string,
-): OfficialExternalPluginCatalogEntry | undefined {
-  return entries.find((entry) => {
-    return resolveOfficialExternalPluginInstallSources(entry).some(
-      (source) =>
-        source.source === "clawhub" && parseClawHubPluginSpec(source.spec)?.name === packageName,
-    );
-  });
-}
-
-function buildClawHubSpec(packageName: string, version?: string): string {
-  const parsed = parseClawHubPluginSpec(`clawhub:${packageName}`);
-  if (!parsed || parsed.version) {
-    throw new ManagedPluginLifecycleError(`invalid ClawHub package name: ${packageName}`);
-  }
-  return `clawhub:${packageName}${version ? `@${version}` : ""}`;
-}
-
-function throwInstallFailure(result: {
-  error: string;
-  code?: string;
-  version?: string;
-  warning?: string;
-  installPolicyWarning?: InstallPolicyWarningDetails;
-}): never {
+function throwInstallFailure(
+  result: Omit<
+    Extract<Awaited<ReturnType<typeof installManagedPluginSource>>, { ok: false }>,
+    "ok"
+  >,
+): never {
   const unavailable =
     !result.code ||
     result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE ||
@@ -181,177 +105,177 @@ function throwInstallFailure(result: {
     version: result.version,
     warning: result.warning,
     installPolicyWarning: result.installPolicyWarning,
-    cause: result,
+    installRejected: true,
+    installSource: result.installSource,
   });
-}
-
-function resolveManagedClawHubInstallRequest(params: {
-  request: Extract<ManagedPluginInstallRequest, { source: "clawhub" }>;
-  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-  expectedIntegrity?: string;
-}): Extract<ManagedPluginSourceInstallRequest, { source: "clawhub" }> {
-  const packageName = params.request.packageName.trim();
-  const official = resolveOfficialEntryByClawHubPackage(params.officialEntries, packageName);
-  // Pin the runtime id only when the catalog entry declares one; the entry-id
-  // fallback is just the package name and would reject legitimate installs.
-  const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
-  const hostedOfficial = resolveHostedOfficialEntryByClawHubPackage(
-    params.officialEntries,
-    packageName,
-  );
-  const hostedSource = hostedOfficial
-    ? resolveOfficialExternalPluginInstallSources(hostedOfficial).find(
-        (source) => source.source === "clawhub",
-      )
-    : undefined;
-  const hostedClawHub = parseClawHubPluginSpec(hostedSource?.spec ?? "");
-  const requestMatchesHostedCandidate =
-    !params.request.version || params.request.version === hostedClawHub?.version;
-  const version =
-    params.request.version ?? (requestMatchesHostedCandidate ? hostedClawHub?.version : undefined);
-  const expectedIntegrity =
-    params.expectedIntegrity ??
-    (requestMatchesHostedCandidate ? hostedSource?.expectedIntegrity : undefined);
-  return {
-    source: "clawhub",
-    spec: buildClawHubSpec(packageName, version),
-    ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
-    ...(expectedPluginId ? { expectedPluginId } : {}),
-    ...(expectedIntegrity ? { expectedIntegrity } : {}),
-  };
-}
-
-function resolveManagedOfficialInstallRequest(params: {
-  request: Extract<ManagedPluginInstallRequest, { source: "official" }>;
-  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-}): ManagedPluginSourceInstallRequest {
-  const entry = resolveOfficialEntryById(params.officialEntries, params.request.pluginId);
-  if (!entry) {
-    throw new ManagedPluginLifecycleError(
-      `unknown official plugin catalog entry: ${params.request.pluginId}`,
-    );
-  }
-  const pluginId = resolveOfficialExternalPluginId(entry);
-  const install = resolveOfficialExternalPluginInstall(entry);
-  if (!pluginId || !install) {
-    throw new ManagedPluginLifecycleError(
-      `official plugin catalog entry is not installable: ${params.request.pluginId}`,
-    );
-  }
-  const installSources = resolveOfficialExternalPluginInstallSources(entry);
-  const primary = installSources[0];
-  if (!primary) {
-    throw new ManagedPluginLifecycleError(
-      `official plugin catalog entry has no supported install source: ${params.request.pluginId}`,
-    );
-  }
-  return {
-    source: "official",
-    spec: primary.spec,
-    installSources,
-    pluginId,
-    expectedPluginId: resolveDeclaredOfficialPluginId(entry),
-    mode: "install",
-  };
 }
 
 /** Install a ClawHub or curated official plugin through the canonical install pipeline. */
 export async function installManagedPlugin(
-  params: ManagedPluginMutationOptions & {
-    request: ManagedPluginInstallRequest;
+  params: ManagedPluginInstallOptions & {
+    request: PluginsInstallParams;
   },
 ): Promise<{
   plugin: ManagedPluginCatalogEntry;
   warnings?: string[];
   application?: PluginRuntimeApplication;
 }> {
+  try {
+    assertConfigWriteAllowedInCurrentMode({ env: params.env });
+  } catch (error) {
+    throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
+  }
   const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
   return await withManagedPluginMutation(params, async (beforePersistentApply) => {
-    const snapshot = await readPluginMutationSnapshot(env, beforePersistentApply);
-    const officialCatalog = await loadOfficialCatalog();
-    const warnings: string[] = [];
-    const installLogger = createInstallLogger(warnings);
-    const request =
-      params.request.source === "clawhub"
-        ? resolveManagedClawHubInstallRequest({
-            request: params.request,
-            officialEntries: officialCatalog.entries,
-          })
-        : resolveManagedOfficialInstallRequest({
-            request: params.request,
-            officialEntries: officialCatalog.entries,
+    const performInstall = async () => {
+      const officialCatalog =
+        params.request.source === "official" || params.request.source === "clawhub"
+          ? await loadOfficialCatalog()
+          : { entries: [] };
+      const warnings: string[] = [];
+      const request = resolveManagedPluginInstallRequest(params.request, officialCatalog.entries);
+      const planned = resolvePluginInstallRequestContext({
+        source: request.source,
+        rawSpec:
+          request.source === "local"
+            ? request.path
+            : request.source === "npm-pack"
+              ? `npm-pack:${request.archivePath}`
+              : request.source === "bundled"
+                ? request.bundledSource.localPath
+                : request.source === "marketplace"
+                  ? request.plugin
+                  : request.spec,
+        ...(request.source === "marketplace" ? { marketplace: request.marketplace } : {}),
+        installKind: "plugin",
+      });
+      if (!planned.ok) {
+        throw new ManagedPluginLifecycleError(planned.error);
+      }
+      const snapshot =
+        params.snapshot ??
+        (await loadConfigForInstall(planned.request).catch((error: unknown) => {
+          if (!(error instanceof PluginInstallConfigError)) {
+            throw error;
+          }
+          throw new ManagedPluginLifecycleError(error.message, {
+            code: PLUGIN_INSTALL_ERROR_CODE.CONFIG_MUTATION_BLOCKED,
+            installRejected: true,
+            ...(request.source === "official" && request.installSources?.[0]
+              ? { installSource: request.installSources[0] }
+              : {}),
+            cause: error,
           });
-    const captured = params.applyRuntime
-      ? capturePluginRuntimeApplications(params.applyRuntime)
-      : undefined;
-    const installed = await installManagedPluginSource({
-      applyRuntime: captured?.applyRuntime,
-      beforePersistentApply,
-      request,
-      snapshot,
-      env,
-      logger: installLogger,
-      ...(params.request.acknowledgeCapabilities
-        ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }
-        : {}),
-      ...(params.request.acknowledgeInstallPolicyWarning
-        ? {
-            safetyOverrides: {
-              onInstallPolicyWarning: async () => ({ status: "approved" as const }),
-            },
+        }));
+      beforePersistentApply();
+      if (request.source === "local" && request.link) {
+        request.successMessage = `Linked plugin path: ${shortenHomePath(request.path)}`;
+      }
+      if (request.source === "clawhub" && params.confirmInstall) {
+        request.confirmInstall = params.confirmInstall;
+      }
+      const captured = params.applyRuntime
+        ? capturePluginRuntimeApplications(params.applyRuntime)
+        : undefined;
+      const installed = await installManagedPluginSource({
+        applyRuntime: captured?.applyRuntime,
+        deferRuntime: params.deferRuntime,
+        beforePersistentApply,
+        request,
+        snapshot,
+        env,
+        logger: params.logger ?? { warn: (message) => warnings.push(message) },
+        onCapabilityConsent: params.onCapabilityConsent,
+        beforePersistentEffect: params.beforePersistentEffect,
+        ...(params.request.acknowledgeCapabilities
+          ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }
+          : {}),
+        ...(params.request.acknowledgeInstallPolicyWarning
+          ? {
+              safetyOverrides: {
+                onInstallPolicyWarning: async () => ({ status: "approved" as const }),
+              },
+            }
+          : params.safetyOverrides
+            ? { safetyOverrides: params.safetyOverrides }
+            : {}),
+        invalidateRuntimeCache: params.invalidateRuntimeCache ?? false,
+        runtime: { log: () => {} },
+      });
+      if (!installed.ok) {
+        return throwInstallFailure(installed);
+      }
+      try {
+        warnings.push(...(installed.warnings ?? []));
+        if (params.request.source === "clawhub" && installed.clawhub) {
+          if (!params.clawManaged && installed.clawhub.version) {
+            markClawPackageIndependentlyOwned({
+              kind: "plugin",
+              source: "clawhub",
+              ref: installed.clawhub.clawhubPackage,
+              version: installed.clawhub.version,
+            });
           }
-        : {}),
-      invalidateRuntimeCache: false,
-      runtime: createSilentRuntime(),
-    });
-    if (!installed.ok) {
-      return throwInstallFailure(installed);
-    }
-    warnings.push(...(installed.warnings ?? []));
-    const workspace = resolvePluginControlPlaneWorkspace({ config: installed.config, env });
-    if (workspace.diagnostic && !getProcessGatewayPluginMetadataSnapshot()) {
-      warnings.push(workspace.diagnostic.message);
-    }
-    // Management inspects the committed candidate; the Gateway keeps its boot inventory.
-    const installedMetadata = refreshManagedPluginMetadata({ config: installed.config, env });
-    const catalog = await listManagedPlugins({
-      config: installed.config,
-      env,
-      officialCatalog,
-      metadata: installedMetadata,
-    });
-    const installedOwnership = createInstalledPluginOwnershipResolver(
-      installedMetadata.index,
-      env,
-    ).resolvePackage(installed.pluginId);
-    if (!installedOwnership.ok) {
-      throw new ManagedPluginLifecycleError(installedOwnership.error);
-    }
-    const installedPluginIds = installedOwnership.value.pluginIds;
-    const representativePluginId = installedPluginIds[0]!;
-    const plugin = catalog.plugins.find((entry) => entry.id === representativePluginId);
-    if (!plugin) {
-      throw new ManagedPluginLifecycleError(
-        `installed plugin missing from refreshed registry: ${installed.pluginId}`,
-      );
-    }
-    return {
-      plugin,
-      ...(captured?.application ? { application: captured.application } : {}),
-      ...(installedPluginIds.length > 1 || warnings.length > 0
-        ? {
-            warnings: [
-              ...(installedPluginIds.length > 1
-                ? [
-                    `Installed package "${installed.pluginId}" with plugin entries: ${installedPluginIds.join(", ")}.`,
-                  ]
-                : []),
-              ...new Set(warnings),
-            ],
-          }
-        : {}),
+          await reportClawHubPluginInstallTelemetry({
+            baseUrl: installed.clawhub.clawhubUrl,
+            packageName: installed.clawhub.clawhubPackage,
+            version: installed.clawhub.version,
+          }).catch(() => undefined);
+        }
+        const workspace = resolvePluginControlPlaneWorkspace({ config: installed.config, env });
+        if (workspace.diagnostic && !getProcessGatewayPluginMetadataSnapshot()) {
+          warnings.push(workspace.diagnostic.message);
+        }
+        // Management inspects the committed candidate; the Gateway keeps its boot inventory.
+        const installedMetadata = refreshManagedPluginMetadata({ config: installed.config, env });
+        const catalog = await listManagedPlugins({
+          config: installed.config,
+          env,
+          officialCatalog,
+          metadata: installedMetadata,
+        });
+        const installedOwnership = createInstalledPluginOwnershipResolver(
+          installedMetadata.index,
+          env,
+        ).resolvePackage(installed.pluginId);
+        if (!installedOwnership.ok) {
+          throw new ManagedPluginLifecycleError(installedOwnership.error);
+        }
+        const installedPluginIds = installedOwnership.value.pluginIds;
+        const representativePluginId = installedPluginIds[0]!;
+        const plugin = catalog.plugins.find((entry) => entry.id === representativePluginId);
+        if (!plugin) {
+          throw new ManagedPluginLifecycleError(
+            `installed plugin missing from refreshed registry: ${installed.pluginId}`,
+          );
+        }
+        return {
+          plugin,
+          ...(captured?.application ? { application: captured.application } : {}),
+          ...(installedPluginIds.length > 1 || warnings.length > 0
+            ? {
+                warnings: [
+                  ...(installedPluginIds.length > 1
+                    ? [
+                        `Installed package "${installed.pluginId}" with plugin entries: ${installedPluginIds.join(", ")}.`,
+                      ]
+                    : []),
+                  ...new Set(warnings),
+                ],
+              }
+            : {}),
+        };
+      } catch (error) {
+        throw new PluginInstallPersistedError(installed.pluginId, error);
+      }
     };
+    return params.request.source === "clawhub" && !params.clawManaged
+      ? await withClawPackageLifecycleLease(
+          { kind: "plugin", source: "clawhub", ref: params.request.packageName },
+          performInstall,
+        )
+      : await performInstall();
   });
 }
 

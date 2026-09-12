@@ -740,7 +740,7 @@ describe("pairing setup code", () => {
     });
   });
 
-  it("allows lan bind cleartext setup urls for mobile pairing", async () => {
+  it("allows LAN cleartext pairing without route probing for a single address", async () => {
     const runCommandWithTimeout = createNoRouteRunner();
     await expectResolvedSetupSuccessCase({
       config: {
@@ -760,7 +760,7 @@ describe("pairing setup code", () => {
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 1,
+      expectedRunCommandCalls: 0,
     });
   });
 
@@ -827,7 +827,10 @@ describe("pairing setup code", () => {
         },
       } satisfies ResolveSetupConfig,
       options: {
-        networkInterfaces: () => createIpv4NetworkInterfaces("192.168.139.3"),
+        networkInterfaces: () => ({
+          ...createIpv4NetworkInterfaces("192.168.139.3"),
+          bridge100: createIpv4NetworkInterfaces("10.37.129.4").en0,
+        }),
         runCommandWithTimeout,
       } satisfies ResolveSetupOptions,
       expected: {

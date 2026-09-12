@@ -35,6 +35,7 @@ import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
 import { persistQueuedCronRunReservations } from "./run-admission.js";
 import type { CronEvent, CronServiceState } from "./state.js";
+import { onTimer } from "./timer-scheduler.js";
 
 const NOW = Date.parse("2026-09-06T20:24:00.000Z");
 const fixtures = setupCronRegressionFixtures({
@@ -119,7 +120,14 @@ describe("ownerless reservation and manual completion", () => {
       expect(events.filter((event) => event.action === "finished")).toEqual([
         expect.objectContaining({ jobId: ownerless.id, status: "skipped" }),
       ]);
-      expect(history(storePath, ownerless.id)).toEqual([]);
+      expect(history(storePath, ownerless.id)).toEqual([
+        expect.objectContaining({
+          jobId: ownerless.id,
+          status: "skipped",
+          completionStatus: "failed",
+          error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+        }),
+      ]);
       expect(receipts(storePath, ownerless.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();
     } finally {
@@ -133,52 +141,68 @@ describe("ownerless reservation and manual completion", () => {
     }
   });
 
-  it("records one durable manual skip without an agent, session, or execution receipt", async () => {
-    const job = commandJob("ownerless-manual-history", NOW + 3_600_000);
-    const { state, storePath, events, execute, finished } = await setupOwnerlessJob(job);
-    const revision = resolveCronJobConfigRevision(job);
-    const ack = await enqueueRun(state, job.id, "force");
-    if (!ack.ok || !("enqueued" in ack) || !ack.enqueued) {
-      throw new Error("Expected an acknowledged manual run");
-    }
-    await finished.promise;
-    await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0));
-    const terminal = {
-      jobId: job.id,
-      runId: ack.runId,
-      status: "skipped",
-      completionStatus: "failed",
-      error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-    };
-    expect(events.filter((event) => event.action === "finished")).toEqual([
-      expect.objectContaining(terminal),
-    ]);
-    expect(history(storePath, job.id, ack.runId)).toEqual([expect.objectContaining(terminal)]);
-    const tasks = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-      runtime: "cron",
-      sourceId: job.id,
-    });
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toMatchObject({
-      scopeKind: "system",
-      ownerKey: "",
-      requesterSessionKey: "",
-      status: "failed",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    expect(tasks[0]?.agentId).toBeUndefined();
-    expect(tasks[0]?.requesterAgentId).toBeUndefined();
-    expect(tasks[0]?.childSessionKey).toBeUndefined();
-    expect(receipts(storePath, job.id)).toEqual([]);
-    expect(execute).not.toHaveBeenCalled();
-    const persisted = (await loadCronStore(storePath)).jobs[0]!;
-    expect(persisted.enabled).toBe(true);
-    expect(persisted.schedule).toEqual(job.schedule);
-    expect(persisted.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
-    expect(persisted.payload).toEqual(job.payload);
-    expect(resolveCronJobConfigRevision(persisted)).toBe(revision);
-  });
+  it.each(["automatic", "manual"])(
+    "records one durable %s skip without an agent, session, or execution receipt",
+    async (mode) => {
+      const job = commandJob(
+        `ownerless-${mode}-history`,
+        mode === "manual" ? NOW + 3_600_000 : NOW,
+      );
+      const { state, storePath, events, execute, finished } = await setupOwnerlessJob(job);
+      const revision = resolveCronJobConfigRevision(job);
+      let runId: string | undefined;
+      if (mode === "manual") {
+        const ack = await enqueueRun(state, job.id, "force");
+        if (!ack.ok || !("enqueued" in ack) || !ack.enqueued) {
+          throw new Error("Expected an acknowledged manual run");
+        }
+        runId = ack.runId;
+        await finished.promise;
+        await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0));
+      } else {
+        await onTimer(state);
+      }
+      const terminal = {
+        jobId: job.id,
+        ...(runId ? { runId } : {}),
+        status: "skipped",
+        completionStatus: "failed",
+        error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+      };
+      expect(events.filter((event) => event.action === "finished")).toEqual([
+        expect.objectContaining(terminal),
+      ]);
+      expect(history(storePath, job.id, runId)).toEqual([expect.objectContaining(terminal)]);
+      const tasks = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+        runtime: "cron",
+        sourceId: job.id,
+      });
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]).toMatchObject({
+        scopeKind: "system",
+        ownerKey: "",
+        requesterSessionKey: "",
+        status: "failed",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      expect(tasks[0]?.agentId).toBeUndefined();
+      expect(tasks[0]?.requesterAgentId).toBeUndefined();
+      expect(tasks[0]?.childSessionKey).toBeUndefined();
+      expect(receipts(storePath, job.id)).toEqual([]);
+      expect(execute).not.toHaveBeenCalled();
+      const persisted = (await loadCronStore(storePath)).jobs[0]!;
+      expect(persisted.enabled).toBe(mode === "manual");
+      expect(persisted.schedule).toEqual(job.schedule);
+      expect(persisted.state.nextRunAtMs).toBe(
+        mode === "manual" ? job.state.nextRunAtMs : undefined,
+      );
+      expect(persisted.payload).toEqual(job.payload);
+      if (mode === "manual") {
+        expect(resolveCronJobConfigRevision(persisted)).toBe(revision);
+      }
+    },
+  );
 
   it("preserves the original scheduled slot when an ownerless manual run waits past it", async () => {
     const scheduledAt = NOW + 1_000;

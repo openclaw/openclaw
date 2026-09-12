@@ -1,4 +1,5 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
@@ -60,6 +61,7 @@ function renderProposalRow(
       <span>
         <span class="sw-row__title">${proposal.name}</span>
         <span class="sw-row__desc">${proposal.oneLine}</span>
+        ${proposal.origin?.agentId ? renderAgentRowChip(proposal.origin.agentId) : nothing}
       </span>
       <span class="sw-row__meta">${proposal.ageLabel}</span>
     </button>

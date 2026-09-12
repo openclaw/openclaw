@@ -1,5 +1,6 @@
 // PTY adapter tests cover PTY lifecycle and termination behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
@@ -15,8 +16,8 @@ const { spawnMock, ptyKillMock, signalProcessTreeMock, signalPtySessionTreeMock 
   }),
 );
 
-vi.mock("@lydell/node-pty", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
+vi.mock("../../terminal-pty.js", () => ({
+  spawnTerminalPty: (...args: unknown[]) => spawnMock(...args),
 }));
 
 vi.mock("../../kill-tree.js", () => ({
@@ -46,11 +47,16 @@ function createStubPty(pid = 1234) {
 }
 
 function expectSpawnOptions() {
-  const options = firstSpawnCall()[2];
+  const options = firstSpawnCall()[0];
   if (typeof options !== "object" || options === null || Array.isArray(options)) {
     throw new Error("expected spawn options to be an object");
   }
-  return options as { env?: Record<string, string>; name?: string };
+  return options as {
+    file: string;
+    args: string[];
+    env?: Record<string, string>;
+    name?: string;
+  };
 }
 
 function expectSpawnEnv() {
@@ -58,11 +64,11 @@ function expectSpawnEnv() {
 }
 
 function expectSpawnCommand() {
-  return firstSpawnCall()[0] as string;
+  return expectSpawnOptions().file;
 }
 
 function expectSpawnArgs() {
-  return firstSpawnCall()[1] as string[];
+  return expectSpawnOptions().args;
 }
 
 function firstSpawnCall(): unknown[] {
@@ -107,6 +113,25 @@ describe("createPtyAdapter", () => {
 
     await expect(starting).rejects.toThrow("PTY construction aborted");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("kills a PTY created after construction is aborted", async () => {
+    const abort = new AbortController();
+    const spawned = createDeferredCore<ReturnType<typeof createStubPty>>();
+    const stub = createStubPty();
+    spawnMock.mockReturnValue(spawned.promise);
+
+    const starting = createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "echo started"],
+      abortSignal: abort.signal,
+    });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+    abort.abort();
+    spawned.resolve(stub);
+
+    await expect(starting).rejects.toThrow("PTY construction aborted");
+    expect(ptyKillMock).toHaveBeenCalledOnce();
   });
 
   it("uses the default terminal name and child env when Windows TERM is blank", async () => {
@@ -403,7 +428,7 @@ describe("createPtyAdapter", () => {
     expect(expectSpawnEnv()).toEqual({ FOO: "bar", COUNT: "12", TERM: "xterm-256color" });
   });
 
-  it("does not pass non-SIGTERM explicit signals to node-pty on Windows", async () => {
+  it("delegates non-SIGTERM explicit signals to the terminal owner on Windows", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
@@ -415,7 +440,7 @@ describe("createPtyAdapter", () => {
       });
 
       adapter.kill("SIGINT");
-      expect(ptyKillMock).toHaveBeenCalledWith(undefined);
+      expect(ptyKillMock).toHaveBeenCalledWith("SIGINT");
       expect(signalProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {

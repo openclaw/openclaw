@@ -434,6 +434,38 @@ describe("post-plugin update readiness", () => {
     });
   });
 
+  it("retains posture warnings while accepting post-plugin readiness", async () => {
+    mocks.runExec.mockImplementation(async (_command, args: string[]) => ({
+      stdout: args.includes("--lint")
+        ? JSON.stringify({
+            ok: true,
+            checksRun: 1,
+            findings: [],
+            warnings: [
+              {
+                checkId: "core/doctor/security",
+                severity: "warning",
+                message: "Open group policy permits mention-gated requests.",
+                fixHint: "Review the group allowlist.",
+              },
+            ],
+          })
+        : "",
+      stderr: "",
+    }));
+    const result = await completePostCorePluginUpdate(updateOptions);
+    expect(result.pluginUpdate).toMatchObject({
+      status: "warning",
+      warnings: [
+        {
+          reason: "doctor-advisory",
+          message: "Open group policy permits mention-gated requests.",
+          guidance: ["Review the group allowlist."],
+        },
+      ],
+    });
+  });
+
   it.each([
     {
       label: "malformed output",

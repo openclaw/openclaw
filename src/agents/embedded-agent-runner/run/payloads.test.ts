@@ -3,7 +3,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
-import { resolveHeartbeatToolResponseFromReplyResult } from "../../../auto-reply/heartbeat-tool-response.js";
+import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import {
@@ -663,7 +663,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       isError: true,
       text: expect.stringContaining("Message failed"),
     });
-    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual({
+    expect(selectHeartbeatToolResponse(payloads)?.response).toEqual({
       outcome: "no_change",
       notify: false,
       summary: "Nothing needs attention.",

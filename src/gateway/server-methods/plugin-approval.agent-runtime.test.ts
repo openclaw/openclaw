@@ -2,8 +2,8 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";

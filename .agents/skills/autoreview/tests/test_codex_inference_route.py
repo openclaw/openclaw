@@ -37,7 +37,7 @@ class CodexInferenceRouteTests(unittest.TestCase):
         self.catalogue = self.home / "models.json"
         self.catalogue_bytes = json.dumps({
             "models": [{
-                "slug": "gpt-5.6-sol", "context_window": 120000,
+                "slug": "gpt-5.6-luna", "context_window": 120000,
                 "max_context_window": 120000, "auto_compact_token_limit": 90000,
                 "display_name": "Synthetic model", "supported_reasoning_levels": [],
                 "shell_type": "unified_exec", "visibility": "list",
@@ -67,7 +67,7 @@ class CodexInferenceRouteTests(unittest.TestCase):
         self.helper = load_helper()
         self.args = argparse.Namespace(
             engine="codex", codex_bin="synthetic-codex", codex_config=['model_provider="review_api"'], codex_speed=None,
-            fallback_model=None, model="gpt-5.6-sol", stream_engine_output=False,
+            fallback_model=None, model="gpt-5.6-luna", stream_engine_output=False,
             thinking="high", tools=True, web_search=False,
         )
         self.environment = mock.patch.dict(os.environ, {
@@ -195,6 +195,10 @@ class CodexInferenceRouteTests(unittest.TestCase):
             "env_defaults_for": lambda _: (None, {}),
         }):
             self.args = self.helper["reviewer_args"](args)[0]
+        catalogue = json.loads(self.catalogue_bytes)
+        catalogue["models"][0]["slug"] = self.args.model
+        self.catalogue_bytes = json.dumps(catalogue).encode()
+        self.catalogue.write_bytes(self.catalogue_bytes)
 
     def test_primary_only_catalogue_keeps_normal_fallback_and_frozen_route(self):
         self.use_default_models()
@@ -211,16 +215,16 @@ class CodexInferenceRouteTests(unittest.TestCase):
             self.assertEqual(observed["catalogue"], original)
             self.assert_auth_command(observed, self.runtime_helper)
             launchers.append(observed["auth_command"])
-            if selected == "gpt-5.6-sol":
+            if selected == "gpt-6-astra":
                 # A retry keeps the prepared route even if operator files change.
                 self.catalogue.write_bytes(b"changed after primary send")
                 (self.home / "config.toml").write_text('model_provider = "another-route"')
                 return subprocess.CompletedProcess(
-                    command, 1, "", "The model gpt-5.6-sol does not exist or you do not have access to it.",
+                    command, 1, "", "The model gpt-6-astra does not exist or you do not have access to it.",
                 )
 
         self.run_review(during_run=respond)
-        self.assertEqual(events, ["gpt-5.6-sol", "gpt-5.6-terra"])
+        self.assertEqual(events, ["gpt-6-astra", "gpt-5.6-terra"])
         self.assertEqual(launchers[0], launchers[1])
 
     def test_primary_only_catalogue_does_not_block_successful_primary(self):
@@ -229,7 +233,7 @@ class CodexInferenceRouteTests(unittest.TestCase):
         attempts = []
         self.run_review(during_run=lambda observed: attempts.append(observed["command"]))
         self.assertEqual(len(attempts), 1)
-        self.assertEqual(attempts[0][attempts[0].index("--model") + 1], "gpt-5.6-sol")
+        self.assertEqual(attempts[0][attempts[0].index("--model") + 1], "gpt-6-astra")
         self.assertEqual(self.available(), (True, None))
 
     def test_default_keeps_legacy_auth_only_behavior_with_unrelated_routes(self):

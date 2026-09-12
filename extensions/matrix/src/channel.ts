@@ -227,7 +227,7 @@ function collectMatrixGroupPolicyWarningsForAccount(params: {
 const collectMatrixOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectMatrixGroupPolicyWarningsForAccount,
   checkId: "channels.matrix.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Matrix security warning",
 });
 

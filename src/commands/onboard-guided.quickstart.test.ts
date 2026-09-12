@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
+import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 describe("runGuidedOnboarding quick start", () => {
   const {
@@ -84,7 +85,7 @@ describe("runGuidedOnboarding quick start", () => {
           initialValue: "one",
           options: [
             { value: "one", label: "One agent" },
-            { value: "team", label: "A small team: a coordinator plus specialists" },
+            { value: "team", label: "A small team: a chief of staff plus specialists" },
           ],
         }),
       ]);
@@ -317,23 +318,124 @@ describe("runGuidedOnboarding quick start", () => {
       expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
     },
   );
-  it("offers the team in quick start and carries its coordinator to the handoff", async () => {
+  it("reports failed team setup without opening a coordinator chat", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "team"] });
-    const deps = setupDeps({ prompter });
-    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
-
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "What would you like to create?",
-        initialValue: "one",
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => {
+        throw new Error(
+          "The requested team was not created because an agent roster already exists.",
+        );
       }),
+    });
+
+    await expect(runGuidedOnboardingImpl({}, makeRuntime(), deps)).rejects.toThrow(
+      "Onboarding did not complete: The requested team was not created",
     );
-    expect(deps.applySetup).toHaveBeenCalledWith(
-      expect.objectContaining({ firstAgent: { name: "coordinator", team: true } }),
-      { beforePersistentApply: expect.any(Function) },
-    );
-    expect(deps.runForegroundGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "coordinator" }),
-    );
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+    expect(localOnboarding.complete).not.toHaveBeenCalled();
   });
+
+  it.each(["writer", "Writer"])(
+    "rejects coordinator %s before provider discovery or receipt creation",
+    async (agentName) => {
+      const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
+      const deps = setupDeps({ prompter });
+
+      const failure = await runGuidedOnboardingImpl(
+        { team: true, agentName },
+        makeRuntime(),
+        deps,
+      ).catch((error: unknown) => error);
+
+      expect(localOnboarding.begin).not.toHaveBeenCalled();
+      expect(deps.detect).not.toHaveBeenCalled();
+      expect(deps.activate).not.toHaveBeenCalled();
+      expect(deps.applySetup).not.toHaveBeenCalled();
+      expect(localOnboarding.states.size).toBe(0);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining("Team member ids must be distinct"),
+      });
+    },
+  );
+
+  it.each(["activated", "no-config-write", "skipped"] as const)(
+    "carries the team coordinator to the handoff (%s)",
+    async (mode) => {
+      const skip = mode === "skipped";
+      const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "team"] });
+      const deps = setupDeps({
+        prompter,
+        applySetup: vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(
+          async ({ workspace }) => {
+            const config = localOnboarding.persisted.config;
+            const specialists = ["researcher", "writer", "reviewer"];
+            localOnboarding.persisted.config = {
+              ...config,
+              agents: {
+                ...config?.agents,
+                ownership: "explicit",
+                defaults: {
+                  ...config?.agents?.defaults,
+                  workspace,
+                  systemAgent: { agentId: "coordinator" },
+                },
+                entries: Object.fromEntries(
+                  ["coordinator", ...specialists].map((id) => [
+                    id,
+                    {
+                      workspace: `${workspace}/${id}`,
+                      subagents:
+                        id === "coordinator"
+                          ? { allowAgents: specialists, delegationMode: "prefer" }
+                          : { allowAgents: [] },
+                    },
+                  ]),
+                ),
+              },
+            };
+            return setupApplyResult();
+          },
+        ),
+      });
+      if (skip) {
+        promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+      } else if (mode === "no-config-write") {
+        vi.mocked(deps.activate).mockResolvedValueOnce({
+          ok: true,
+          modelRef: "fixture/model",
+          latencyMs: 1,
+          lines: [],
+        });
+      }
+      await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+      expect(prompter.select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "What would you like to create?",
+          initialValue: "one",
+        }),
+      );
+      expect(deps.applySetup).toHaveBeenCalledWith(
+        expect.objectContaining({ firstAgent: { name: "coordinator", team: true } }),
+        { beforePersistentApply: expect.any(Function) },
+      );
+      expect(localOnboarding.begin).toHaveBeenCalledWith(
+        expect.objectContaining({ teamCoordinatorId: "coordinator" }),
+      );
+      if (skip) {
+        expect(deps.activate).not.toHaveBeenCalled();
+        expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+        expect(prompter.note).toHaveBeenCalledWith(
+          expect.stringContaining("AI"),
+          expect.any(String),
+        );
+      } else {
+        expect(deps.runForegroundGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "coordinator" }),
+        );
+      }
+    },
+  );
 });

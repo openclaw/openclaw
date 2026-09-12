@@ -2,7 +2,9 @@ import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { pluginLifecycleError } from "../gateway/server-methods/plugins-lifecycle-error.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
+import { PluginInstallConfigError } from "./install-config.js";
 import {
   configSnapshot,
   hostedFeedDiffsEntry,
@@ -42,7 +44,8 @@ vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
 }));
 
-vi.mock("./install-config-mutation.js", () => ({
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
     mocks.selectWriteOptions(writeOptions),
@@ -144,6 +147,22 @@ describe("managed plugin installation", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("refuses managed installs in Nix mode before config or artifact work", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.npmInstall.mockResolvedValue({ ok: false, error: "artifact installer reached" });
+    mocks.clawhubInstall.mockResolvedValue({ ok: false, error: "artifact installer reached" });
+    await expect(
+      installManagedPlugin({
+        request: { source: "official", pluginId: "diffs" },
+        env: { OPENCLAW_NIX_MODE: "1" },
+      }),
+    ).rejects.toThrow("Config is managed by Nix");
+    expect(mocks.readConfig).not.toHaveBeenCalled();
+    expect(mocks.clawhubInstall).not.toHaveBeenCalled();
+    expect(mocks.npmInstall).not.toHaveBeenCalled();
+    expect(mocks.persistInstall).not.toHaveBeenCalled();
+  });
+
   it("pins curated ClawHub installs to the expected runtime id", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
@@ -239,12 +258,61 @@ describe("managed plugin installation", () => {
       },
     ]);
     mocks.npmInstall.mockResolvedValue({ ok: false, ...failure });
-    await expect(
-      installManagedPlugin({ request: { source: "official", pluginId: "diffs" }, env: {} }),
-    ).rejects.toThrow(failure.error);
+    const rejected = await installManagedPlugin({
+      request: { source: "official", pluginId: "diffs" },
+      env: {},
+    }).catch((error: unknown) => error);
+    expect(rejected).toMatchObject({ message: failure.error });
+    expect(pluginLifecycleError(rejected)).toMatchObject({
+      message: failure.error,
+      details: {
+        pluginInstallRejected: true,
+        ...(failure.code ? { pluginInstallCode: failure.code } : {}),
+        pluginInstallSource: { source: "npm" },
+      },
+    });
     expect(mocks.clawhubInstall).not.toHaveBeenCalled();
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      valid: false,
+      reason: "Config invalid; run `openclaw doctor --fix` before installing plugins.",
+    },
+    { valid: true, reason: "Plugin settings belong to an external include." },
+  ])(
+    "retains config refusal diagnostics without serializing the snapshot ($valid)",
+    async ({ valid, reason }) => {
+      const prepared = configSnapshot();
+      prepared.snapshot.valid = valid;
+      mocks.readConfig.mockResolvedValue(prepared);
+      mocks.preflight.mockReturnValue({
+        hookMutation: { mode: "allowed" },
+        pluginMutation: { mode: "blocked", reason },
+      });
+
+      const rejected = await installManagedPlugin({
+        request: { source: "npm", spec: "@acme/plugin" },
+        env: {},
+      }).catch((error: unknown) => error);
+      expect(rejected).toMatchObject({
+        message: reason,
+        cause: expect.any(PluginInstallConfigError),
+      });
+      expect(pluginLifecycleError(rejected)).toEqual({
+        code: "INVALID_REQUEST",
+        message: `${reason} | INVALID_CONFIG`,
+        details: {
+          pluginInstallRejected: true,
+          pluginInstallCode: "config_mutation_blocked",
+        },
+      });
+      expect(mocks.npmInstall).not.toHaveBeenCalled();
+      expect(mocks.clawhubInstall).not.toHaveBeenCalled();
+      expect(mocks.persistInstall).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps each hosted source's exact version and integrity on fallback", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());

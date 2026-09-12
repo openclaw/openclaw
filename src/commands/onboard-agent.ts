@@ -95,10 +95,18 @@ export async function ensureOnboardingAgent(params: {
   // owner before returning an existing fleet to the remaining setup effects.
   inheritLegacyDefaultAgentId(params.baseConfig ?? params.config, params.config);
   const candidateRoster = listAgentEntries(params.config);
-  if (
+  const hasCandidateRoster =
     candidateRoster.length > 0 &&
-    (params.preserveCandidateRoster || !isInjectedMainRoster(params.config))
-  ) {
+    (params.preserveCandidateRoster || !isInjectedMainRoster(params.config));
+  if (params.firstAgent?.team) {
+    before ??= await readConfigFileSnapshot();
+    if (hasCandidateRoster || hasResolvedRosterBeforeMigrations(before)) {
+      throw new Error(
+        "The requested team was not created because an agent roster already exists. Use `openclaw agents team create` to add a team.",
+      );
+    }
+  }
+  if (hasCandidateRoster) {
     return {
       config: params.config,
       configBase: params.baseConfig ?? params.config,

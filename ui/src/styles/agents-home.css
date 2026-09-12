@@ -54,22 +54,6 @@
   font-size: 28px;
 }
 
-.agents-home__avatar img,
-.agents-home__avatar span {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.agents-home__avatar span {
-  display: grid;
-  place-items: center;
-}
-
-.agents-home__avatar img:not([hidden]) + span {
-  display: none;
-}
-
 .agents-home__name {
   min-width: 0;
   overflow-wrap: anywhere;

@@ -236,7 +236,8 @@ export async function convergeUpdatePlugins(params: {
       }
       const pluginAdvisories = [
         ...(postCorePluginUpdate?.warnings ?? []).filter(
-          (warning) => warning.reason === "plugin-target-unavailable",
+          (warning) =>
+            warning.reason === "plugin-target-unavailable" || warning.reason === "doctor-advisory",
         ),
         // Committed handoff files can acknowledge success without npm details.
         ...(postCorePluginUpdate?.npm?.outcomes ?? []).filter(

@@ -46,13 +46,36 @@ creates a retirement row in the same transaction as the job edit. This includes
 an exact receipt already closed by an agent-owner edit but still awaiting run
 reconciliation. Normal completion and restart recovery preserve the replacement's
 state while retaining the old run's history. The first eligible edit creates the
-table; queued edits do not retire a future evaluation. Existing receipt pruning
-also deletes its retirement row.
+table; queued edits do not retire a future evaluation. The job's private runtime
+state retains the exact running receipt ID until scheduler reconciliation, including
+when an agent-owner edit closes the receipt first. Recovery and later state edits
+use that association even when run timestamps collide. Receipt pruning preserves
+that pending receipt; ordinary history retains its existing 64-receipt bound and
+deletes retirement rows with their receipts.
+
+Rows written before this association was recorded retain their legacy recovery
+fallback. The association adds no SQL table, column, or schema version. Current
+builds omit it from public job state and the public state-patch schema.
 
 A missing table or row means no recorded retirement; earlier edits cannot be
 reconstructed from the final job definition. Older compatible readers ignore the
-companion but do not enforce this protection. Finish active runs before downgrading
-if their edited watcher state must be preserved.
+companion but do not enforce this protection. To preserve edited watcher state,
+complete active runs and pending scheduler reconciliation on the current build
+before downgrading. A terminal task or receipt can still leave job state
+unreconciled.
+
+Scheduling edits made while a run awaits reconciliation record a private
+`runningScheduleChangeId` in the existing job runtime state, in the same
+transaction as the edit. The fresh value distinguishes successive committed
+edits even when a passive editor's snapshot spans two runs. Completion and
+recovery preserve the edited scheduling state; a new run and pending-run cleanup
+clear the marker. This adds no table, column, or public job field.
+
+Pending runs without this marker retain their previous recovery behavior.
+Edits acknowledged by older builds cannot be reconstructed reliably from
+timestamps or the final schedule. New edits to those pending jobs record the
+marker normally. Older compatible readers ignore it; finish pending runs before
+downgrading if their edited cadence must be preserved.
 
 Worker preparation uses the same-version rule for the bare nullable
 `worker_environments.preparation_purpose TEXT` column in the shared state

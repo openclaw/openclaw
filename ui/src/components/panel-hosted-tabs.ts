@@ -5,8 +5,10 @@ export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change
 export type PanelHostedTab = {
   id: string;
   label: string;
-  /** Page URL whose hostname favicon should lead the tab; `icon` is the fallback. */
+  /** Page URL used for hostname favicon lookup when no explicit favicon is available. */
   url?: string;
+  /** Explicit icon URL; takes precedence over hostname lookup and `icon`. */
+  favicon?: string;
   icon?: TemplateResult;
   title?: string | null;
   statusLabel?: string | null;

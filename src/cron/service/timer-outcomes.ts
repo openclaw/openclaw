@@ -49,7 +49,8 @@ function resolveCronRunScheduleOwnership(params: {
   currentJob: CronJob;
   activeJobMarker?: CronActiveJobMarker;
 }): CronScheduleOwnership {
-  return params.activeJobMarker?.scheduleMutated === true ||
+  return typeof params.currentJob.state.runningScheduleChangeId === "string" ||
+    params.activeJobMarker?.scheduleMutated === true ||
     !cronSchedulingInputsEqual(params.admittedJob, params.currentJob)
     ? "stale"
     : "current";
@@ -102,6 +103,8 @@ export function applyJobResult(
   };
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.state.pacedNextRunAtMs = undefined;
   job.state.forcePreservedNextRunAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
@@ -596,6 +599,8 @@ export function applyTriggerNoFireResult(
   const previousForcePreservedNextRunAtMs = job.state.forcePreservedNextRunAtMs;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.updatedAtMs = result.endedAt;
   if (!result.triggerEval.busy && opts?.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;

@@ -273,7 +273,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
     );
     expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.6-sol");
+    expect(selection.modelId).toBe("gpt-6-astra");
   });
 
   it("uses the configured provider model when the runtime default is unavailable", () => {

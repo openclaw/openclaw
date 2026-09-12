@@ -4,6 +4,7 @@ import type {
   SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -292,7 +293,6 @@ function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterI
 export function renderCustodianTranscriptEntry(params: {
   message: CustodianMessage;
   boundaryAfterId: number | null;
-  assistantAvatar: string;
   showQuestion: boolean;
   questionDisabled: boolean;
   showWizardStep: boolean;
@@ -316,7 +316,7 @@ export function renderCustodianTranscriptEntry(params: {
             showReasoning: false,
             showToolCalls: false,
             assistantName: t("custodian.title"),
-            assistantAvatar: params.assistantAvatar,
+            agentId: SYSTEM_AGENT_ID,
           })
         : nothing
     }

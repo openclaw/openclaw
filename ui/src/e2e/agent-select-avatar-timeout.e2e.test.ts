@@ -36,7 +36,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("aborts a stalled authenticated avatar request and keeps the text fallback", async () => {
+  it("aborts a stalled authenticated avatar request and keeps the generated face", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await page.clock.install();
 
@@ -95,21 +95,17 @@ suite.define(() => {
       await expect.poll(() => avatarRequestCount).toBe(1);
       const picker = page.locator("openclaw-agent-select");
       await expect
-        .poll(() =>
-          picker.locator(".agent-select__avatar--text").first().getAttribute("data-avatar"),
-        )
-        .toBe("O");
+        .poll(() => picker.locator(".identity-avatar__agent-face").first().count())
+        .toBe(1);
       expect(avatarAuthorization).toBe("Bearer e2e-device-token");
       await screenshot(page, "01-request-stalled.png");
 
       await page.clock.runFor(30_000);
       await expect.poll(() => failedAvatarRequests.length).toBe(1);
-      await expect.poll(() => picker.locator("img.agent-select__avatar").count()).toBe(0);
+      await expect.poll(() => picker.locator(".agent-select__avatar img").count()).toBe(0);
       await expect
-        .poll(() =>
-          picker.locator(".agent-select__avatar--text").first().getAttribute("data-avatar"),
-        )
-        .toBe("O");
+        .poll(() => picker.locator(".identity-avatar__agent-face").first().count())
+        .toBe(1);
 
       // A later render must use the cached miss instead of launching another fetch.
       await picker.locator(".agent-select__trigger").click();

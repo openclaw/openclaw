@@ -46,7 +46,7 @@ Select a primary and ordered fallback chain with repeatable flags:
 
 ```bash
 openclaw agent exec "Implement the change" \
-  --model openai/gpt-5.6-sol \
+  --model openai/gpt-6-astra \
   --fallback anthropic/claude-sonnet-4-6 \
   --fallback google/gemini-3.1-pro-preview
 ```
@@ -87,7 +87,7 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
   "assistantTurns": 2,
   "bridgeCalls": { "search": 1, "describe": 0, "call": 3 },
   "toolSummary": { "calls": 2, "tools": ["read", "write"], "totalToolTimeMs": 48 },
-  "model": "gpt-5.6-sol",
+  "model": "gpt-6-astra",
   "provider": "openai",
   "sessionId": "019..."
 }

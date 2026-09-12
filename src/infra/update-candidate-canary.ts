@@ -21,15 +21,18 @@ import {
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import { parseUpdateDoctorLintReport } from "./update-doctor-lint.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
+  normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "./update-doctor-result.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
+import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 
 type CanaryPhase =
   | "snapshot"
@@ -296,6 +299,16 @@ export async function validateUpdateCandidateCanary(params: {
     const snapshotDuration = Date.now() - snapshotStarted;
     deadline += snapshotDuration;
     workDeadline += snapshotDuration;
+    const snapshotStep: UpdateStepResult = {
+      name: "candidate snapshot",
+      command: "candidate snapshot",
+      cwd: params.root,
+      durationMs: snapshotDuration,
+      exitCode: 0,
+      snapshotCapacity: rehearsal.snapshotCapacity,
+    };
+    steps.push(snapshotStep);
+    params.onStep?.(snapshotStep);
     env = { ...rehearsal.env };
     const { port, stateDir: copiedStateDir } = rehearsal;
     const doctorResultOptions = { tmpdir: () => copiedStateDir };
@@ -389,6 +402,22 @@ export async function validateUpdateCandidateCanary(params: {
         }
       }
       params.signal?.throwIfAborted();
+      let lintWarnings: string[] = [];
+      if (code === 0 && phase === "lint") {
+        if (running.outputExceeded()) {
+          throw new Error("Candidate Doctor lint output exceeded the inspection limit");
+        }
+        const report = parseUpdateDoctorLintReport(running.stdout());
+        lintWarnings = normalizeUpdatePostInstallDoctorWarnings(
+          report.warnings.map((finding) =>
+            redactSupportString(
+              [finding.message, finding.fixHint].filter(Boolean).join("\n"),
+              { env, stateDir: params.stateDir },
+              { maxLength: 20_000 },
+            ),
+          ),
+        );
+      }
       if (code === 0 && phase === "plugins") {
         const inventory: unknown = running.outputExceeded()
           ? undefined
@@ -455,6 +484,9 @@ export async function validateUpdateCandidateCanary(params: {
           ? { stdoutTail: pluginObservations.join("\n") }
           : {}),
       };
+      if (lintWarnings.length > 0) {
+        step.warnings = lintWarnings;
+      }
       steps.push(step);
       if (code !== 0 && !doctorAdvisory) {
         throw new Error(`Candidate ${phase} failed${timedOut ? " (deadline exceeded)" : ""}`);
@@ -549,6 +581,9 @@ export async function validateUpdateCandidateCanary(params: {
       steps.push(failed);
     }
     failed.stderrTail = logTail.join("\n");
+    if (error instanceof UpdateSnapshotCapacityError) {
+      failed.snapshotCapacity = error.capacity;
+    }
     params.onStep?.(failed);
     return {
       status: "error",
@@ -564,15 +599,20 @@ export async function validateUpdateCandidateCanary(params: {
     };
   } finally {
     if (!params.rehearsal && rehearsal) {
-      await cleanupUpdateTemporaryDirectory({
-        directory: rehearsal.stateDir,
-        root: params.root,
-        name: "candidate rehearsal cleanup",
-        onWarning: (step) => {
-          steps.push(step);
-          params.onStep?.(step);
-        },
-      });
+      for (const directory of rehearsal.cleanupDirectories) {
+        await cleanupUpdateTemporaryDirectory({
+          directory,
+          root: params.root,
+          name:
+            directory === rehearsal.stateDir
+              ? "candidate rehearsal cleanup"
+              : "candidate inventory cleanup",
+          onWarning: (step) => {
+            steps.push(step);
+            params.onStep?.(step);
+          },
+        });
+      }
     }
   }
 }

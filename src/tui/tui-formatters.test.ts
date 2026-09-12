@@ -38,7 +38,7 @@ describe("formatTuiFooter", () => {
         agentLabel: "Main",
         sessionLabel: "work",
         sessionInfo: {
-          model: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+          model: "gpt-5.6-luna@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
           fastMode: "auto",
           verboseLevel: "full",
           traceLevel: "raw",
@@ -50,7 +50,7 @@ describe("formatTuiFooter", () => {
         deliver: true,
       }),
     ).toBe(
-      "agent Main | session work | gpt-5.6-sol high | fast:auto | verbose full | trace:raw | reasoning:stream | deliver:on | tokens 1.2k/128k (1%)",
+      "agent Main | session work | gpt-5.6-luna high | fast:auto | verbose full | trace:raw | reasoning:stream | deliver:on | tokens 1.2k/128k (1%)",
     );
   });
 

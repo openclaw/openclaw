@@ -195,7 +195,26 @@ export function createInstalledPluginOwnershipResolver(
     }
     return resolveLifecycle(pluginId);
   }
-  return { resolvePackage, resolveLifecycle, resolveReload };
+  function isSourceInUse(sourcePath: string, loadPaths: readonly string[]): boolean {
+    const target = safeRealpathSync(sourcePath, realpathCache) ?? path.resolve(sourcePath);
+    const paths = [
+      ...loadPaths,
+      ...Object.values(index.installRecords).flatMap((record) => [
+        record.installPath,
+        record.sourcePath,
+      ]),
+      ...index.plugins.flatMap((entry) => [entry.rootDir, entry.source, entry.manifestPath]),
+    ];
+    return paths.some((candidate) => {
+      if (!candidate?.trim()) {
+        return false;
+      }
+      const resolved = path.resolve(resolveUserPath(candidate, env));
+      const current = safeRealpathSync(resolved, realpathCache) ?? resolved;
+      return isPathInside(target, current) || isPathInside(current, target);
+    });
+  }
+  return { resolvePackage, resolveLifecycle, resolveReload, isSourceInUse };
 }
 
 function installRecordPathMatchesPluginRoot(

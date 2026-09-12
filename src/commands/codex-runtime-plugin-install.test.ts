@@ -491,13 +491,11 @@ describe("Codex runtime plugin install repair", () => {
     );
   });
 
-  it.each(["selected onboarding", "ordinary selection", "silent supervision"] as const)(
-    "requests official capability review only for the explicit caller: %s",
+  it.each(["ordinary selection", "silent supervision"] as const)(
+    "keeps runtime installation prompt-free for %s",
     async (caller) => {
-      const reviewOfficialArtifacts = caller === "selected onboarding" ? true : undefined;
       const prompter = createWizardPrompter();
       mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
-        expect(params.reviewOfficialArtifacts).toBe(reviewOfficialArtifacts);
         if (caller === "silent supervision") {
           expect(await params.onCapabilityConsent({})).toBeUndefined();
         }
@@ -518,7 +516,6 @@ describe("Codex runtime plugin install repair", () => {
         model: "openai/fixture-model",
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        ...(reviewOfficialArtifacts ? { reviewOfficialArtifacts } : {}),
         ...(caller === "silent supervision" ? { output: "silent" } : {}),
       });
       expect(result).toMatchObject({ ok: true, required: true });

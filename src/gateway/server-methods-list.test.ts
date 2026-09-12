@@ -204,6 +204,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.status",
       "sessions.storage.run",
       "plugins.reload",
+      "claws.packages.remove",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -235,6 +236,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.status",
       "sessions.storage.run",
       "plugins.reload",
+      "claws.packages.remove",
     ]);
   });
 
@@ -393,6 +395,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.status",
       "sessions.storage.run",
       "plugins.reload",
+      "claws.packages.remove",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

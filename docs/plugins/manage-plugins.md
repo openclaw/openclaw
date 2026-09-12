@@ -18,7 +18,8 @@ For its full command contract, flags, source-selection rules, and edge cases, se
 
 Typical workflow: find a package, install it, enable it, then verify the plugin's
 runtime registrations. Control UI actions apply to the running Gateway without
-restarting it. The CLI also supports npm, git, and local-path installs; see
+restarting it. CLI installs also use the running local Gateway for npm, Git,
+local paths and archives, npm-pack tarballs, and marketplace sources. See
 [Apply changes and inspect](#apply-changes-and-inspect) for those paths.
 
 ## Use the Control UI
@@ -130,19 +131,15 @@ also lists declared channels, providers, tools, hooks, MCP servers, CLI
 commands and backends, skills, and dangerous configuration flags, along with
 the operator grants that apply to hooks, model access, and subagents.
 
-Outside AI onboarding, bundled plugins and verified first-party plugins from OpenClaw's official
-catalog do not require this capability review during install, enable, update,
-or Doctor repair. For separately installed first-party plugins, OpenClaw checks
+Bundled plugins and verified first-party plugins from OpenClaw's official
+catalog do not require this capability review during setup, install, enable,
+update, or Doctor repair. For separately installed first-party plugins, OpenClaw checks
 the actual package identity against its catalog and verified npm source record
 or official-channel record from `https://clawhub.ai`. A matching plugin id or
 package name alone is insufficient: local copies, archives, git installs,
 custom ClawHub registries, and conflicting source records still require review.
 This exemption does not grant OAuth access, operating-system permissions, or
 runtime tool approvals, and does not create an operator acceptance record.
-
-AI onboarding also requests a review when you choose an installable provider or
-required runtime from the official catalog. After you accept, setup continues
-with that provider.
 
 The review token hashes the exact declared capability surface, not the plugin's
 executable files. Acceptance separately records installer-provided artifact
@@ -264,19 +261,18 @@ paths, and the `memory` and `contextEngine` slots.
 ## Apply changes and inspect
 
 Control UI actions and the Gateway plugin-management RPCs apply plugin changes
-without restarting the Gateway. Ordinary CLI enable, disable, and uninstall
-commands use the running Gateway when available; updates refresh it after the
-local package operation finishes. Without a running Gateway, those commands
-update the local installation for its next startup.
+without restarting the Gateway. Ordinary CLI install, enable, disable, and
+uninstall commands use the running local Gateway when available; updates refresh
+it after the local package operation finishes. Without a running Gateway, those
+commands update the local installation for its next startup.
 
-CLI installation from npm, git, archives, and local paths still uses the local
-installer and requests a Gateway restart. Use Control UI installation for
-official or ClawHub packages when you need synchronous application without a
-restart. If automatic restart is disabled, restart before checking the locally
-installed runtime surfaces:
+CLI installation supports npm, Git, local paths and archives, npm-pack tarballs,
+marketplace sources, and official or ClawHub packages through that same owner.
+See [Install](/cli/plugins#install) for source selection and capability consent.
+After an offline installation, start the Gateway to use the installed runtime
+surfaces. To inspect their registration:
 
 ```bash
-openclaw gateway restart
 openclaw plugins inspect <plugin-id> --runtime --json
 ```
 

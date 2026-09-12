@@ -227,31 +227,33 @@ export function withPluginRuntimeRegistryScope<T>(
   }
   const current = pluginRuntimeGatewayRequestScope.getStore();
   return pluginRuntimeGatewayRequestScope.run(
-    {
-      isWebchatConnect: () => false,
-      ...current,
-      pluginRegistry: registry,
-      declaredProviderOwners:
-        declaredProviderOwners ??
-        // Nested calls keep this prepared registry's facts, never a different registry's index.
-        (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
-        getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
-    },
+    createRegistryScope(registry, current, declaredProviderOwners),
     run,
   );
 }
 
-/**
- * Runs work under the current gateway request scope while attaching plugin identity.
- */
-export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope, run: () => T): T {
-  const current = pluginRuntimeGatewayRequestScope.getStore();
-  const scoped: PluginRuntimeGatewayRequestScope = current
-    ? { ...current, pluginId: scope.pluginId }
-    : {
-        pluginId: scope.pluginId,
-        isWebchatConnect: () => false,
-      };
+function createRegistryScope(
+  registry: PluginRegistry,
+  current: PluginRuntimeGatewayRequestScope | undefined,
+  declaredProviderOwners?: DeclaredProviderOwnerIndex,
+): PluginRuntimeGatewayRequestScope {
+  return {
+    isWebchatConnect: () => false,
+    ...current,
+    pluginRegistry: registry,
+    declaredProviderOwners:
+      declaredProviderOwners ??
+      // Nested calls keep this prepared registry's facts, never a different registry's index.
+      (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
+      getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
+  };
+}
+
+function applyPluginScope(
+  scoped: PluginRuntimeGatewayRequestScope,
+  scope: PluginRuntimePluginScope,
+): void {
+  scoped.pluginId = scope.pluginId;
   if (scope.pluginSource !== undefined) {
     scoped.pluginSource = scope.pluginSource;
   } else {
@@ -267,6 +269,24 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
   } else {
     delete scoped.pluginTrustedOfficialInstall;
   }
+}
+
+/**
+ * Runs work under the current gateway request scope while attaching plugin identity.
+ */
+export function withPluginRuntimePluginScope<T>(
+  scope: PluginRuntimePluginScope,
+  run: () => T,
+  registry?: PluginRegistry,
+): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  // Instance calls combine registry and identity without adding a second async frame.
+  const scoped: PluginRuntimeGatewayRequestScope = registry
+    ? createRegistryScope(registry, current)
+    : current
+      ? { ...current }
+      : { isWebchatConnect: () => false };
+  applyPluginScope(scoped, scope);
   return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }
 

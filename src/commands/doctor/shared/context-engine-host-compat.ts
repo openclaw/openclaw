@@ -24,7 +24,7 @@ import {
   getContextEngineRegistration,
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
-import type { ContextEngineInfo } from "../../../context-engine/types.js";
+import type { ContextEngine, ContextEngineInfo } from "../../../context-engine/types.js";
 import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -253,41 +253,34 @@ async function resolveSelectedContextEngineInfo(params: {
   ensureContextEnginesInitialized();
   let pluginRegistry: PluginRegistry | undefined;
   let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+  let engine: ContextEngine | undefined;
+  let outcome: { ok: true; result: ContextEngineInfoResult } | { ok: false; error: unknown };
   try {
-    try {
-      if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
-        try {
-          inspection = await acquirePluginRegistryForInspection({
-            config: params.cfg,
-            env: params.env,
-            onlyPluginIds: [engineId],
-          });
-          pluginRegistry = inspection.registry;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return {
-            warnings: [
-              `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because its plugin failed to load: ${message}`,
-            ],
-          };
-        }
+    let inspectionWarning: string | undefined;
+    if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+      try {
+        inspection = await acquirePluginRegistryForInspection({
+          config: params.cfg,
+          env: params.env,
+          onlyPluginIds: [engineId],
+        });
+        pluginRegistry = inspection.registry;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        inspectionWarning = `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because its plugin failed to load: ${message}`;
+      }
+      if (pluginRegistry) {
         const registration = pluginRegistry.contextEngines.get(engineId);
         if (registration?.lifecycle === "readOnlyDiscovery") {
-          return {
-            warnings: [
-              `- plugins.slots.contextEngine: context engine "${engineId}" is registered for read-only discovery; offline host compatibility inspection is unavailable. This does not indicate a missing runtime registration in the Gateway.`,
-            ],
-          };
-        }
-        if (registration?.lifecycle !== "runtime") {
-          return {
-            warnings: [
-              `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,
-            ],
-          };
+          inspectionWarning = `- plugins.slots.contextEngine: context engine "${engineId}" is registered for read-only discovery; offline host compatibility inspection is unavailable. This does not indicate a missing runtime registration in the Gateway.`;
+        } else if (registration?.lifecycle !== "runtime") {
+          inspectionWarning = `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`;
         }
       }
-
+    }
+    if (inspectionWarning) {
+      outcome = { ok: true, result: { warnings: [inspectionWarning] } };
+    } else {
       const agentId = resolveAmbientOwnerAgentId(params.cfg, undefined, {
         surface: "context-engine Doctor checks",
         hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
@@ -299,12 +292,24 @@ async function resolveSelectedContextEngineInfo(params: {
             ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
             : undefined,
         });
-      const engine = await withPluginRuntimeRegistryScope(pluginRegistry, resolve);
-      return { info: engine.info, warnings: [] };
-    } finally {
-      await inspection?.release();
+      engine = await withPluginRuntimeRegistryScope(pluginRegistry, resolve);
+      outcome = { ok: true, result: { info: engine.info, warnings: [] } };
     }
   } catch (error) {
+    outcome = { ok: false, error };
+  }
+  // The engine's final work must finish before its inspection can retire.
+  for (const cleanup of [() => engine?.dispose?.(), () => inspection?.release()]) {
+    try {
+      await cleanup();
+    } catch (error) {
+      if (outcome.ok) {
+        outcome = { ok: false, error };
+      }
+    }
+  }
+  if (!outcome.ok) {
+    const { error } = outcome;
     const message = error instanceof Error ? error.message : String(error);
     return {
       warnings: [
@@ -312,6 +317,7 @@ async function resolveSelectedContextEngineInfo(params: {
       ],
     };
   }
+  return outcome.result;
 }
 
 function collectHostCompatibilityIssues(params: {

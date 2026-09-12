@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
+import { buildAllowedModelSet } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 describe("applySystemAgentModelSelection", () => {
+  it("keeps a newly approved model allowed when migrating a first-run legacy model map", async () => {
+    const cfg = await applySystemAgentModelSelection({
+      config: { agents: { defaults: { models: { "fixture/old": {} } } } },
+      model: "fixture/new",
+      agentRuntimeId: "openclaw",
+      runtimeInDefaults: true,
+    });
+    const allowed = buildAllowedModelSet({ cfg, catalog: [], defaultProvider: "fixture" });
+    expect(allowed.allows({ provider: "fixture", model: "new" })).toBe(true);
+    expect(allowed.allows({ provider: "fixture", model: "old" })).toBe(true);
+    expect(allowed.allows({ provider: "fixture", model: "unapproved" })).toBe(false);
+  });
+
   it("updates the configured system owner without changing the legacy owner", async () => {
     const config = {
       agents: {

@@ -1008,7 +1008,6 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
 extensions/qa-lab/src/providers/mock-openai/server.ts	15
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
-extensions/qa-lab/src/qa-bus-protocol.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	2
 extensions/qa-lab/src/runtime-parity.ts	3
@@ -1289,7 +1288,6 @@ extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/mock.ts	7
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/providers/shared/response-body.ts	1
-extensions/voice-call/src/providers/twilio.ts	2
 extensions/voice-call/src/providers/twilio/api.ts	3
 extensions/voice-call/src/realtime-agent-context.ts	1
 extensions/voice-call/src/response-generator.ts	3
@@ -2117,7 +2115,7 @@ src/auto-reply/usage-bar/template.ts	1
 src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
 src/boards/sqlite-board-codec.ts	7
-src/boards/sqlite-board-store.ts	3
+src/boards/sqlite-board-store.ts	1
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	1
 src/canvas/serve.runtime.ts	1
@@ -2276,10 +2274,8 @@ src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/parse-duration.ts	2
-src/cli/plugin-install-plan.ts	1
 src/cli/plugins-authoring-command.ts	8
 src/cli/plugins-command-helpers.ts	1
-src/cli/plugins-install-config.ts	2
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	9
 src/cli/precomputed-help.ts	1
@@ -3120,7 +3116,7 @@ src/mcp/channel-bridge.ts	6
 src/mcp/channel-shared.ts	3
 src/mcp/codex-supervision-tools-serve.ts	6
 src/mcp/openclaw-tools-serve-config.ts	1
-src/mcp/plugin-tools-handlers.ts	3
+src/mcp/plugin-tools-handlers.ts	2
 src/media-generation/provider-registry.ts	1
 src/media-understanding/attachments.select.ts	1
 src/media-understanding/entry-capabilities.ts	1
@@ -3503,7 +3499,7 @@ src/state/openclaw-agent-db-schema.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	4
 src/state/openclaw-agent-db-session-provenance.ts	2
 src/state/openclaw-agent-standing-intents-schema.ts	1
-src/state/openclaw-database-preflight.ts	2
+src/state/openclaw-database-preflight.ts	1
 src/state/openclaw-database-verify.impl.ts	1
 src/state/openclaw-database-verify.worker.ts	1
 src/state/openclaw-quarantine-store.ts	2
@@ -3659,7 +3655,7 @@ ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-nav-menus.ts	6
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
-ui/src/components/app-sidebar-session-list-render.ts	2
+ui/src/components/app-sidebar-session-list-render.ts	1
 ui/src/components/app-sidebar-session-menu-renderers.ts	4
 ui/src/components/app-sidebar-session-narration.ts	5
 ui/src/components/app-sidebar-session-row-render.ts	2

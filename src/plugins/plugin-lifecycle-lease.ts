@@ -41,6 +41,10 @@ type PluginLifecycleLeaseOptions = Pick<
 
 const activePluginLifecycleLease = new AsyncLocalStorage<ActivePluginLifecycleLease>();
 
+export function hasPluginLifecycleLease(): boolean {
+  return activePluginLifecycleLease.getStore() !== undefined;
+}
+
 /** Detached observers must acquire ownership rather than borrow their writer's lease. */
 export function runOutsidePluginLifecycleLease<T>(run: () => T): T {
   return activePluginLifecycleLease.exit(() => runOutsideOpenClawStateLeaseScope(run));

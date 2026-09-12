@@ -436,6 +436,9 @@ describe("chat pane header", () => {
     >("openclaw-viewer-facepile.chat-pane__participants");
     await facepile?.updateComplete;
 
+    await vi.waitFor(() =>
+      expect(facepile?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
     expect(mounted.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
     expect(
       [...(facepile?.querySelectorAll(".viewer-avatar") ?? [])].map((avatar) =>

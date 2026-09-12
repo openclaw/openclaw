@@ -6,7 +6,8 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
+import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import "../../components/web-awesome-popover.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -434,9 +435,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
     return renderWelcomeState({
+      currentAgentId: this.place.agentId,
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
-      assistantAvatar: agent?.identity?.avatar ?? agent?.identity?.emoji ?? null,
-      assistantAvatarUrl: agent?.identity?.avatarUrl ?? null,
+      assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
+      assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
       hint: t(catalog.isTarget(this.data) ? "newSession.nativeTerminalHint" : "newSession.hint"),
       composer: this.renderDraftBlock(),
       hideSecondaryContent: this.submission.visibility === "incognito",

@@ -83,10 +83,7 @@ final class ConnectionModeCoordinator {
                 }
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
-                let settings = CommandResolver.connectionSettings()
-                try await ControlChannel.shared.configure(mode: .remote(
-                    target: settings.target,
-                    identity: settings.identity))
+                await ControlChannel.shared.configure()
                 guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
             } catch {
                 guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
@@ -102,13 +99,7 @@ final class ConnectionModeCoordinator {
     private func applyLocalMode(paused: Bool, generation: UInt64) async {
         await self.applyLocalGateway(mode: .local, paused: paused, hostsLocalGateway: false, generation: generation)
         guard self.transition.isCurrent(generation, mode: .local) else { return }
-        do {
-            try await ControlChannel.shared.configure(mode: .local)
-        } catch {
-            guard self.transition.isCurrent(generation, mode: .local) else { return }
-            self.logger.error(
-                "control channel local configure failed: \(error.localizedDescription, privacy: .public)")
-        }
+        await ControlChannel.shared.configure()
     }
 
     private func applyLocalGateway(

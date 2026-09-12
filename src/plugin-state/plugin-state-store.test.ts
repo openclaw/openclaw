@@ -4,8 +4,8 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -16,7 +16,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   countPluginStateLiveEntries,
   createCorePluginStateKeyedStore,
   createCorePluginStateSyncKeyedStore,
@@ -26,6 +25,7 @@ import {
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import {
   clearPluginStateStoreForTests,
   probePluginStateStore,

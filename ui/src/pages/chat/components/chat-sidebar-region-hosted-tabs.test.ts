@@ -239,6 +239,17 @@ describe("chat sidebar hosted tabs", () => {
     expect(actionLabels()).toEqual(["New session", "Terminal action"]);
   });
 
+  it("prefers an explicit favicon over the hostname fetch and fallback icon", async () => {
+    const favicon = "data:image/png;base64,eA==";
+    const fetchFavicon = vi.fn<LinkFaviconFetcher>().mockResolvedValue(null);
+    const { shell } = await mount({ tabs: [{ ...secondTab, favicon }], fetchFavicon });
+    const icon = shell.querySelector(".tabstrip-tab__favicon");
+    expect(icon?.getAttribute("src")).toBe(favicon);
+    expect(icon?.getAttribute("alt")).toBe("");
+    expect(icon?.parentElement?.querySelector("svg")).toBeNull();
+    expect(fetchFavicon).not.toHaveBeenCalled();
+  });
+
   it("renders a cached favicon after the hostname fetch settles", async () => {
     const fetchFavicon = vi.fn<LinkFaviconFetcher>().mockResolvedValue("blob:header-favicon");
     const { shell, region } = await mount({

@@ -1,3 +1,5 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { loadAgentTeamPreset, validateAgentTeamMemberIds } from "../agents/agent-roles.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { type FirstOnboardingAgent, validateFirstOnboardingAgentName } from "./onboard-agent.js";
 
@@ -20,21 +22,32 @@ export async function promptFirstOnboardingAgent(
         initialValue: "one",
         options: [
           { value: "one", label: "One agent" },
-          { value: "team", label: "A small team: a coordinator plus specialists" },
+          { value: "team", label: "A small team: a chief of staff plus specialists" },
         ],
       })) === "team");
-  const defaultName = createTeam ? "coordinator" : "main";
+  const teamPreset = createTeam ? await loadAgentTeamPreset() : undefined;
+  const specialistIds = teamPreset?.specialists.map(({ id }) => id) ?? [];
+  const validateName = (value: string) =>
+    validateFirstOnboardingAgentName(value) ??
+    (teamPreset
+      ? validateAgentTeamMemberIds([normalizeAgentId(value), ...specialistIds])
+      : undefined);
+  const defaultName = teamPreset?.coordinator.id ?? "main";
   const name =
     requestedName ??
     (nonInteractive
       ? defaultName
       : await prompter.text({
           message: createTeam
-            ? "What should we call your coordinator?"
+            ? "What should we call your chief of staff?"
             : "What should we call your first agent?",
           initialValue: defaultName,
-          validate: validateFirstOnboardingAgentName,
+          validate: validateName,
         }));
+  const error = validateName(name);
+  if (error) {
+    throw new Error(error);
+  }
   return { name, ...(createTeam ? { team: true } : {}) };
 }
 

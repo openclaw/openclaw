@@ -244,6 +244,11 @@ Each agent in a broadcast group maintains completely separate:
 - **Tool access** (different allow/deny lists)
 - **Memory/context** (separate `IDENTITY.md`, `SOUL.md`, etc.)
 
+On Discord, Slack, and Telegram, reply delivery and completion hooks use the
+responding participant's session, and local media resolves with that participant's
+media roots. This also applies to qualified entries with one participant, whose
+replies do not have a participant name label.
+
 On WhatsApp, one input is shared on purpose: the **group context buffer** (recent group messages used for context) is shared per peer, so all broadcast agents see the same context when triggered. It is cleared once after the fan-out completes.
 
 This allows each agent to have different personalities, models, skills, and tool access (for example read-only vs. read-write).

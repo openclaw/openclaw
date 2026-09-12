@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 

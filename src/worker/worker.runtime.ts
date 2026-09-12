@@ -149,9 +149,26 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
+  function loadRuntimeImports() {
+    const imports = [
+      import("./embedded-agent.runtime.js"),
+      import("./inference-stream.runtime.js"),
+    ] as const;
+    const ready = Promise.all(imports);
+    // Rejected admission does not await ready; still observe errors and join both
+    // imports before restoring the process environment.
+    void ready.catch(() => undefined);
+    return { ready, settled: Promise.allSettled(imports) };
+  }
+  let runtimeImports: ReturnType<typeof loadRuntimeImports> | undefined;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    onAdmissionRequestSent: () => {
+      if (!abortController.signal.aborted) {
+        runtimeImports ??= loadRuntimeImports();
+      }
+    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -209,10 +226,8 @@ export async function runWorkerDescriptor(
       }
       throw error;
     }
-    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] = await Promise.all([
-      import("./embedded-agent.runtime.js"),
-      import("./inference-stream.runtime.js"),
-    ]);
+    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] =
+      await (runtimeImports ??= loadRuntimeImports()).ready;
     const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     const stream = createWorkerInferenceStreamAdapter({
       client: inference,
@@ -333,6 +348,7 @@ export async function runWorkerDescriptor(
     inference.dispose();
     live.dispose();
     await connection.stop();
+    await runtimeImports?.settled;
     await environment?.close();
   }
 }

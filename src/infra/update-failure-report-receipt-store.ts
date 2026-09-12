@@ -193,6 +193,29 @@ function buildReceiptPayload(receipt: UpdateFailureReportReceipt): RestartSentin
   };
 }
 
+function replaceReceiptAtRevision(
+  db: DatabaseSync,
+  sentinelKey: string,
+  revision: number,
+  receipt: UpdateFailureReportReceipt,
+): boolean {
+  const row = buildRestartSentinelRow(
+    buildReceiptPayload(receipt),
+    nextRevision(revision),
+    sentinelKey,
+  );
+  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
+  const result = executeSqliteQuerySync(
+    db,
+    stateDb
+      .updateTable("gateway_restart_sentinel")
+      .set(row)
+      .where("sentinel_key", "=", sentinelKey)
+      .where("updated_at_ms", "=", revision),
+  );
+  return result.numAffectedRows === 1n;
+}
+
 /** Atomically owns one report attempt in the canonical state database. */
 export function reserveUpdateFailureReportReceiptRowSync(
   db: DatabaseSync,
@@ -236,20 +259,7 @@ export function reserveUpdateFailureReportReceiptRowSync(
       reservationId,
       status: "preparing",
     };
-    const replacementRow = buildRestartSentinelRow(
-      buildReceiptPayload(replacement),
-      nextRevision(current.sentinel.revision),
-      sentinelKey,
-    );
-    const replaced = executeSqliteQuerySync(
-      db,
-      stateDb
-        .updateTable("gateway_restart_sentinel")
-        .set(replacementRow)
-        .where("sentinel_key", "=", sentinelKey)
-        .where("updated_at_ms", "=", current.sentinel.revision),
-    );
-    return replaced.numAffectedRows === 1n
+    return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, replacement)
       ? { receipt: replacement, reserved: true }
       : { receipt: readReceipt(db, attemptId), reserved: false };
   }
@@ -281,21 +291,7 @@ export function refreshUpdateFailureReportReceiptPreparationRowSync(
     status: currentReceipt.status,
     ...(currentReceipt.status === "prepared" ? { preparingSinceMs: Date.now() } : {}),
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(refreshed),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, refreshed);
 }
 
 /** Fences final artifact publication behind one process-owned preparation. */
@@ -325,21 +321,7 @@ export function markUpdateFailureReportReceiptPreparedRowSync(
     reservationId,
     status: "prepared",
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(prepared),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, prepared);
 }
 
 /** Makes one published preparation ambiguity-safe immediately before issue creation starts. */
@@ -368,21 +350,7 @@ export function markUpdateFailureReportReceiptPendingRowSync(
     reservationId,
     status: "pending",
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(pending),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, pending);
 }
 
 /** Finalizes only a process-owned reservation in the required prior phase. */
@@ -415,21 +383,7 @@ export function finalizeUpdateFailureReportReceiptRowSync(
     ...receipt,
     ...retainedArtifactSweep(currentReceipt),
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(terminalReceipt),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, terminalReceipt);
 }
 
 /** Records post-commit cleanup intent without performing filesystem work in SQLite. */
@@ -460,21 +414,7 @@ export function beginUpdateFailureReportReceiptCleanupRowSync(
     reservationId,
     status: "retryable",
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(cleanupReceipt),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, cleanupReceipt);
 }
 
 /** Atomically transfers an expired preparation into durable cleanup custody. */
@@ -508,21 +448,7 @@ export function beginStaleUpdateFailureReportReceiptCleanupRowSync(
     reservationId,
     status: "retryable",
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(cleanupReceipt),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, cleanupReceipt);
 }
 
 /** Serializes one attempt-wide retired-artifact sweep against successor publication. */
@@ -554,21 +480,7 @@ export function claimUpdateFailureReportArtifactSweepRowSync(
     sweepOwnerId,
     sweepSinceMs: nowMs,
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(claimed),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, claimed);
 }
 
 /** Checks the exact sweep generation without renewing or otherwise mutating it. */
@@ -614,21 +526,7 @@ export function releaseUpdateFailureReportArtifactSweepRowSync(
     sweepSinceMs: _since,
     ...released
   } = currentReceipt;
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(released),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, released);
 }
 
 /** Completes one idempotent artifact cleanup after the cleanup intent has committed. */
@@ -659,20 +557,7 @@ export function completeUpdateFailureReportReceiptCleanupRowSync(
         reservationId,
         status: "retryable",
       };
-      const completedRow = buildRestartSentinelRow(
-        buildReceiptPayload(completed),
-        nextRevision(current.sentinel.revision),
-        sentinelKey,
-      );
-      const result = executeSqliteQuerySync(
-        db,
-        stateDb
-          .updateTable("gateway_restart_sentinel")
-          .set(completedRow)
-          .where("sentinel_key", "=", sentinelKey)
-          .where("updated_at_ms", "=", current.sentinel.revision),
-      );
-      return result.numAffectedRows === 1n;
+      return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, completed);
     }
     const result = executeSqliteQuerySync(
       db,
@@ -693,18 +578,5 @@ export function completeUpdateFailureReportReceiptCleanupRowSync(
     status: "created",
     ...(currentReceipt.url ? { url: currentReceipt.url } : {}),
   };
-  const row = buildRestartSentinelRow(
-    buildReceiptPayload(completed),
-    nextRevision(current.sentinel.revision),
-    sentinelKey,
-  );
-  const result = executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", sentinelKey)
-      .where("updated_at_ms", "=", current.sentinel.revision),
-  );
-  return result.numAffectedRows === 1n;
+  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, completed);
 }

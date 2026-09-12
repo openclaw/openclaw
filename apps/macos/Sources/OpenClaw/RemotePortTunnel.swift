@@ -35,7 +35,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
     }
 
-    let localPort: UInt16?
+    let localPort: UInt16
     var isRunning: Bool {
         self.process.isRunning
     }
@@ -49,7 +49,7 @@ final class RemotePortTunnel: @unchecked Sendable {
     private init(
         process: ManagedProcess,
         processIdentifier: pid_t,
-        localPort: UInt16?,
+        localPort: UInt16,
         stderrReader: PipeReadStream,
         guardianReceipt: PortGuardian.Record)
     {

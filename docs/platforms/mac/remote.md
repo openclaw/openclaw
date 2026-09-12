@@ -328,6 +328,22 @@ Direct connections no longer use discovered SSH details for silent node-pairing 
 - **Direct (ws/wss)**: connects straight to the configured Gateway URL.
 - There is no separate WebChat HTTP server.
 
+## Debug connection actions
+
+With developer tools enabled, **Reset SSH tunnel** is available only for a
+remote primary using SSH. It retires the existing tunnel, resolves the current
+primary endpoint, and reconnects the control channel. Direct ws/wss connections
+do not use an SSH tunnel. Changing the primary connection while a reset is in
+progress cancels the remaining reset steps. **Restart Gateway** is available only
+when the primary Gateway runs locally on this Mac.
+
+**Check gateway ports** inspects local listeners: the SSH tunnel when used, and
+any local Gateway hosted by the app. For a running SSH tunnel, diagnostics inspect
+its allocated port, including when the preferred port was occupied and SSH uses
+another local port. With no running tunnel, diagnostics inspect the configured
+port. A direct remote primary does not require a local listener and does not
+produce a missing-local-port warning.
+
 ## Permissions
 
 - The remote host needs the same TCC approvals as local (Automation, Accessibility, Screen Recording, Microphone, Speech Recognition, Notifications). Run onboarding on that machine once to grant them.

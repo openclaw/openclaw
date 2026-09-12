@@ -461,23 +461,38 @@ actor PortGuardian {
         }
     }
 
-    func diagnose(mode: AppState.ConnectionMode) async -> [PortReport] {
-        if mode == .unconfigured {
-            return []
+    func diagnose(
+        mode: AppState.ConnectionMode,
+        activeTunnelPort: UInt16?,
+        hostsLocalGateway: Bool = false) async -> [PortReport]
+    {
+        guard mode != .unconfigured else { return [] }
+        let root = OpenClawConfigFile.loadDict()
+        var ports: [(port: Int, mode: AppState.ConnectionMode)] = []
+        if mode == .remote, GatewayRemoteConfig.resolveTransport(root: root) == .ssh {
+            let tunnelPort = activeTunnelPort.map(Int.init) ?? RemotePortTunnel.localPort(root: root)
+            ports.append((tunnelPort, .remote))
         }
-        let port = mode == .remote
-            ? RemotePortTunnel.localPort(root: OpenClawConfigFile.loadDict())
-            : GatewayEnvironment.gatewayPort()
-        let listeners = await self.listeners(on: port)
-        let tunnelHealthy = await self.probeGatewayHealthIfNeeded(
-            port: port,
-            mode: mode,
-            listeners: listeners)
-        return [Self.buildReport(
-            port: port,
-            listeners: listeners,
-            mode: mode,
-            tunnelHealthy: tunnelHealthy)]
+        if mode == .local || hostsLocalGateway {
+            let localPort = GatewayEnvironment.gatewayPort(root: root)
+            if !ports.contains(where: { $0.port == localPort }) {
+                ports.append((localPort, .local))
+            }
+        }
+        var reports: [PortReport] = []
+        for (port, portMode) in ports {
+            let listeners = await self.listeners(on: port)
+            let tunnelHealthy = await self.probeGatewayHealthIfNeeded(
+                port: port,
+                mode: portMode,
+                listeners: listeners)
+            reports.append(Self.buildReport(
+                port: port,
+                listeners: listeners,
+                mode: portMode,
+                tunnelHealthy: tunnelHealthy))
+        }
+        return reports
     }
 
     func probeGatewayHealth(port: Int, timeout: TimeInterval = 2.0) async -> Bool {

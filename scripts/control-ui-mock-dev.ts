@@ -19,6 +19,7 @@ import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-cont
 import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
+import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
   controlUiSessionPath,
@@ -77,6 +78,7 @@ type CliOptions = {
     | "dashboards"
     | "goal"
     | "plugins-dense"
+    | "sidebar-roster"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -397,6 +399,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "dashboards" &&
     value !== "goal" &&
     value !== "plugins-dense" &&
+    value !== "sidebar-roster" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -1563,6 +1566,21 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
+function syntheticAvatar(color: "coral" | "green"): string {
+  const background = color === "coral" ? "#ffdbcc" : "#d5efd4";
+  const fill = color === "coral" ? "#e87355" : "#65a879";
+  const artwork = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="18" fill="${background}"/>
+    <path d="M12 28 16 10l13 10h6l13-10 4 18v10a20 20 0 0 1-40 0Z" fill="${fill}"/>
+    <g fill="#253331">
+      <circle cx="24" cy="33" r="3"/>
+      <circle cx="40" cy="33" r="3"/>
+    </g>
+    <path d="M26 43q6 6 12 0" fill="none" stroke="#253331" stroke-width="3" stroke-linecap="round"/>
+  </svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(artwork).toString("base64")}`;
+}
+
 async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
 ): Promise<ControlUiMockGatewayScenario> {
@@ -1574,36 +1592,36 @@ async function createChatPickerScenario(
       name: "Molty",
       theme: "Your everyday coordinator",
       emoji: "🦞",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=",
+      avatar: syntheticAvatar("coral"),
       preview: "I am organizing the next steps for the sample project.",
+      sessionLabels: ["Project next steps", "Weekly review"],
     },
     {
       id: "forge",
       name: "Forge",
       theme: "Builds and maintains your projects",
-      emoji: "🛠️",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGMInfMAK2IgIPH1xx80BiEJfEbBEXE6MBEAgkh9AfK4IAAAAAAASUVORK5CYII=",
+      emoji: "",
+      avatar: "",
       preview: "The sample dashboard is ready for your review.",
+      sessionLabels: ["Sample dashboard", "Build notes"],
     },
     {
       id: "scout",
       name: "Scout",
       theme: "Finds answers and connects ideas",
       emoji: "🔭",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4vc0NK2IgIPH1xx80BiEJfEbBEXE6MBEAqnKB0ZTY3IwAAAAASUVORK5CYII=",
+      avatar: "",
       preview: "I found three useful approaches for the research outline.",
+      sessionLabels: ["Research outline", "Source notes"],
     },
     {
       id: "bloom",
       name: "Bloom",
       theme: "Turns rough drafts into clear stories",
       emoji: "🌱",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGPI2NqGFTEQkPj64w8ag5AEPqPgiDgdmAgAoqhy8cqD9UUAAAAASUVORK5CYII=",
+      avatar: syntheticAvatar("green"),
       preview: "The welcome guide now has a shorter opening and clear examples.",
+      sessionLabels: ["Welcome guide", "Story ideas"],
     },
   ] as const;
   const pickerInventory = process.env.MOCK_PICKER_INVENTORY === "1";
@@ -1971,14 +1989,47 @@ async function createChatPickerScenario(
     tokenBudget: 300_000,
     continuationTurns: 3,
   };
-  const sessions = [
-    ...rosterAgents.slice(1).map((agent, index) =>
-      sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
-        agentId: agent.id,
-        isMain: true,
-        lastMessagePreview: agent.preview,
+  const rosterSessions = rosterAgents.flatMap((agent, index) => [
+    sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
+      agentId: agent.id,
+      isMain: true,
+      lastMessagePreview: agent.preview,
+    }),
+    ...agent.sessionLabels.map((label, sessionIndex) => {
+      const working = agent.id === "forge" && sessionIndex === 0;
+      return sessionRow(
+        `agent:${agent.id}:sample-${sessionIndex + 1}`,
+        label,
+        rosterTime - (index + 1) * 60_000 - sessionIndex * 5_000,
+        {
+          agentId: agent.id,
+          pinned: sessionIndex === 0,
+          lastMessagePreview: agent.preview,
+          unread: agent.id === "scout" && sessionIndex === 1,
+          hasActiveRun: working,
+          ...(working ? { activeRunIds: ["mock-forge-dashboard"], status: "running" } : {}),
+        },
+      );
+    }),
+  ]);
+  if (fixture === "sidebar-roster") {
+    rosterSessions.push(
+      sessionRow("agent:forge:subagent:layout", "Check sidebar layout", rosterTime - 20_000, {
+        agentId: "forge",
+        spawnedBy: "agent:forge:sample-1",
+        status: "done",
       }),
-    ),
+      sessionRow("agent:forge:subagent:contrast", "Check nested contrast", rosterTime - 10_000, {
+        agentId: "forge",
+        spawnedBy: "agent:forge:subagent:layout",
+        hasActiveRun: true,
+        status: "running",
+        unread: true,
+      }),
+    );
+  }
+  const gallerySessions = [
+    ...rosterSessions.filter((row) => !row.key.startsWith("agent:main:")),
     ...activitySessions,
     ...dashboardGallerySessions,
     ...(fixture === "workboard"
@@ -2160,6 +2211,7 @@ async function createChatPickerScenario(
       labelPrefix: "Long running session",
     }),
   ];
+  const sessions = fixture === "sidebar-roster" ? rosterSessions : gallerySessions;
   const archivedSessions = [
     sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
       archived: true,
@@ -2199,7 +2251,10 @@ async function createChatPickerScenario(
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const richAttention = fixture === "approval";
-  const cronMocks = buildCronMocks(Date.now(), { richAttention });
+  const cronMocks = buildCronMocks(Date.now(), {
+    richAttention,
+    ...(fixture === "sidebar-roster" ? { secondAgentId: "forge" } : {}),
+  });
   const updateFixtureNow = Date.now();
   const updateFixture = buildUpdateFixture(fixture, updateFixtureNow);
   const updateSchedule = updateFixture?.schedule ?? null;
@@ -2268,6 +2323,14 @@ async function createChatPickerScenario(
     attachments: buildChatAttachmentHistory(baseTime),
     avatars: buildAvatarChatHistory(baseTime),
     "code-fences": buildCodeFenceChatHistory(baseTime),
+    "sidebar-roster": [
+      chatHistoryMessage("user", "Help me organize the sample project.", rosterTime - 120_000),
+      chatHistoryMessage(
+        "assistant",
+        "The project outline is ready. Forge is building the sample dashboard, Scout is reviewing sources, and Bloom is drafting the welcome guide.",
+        rosterTime - 60_000,
+      ),
+    ],
     "update-blocked": buildCancelledChatHistory(baseTime),
   };
   const historyMessages = fixture
@@ -2335,7 +2398,7 @@ async function createChatPickerScenario(
       },
     ],
   } satisfies SystemChangesListResult;
-  return {
+  const scenario: ControlUiMockGatewayScenario = {
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
@@ -3446,7 +3509,11 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_OWNERS),
+          ...buildSessionListCases(
+            fixture === "sidebar-roster" ? sessions : [...sessions, ...archivedSessions],
+            {},
+            MOCK_SESSION_OWNERS,
+          ),
         ],
       },
       "sessions.search": { results: [] },
@@ -3529,6 +3596,55 @@ async function createChatPickerScenario(
     workspace: "/Users/demo/Projects/openclaw",
     workspaceGit: true,
   };
+  if (fixture === "sidebar-roster") {
+    const teamTasks = backgroundTasks.tasks.slice(0, 2).map((task, index) => {
+      const agent = expectDefined(rosterAgents[index], "team task agent");
+      return Object.assign({}, task, {
+        agentId: agent.id,
+        title: agent.sessionLabels[0],
+        sessionKey: `agent:${agent.id}:main`,
+        ownerKey: `agent:${agent.id}:main`,
+        childSessionKey: `agent:${agent.id}:sample-1`,
+      });
+    });
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      "sessions.catalog.list": { catalogs: [] },
+      "tasks.list": {
+        cases: [
+          ...rosterAgents.map(({ id }) => ({
+            match: { agentId: id },
+            response: { tasks: teamTasks.filter((task) => task.agentId === id) },
+          })),
+          { response: { tasks: teamTasks } },
+        ],
+      },
+      "tasks.get": {
+        cases: teamTasks.map((task) => ({
+          match: { taskId: task.id },
+          response: { task },
+        })),
+      },
+      "cron.list": {
+        cases: [
+          ...rosterAgents.flatMap(({ id }) =>
+            cronMocks["cron.list"].cases.map((entry) => {
+              const jobs = entry.response.jobs.filter((job) => job.agentId === id);
+              return {
+                match: { ...entry.match, agentId: id },
+                response: { ...entry.response, jobs, total: jobs.length },
+              };
+            }),
+          ),
+          ...cronMocks["cron.list"].cases,
+        ],
+      },
+    };
+    scenario.sessions = rosterSessions;
+    scenario.repeatingSessionEvents = { events: [] };
+    scenario.sessionGroups = [];
+  }
+  return scenario;
 }
 
 function escapeScriptContent(script: string): string {
@@ -3542,12 +3658,15 @@ async function createMockGatewayPlugin(
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
+  const newAgentWelcome = await buildNewAgentWelcome({
+    engine: { noteAssistantMessage: () => {} },
+  });
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript() +
+    createControlUiPreviewInitScript(newAgentWelcome) +
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
-      backgroundTasksMockInitScript(Date.now()) +
+      (fixture === "sidebar-roster" ? "" : backgroundTasksMockInitScript(Date.now())) +
       approvalMockInitScript(fixture === "approval"),
   );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
@@ -3662,9 +3781,19 @@ async function createMockGatewayPlugin(
     enforce: "pre",
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
+      const rosterPreferenceScript = `<script data-openclaw-sidebar-roster>
+        ${fixture === "sidebar-roster" ? 'localStorage.setItem("openclaw:control-ui:community-invite", JSON.stringify({ dismissedAtMs: Date.now() }));' : ""}
+        if (new URLSearchParams(location.search).get("sidebarAgents") === "roster") {
+          const gatewayUrl = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"].gatewayUrl;
+          const key = "openclaw.control.settings.v1:" + gatewayUrl;
+          const prefs = JSON.parse(localStorage.getItem(key) || "{}");
+          localStorage.setItem(key, JSON.stringify({ ...prefs, gatewayUrl, sidebarAgentsMode: "roster" }));
+          localStorage.setItem("openclaw.control.currentGateway.v1:" + new URL(gatewayUrl).origin, gatewayUrl);
+        }
+      </script>`;
       return html.replace(
         "</head>",
-        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-storage>\n      try {\n        localStorage.setItem("openclaw.i18n.locale", "en");\n      } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-storage>\n      try {\n        localStorage.setItem("openclaw.i18n.locale", "en");\n      } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n${rosterPreferenceScript}\n  </head>`,
       );
     },
   };

@@ -344,6 +344,10 @@ export type CronJobState = Omit<
   forcePreservedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
+  /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
+  runningReceiptId?: string;
+  /** Nonce for a committed schedule edit during the pending run. */
+  runningScheduleChangeId?: string;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** @deprecated Use lastRunStatus. */
@@ -433,7 +437,14 @@ export type CronStoreFile = {
 };
 
 type CronJobStateInput = Partial<
-  Omit<CronJobState, "autoDisabled" | "scheduleActivatedAtMs" | "streamSourceIdentity">
+  Omit<
+    CronJobState,
+    | "autoDisabled"
+    | "scheduleActivatedAtMs"
+    | "streamSourceIdentity"
+    | "runningReceiptId"
+    | "runningScheduleChangeId"
+  >
 >;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */

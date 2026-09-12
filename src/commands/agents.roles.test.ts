@@ -13,6 +13,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { agentsAddCommand } from "./agents.commands.add.js";
 import { agentsTeamCreateCommand } from "./agents.commands.team.js";
+import { ensureOnboardingAgent } from "./onboard-agent.js";
 import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agent-roles-" });
@@ -68,6 +69,31 @@ function existingFleet(root: string): OpenClawConfig {
 }
 
 describe("role and team creation through persisted configuration", () => {
+  it.each([false, true])(
+    "rejects skipped team creation with an existing roster (stale proposal: %s)",
+    async (stale) => {
+      await withState(async (root, configPath) => {
+        const initial: OpenClawConfig = {
+          agents: { entries: { main: { name: "Existing owner" } } },
+        };
+        const original = JSON.stringify(initial);
+        await fs.writeFile(configPath, original);
+        const workspace = path.join(root, "team");
+        await expect(
+          ensureOnboardingAgent({
+            config: stale ? {} : initial,
+            workspace,
+            firstAgent: { name: "coordinator", team: true },
+          }),
+        ).rejects.toThrow(
+          "The requested team was not created because an agent roster already exists",
+        );
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        await expect(fs.access(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
+
   it("preserves an established implicit main and its routing when adding a team", async () => {
     await withState(async (root, configPath) => {
       const workspace = path.join(root, "existing-workspace");

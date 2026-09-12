@@ -375,6 +375,21 @@ instructions, writes declared workspace assets, realizes workspace skills, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
 and retries fail closed when owned content drifted.
 
+With a local Gateway running, Claw add and update apply their plugin requirements
+before continuing to the agent, workspace, MCP, and cron phases. One bounded
+handoff reloads the affected packages after the package leases have been released;
+it does not restart the Gateway or reload unrelated plugins. A live requirement
+batch supports at most 64 plugin packages. Normal package, capability, and trust
+confirmation still apply.
+
+If installation was saved but runtime activation was not confirmed, the command
+reports that distinction and stops before later phases. Inspect the reported
+error and preview again before retrying. An exact retry reuses the saved package
+and retries activation. Successfully realized shared requirements remain installed
+if a later Claw phase fails. Disabled or metadata-only entries remain unevaluated;
+their source has not been verified by runtime execution. With no local Gateway,
+installation retains the existing restart requirement.
+
 ## Inspect installed state
 
 ```bash
@@ -460,7 +475,7 @@ imported heartbeat tasks, uncorroborated monitors, and jobs in another scheduler
 remain blockers.
 Modified files and resources with another current owner are retained or
 blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
-them. Globally installed plugins are retained while this Claw's reference is
+them. By default, globally installed plugins are retained while this Claw's reference is
 released. Removal reports which retained requirements Claw add introduced; use
 the ordinary plugin lifecycle separately when you intend to uninstall a
 process-wide plugin.
@@ -490,7 +505,8 @@ its cleanup record. Correct the reported error, preview removal again, and retry
 to finish cleanup before recreating the agent.
 
 To remove unchanged Claw-introduced references that have no other current
-owner, include `--remove-unused` in both preview and apply. To select exact
+owner, include `--remove-unused` in both preview and apply. Global plugins are
+excluded from this generic cleanup mode. To select exact
 referenced resources instead, repeat `--remove-referenced`:
 
 ```bash
@@ -502,6 +518,22 @@ openclaw claws remove incident-triage \
 Use `--force-referenced` only after reviewing the displayed dependents,
 independent owners, and pre-existing origin. It allows selected cleanup despite
 those conflicts; it does not skip plan-integrity consent.
+
+For a selected plugin, the serving Gateway withdraws its runtime capabilities
+and attempts cleanup before deleting its installed files. The command waits for
+runtime application and reports the resulting Gateway generation without
+restarting the Gateway. Ownership and artifact changes after preview require a
+fresh plan. Cleanup is best effort: warnings appear in the result's `warnings`
+list and in human-readable output, without turning a completed removal into a
+failed result.
+
+If package cleanup fails, removal reports `partial` with `package_cleanup_failed`
+and retains its cleanup record. Earlier removal steps are not rolled back.
+A Gateway runtime replacement failure stops the remaining package phase and
+reports unattempted packages as retained, alongside earlier outcomes and warnings.
+Ordinary package errors continue best-effort cleanup of the other selections.
+Resolve the reported failure, preview again, and retry; a lost connection never
+causes an automatic local uninstall.
 
 ## Export an installed agent
 

@@ -136,7 +136,7 @@ openclaw onboard
 Sets up model and auth for common providers without hand-editing config, including OpenAI Codex subscription OAuth and Anthropic (API key or Claude CLI reuse).
 
 With no primary model configured, fresh OpenAI API-key and ChatGPT/Codex OAuth
-setup select the exact `openai/gpt-5.6-sol` catalog ref. The bare direct-API
+setup select the exact `openai/gpt-6-astra` catalog ref. The bare direct-API
 `openai/gpt-5.6` alias remains supported and resolves to the Sol tier.
 Reauthentication preserves an existing explicit primary model, including
 `openai/gpt-5.5`. If GPT-5.6 is unavailable to the account, select

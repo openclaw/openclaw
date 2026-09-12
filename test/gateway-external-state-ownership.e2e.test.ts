@@ -4,11 +4,9 @@ import { withStateSchemaFence } from "../src/infra/state-database-coordinator.js
 import { readUpdateRunDriver, type UpdateRunDriver } from "../src/infra/update-run-driver.js";
 import { createUpdateRun, finishUpdateRun } from "../src/infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../src/infra/update-run-timeouts.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../src/state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { withEnv } from "../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,

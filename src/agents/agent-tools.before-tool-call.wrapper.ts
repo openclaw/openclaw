@@ -68,14 +68,11 @@ import {
   validateToolExecutionParams,
 } from "./agent-tools.execution-validation.js";
 import {
-  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
   clearBeforeToolCallWrappedMarker,
   getBeforeToolCallDiagnosticOptions,
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
+  setBeforeToolCallMetadata,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
@@ -690,11 +687,9 @@ export function wrapToolWithBeforeToolCallHook(
     }
   };
   copyBeforeToolCallWrapperMetadata(tool, wrappedTool);
-  Object.defineProperties(wrappedTool, {
-    [BEFORE_TOOL_CALL_WRAPPED]: { value: true, enumerable: true },
-    [BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS]: { value: hookOptions, enumerable: false },
-    [BEFORE_TOOL_CALL_SOURCE_TOOL]: { value: tool, enumerable: false },
-    [BEFORE_TOOL_CALL_HOOK_CONTEXT]: { value: ctx, enumerable: false },
+  setBeforeToolCallMetadata(wrappedTool, tool, {
+    diagnosticOptions: hookOptions,
+    hookContext: ctx,
   });
   return wrappedTool;
 }

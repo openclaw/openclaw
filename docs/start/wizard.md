@@ -142,11 +142,29 @@ changes.
 ## Choose one agent or a team
 
 When guided onboarding creates the first agent, choose **One agent** (the
-default) or **A small team: a coordinator plus specialists**. The team choice
-uses the same preset as `openclaw agents team create`: a coordinator, researcher,
+default) or **A small team: a chief of staff plus specialists**. The team choice
+uses the same preset as `openclaw agents team create`: a chief of staff (`coordinator`), researcher,
 writer, and reviewer with separate workspaces, completed identities, and written
-role contracts. The coordinator delegates suitable tasks and verifies specialist
+role contracts. The chief of staff delegates suitable tasks and verifies specialist
 results before reporting to you.
+
+Guided setup creates the team after the selected provider passes its connection
+check. A failed check returns to provider selection without creating team members.
+Choosing **Skip** creates the workspaces for later use and reports that AI access
+still needs configuration.
+Guided setup remembers the chosen coordinator across restarts, including an
+interruption after provider activation but before member creation.
+
+For a team, `--workspace` is the parent directory; every member uses
+`<workspace>/<agent-id>`. After all members have been created, interrupted setup
+keeps that parent as its recovery workspace. Retry
+`openclaw onboard --workspace <workspace>` without `--team` to finish setup. Completion
+checks the full team roster and every member's workspace before closing the
+setup receipt; an incomplete or changed team stays pending with an error.
+
+If member creation itself fails, already-created members are retained and are
+not recreated automatically. Inspect `openclaw agents list` and repair the
+incomplete roster before retrying setup.
 
 Select the team directly in an interactive or non-interactive run with `--team`:
 
@@ -227,7 +245,7 @@ Local mode (default) walks through these steps:
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
    Fresh OpenAI API-key and ChatGPT/Codex setup default to
-   `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+   `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
    supported and resolves to Sol. Re-running setup preserves an existing
    explicit model, including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
    account does not expose GPT-5.6.

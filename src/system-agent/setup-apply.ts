@@ -1,4 +1,3 @@
-import path from "node:path";
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
@@ -21,7 +20,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
 import {
@@ -32,6 +31,7 @@ import {
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
 import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js";
+import { matchesLocalSetupWorkspace } from "./setup-recovery.js";
 
 /**
  * The whole first-run setup as one approved operation: the user says "yes" in
@@ -44,6 +44,8 @@ export type SystemAgentSetupApplyParams = {
   workspace: string;
   /** Selected first agent when setup starts without a persisted roster. */
   firstAgent?: FirstOnboardingAgent;
+  /** Coordinator recorded by the owning team setup receipt. */
+  teamCoordinatorId?: string;
   /** Explicit interactive approval to replace an existing fleet workspace root. */
   allowWorkspaceChange?: boolean;
   /** Exact default-agent route whose inference passed the setup gate. */
@@ -164,6 +166,11 @@ export async function applySystemAgentSetup(
   assertCommitPreconditions?.(snapshotConfig.sourceConfig);
   const configHashBefore = resolveConfigSnapshotHash(snapshot);
   const startedWithoutAuthoredRoster = !hasResolvedRosterBeforeMigrations(snapshot);
+  if (params.firstAgent?.team && !startedWithoutAuthoredRoster) {
+    throw new Error(
+      "The requested team was not created because an agent roster already exists. Use `openclaw agents team create` to add a team.",
+    );
+  }
   const onboardingSourceConfig =
     snapshot.sourceConfigBeforeMigrations ?? snapshotConfig.sourceConfig;
   const initialWorkspaceConflict = resolveOnboardingWorkspaceConflict(
@@ -174,6 +181,17 @@ export async function applySystemAgentSetup(
     initialWorkspaceConflict && !params.allowWorkspaceChange
       ? initialWorkspaceConflict.currentWorkspaceDir
       : workspace;
+  let teamCoordinatorId =
+    params.teamCoordinatorId ??
+    (params.firstAgent?.team ? normalizeAgentId(params.firstAgent.name) : undefined);
+  if (!teamCoordinatorId && assertCommitPreconditions) {
+    const candidateId = resolveSystemAgentOnboardingTarget(snapshotConfig.runtimeConfig).agentId;
+    if (
+      await matchesLocalSetupWorkspace(snapshotConfig.runtimeConfig, setupWorkspace, candidateId)
+    ) {
+      teamCoordinatorId = candidateId;
+    }
+  }
   let verifiedRoute = params.expectedInferenceRoute;
   let guardedExpectedAgentId = expectedAgentId;
   let guardedExpectedAgentDir = expectedAgentDir;
@@ -407,15 +425,13 @@ export async function applySystemAgentSetup(
       // This is the auth/config operation's linearization point. Never hold
       // the synchronous cross-store guard across async config I/O.
       if (assertCommitPreconditions) {
+        const matchesWorkspace = await matchesLocalSetupWorkspace(
+          finalizedConfig,
+          setupWorkspace,
+          teamCoordinatorId,
+        );
         assertCommitPreconditions(currentSnapshot.sourceConfig);
-        if (
-          resolveUserPath(resolveSetupTarget(finalizedConfig).workspaceDir) !==
-          resolveUserPath(
-            params.firstAgent?.team
-              ? path.join(setupWorkspace, normalizeAgentId(params.firstAgent.name))
-              : setupWorkspace,
-          )
-        ) {
+        if (!matchesWorkspace) {
           throw new Error(
             "Another onboarding run owns a different workspace. Retry onboarding with its approved workspace.",
           );
