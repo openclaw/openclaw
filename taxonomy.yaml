@@ -625,14 +625,40 @@ surfaces:
           - name: Event scoping
             coverageIds: [gateway.event-scoping]
             description: Broadcast event scoping, including fail-closed behavior for unknown event families.
+          - name: People and session attribution
+            coverageIds: [gateway.people-and-session-attribution]
+            description: Durable profiles plus distinct creator, owner, and participant history for collaborative sessions.
+          - name: Session sharing and identity-scoped state
+            coverageIds: [gateway.session-sharing-and-identity-scoped-state]
+            description: Explicit membership, public links, mentions, and private drafts without treating visibility as authorization.
+          - name: Personal model accounts
+            coverageIds: [gateway.personal-model-accounts]
+            description: Profile-owned provider credentials and session-sticky account selection on shared infrastructure.
+          - name: Agent bindings and ownership
+            coverageIds: [gateway.agent-bindings-and-ownership]
+            description: Deterministic account and conversation routing plus assignable human or agent session ownership.
+          - name: Shared and tenant trust boundaries
+            coverageIds: [gateway.shared-and-tenant-trust-boundaries]
+            description: One explicit trust domain for shared collaboration and separate Gateway cells for tenant isolation.
+          - name: Identity and decision receipts
+            coverageIds: [gateway.identity-and-decision-receipts]
+            description: Opt-in metadata-only inspection that distinguishes attribution, enforcement, unknown evidence, and delivery outcomes.
         docs:
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
+          - docs/concepts/multi-user.md
+          - docs/concepts/agent-bindings.md
+          - docs/gateway/multi-tenant-hosting.md
+          - docs/gateway/audit.md
         search_anchors:
           - "gateway runtime and websocket protocol gateway runtime websocket feature matrix: roles, scopes, and operator policy"
           - "gateway runtime websocket feature matrix: roles, scopes, and operator policy"
+          - shared gateway people ownership and attribution
+          - shared session visibility and personal model accounts
+          - agent bindings and ownership
+          - tenant trust boundaries and decision receipts
         category_note: roles-scopes-and-operator-policy.md
-        human_lts_override: true
+        human_lts_override: false
       - name: Gateway Lifecycle
         id: gateway-lifecycle
         features:
@@ -4971,11 +4997,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: app-sdk
-    name: OpenClaw App SDK
+    name: External apps and interoperability
     family: core
     level: alpha
     level_code: M2
-    rationale: OpenClaw App SDK is a distinct external app contract separate from Gateway runtime and Plugin SDK. Current scoring shows a real `@openclaw/sdk` path with gaps around public packaging, auto-discovery, approvals, helpers, and compatibility.
+    rationale: External apps can use the public SDK, attach to sessions, or interoperate through ACP/ACPX, MCP, and A2A. These paths are real but still have uneven packaging, discovery, transport, approval, and compatibility guarantees.
     completeness_instructions: references/completeness/openclaw-app-sdk.md
     categories:
       - name: Client API
@@ -5021,10 +5047,17 @@ surfaces:
           - name: Scopes and redaction
             coverageIds: [app-sdk.scopes-and-redaction]
             description: Token scopes, secret-forwarding defaults, and redaction boundaries.
+          - name: External app grants and session attachment
+            coverageIds: [app-sdk.external-app-grants-and-session-attachment]
+            description: Explicit external-app access grants and attachment to existing Gateway sessions without private runtime coupling.
+          - name: Session URLs and cross-client continuity
+            coverageIds: [app-sdk.session-urls-and-cross-client-continuity]
+            description: Stable session references that preserve focus and continuity across CLI, browser, IDE, and external clients.
         docs:
           - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
+          - docs/cli/attach.md
         search_anchors:
           - Connect to a Gateway
           - explicit URL/token handling
@@ -5032,6 +5065,8 @@ surfaces:
           - gateway auto
           - Security model
           - token scopes
+          - external app grants and session attachment
+          - session URLs and cross-client continuity
         category_note: gateway-access.md
         human_lts_override: false
       - name: Agent Conversations
@@ -5147,10 +5182,26 @@ surfaces:
           - name: Public package contract
             coverageIds: [app-sdk.public-package-contract]
             description: Package publication and reusable-client expectations tracked explicitly.
+          - name: ACP and ACPX harness sessions
+            coverageIds: [app-sdk.acp-acpx-harness-sessions]
+            description: Persistent and one-shot harness sessions across the ACP bridge, ACPX clients, IDEs, and configured coding agents.
+          - name: MCP server exposure
+            coverageIds: [app-sdk.mcp-server-exposure]
+            description: Deliberate exposure of OpenClaw tools and resources through supported MCP server transports.
+          - name: MCP client registry, transport, OAuth, and apps
+            coverageIds: [app-sdk.mcp-client-registry-transport-oauth-apps]
+            description: Registered MCP clients with bounded transports, authentication, app surfaces, and operator diagnostics.
+          - name: A2A discovery, tasks, and peers
+            coverageIds: [app-sdk.a2a-discovery-tasks-and-peers]
+            description: A2A 1.0 Agent Card discovery, inbound and outbound task lifecycle, polling, peer configuration, and session isolation.
         docs:
           - docs/gateway/external-apps.md
           - docs/concepts/typebox.md
           - docs/gateway/protocol.md
+          - docs/cli/acp.md
+          - docs/cli/mcp.md
+          - docs/tools/mcp.md
+          - docs/channels/a2a.md
         search_anchors:
           - Generated client strategy
           - Gateway schemas
@@ -5158,6 +5209,9 @@ surfaces:
           - Explicitly unsupported today
           - unsupported environment mutations
           - future per-run overrides
+          - ACP ACPX harness sessions
+          - MCP server client registry transport OAuth apps
+          - A2A discovery tasks outbound peers
         category_note: compatibility.md
         human_lts_override: false
     last_score_run:

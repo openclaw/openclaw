@@ -210,6 +210,7 @@ function markdownSlug(value: string): string {
 }
 
 const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
+  "app-sdk": ["openclaw-app-sdk"],
   automation: ["automation-cron-hooks-tasks-polling"],
   "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],

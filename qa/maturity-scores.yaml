@@ -28,14 +28,14 @@ surfaces:
       label: Stable
     scores:
       quality:
-        score: 81
+        score: 80
         label: Stable
       completeness:
-        score: 89
+        score: 88
         label: Stable
     lts:
       status: partial
-      supported_categories: 12
+      supported_categories: 11
       total_categories: 13
     last_score_run:
       status: complete
@@ -145,15 +145,15 @@ surfaces:
           human_override: true
       - name: Roles and Permissions
         quality:
-          score: 75
+          score: 70
           label: Beta
         completeness:
-          score: 89
-          label: Stable
+          score: 72
+          label: Beta
         lts:
-          supported: true
-          reason: human_override
-          human_override: true
+          supported: false
+          reason: none
+          human_override: false
       - name: Gateway Lifecycle
         quality:
           score: 90
@@ -1459,7 +1459,7 @@ surfaces:
           reason: none
           human_override: false
   - id: app-sdk
-    name: OpenClaw App SDK
+    name: External apps and interoperability
     family: core
     level:
       id: alpha
@@ -1467,10 +1467,10 @@ surfaces:
       label: Alpha
     scores:
       quality:
-        score: 54
+        score: 53
         label: Alpha
       completeness:
-        score: 53
+        score: 51
         label: Alpha
     lts:
       status: none
@@ -1496,10 +1496,10 @@ surfaces:
           human_override: false
       - name: Gateway Access
         quality:
-          score: 53
+          score: 50
           label: Alpha
         completeness:
-          score: 54
+          score: 50
           label: Alpha
         lts:
           supported: false
@@ -1540,10 +1540,10 @@ surfaces:
           human_override: false
       - name: Compatibility
         quality:
-          score: 54
+          score: 50
           label: Alpha
         completeness:
-          score: 55
+          score: 50
           label: Alpha
         lts:
           supported: false
