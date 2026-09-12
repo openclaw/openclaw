@@ -1,4 +1,5 @@
 // Signal plugin module owns raw-envelope durable ingress mapping and draining.
+import { performance } from "node:perf_hooks";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -32,11 +33,13 @@ type SignalIngressEventFacts = {
   eventId: string;
   laneKey: string;
   numberAliasEventId?: string;
+  timestamp: number;
 };
 
 type SignalPreparedIngressEvent = [
   event: SignalSseEvent,
   parsedPayload: SignalReceivePayload | null | undefined,
+  admissionStartedAt?: number,
 ];
 
 type SignalIngressPayload = {
@@ -139,6 +142,7 @@ function inspectSignalIngressEvent(
     normalizeRawString(dataGroup?.groupId) ?? normalizeRawString(reactionGroup?.groupId);
   return {
     eventId: JSON.stringify([senderKey, timestamp]),
+    timestamp,
     laneKey: groupId ? `group:${groupId}` : `direct:${senderKey}`,
     ...(senderUuid && senderNumber
       ? { numberAliasEventId: JSON.stringify([`number:${senderNumber}`, timestamp]) }
@@ -198,15 +202,29 @@ export async function startSignalIngressMonitor(params: {
     },
     deliver: ([event, parsedPayload], lifecycle) =>
       parsedPayload ? params.dispatch(event, lifecycle, parsedPayload) : undefined,
-    onDurableAdmission: async (_event, { facts, isNew }) => {
-      const { numberAliasEventId } = facts as SignalIngressEventFacts;
-      if (!numberAliasEventId) {
-        return;
-      }
+    onDurableAdmission: async (prepared, { facts, receivedAt, isNew }) => {
+      const admissionStartedAt = prepared[2];
+      const { numberAliasEventId, timestamp } = facts as SignalIngressEventFacts;
       // signal-cli can learn or forget a UUID between redeliveries; bridge both
       // shipped sender IDs before the monitor releases its admission/claim lock.
-      if (!(await ingressQueue.complete(numberAliasEventId)) && isNew) {
+      if (numberAliasEventId && !(await ingressQueue.complete(numberAliasEventId)) && isNew) {
         await ingressQueue.complete(facts.eventId);
+        return;
+      }
+      if (!isNew || admissionStartedAt === undefined) {
+        return;
+      }
+      try {
+        params.runtime.log?.(
+          JSON.stringify({
+            signalIngressTiming: true,
+            // Signed age compares two wall clocks; it is not transport latency.
+            envelopeAgeAtIngressSeconds: Math.trunc((receivedAt - timestamp) / 1_000),
+            localAdmissionElapsedMs: Math.round(performance.now() - admissionStartedAt),
+          }),
+        );
+      } catch {
+        // Admission and alias handling already succeeded; logging cannot undo them.
       }
     },
     pollIntervalMs: SIGNAL_INGRESS_DRAIN_INTERVAL_MS,
@@ -228,7 +246,7 @@ export async function startSignalIngressMonitor(params: {
 
   return {
     receive: async (event) => {
-      await monitor.admit([event, undefined]);
+      await monitor.admit([event, undefined, performance.now()]);
       await monitor.waitForPumpIdle();
     },
     stop: monitor.stop,

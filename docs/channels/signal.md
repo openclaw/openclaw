@@ -304,6 +304,39 @@ Allowed group messages that do not mention the bot stay silent and are kept only
 - Replies to inbound messages include native Signal quote metadata when the backend accepts the inbound timestamp and author; if quote metadata is missing or rejected, OpenClaw sends the reply as a normal message.
 - Configure native quote use with `channels.signal.replyToMode = off | first | all | batched`, or `channels.signal.replyToModeByChatType.direct/group` for per-chat-type overrides. Account-level values under `channels.signal.accounts.<id>` take precedence.
 
+### Ingress timing
+
+After a new logical Signal envelope completes durable admission and identity-alias
+handling, the Signal plugin emits one informational record:
+
+```json
+{
+  "signalIngressTiming": true,
+  "envelopeAgeAtIngressSeconds": 240,
+  "localAdmissionElapsedMs": 5
+}
+```
+
+`envelopeAgeAtIngressSeconds` is the local ingress observation time minus the
+validated envelope timestamp, truncated toward zero to whole seconds. It compares
+two wall clocks, preserves negative ages, and is not a transport latency or SLA.
+`localAdmissionElapsedMs` uses a monotonic clock, rounded to milliseconds. It
+includes serialized queue waiting, insertion, and identity-alias handling, but
+excludes waiting for agent dispatch. For example, `240s / 5ms` distinguishes an
+already-old envelope from the slow local admission represented by `1s / 239000ms`.
+Neither pair establishes the cause of a delay.
+
+Concrete and identity-alias duplicates recognized within the existing tombstone
+window do not emit another record. Recovered rows, failed admission, and ignored
+transport-only envelopes do not invent new receive timings. The record contains
+only the marker and two durations, not message content, source or destination IDs,
+account or group IDs, event IDs, session keys, attachments, or exact source timestamps.
+No timing fields are added to persistent state. Logging failure cannot fail admission.
+
+These records add log volume and reveal coarse activity patterns, so existing log
+retention and access controls still apply. A record proves admission, not
+authorization, execution, reply delivery, or device receipt.
+
 ## Media + limits
 
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
