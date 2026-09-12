@@ -195,10 +195,25 @@ export function createDiscordMessageReplyRuntime(params: {
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
+  let sessionStreamingMode: unknown;
+  if (ctxPayload.SessionKey) {
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      sessionStreamingMode = getSessionEntry({
+        agentId: route.agentId,
+        readConsistency: "latest",
+        sessionKey: ctxPayload.SessionKey,
+        storePath,
+      })?.streamingMode;
+    } catch (err) {
+      logVerbose(`discord stream mode session lookup failed: ${String(err)}`);
+    }
+  }
   const draftPreview = createDiscordDraftPreviewController({
     groupThread: Boolean(ctxPayload.GroupThread),
     cfg,
     discordConfig,
+    sessionStreamingMode,
     accountId,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,

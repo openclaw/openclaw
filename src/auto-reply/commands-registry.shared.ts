@@ -128,6 +128,7 @@ function defineBuiltinCommand(
     nativeProviders: options.nativeProviders
       ? normalizeStringEntries(options.nativeProviders)
       : undefined,
+    nativeChannelCapability: options.nativeChannelCapability,
     description,
     ...(options.descriptionLocalizations
       ? { descriptionLocalizations: options.descriptionLocalizations }
@@ -611,6 +612,17 @@ export function buildBuiltinChatCommands(
             "default",
             "status",
           ],
+        }),
+      ],
+      argsMenu: "auto",
+    }),
+    defineBuiltinCommand("stream", "Set chat preview streaming mode.", "options", "standard", {
+      nativeAliases: ["streaming"],
+      nativeChannelCapability: "sessionStreaming",
+      textAliases: ["/stream", "/streaming"],
+      args: [
+        defineCommandArgument("mode", "Preview streaming mode", {
+          choices: ["status", "off", "partial", "block", "progress", "default"],
         }),
       ],
       argsMenu: "auto",

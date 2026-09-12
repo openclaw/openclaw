@@ -26,6 +26,7 @@ import type {
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { StreamingMode } from "../types.base.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type {
@@ -482,6 +483,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     };
     fastMode?: FastMode;
     toolOverrides?: SessionToolOverrides;
+    /** Per-session preview streaming override for supported channels. */
+    streamingMode?: StreamingMode;
     /** Swarm group for collector-mode child sessions. */
     swarmGroupId?: string;
     /** Marks non-interactive collector-mode child sessions. */
