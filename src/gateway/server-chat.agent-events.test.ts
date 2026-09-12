@@ -634,6 +634,37 @@ describe("agent event handler", () => {
     );
   });
 
+  it("sizes retained progress once when a live event evicts old reconnect activity", () => {
+    const { chatRunState, handler } = createHarness();
+    registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
+    const emit = (seq: number) =>
+      emitAgentEvent(
+        handler,
+        "provider-run",
+        "item",
+        { kind: "preamble", itemId: `item-${seq}`, progressText: "x".repeat(2_048) },
+        { seq },
+      );
+    for (let seq = 1; seq <= 50; seq += 1) {
+      emit(seq);
+    }
+    const retained = chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1);
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      emit(51);
+      expect(
+        stringify.mock.calls.filter(([value]) => value === retained).length,
+      ).toBeLessThanOrEqual(1);
+      const snapshot = chatRunState.runs.get("client-run")?.progressSnapshot;
+      expect(snapshot?.events).toHaveLength(50);
+      expect(snapshot?.events[0]?.seq).toBe(2);
+      expect(snapshot?.events.at(-1)?.seq).toBe(51);
+    } finally {
+      stringify.mockRestore();
+      handler.dispose();
+    }
+  });
+
   it("replays cumulative usage with the same client identity as live delivery", () => {
     const { chatRunState, handler, broadcast } = createHarness();
     registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
