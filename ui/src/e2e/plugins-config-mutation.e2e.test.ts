@@ -136,11 +136,7 @@ suite.define(() => {
 
         const pendingDraft = await gateway.waitForRequest("config.set");
         expect(pendingDraft.params).toMatchObject({ baseHash: "config-hash-1" });
-        await gateway.resolveDeferred("config.set", {
-          ok: true,
-          hash: "config-hash-2",
-          config: JSON.parse(String(pendingDraft.params.raw)),
-        });
+        await gateway.resolveDeferred("config.set");
 
         const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
         expect(enableRequest.params).toEqual({ pluginId: "workboard", enabled: true });

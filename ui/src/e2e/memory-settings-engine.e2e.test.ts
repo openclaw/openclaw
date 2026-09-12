@@ -102,11 +102,7 @@ suite.define(() => {
               path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
             });
         }
-        await gateway.resolveDeferred("config.set", {
-          ok: true,
-          hash: "mock-config-hash-1",
-          config: JSON.parse(String(pendingOffSave.params.raw)),
-        });
+        await gateway.resolveDeferred("config.set");
         const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
         expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
 
