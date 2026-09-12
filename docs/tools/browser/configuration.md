@@ -12,6 +12,15 @@ read_when:
 
 Browser settings live in `~/.openclaw/openclaw.json`.
 
+With Gateway hot reload enabled, changing `browser.enabled`,
+`browser.evaluateEnabled`, or `browser.ssrfPolicy` replaces only the Browser
+control service. Pending browser operations are cancelled and OpenClaw-owned
+Chrome processes close before the new policy applies. The Gateway and other
+plugins keep running. Attached and remote browser processes stay open, but
+OpenClaw disconnects its control sessions. Browser control starts again on the
+next request when enabled; managed tabs from the retired process are not kept.
+Extension relay configuration still requires a Gateway restart.
+
 ```json5
 {
   browser: {

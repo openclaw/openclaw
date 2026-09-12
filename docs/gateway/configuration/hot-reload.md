@@ -97,6 +97,7 @@ back to OpenClaw.
 | Gateway auth limits       | `gateway.auth.rateLimit`                                                                                                                                                                                                                                           | No (retains limiter state)             |
 | Discovery visibility      | `discovery.mdns.mode`                                                                                                                                                                                                                                              | No (replaces discovery advertisements) |
 | Browser defaults          | `browser.profiles`, `browser.defaultProfile`, `browser.headless`, `browser.executablePath`, `browser.attachOnly`, `browser.cdpUrl`, `browser.noSandbox`, `browser.extraArgs`, `browser.snapshotDefaults`, `browser.tabCleanup`, `browser.allowSystemProfileImport` | No                                     |
+| Browser control policy    | `browser.enabled`, `browser.evaluateEnabled`, `browser.ssrfPolicy`                                                                                                                                                                                                 | No (replaces Browser control service)  |
 | Gateway server            | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                                                                                                          | **Yes**                                |
 | Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                                                    | **Yes**                                |
 
@@ -173,9 +174,14 @@ in force until that restart completes or its rejected changes are reverted.
 
 Browser default-profile changes apply on the next request. Launch-setting
 changes replace affected managed browser processes when next used; externally
-attached browsers stay running. Browser enablement, evaluation, SSRF policy,
-and extension relay remain restart-owned. Snapshot defaults apply to the next
-snapshot, and tab-cleanup settings apply on the next sweep.
+attached browsers stay running. Browser enablement, evaluation, and SSRF policy
+changes replace only the Browser control service: pending operations cancel and
+owned Chrome processes close before the new policy applies. Attached and remote
+browser processes stay open while OpenClaw disconnects its control sessions.
+When enabled, Browser control starts again on demand; managed tabs from the
+retired process are not kept. Extension relay settings still require a Gateway
+restart. Snapshot defaults apply to the next snapshot, and tab-cleanup settings
+apply on the next sweep.
 
 Authentication rate-limit changes retain recorded failures, earned lockout
 deadlines, and pending loopback delays. New limits and loopback exemptions apply

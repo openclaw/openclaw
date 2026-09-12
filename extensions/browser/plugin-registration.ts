@@ -255,6 +255,11 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   };
   return {
     id: "browser-control",
+    // Policy changes drain the service's generation before adopting new values.
+    // Profile-level refresh keeps the admitted policy until this owner stops.
+    reload: {
+      configPrefixes: ["browser.enabled", "browser.evaluateEnabled", "browser.ssrfPolicy"],
+    },
     start: async (ctx) => {
       if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
         return;
