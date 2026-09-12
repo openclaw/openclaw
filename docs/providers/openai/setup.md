@@ -262,12 +262,14 @@ sidebarTitle: "Setup"
     failing route:
 
     ```bash
-    openclaw models auth login --provider openai
+    openclaw models auth login --agent <id> --provider openai
     openclaw models status --agent <id> --probe --probe-provider openai
     ```
 
-    If you use multiple profiles, include the same `--agent <id>` and
-    `--profile-id` selectors used by that route. A standalone `codex login`
+    If you use multiple profiles, include the same `--agent <id>` selector
+    used by that route. The selectors differ between the two commands: login
+    names its profiles with `--profile-id`, while `models status` probes
+    select profiles with `--probe-profile`. A standalone `codex login`
     updates native Codex user-home credentials; it does not replace an
     OpenClaw-managed OAuth profile. Native user-home authentication is a
     separate, explicitly configured mode described in the
