@@ -179,6 +179,20 @@ export function createMatrixReplyDispatcher(config: {
           );
         }
 
+        const deliverFallback = async () =>
+          await deliverMatrixReplies({
+            cfg,
+            replies: [fallbackPayload],
+            roomId,
+            client,
+            runtime,
+            replyToMode,
+            hasRepliedRef,
+            threadId: threadTarget,
+            replyToId: threadTarget ?? replyToEventId ?? undefined,
+            accountId,
+            mediaLocalRoots,
+          });
         const payloadReplyMismatch =
           ((!threadTarget && replyToMode !== "off") ||
             payload.replyToTag ||
@@ -292,20 +306,7 @@ export function createMatrixReplyDispatcher(config: {
               fallbackResult = await settleDraftReplacement({
                 draftEventId,
                 draftContent: draftStream.content() ?? preparedFinalPreviewContent,
-                deliver: async () =>
-                  await deliverMatrixReplies({
-                    cfg,
-                    replies: [fallbackPayload],
-                    roomId,
-                    client,
-                    runtime,
-                    replyToMode,
-                    hasRepliedRef,
-                    threadId: threadTarget,
-                    replyToId: threadTarget ?? replyToEventId ?? undefined,
-                    accountId,
-                    mediaLocalRoots,
-                  }),
+                deliver: deliverFallback,
               });
               return fallbackResult.visibleReplySent;
             },
@@ -434,20 +435,6 @@ export function createMatrixReplyDispatcher(config: {
             payloadReplyMismatch ||
             mustDeliverFinalNormally ||
             draftFinalTextNeedsNormalMentionDelivery);
-        const deliverFallback = async () =>
-          await deliverMatrixReplies({
-            cfg,
-            replies: [fallbackPayload],
-            roomId,
-            client,
-            runtime,
-            replyToMode,
-            hasRepliedRef,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-          });
         const draftContent = draftStream.content();
         if (shouldRedactDraft && draftEventId && draftContent) {
           return await completeDelivery(
