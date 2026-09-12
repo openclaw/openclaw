@@ -2,6 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { normalizeBasePath } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
@@ -208,6 +209,12 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     if (copyLink) {
       const copied = await copyToClipboard(href);
       showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+      return;
+    }
+    // The native macOS shell rejects synthetic about:blank popups before the
+    // deferred navigation can commit, so hand the final URL to its trusted
+    // link bridge instead; window.open below stays the browser fallback.
+    if (postNativeExternalLink(href)) {
       return;
     }
     // Reserve an inert page so popup blocking remains observable, and detach

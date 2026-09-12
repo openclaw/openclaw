@@ -58,6 +58,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("session menu navigation actions", () => {
@@ -151,6 +152,49 @@ describe("session menu navigation actions", () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     await runSessionNavigationAction("open-new-window", fixture().params);
     expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.openWindowBlocked") });
+  });
+
+  it.each(["open-new-tab", "open-new-window"] as const)(
+    "hands %s to the native shell link bridge instead of a blocked popup",
+    async (kind) => {
+      const postMessage = vi.fn();
+      vi.stubGlobal("webkit", {
+        messageHandlers: { openclawLink: { postMessage } },
+      });
+      const open = vi.spyOn(window, "open");
+      const { params } = fixture();
+      Object.assign(params.context.gateway.snapshot.hello!, {
+        controlUiUrl: "https://gateway.example.test/remote",
+      });
+      await runSessionNavigationAction(kind, params);
+      expect(postMessage).toHaveBeenCalledWith({
+        type: "open-link",
+        url: `${window.location.origin}/control/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
+        target: "external",
+      });
+      expect(open).not.toHaveBeenCalled();
+      expect(showToast).not.toHaveBeenCalled();
+    },
+  );
+
+  it("falls back to the browser popup when the native link bridge rejects the post", async () => {
+    vi.stubGlobal("webkit", {
+      messageHandlers: {
+        openclawLink: {
+          postMessage: vi.fn(() => {
+            throw new Error("bridge unavailable");
+          }),
+        },
+      },
+    });
+    const opened = { opener: window, location: { replace: vi.fn() } };
+    const open = vi.spyOn(window, "open").mockReturnValue(opened as unknown as Window);
+    await runSessionNavigationAction("open-new-window", fixture().params);
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank", "popup");
+    expect(opened.location.replace).toHaveBeenCalledWith(
+      `${window.location.origin}/control/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
+    );
+    expect(showToast).not.toHaveBeenCalled();
   });
 
   it("copies every history page chronologically without duplicating replayed records", async () => {
