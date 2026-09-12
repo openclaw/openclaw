@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -75,7 +75,7 @@ async function capture(reply = "reply") {
   const root = await mkdtemp(path.join(os.tmpdir(), "tg-record-"));
   try {
     execFileSync(
-      "python",
+      process.platform === "win32" ? "python" : "python3",
       [
         "test/fixtures/mantis-telegram-recorder.py",
         path.resolve(".agents/skills/telegram-e2e-userbot/scripts/user-record.py"),
@@ -174,7 +174,9 @@ describe("Complete canonical recorder observations", () => {
   });
 });
 async function ingressFixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "tg-ingress-"));
+  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+  const socketBase = process.platform === "win32" ? os.tmpdir() : await realpath("/tmp");
+  const root = await mkdtemp(path.join(socketBase, "oc-tg-ingress-"));
   const socket =
     process.platform === "win32"
       ? `\\\\.\\pipe\\mantis-${randomUUID()}`

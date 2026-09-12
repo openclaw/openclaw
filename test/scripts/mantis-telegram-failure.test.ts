@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -95,7 +95,7 @@ describe("Telegram failure diagnostics", () => {
         await writeFile(archive, await zip.generateAsync({ type: "nodebuffer" }));
         const run = () =>
           execFileSync(
-            "python",
+            process.platform === "win32" ? "python" : "python3",
             [
               "-I",
               "-S",
@@ -134,7 +134,9 @@ describe("Telegram failure diagnostics", () => {
   ] as const)(
     "records %s through the real ingress without raw error or request data",
     async (expected) => {
-      const root = await mkdtemp(path.join(os.tmpdir(), "tg-diagnostic-ingress-"));
+      // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+      const socketBase = process.platform === "win32" ? os.tmpdir() : await realpath("/tmp");
+      const root = await mkdtemp(path.join(socketBase, "oc-tg-diag-"));
       const socket =
         process.platform === "win32"
           ? `\\\\.\\pipe\\mantis-${randomUUID()}`
