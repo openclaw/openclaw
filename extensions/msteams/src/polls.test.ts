@@ -1,6 +1,7 @@
 // Msteams tests cover polls plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   createPluginStateKeyedStoreForTests,
@@ -175,12 +176,13 @@ describe("state poll store", () => {
     try {
       const defaultStore = createMSTeamsPollStoreState({ stateDir });
       const busyStore = createMSTeamsPollStoreState({ stateDir, accountId: "busy" });
+      const createdAtMs = Date.now();
       await defaultStore.createPoll({
         id: "default-poll",
         question: "Default?",
         options: ["A", "B"],
         maxSelections: 1,
-        createdAt: "2026-08-01T00:00:00.000Z",
+        createdAt: new Date(createdAtMs).toISOString(),
         votes: {},
       });
 
@@ -190,7 +192,7 @@ describe("state poll store", () => {
           question: "Busy?",
           options: ["A", "B"],
           maxSelections: 1,
-          createdAt: new Date(Date.UTC(2026, 7, 1, 0, 0, index)).toISOString(),
+          createdAt: new Date(createdAtMs + index).toISOString(),
           votes: {},
         });
       }

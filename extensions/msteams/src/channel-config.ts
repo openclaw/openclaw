@@ -52,8 +52,10 @@ export const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicy
       account.accountId === DEFAULT_ACCOUNT_ID && !hasAccountPolicyOverride
         ? "channels.msteams"
         : `channels.msteams.accounts.${rawAccountKey ?? account.accountId}`;
+    const surface =
+      configPath === "channels.msteams" ? "MS Teams" : `MS Teams[${account.accountId}]`;
     return [
-      `- MS Teams[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set ${configPath}.groupPolicy="allowlist" + ${configPath}.groupAllowFrom to restrict senders.`,
+      `- ${surface} groups: groupPolicy="open" allows any member to trigger (mention-gated). Set ${configPath}.groupPolicy="allowlist" + ${configPath}.groupAllowFrom to restrict senders.`,
     ];
   },
 });

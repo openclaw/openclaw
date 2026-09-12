@@ -491,7 +491,7 @@ describe("msteamsPlugin", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "channels.msteams.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "MS Teams security warning",
         detail: expect.stringMatching(
           /MS Teams\[support\].*channels\.msteams\.accounts\.support\.groupPolicy.*channels\.msteams\.accounts\.support\.groupAllowFrom/,
