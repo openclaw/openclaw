@@ -40,6 +40,8 @@ import {
 } from "./config-machine-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
+import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
+import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
 import {
   FIRST_USE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -281,7 +283,7 @@ function replaceManagedImageRecordsWithLegacyTable(
 const LEGACY_SESSION_WATCH_SCHEMA_VERSION = 3;
 const LEGACY_AMBIENT_WATCH_PREFIX = "ambient-group-watch:";
 
-function markStateDatabaseVersion(database: DatabaseSync, version: 5 | 6 | 7): void {
+function markStateDatabaseVersion(database: DatabaseSync, version: number): void {
   database.exec(`
     PRAGMA user_version = ${version};
     UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
@@ -5371,34 +5373,61 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
   });
 
   it.each(
-    ([5, 6] as const).flatMap((version) =>
-      (["runtime open", "doctor repair"] as const).map((migrationPath) => ({
+    ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] as const).flatMap((version) =>
+      (["runtime open", "doctor repair", "startup admission"] as const).map((migrationPath) => ({
         migrationPath,
         version,
       })),
     ),
   )(
-    "rejects a missing stable v$version table before the v7 migration through $migrationPath",
-    ({ migrationPath, version }) => {
+    "rejects a missing stable v$version table before migration through $migrationPath",
+    async ({ migrationPath, version }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       const databasePath = materializeCurrentStateDatabase(stateDir);
 
       const { DatabaseSync } = requireNodeSqlite();
+      if (migrationPath === "startup admission") {
+        const intact = new DatabaseSync(databasePath);
+        markStateDatabaseVersion(intact, version);
+        intact.close();
+        const before = snapshotPreflightSourceManifest(stateDir);
+        await expect(
+          assertOpenClawDatabasesReady({
+            env: options.env,
+            operation: "gateway-startup",
+            config: {},
+          }),
+        ).resolves.toBeUndefined();
+        expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+      }
       const damaged = new DatabaseSync(databasePath);
       damaged.exec("DROP TABLE apns_registration_tombstones;");
       markStateDatabaseVersion(damaged, version);
+      const schemaBefore = hashSqliteSchema(damaged);
+      const metadataBefore = damaged.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all();
       damaged.close();
 
+      const message = `SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`;
       if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(
-          /missing table apns_registration_tombstones/iu,
-        );
-      } else {
+        expect(() => openOpenClawStateDatabase(options)).toThrow(new Error(message));
+      } else if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [],
-          warnings: [expect.stringContaining("missing table apns_registration_tombstones")],
+          warnings: [
+            `Failed migrating shared state database schema at ${databasePath}: Error: ${message}`,
+          ],
         });
+      } else {
+        const before = snapshotPreflightSourceManifest(stateDir);
+        await expect(
+          assertOpenClawDatabasesReady({
+            env: options.env,
+            operation: "gateway-startup",
+            config: {},
+          }),
+        ).rejects.toThrow(new Error(message));
+        expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
       }
 
       const after = new DatabaseSync(databasePath, { readOnly: true });
@@ -5411,6 +5440,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
             .get(),
         ).toBeUndefined();
         expect(readSqliteNumberPragma(after, "user_version")).toBe(version);
+        expect(hashSqliteSchema(after)).toBe(schemaBefore);
+        expect(after.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all()).toEqual(
+          metadataBefore,
+        );
       } finally {
         after.close();
       }
