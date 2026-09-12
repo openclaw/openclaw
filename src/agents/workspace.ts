@@ -416,10 +416,22 @@ async function hasWorkspaceUserContentEvidence(
       // continue
     }
   }
-  if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
+  // Readable custom skills are independent user-content evidence that survives
+  // a root-listing failure (e.g. a 0300 searchable-but-unlistable root): the
+  // probe only needs search on the root plus read on the skills subdirectory.
+  // Probe them before the exact-entry lookup so an EACCES on the root cannot
+  // hide readable skills from survival/completion decisions.
+  if (await hasWorkspaceSkillEvidence(dir)) {
     return true;
   }
-  return await hasWorkspaceSkillEvidence(dir);
+  // The exact-entry lookup distinguishes an absent optional file from one that
+  // exists but cannot be listed/read. An operational lookup failure (EACCES/EIO)
+  // stays an unknown outcome: it is neither absence nor positive user-content
+  // evidence. Callers decide how to treat the unknown — completion evidence must
+  // not count it as configured (that could persist false completion and remove
+  // BOOTSTRAP.md), while disappearance detection must not count it as empty
+  // (that could reseed/clear an existing workspace).
+  return await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
 }
 
 async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
@@ -462,9 +474,14 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
     }
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
+    if (anyErr.code === "ENOENT") {
+      return false;
     }
+    // An operational listing failure (EACCES/EIO) means we cannot tell whether
+    // the workspace has content. Treat it as having content so setup preserves
+    // the workspace instead of aborting or mistaking an unreadable dir for an
+    // empty one (which could trigger brand-new detection and reseed/clear).
+    return true;
   }
   return false;
 }
@@ -478,12 +495,19 @@ async function workspaceProfileLooksConfigured(params: {
       fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
     ),
   );
-  return (
-    profileFileDiffs.some(Boolean) ||
-    (await hasWorkspaceUserContentEvidence(params.dir, {
+  if (profileFileDiffs.some(Boolean)) {
+    return true;
+  }
+  try {
+    return await hasWorkspaceUserContentEvidence(params.dir, {
       includeGit: params.includeGitEvidence,
-    }))
-  );
+    });
+  } catch {
+    // An operational lookup failure is an unknown, not positive completion
+    // evidence. Treat it as not configured so a pending workspace keeps its
+    // BOOTSTRAP.md and does not acquire a durable false setupCompletedAt.
+    return false;
+  }
 }
 
 async function workspaceRequiredBootstrapLooksCustomized(
@@ -1083,7 +1107,11 @@ export async function ensureAgentWorkspace(params?: {
         }
       }),
     );
-    return existing.every((v) => !v) && !(await hasWorkspaceUserContentEvidence(dir));
+    // An operational lookup failure is an unknown; treat it as having user
+    // content so an unreadable workspace is not mistaken for an empty/brand-new
+    // one (which would reseed or clear existing setup).
+    const hasUserContent = await hasWorkspaceUserContentEvidence(dir).catch(() => true);
+    return existing.every((v) => !v) && !hasUserContent;
   })();
 
   if (isBrandNewWorkspace) {
@@ -1286,11 +1314,20 @@ export async function loadWorkspaceBootstrapFiles(
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
-    if (
-      (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
-      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
-    ) {
-      continue;
+    if (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) {
+      // The exact-entry check distinguishes an absent optional file (skipped)
+      // from one that exists but cannot be listed or read. When the lookup
+      // itself fails operationally (e.g. EACCES/EIO on the workspace dir), do
+      // not reject the whole bootstrap load: fall through to the guarded read,
+      // which produces the existing [UNREADABLE: ...] record and retains the
+      // remaining readable context.
+      try {
+        if (!(await exactWorkspaceEntryExists(resolvedDir, entry.name))) {
+          continue;
+        }
+      } catch {
+        // Fall through to the guarded read; it reports unreadability per entry.
+      }
     }
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,

@@ -33,8 +33,14 @@ export async function exactWorkspaceEntryExists(dir: string, name: string): Prom
   try {
     const entries = await fs.readdir(dir);
     return entries.includes(name);
-  } catch {
-    return false;
+  } catch (error) {
+    // A missing directory or non-directory component is absence; re-throw
+    // permission and I/O errors so callers do not mistake an unreadable
+    // workspace for a missing entry (e.g. and then overwrite/delete it).
+    if (isMissingPathError(error)) {
+      return false;
+    }
+    throw error;
   }
 }
 
