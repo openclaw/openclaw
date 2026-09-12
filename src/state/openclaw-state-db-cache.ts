@@ -378,6 +378,9 @@ function retireOpenClawStateDatabaseHandle(
   const coordinator = acquireStateDatabaseCoordinator({
     databasePath: database.path,
     busyTimeoutMs,
+    // Retirement releases physical custody, including an idle coordinator that
+    // would otherwise keep temporary or relocated Windows homes undeletable.
+    keepAlive: false,
   });
   runWithSqliteCoordinator(coordinator, "state database retirement", () => {
     // Refused acquisition leaves both cache and physical ownership untouched.

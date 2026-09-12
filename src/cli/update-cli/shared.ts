@@ -435,14 +435,19 @@ export async function resolveGlobalManager(params: {
   timeoutMs: number;
 }): Promise<GlobalInstallManager> {
   if (params.installKind === "package") {
+    const diagnostics: string[] = [];
     const detected = await detectGlobalInstallManagerForRoot(
       runCommandWithTimeout,
       params.root,
       params.timeoutMs,
+      diagnostics,
     );
     if (!detected) {
       const reason = resolveUnmanagedUpdateInstallReason();
-      throw new UpdatePreMutationError(reason, UPDATE_INSTALL_SKIP_GUIDANCE[reason]!);
+      throw new UpdatePreMutationError(
+        reason,
+        `${UPDATE_INSTALL_SKIP_GUIDANCE[reason]} Inspected: ${diagnostics.join("; ")}.`,
+      );
     }
     return detected;
   }

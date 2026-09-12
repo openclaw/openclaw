@@ -22,6 +22,7 @@ import {
 import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
 
 const DEFAULT_EXTENSION_CHUNK_SIZE = 8;
+const DEFAULT_CONSTRAINED_CORE_STRIPES = 5;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
@@ -86,14 +87,24 @@ export function createOxlintShards({
   splitCore = false,
   splitExtensions = false,
 }: PlatformShardOptions = {}) {
-  const coreShards = splitCore ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
+  const constrainedSerial =
+    hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
+    shouldRunOxlintShardsSerial({ env, platform, hostResources });
+  const coreGroups =
+    splitCore || constrainedSerial ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
+  // Bound semantic checker caches without rebuilding the full type graph for every directory.
+  const coreShards =
+    constrainedSerial && !splitCore
+      ? Array.from({ length: DEFAULT_CONSTRAINED_CORE_STRIPES }, (_, index) =>
+          selectCoreOxlintStripe(coreGroups, {
+            index: index + 1,
+            total: DEFAULT_CONSTRAINED_CORE_STRIPES,
+          }),
+        ).flat()
+      : coreGroups;
   // Unsplit plugin lint can exceed small-host RAM even with a single lint thread.
   // Chunk serial runs; explicit stripes use independently bounded Programs that stay serial.
-  const chunkExtensions =
-    splitExtensions ||
-    platform === "win32" ||
-    (hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
-      shouldRunOxlintShardsSerial({ env, platform, hostResources }));
+  const chunkExtensions = splitExtensions || platform === "win32" || constrainedSerial;
   const extensionShards = chunkExtensions
     ? createExtensionOxlintShards({ cwd, env, platform, readDir })
     : [EXTENSIONS_SHARD];

@@ -4,6 +4,8 @@ import { createReclaimedPlacementRedispatch } from "./reclaimed-placement-redisp
 
 type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
 
+const dispatchOptions = { assertCurrent: () => {} };
+
 const placement = {
   state: "reclaimed",
   sessionId: "session-1",
@@ -19,7 +21,9 @@ describe("createReclaimedPlacementRedispatch", () => {
       WorkerSessionPlacementRecord,
       { state: "active" }
     >;
-    const dispatch = vi.fn(async () => active);
+    const dispatch = vi.fn<Parameters<typeof createReclaimedPlacementRedispatch>[0]["dispatch"]>(
+      async () => active,
+    );
     const redispatch = createReclaimedPlacementRedispatch({
       environments: {
         get: () =>
@@ -32,8 +36,8 @@ describe("createReclaimedPlacementRedispatch", () => {
       dispatch,
     });
 
-    await expect(redispatch(placement)).resolves.toBe(active);
-    expect(dispatch).toHaveBeenCalledWith({
+    await expect(redispatch(placement, dispatchOptions)).resolves.toBe(active);
+    expect(dispatch.mock.calls[0]?.[0]).toEqual({
       sessionId: placement.sessionId,
       sessionKey: placement.sessionKey,
       agentId: placement.agentId,
@@ -48,7 +52,9 @@ describe("createReclaimedPlacementRedispatch", () => {
 
   it("carries the exact paired node and owner-resolved requirement through redispatch", async () => {
     const requirement = { requiredNodeCommands: [], consumesWorkerSlot: true };
-    const dispatch = vi.fn(async () => ({ state: "active" }) as never);
+    const dispatch = vi.fn<Parameters<typeof createReclaimedPlacementRedispatch>[0]["dispatch"]>(
+      async () => ({ state: "active" }) as never,
+    );
     const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
     const redispatch = createReclaimedPlacementRedispatch({
       environments: {
@@ -64,7 +70,7 @@ describe("createReclaimedPlacementRedispatch", () => {
       resolveDevicePlacementRequirement,
     });
 
-    await redispatch(placement);
+    await redispatch(placement, dispatchOptions);
 
     expect(resolveDevicePlacementRequirement).toHaveBeenCalledWith({
       sessionId: placement.sessionId,
@@ -72,9 +78,10 @@ describe("createReclaimedPlacementRedispatch", () => {
       agentId: placement.agentId,
       executionMode: "worker-turn",
     });
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ deviceId: "paired-node", devicePlacement: requirement }),
-    );
+    expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+      deviceId: "paired-node",
+      devicePlacement: requirement,
+    });
   });
 
   it("revalidates a reclaimed cloud node without targeting its retired device", async () => {
@@ -86,7 +93,9 @@ describe("createReclaimedPlacementRedispatch", () => {
       requiredNodeCommands: ["codex.exec-server.stdio.v1"],
       consumesWorkerSlot: false,
     };
-    const dispatch = vi.fn(async () => ({ state: "active" }) as never);
+    const dispatch = vi.fn<Parameters<typeof createReclaimedPlacementRedispatch>[0]["dispatch"]>(
+      async () => ({ state: "active" }) as never,
+    );
     const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
     const redispatch = createReclaimedPlacementRedispatch({
       environments: {
@@ -102,7 +111,7 @@ describe("createReclaimedPlacementRedispatch", () => {
       resolveDevicePlacementRequirement,
     });
 
-    await redispatch(remotePlacement);
+    await redispatch(remotePlacement, dispatchOptions);
 
     expect(resolveDevicePlacementRequirement).toHaveBeenCalledWith({
       sessionId: remotePlacement.sessionId,
@@ -110,7 +119,7 @@ describe("createReclaimedPlacementRedispatch", () => {
       agentId: remotePlacement.agentId,
       executionMode: "remote-exec",
     });
-    expect(dispatch).toHaveBeenCalledWith({
+    expect(dispatch.mock.calls[0]?.[0]).toEqual({
       sessionId: remotePlacement.sessionId,
       sessionKey: remotePlacement.sessionKey,
       agentId: remotePlacement.agentId,
@@ -145,7 +154,7 @@ describe("createReclaimedPlacementRedispatch", () => {
       });
 
       await expect(
-        redispatch({ ...placement, executionMode } as ReclaimedWorkerPlacement),
+        redispatch({ ...placement, executionMode } as ReclaimedWorkerPlacement, dispatchOptions),
       ).rejects.toThrow("authoritative runtime requirement");
       expect(dispatch).not.toHaveBeenCalled();
     },
@@ -157,7 +166,7 @@ describe("createReclaimedPlacementRedispatch", () => {
       dispatch: vi.fn(),
     });
 
-    await expect(redispatch(placement)).rejects.toThrow(
+    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(
       "Reclaimed worker placement has no environment record: worker:previous",
     );
   });

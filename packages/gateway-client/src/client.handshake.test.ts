@@ -4,6 +4,8 @@ import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { validatePreviousConnectParams } from "../../gateway-protocol/src/connect-compatibility.test-support.js";
+import { GATEWAY_SERVER_CAPS, validateConnectParams } from "../../gateway-protocol/src/index.js";
 import { GatewayClient } from "./client.js";
 import { rawDataToString } from "./websocket-data.js";
 import { WebSocketServer, type WebSocket } from "./websocket.test-support.js";
@@ -41,6 +43,82 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
     });
     return (server.address() as AddressInfo).port;
   }
+
+  it.each([
+    { advertised: false, modelCatalog: {} },
+    { advertised: false, modelCatalog: { agentId: "alpha" } },
+    { advertised: true, modelCatalog: { agentId: "alpha", sessionKey: "agent:alpha:saved" } },
+    { advertised: true, modelCatalog: undefined },
+  ])(
+    "negotiates catalog input with a compatible Gateway: %j",
+    async ({ advertised, modelCatalog }) => {
+      const server = http.createServer();
+      const wss = new WebSocketServer({ server });
+      const port = await listen(server);
+      const connected = createDeferred();
+      const received = createDeferred<{ id: string; params: unknown }>();
+      wss.on("connection", (socket) => {
+        socket.send(
+          JSON.stringify({
+            type: "event",
+            event: "connect.challenge",
+            payload: {
+              nonce: "catalog-handshake",
+              ts: Date.now(),
+              ...(advertised ? { capabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] } : {}),
+            },
+          }),
+        );
+        socket.once("message", (raw) => {
+          const frame = JSON.parse(rawDataToString(raw)) as { id: string; params: unknown };
+          received.resolve(frame);
+          const valid = advertised
+            ? validateConnectParams(frame.params)
+            : validatePreviousConnectParams(frame.params);
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: valid,
+              ...(valid
+                ? { payload: { type: "hello-ok", protocol: 4 } }
+                : { error: { code: "INVALID_REQUEST", message: "invalid connect params" } }),
+            }),
+          );
+        });
+      });
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        deviceIdentity: null,
+        modelCatalog,
+        onHelloOk: () => connected.resolve(),
+        onConnectError: connected.reject,
+      });
+      clients.push(client);
+      try {
+        client.start();
+        await connected.promise;
+        const frame = await received.promise;
+        if (advertised && modelCatalog) {
+          expect(frame.params).toMatchObject({
+            modelCatalog,
+            caps: ["model-catalog-snapshot"],
+          });
+        } else {
+          expect(frame.params).not.toHaveProperty("modelCatalog");
+          expect(frame.params).toMatchObject({ caps: [] });
+        }
+      } finally {
+        await client.stopAndWait();
+        for (const socket of wss.clients) {
+          socket.terminate();
+        }
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
+      }
+    },
+  );
 
   it("keeps a hello received during WebSocket closing in the pre-hello failure path", async () => {
     const server = http.createServer();

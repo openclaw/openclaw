@@ -222,6 +222,39 @@ suite.define(() => {
       await page.screenshot({
         path: path.join(artifactDirectory, "session-first-frame-without-global-inventory.png"),
       });
+
+      for (let index = 0; index < 32; index += 1) {
+        await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "message" });
+      }
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      expect(await rfb.events()).toEqual(["authenticated:1"]);
+
+      const replacement = { ...environment, id: "worker-replacement" };
+      await gateway.setMethodResponse("environments.status", replacement);
+      await gateway.deferNext("sessions.describe");
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "placement" });
+      await gateway.waitForRequest("sessions.describe", { after: 1 });
+      for (let index = 0; index < 32; index += 1) {
+        await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "message" });
+      }
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(2);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      await gateway.resolveDeferred("sessions.describe", {
+        session: { key: sessionKey, placement: { state: "active", environmentId: replacement.id } },
+      });
+      expect((await gateway.waitForRequest("desktop.observe", { after: 1 })).params).toEqual({
+        source: { kind: "environment", environmentId: replacement.id },
+        control: false,
+      });
+      await expect.poll(async () => (await rfb.events()).includes("authenticated:2")).toBe(true);
+      await gateway.setMethodResponse("environments.status", environment);
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "start" });
+      expect((await gateway.waitForRequest("desktop.observe", { after: 2 })).params).toEqual({
+        source: { kind: "environment", environmentId: environment.id },
+        control: false,
+      });
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
     });
   });
 

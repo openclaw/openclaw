@@ -9,6 +9,7 @@ import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -163,9 +164,8 @@ export function createFixture(
   });
   // These owners derive runtime inputs from import.meta.url; keep that graph inside the fixture.
   const runtimeEntryOwners = new Set([
-    "src/infra/runtime-process-entrypoints.ts",
+    ...Object.values(runtimeProcessDeclarationEntries),
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
     "packages/normalization-core/src/record-coerce.ts",
   ]);

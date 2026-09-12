@@ -48,6 +48,7 @@ export class GatewayProtocolClient<TPlan> {
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
   private connectChallengeTs: number | null | undefined;
+  private serverCapabilities: string[] = [];
   private connectSent = false;
   private connectRequestSent = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -188,6 +189,7 @@ export class GatewayProtocolClient<TPlan> {
     this.lastSeq = null; // Outer event sequences belong to one WebSocket generation.
     this.connectNonce = null;
     this.connectChallengeTs = undefined;
+    this.serverCapabilities = [];
     this.connectSent = this.connectRequestSent = false;
     this.socketOpened = false;
     this.helloReceived = false;
@@ -290,6 +292,7 @@ export class GatewayProtocolClient<TPlan> {
       planOrPromise = this.opts.buildConnectPlan({
         nonce: this.connectNonce,
         challengeTs: this.connectChallengeTs,
+        serverCapabilities: this.serverCapabilities,
         generation,
       });
     } catch (error) {
@@ -390,7 +393,9 @@ export class GatewayProtocolClient<TPlan> {
     if (isGatewayEventFrame(parsed)) {
       this.opts.onActivity?.();
       if (parsed.event === "connect.challenge") {
-        const payload = parsed.payload as { nonce?: unknown; ts?: unknown } | undefined;
+        const payload = parsed.payload as
+          | { nonce?: unknown; ts?: unknown; capabilities?: unknown }
+          | undefined;
         const nonce = typeof payload?.nonce === "string" ? payload.nonce.trim() : "";
         if (!nonce) {
           if (this.opts.handshake.mode === "require-challenge") {
@@ -401,6 +406,9 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.connectNonce = nonce;
+        this.serverCapabilities = Array.isArray(payload?.capabilities)
+          ? payload.capabilities.filter((value): value is string => typeof value === "string")
+          : [];
         const challengeTs = payload?.ts;
         this.connectChallengeTs =
           typeof challengeTs === "number" && Number.isSafeInteger(challengeTs) && challengeTs >= 0

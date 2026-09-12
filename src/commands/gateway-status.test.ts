@@ -84,7 +84,13 @@ const mocks = vi.hoisted(() => {
               linked: false,
               authAgeMs: null,
             },
-            sessions: { count: 0 },
+            sessions: {
+              paths: [],
+              count: 0,
+              defaults: { model: null, contextTokens: null },
+              recent: [],
+              byAgent: [],
+            },
           },
           presence: [
             {
@@ -131,7 +137,13 @@ const mocks = vi.hoisted(() => {
             linked: true,
             authAgeMs: 5_000,
           },
-          sessions: { count: 2 },
+          sessions: {
+            paths: [],
+            count: 2,
+            defaults: { model: null, contextTokens: null },
+            recent: [],
+            byAgent: [],
+          },
         },
         presence: [
           {
@@ -895,7 +907,13 @@ describe("gateway-status command", () => {
           linked: true,
           authAgeMs: 1_000,
         },
-        sessions: { count: 1 },
+        sessions: {
+          paths: [],
+          count: 1,
+          defaults: { model: null, contextTokens: null },
+          recent: [],
+          byAgent: [],
+        },
       },
       presence: [
         {

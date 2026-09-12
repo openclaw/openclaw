@@ -163,13 +163,6 @@ class OpenClawShell
   runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   lastLocalePrefSignature: string | null = null;
   previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
-  private metadataConnection:
-    | {
-        client: GatewayBrowserClient | null;
-        hello: ApplicationContext["gateway"]["snapshot"]["hello"];
-        profileId: string | undefined;
-      }
-    | undefined;
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
   private outboxStoreUnsubscribe: (() => void) | null = null;
@@ -342,7 +335,7 @@ class OpenClawShell
       .watch(
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
-        (gateway) => this.synchronizeGateway(gateway.snapshot),
+        (gateway) => this.shellGateway.synchronizeGateway(gateway.snapshot),
       )
       .effect(
         () => this.context?.gateway,
@@ -695,24 +688,6 @@ class OpenClawShell
     this.lastNativeNavState = navState;
     // Shipped Mac app builds without web chrome still consume this bridge.
     postNativeNavState(navState);
-  }
-
-  private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
-    const previous = this.metadataConnection;
-    const profileId = snapshot.selfUser?.id;
-    if (
-      previous?.client &&
-      (previous.client !== snapshot.client ||
-        previous.hello !== snapshot.hello ||
-        previous.profileId !== profileId ||
-        (this.previousGatewayPhase === "connected" && snapshot.phase !== "connected"))
-    ) {
-      // A reused browser client must not carry display facts across connections or identities.
-      invalidateModelAuthStatusRequests(previous.client);
-      invalidateChatMetadataStore(previous.client);
-    }
-    this.metadataConnection = { client: snapshot.client, hello: snapshot.hello, profileId };
-    this.shellGateway.synchronizeGateway(snapshot);
   }
 
   private ensureRuntimeConfig(

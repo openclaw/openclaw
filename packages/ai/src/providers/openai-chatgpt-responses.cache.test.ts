@@ -700,7 +700,11 @@ describe("ChatGPT Responses cached transport", () => {
         diagnostics: [
           {
             type: "provider_transport_failure",
-            error: { message: "Unexpected server response: 426" },
+            error: {
+              message: expect.stringMatching(
+                /(?:Unexpected server response: 426|Expected 101 status code)/u,
+              ),
+            },
             details: {
               configuredTransport: "auto",
               fallbackTransport: "sse",

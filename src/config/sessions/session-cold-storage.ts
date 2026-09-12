@@ -26,7 +26,10 @@ import {
 import type { OpenClawConfig } from "../types.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import { runSqliteTranscriptArchiveWorkerOperation } from "./session-accessor.sqlite-archive.js";
-import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptReadScope,
+  SqliteSessionReclamationDiagnostics,
+} from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
@@ -96,6 +99,7 @@ async function runColdMutation(
       assertCurrent?.();
     };
     const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const diagnostics: SqliteSessionReclamationDiagnostics = { kind: plan.kind };
     const [completed] = await withSqliteReclamationAuthorization(
       commitGate,
       database.db,
@@ -105,11 +109,12 @@ async function runColdMutation(
           result: SessionColdMutationResult;
           cleanupIncomplete?: boolean;
         }>({
+          diagnostics,
           expectedMessageType: "reclaimed",
           onCommitRequest: () => {
             authorize();
           },
-          withWriteAdmission: async (run) =>
+          withWriteAdmission: async (run, reclamationAdmission) =>
             runExclusiveSqliteSessionWrite(
               plan.databaseOptions,
               async () => {
@@ -122,6 +127,7 @@ async function runColdMutation(
                 await run(refusal);
               },
               "session.reclamation.worker-commit",
+              { ...diagnostics, reclamationAdmission },
             ),
           workerData: {
             type: "sqlite-transcript-archive-v2",

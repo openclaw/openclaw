@@ -56,14 +56,13 @@ export function createWorkerNodePortalCarrier(options: {
     capturedRuntime: WorkerNodeCarrierRuntime,
     signal?: AbortSignal,
   ): Promise<NodeWorkerSupervisorNodeProof> => {
-    const discovery = capturedRuntime.transport.listCurrentNodes();
-    const nodes = signal
+    const discovery = capturedRuntime.transport.getCurrentNode(binding.nodeDeviceId);
+    const node = signal
       ? await raceNodeWorkerOperation(discovery, signal, {
           aborted: "Worker environment node portal owner stopped",
         })
       : await discovery;
     signal?.throwIfAborted();
-    const node = nodes.find((candidate) => candidate.nodeId === binding.nodeDeviceId);
     if (!node || !bindingIsCurrent(binding, capturedRuntime, node)) {
       throw new Error(UNSUPPORTED_NODE_PORTAL_MESSAGE);
     }

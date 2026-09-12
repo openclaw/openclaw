@@ -19,6 +19,7 @@ export async function extractPdfContent(params: {
   minTextChars: number;
   password?: string;
   pageNumbers?: number[];
+  signal?: AbortSignal;
   config?: OpenClawConfig;
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {

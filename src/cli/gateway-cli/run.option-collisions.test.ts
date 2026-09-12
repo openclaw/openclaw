@@ -308,10 +308,6 @@ vi.mock("../../globals.js", () => ({
   setVerbose: (enabled: boolean) => setVerbose(enabled),
 }));
 
-vi.mock("../../infra/gateway-lock.js", () => ({
-  GatewayLockError: class GatewayLockError extends Error {},
-}));
-
 vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: async () => ({ status: "free" }),
 }));

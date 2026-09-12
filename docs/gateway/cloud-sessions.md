@@ -79,6 +79,8 @@ To enter text from your local clipboard, take control and choose **Keyboard** be
 
 A desktop-enabled cloud session uses the same machine for the chat Desktop panel and the agent's `computer` tool. Enable the **Cloud Worker Desktop** lab and provision a Crabbox profile with `settings.desktop: true`. OpenClaw starts the worker's CUA provider inside the provisioned desktop session; the agent does not need to discover or choose a paired computer. Both OpenClaw and Codex sessions use this binding. A paired-device session instead uses that device's enabled Computer Control provider.
 
+OpenClaw worker turns preserve their node host's display and desktop-session environment for local `exec` commands. On a desktop-enabled Linux worker, launch a GUI application with `background: true` to keep using `computer` while it runs.
+
 Use a vision-capable model and a tool profile that permits `computer`. For the `coding` profile, add `computer` to `tools.alsoAllow`. The bound desktop is available under default remote-session sandbox policy; explicit sandbox allowlists and denies still apply. Observe the Desktop panel while the agent works, and pause the agent before taking manual control to avoid competing input.
 
 Worker transcripts retain screenshots. Codex exposes the computer tool directly, outside code mode, so screenshot results reach the model as images. To keep later model requests within the transport limit, OpenClaw can replace older, already processed images with a text marker in the model context while preserving the current computer frame and unprocessed images. Opaque provider replay remains unchanged; if its required context cannot fit, the turn fails with recovery guidance.

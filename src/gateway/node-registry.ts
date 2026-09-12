@@ -348,6 +348,7 @@ export class NodeRegistry {
       isCommandAllowed: (nodeId, command) =>
         this.isCommandAllowed(nodeId, command, this.options.getConfig?.()),
       listCurrentConnected: () => this.listCurrentConnected(),
+      getCurrentConnected: (nodeId) => this.getCurrentConnected(nodeId),
       hasCurrentPairingStateResolver: Boolean(this.options.resolveCurrentPairingState),
       resolvePairingLease: async (node) => {
         const current = this.nodesById.get(node.nodeId);
@@ -748,8 +749,21 @@ export class NodeRegistry {
 
   /** Resolve persistent pairing state before projecting connected sessions. */
   async listCurrentConnected(): Promise<NodeSession[]> {
+    return await this.resolveCurrentConnectedSessions(this.listConnectedSessions());
+  }
+
+  async getCurrentConnected(nodeId: string): Promise<NodeSession | undefined> {
+    const node = this.nodesById.get(nodeId);
+    return node && node.client.invalidated !== true
+      ? (await this.resolveCurrentConnectedSessions([node]))[0]
+      : undefined;
+  }
+
+  private async resolveCurrentConnectedSessions(
+    candidates: readonly PairingBoundNodeSession[],
+  ): Promise<NodeSession[]> {
     const resolved = await Promise.all(
-      this.listConnectedSessions().map((node) =>
+      candidates.map((node) =>
         this.resolvePairingLease(this.capturePairingLease(node), { invalidateStale: true }),
       ),
     );

@@ -33,6 +33,7 @@ import {
   shouldRetryGatewayWithDeviceToken,
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import { resolveModelCatalogConnect } from "./model-catalog-connect.js";
 import {
   GatewayProtocolClient,
   type GatewayProtocolCloseContext,
@@ -270,6 +271,7 @@ export type GatewayClientOptions = {
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
+  modelCatalog?: ConnectParams["modelCatalog"];
   caps?: string[];
   commands?: string[];
   computerUse?: ConnectParams["computerUse"];
@@ -387,7 +389,7 @@ export class GatewayClient {
       createRequestTimeoutError: (method, timeoutMs, requestSent) =>
         new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
       createRequestAbortError: createGatewayRequestAbortError,
-      buildConnectPlan: ({ nonce, challengeTs }) => {
+      buildConnectPlan: ({ nonce, challengeTs, serverCapabilities }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
         }
@@ -398,6 +400,7 @@ export class GatewayClient {
           role: this.opts.role ?? "operator",
           nonce,
           signedAtMs: challengeTs ?? Date.now(),
+          serverCapabilities,
         });
       },
       buildConnectParams: (assembled) => assembled.params,
@@ -740,6 +743,7 @@ export class GatewayClient {
     role: string;
     nonce: string;
     signedAtMs: number;
+    serverCapabilities: readonly string[];
   }): AssembledConnect {
     const { role, nonce, signedAtMs } = params;
     // Auth selection is intentionally centralized: retry decisions depend on
@@ -819,7 +823,11 @@ export class GatewayClient {
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },
-        caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
+        ...resolveModelCatalogConnect({
+          caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
+          modelCatalog: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelCatalog,
+          serverCapabilities: params.serverCapabilities,
+        }),
         commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
         computerUse: useLegacyNodeProtocolEnvelope ? undefined : this.opts.computerUse,
         workerRuns: useLegacyNodeProtocolEnvelope ? undefined : this.opts.workerRuns,

@@ -13,7 +13,6 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { MessageActionParams } from "../../../packages/gateway-protocol/src/index.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -931,12 +930,10 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  "message.action": async ({ params, respond, context, client }) => {
-    const p = params;
-    if (!assertValidParams(p, validateMessageActionParams, "message.action", respond)) {
+  "message.action": async ({ params: request, respond, context, client }) => {
+    if (!assertValidParams(request, validateMessageActionParams, "message.action", respond)) {
       return;
     }
-    const request = p as MessageActionParams;
     const trustedContext = resolveTrustedMessageActionToolContext({ client, request });
     if (!trustedContext.ok) {
       respond(false, undefined, trustedContext.error);
@@ -1234,32 +1231,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
     });
   },
-  send: async ({ params, respond, context, client }) => {
-    const p = params;
-    if (!assertValidParams(p, validateSendParams, "send", respond)) {
+  send: async ({ params: request, respond, context, client }) => {
+    if (!assertValidParams(request, validateSendParams, "send", respond)) {
       return;
     }
-    const request = p as {
-      to: string;
-      message?: string;
-      mediaUrl?: string;
-      mediaUrls?: string[];
-      buffer?: string;
-      filename?: string;
-      contentType?: string;
-      asVoice?: boolean;
-      gifPlayback?: boolean;
-      channel?: string;
-      accountId?: string;
-      agentId?: string;
-      replyToId?: string;
-      threadId?: string;
-      forceDocument?: boolean;
-      silent?: boolean;
-      parseMode?: "HTML";
-      sessionKey?: string;
-      idempotencyKey: string;
-    };
     const to = normalizeOptionalString(request.to) ?? "";
     const message = request.message?.trim() ? request.message : "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -1553,25 +1528,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
     });
   },
-  poll: async ({ params, respond, context, client }) => {
-    const p = params;
-    if (!assertValidParams(p, validatePollParams, "poll", respond)) {
+  poll: async ({ params: request, respond, context, client }) => {
+    if (!assertValidParams(request, validatePollParams, "poll", respond)) {
       return;
     }
-    const request = p as {
-      to: string;
-      question: string;
-      options: string[];
-      maxSelections?: number;
-      durationSeconds?: number;
-      durationHours?: number;
-      silent?: boolean;
-      isAnonymous?: boolean;
-      threadId?: string;
-      channel?: string;
-      accountId?: string;
-      idempotencyKey: string;
-    };
     await withMessageOperationRoute({
       context,
       prefix: "poll",

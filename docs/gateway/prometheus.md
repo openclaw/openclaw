@@ -178,6 +178,13 @@ They measure elapsed time, not CPU time. Early acknowledgments and responses
 after handler return are distinct from completed agent work. See
 [Gateway RPC timing semantics](/gateway/opentelemetry#gateway-rpc).
 
+Receipt begins after the connected client's request frame passes validation.
+These timings exclude CLI startup, local diagnostics, connection/authentication
+setup, and event-loop delay before request dispatch. Histograms record completed
+observations: an unfinished handler has no handler-duration sample yet. Compare
+request counts, completed timings, and event-loop observations when investigating
+a timeout; low handler latency alone does not establish a responsive client path.
+
 RPC method labels contain canonical core method names, `other` for plugin
 methods, or `unknown`. Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings occupies five aggregate

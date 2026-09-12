@@ -145,16 +145,20 @@ export class NewSessionModelControl {
     const gateway = this.pendingContext?.gateway;
     this.metadataGateway = gateway;
     this.metadataUnsubscribe = gateway
-      ? subscribeModelCatalogChanges(gateway, () => {
-          if (!this.ownsMetadata(client, scope)) {
-            this.restoringPreference = false;
-            this.draftAccount = undefined;
-            this.clearMetadataSubscription();
-            this.updateMetadataState({ catalog: [], hasSnapshot: false, status: "offline" });
-            return;
-          }
-          void this.startMetadataRequest(client, scope);
-        })
+      ? subscribeModelCatalogChanges(
+          gateway,
+          () => {
+            if (!this.ownsMetadata(client, scope)) {
+              this.restoringPreference = false;
+              this.draftAccount = undefined;
+              this.clearMetadataSubscription();
+              this.updateMetadataState({ catalog: [], hasSnapshot: false, status: "offline" });
+              return;
+            }
+            void this.startMetadataRequest(client, scope);
+          },
+          scope,
+        )
       : undefined;
     return scope;
   }

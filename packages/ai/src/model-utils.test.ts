@@ -60,6 +60,17 @@ describe("calculateCost", () => {
 });
 
 describe("clampThinkingLevel", () => {
+  it.each(["anthropic-messages", "google-generative-ai", "mistral-conversations"] as const)(
+    "does not apply OpenAI compat levels to %s",
+    (api) => {
+      const model = makeModel(undefined, {
+        api,
+        compat: { supportedReasoningEfforts: ["max"] },
+      });
+      expect(clampThinkingLevel(model, "max")).toBe("high");
+    },
+  );
+
   it("downgrades explicit extended-level opt-outs", () => {
     expect(clampThinkingLevel(makeModel({ xhigh: null, max: "max" }), "xhigh")).toBe("high");
   });

@@ -1698,6 +1698,21 @@ export interface WorktreeProvisionedFileChunks {
   worktree_id: string;
 }
 
+export interface WorktreeTemplates {
+  backend: string;
+  cache_key: string;
+  common_dir: string;
+  content_key: string;
+  created_at: number;
+  id: string;
+  last_used_at: number;
+  path: string;
+  repo_root: string;
+  source_commit: string;
+  status: string;
+  worktree_root: string;
+}
+
 export interface Worktrees {
   base_ref: string;
   branch: string;
@@ -1842,5 +1857,6 @@ export interface DB {
   workspace_path_aliases: WorkspacePathAliases;
   workspace_setup_state: WorkspaceSetupState;
   worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
+  worktree_templates: WorktreeTemplates;
   worktrees: Worktrees;
 }

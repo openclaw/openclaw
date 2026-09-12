@@ -188,6 +188,16 @@ Each client retains its admitted lexical and canonical pathnames through
 drainage and close. The backend's opening paths remain pinned for its native
 lifetime; released secondary aliases do not accumulate while other clients live.
 
+### Computation worker entrypoints
+
+For a plugin-owned worker, pass `package: { name, distWorkerPath }` to
+`resolveRuntimeWorkerUrl` from the same SDK subpath. Use the plugin's
+`package.json` name and a worker path relative to its `dist` directory. The
+descriptor then supports bundled and standalone installations, including renamed
+installation directories. Declare the worker's source entry in
+[`openclaw.build.workerEntries`](/plugins/dependency-resolution#native-imports-from-a-standalone-source-build)
+so package builds emit it.
+
 ### Webhook body rejection
 
 Use `readWebhookBodyOrReject` or `readJsonWebhookBodyOrReject` from

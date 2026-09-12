@@ -51,6 +51,8 @@ function withCardHooks(
     deleteIfUpdatedAt: (key, expectedUpdatedAt) => cards.deleteIfUpdatedAt(key, expectedUpdatedAt),
     entries: () => cards.entries(),
     listBoardAggregates: () => cards.listBoardAggregates(),
+    listStatsAggregates: (boardId) => cards.listStatsAggregates(boardId),
+    hasCards: (boardId) => cards.hasCards(boardId),
   };
 }
 

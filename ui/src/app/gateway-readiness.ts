@@ -1,5 +1,18 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationGateway } from "./context.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./context.ts";
+
+export function readSuspensionPhase(
+  payload: unknown,
+): ApplicationGatewaySnapshot["suspensionPhase"] {
+  const phase = asOptionalRecord(payload)?.phase;
+  return phase === "accepting" ||
+    phase === "preparing" ||
+    phase === "draining" ||
+    phase === "prepared"
+    ? phase
+    : undefined;
+}
 
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error

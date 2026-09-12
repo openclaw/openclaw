@@ -221,6 +221,7 @@ describe("session list resolver cache", () => {
       rowWorkMs: 0,
       storeWorkMs: 0,
       preparationWorkMs: 0,
+      orderingWorkMs: 0,
       keepRows: true,
       limit: 100,
       shouldYield: false,
@@ -230,6 +231,7 @@ describe("session list resolver cache", () => {
       rowWorkMs: 20,
       storeWorkMs: 0,
       preparationWorkMs: 0,
+      orderingWorkMs: 0,
       keepRows: true,
       limit: 100,
       shouldYield: true,
@@ -239,6 +241,7 @@ describe("session list resolver cache", () => {
       rowWorkMs: 0,
       storeWorkMs: 0,
       preparationWorkMs: 1,
+      orderingWorkMs: 0,
       keepRows: true,
       limit: 1,
       shouldYield: true,
@@ -248,6 +251,7 @@ describe("session list resolver cache", () => {
       rowWorkMs: 0,
       storeWorkMs: 0,
       preparationWorkMs: 1,
+      orderingWorkMs: 0,
       keepRows: false,
       limit: 1,
       shouldYield: true,
@@ -257,6 +261,7 @@ describe("session list resolver cache", () => {
       rowWorkMs: 0,
       storeWorkMs: 8,
       preparationWorkMs: 0.25,
+      orderingWorkMs: 0,
       keepRows: true,
       limit: 1,
       shouldYield: true,
@@ -266,32 +271,66 @@ describe("session list resolver cache", () => {
       rowWorkMs: 0,
       storeWorkMs: 20,
       preparationWorkMs: 0,
+      orderingWorkMs: 0,
       keepRows: true,
       limit: 1,
       shouldYield: true,
     },
+    {
+      name: "wide ordering",
+      rowWorkMs: 0,
+      storeWorkMs: 0,
+      preparationWorkMs: 0,
+      orderingWorkMs: 1,
+      keepRows: true,
+      limit: 300,
+      shouldYield: true,
+    },
   ])(
     "shares the event loop for $name",
-    async ({ rowWorkMs, storeWorkMs, preparationWorkMs, keepRows, limit, shouldYield }) => {
+    async ({
+      rowWorkMs,
+      storeWorkMs,
+      preparationWorkMs,
+      orderingWorkMs,
+      keepRows,
+      limit,
+      shouldYield,
+    }) => {
       await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
         const cfg: OpenClawConfig = {};
         resetConfigRuntimeState();
         setRuntimeConfigSnapshot(cfg);
+        let workMs = storeWorkMs;
+        let orderingCalls = 0;
+        let orderingCallsAtControl = 0;
+        let orderingCallsBeforeRows: number | undefined;
         const store = Object.fromEntries(
-          Array.from({ length: 32 }, (_, index) => [
+          Array.from({ length: orderingWorkMs > 0 ? 2051 : 32 }, (_, index) => [
             `agent:main:budget-${index}`,
-            { sessionId: `budget-${index}`, updatedAt: index + 1 },
+            {
+              sessionId: `budget-${index}`,
+              updatedAt: index + 1,
+              // Pin reads charge ordering work before any row is projected.
+              get pinnedAt() {
+                orderingCalls++;
+                workMs += orderingWorkMs;
+                return undefined;
+              },
+            },
           ]),
         );
-        let workMs = storeWorkMs;
         let controlBeforePreparation: boolean | undefined;
+        let preparationCalls = 0;
+        let preparationCallsAtControl = 0;
         const buildRow = rowProjection.buildGatewaySessionRow;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
         const rows = vi
           .spyOn(rowProjection, "buildGatewaySessionRow")
           .mockImplementation((params) => {
+            orderingCallsBeforeRows ??= orderingCalls;
             const row = buildRow(params);
             workMs += rowWorkMs;
             return row;
@@ -300,6 +339,8 @@ describe("session list resolver cache", () => {
         const controlCallback = new Promise<void>((resolve) => {
           setImmediate(() => {
             controlRan = true;
+            preparationCallsAtControl = preparationCalls;
+            orderingCallsAtControl = orderingCalls;
             resolve();
           });
         });
@@ -311,6 +352,7 @@ describe("session list resolver cache", () => {
             store,
             entryFilter: () => {
               controlBeforePreparation ??= controlRan;
+              preparationCalls++;
               workMs += preparationWorkMs;
               return keepRows;
             },
@@ -321,6 +363,14 @@ describe("session list resolver cache", () => {
           );
           expect(controlRan).toBe(shouldYield);
           expect(controlBeforePreparation).toBe(false);
+          if (preparationWorkMs > 0 && shouldYield) {
+            expect(preparationCallsAtControl).toBeLessThan(preparationCalls);
+          }
+          if (orderingWorkMs > 0) {
+            expect(orderingCallsAtControl).toBeLessThan(
+              expectDefined(orderingCallsBeforeRows, "row projection started"),
+            );
+          }
         } finally {
           rows.mockRestore();
           clock.mockRestore();

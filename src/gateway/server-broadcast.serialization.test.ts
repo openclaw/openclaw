@@ -79,6 +79,33 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it("keeps reentrant targeted frames separate from an in-progress fanout at the same sequence", () => {
+    const first = makeClient("first");
+    const second = makeClient("second");
+    const third = makeClient("third");
+    const peers = [first, second, third];
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+    });
+    broadcastToConnIds("skills.changed", { reason: "prime" }, new Set(["second", "third"]));
+    peers.forEach((peer) => peer.socket.send.mockClear());
+    first.socket.send.mockImplementationOnce(() => {
+      broadcastToConnIds("skills.changed", { reason: "inner" }, new Set(["first"]));
+    });
+
+    broadcast("skills.changed", { reason: "outer" });
+
+    const encode = (reason: string, seq: number) =>
+      JSON.stringify({ type: "event", event: "skills.changed", payload: { reason }, seq });
+    expect(first.socket.send.mock.calls.map(([frame]) => frame)).toEqual([
+      encode("outer", 1),
+      encode("inner", 2),
+    ]);
+    for (const peer of [second, third]) {
+      expect(peer.socket.send.mock.calls.map(([frame]) => frame)).toEqual([encode("outer", 2)]);
+    }
+  });
+
   it.each([
     ["undefined", undefined],
     ["function", () => "omitted"],

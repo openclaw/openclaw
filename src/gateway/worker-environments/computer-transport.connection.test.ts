@@ -138,7 +138,9 @@ describe("worker computer connection lifetime", () => {
           send: (frame) => {
             if (socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify(frame));
+              return { kind: "sent" };
             }
+            return { kind: "unavailable" };
           },
           close: (code, reason) => socket.close(code, reason),
           isClosed: () => closed,

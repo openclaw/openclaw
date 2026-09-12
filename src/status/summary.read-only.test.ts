@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { getAgentLocalStatuses } from "../commands/status.agent-local.js";
+import { collectStatusLocalSnapshot } from "../commands/status.agent-local.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -22,6 +22,7 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getStatusSummary } from "./summary.js";
 
@@ -151,7 +152,7 @@ describe("getStatusSummary read-only session access", () => {
           expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
 
           readSummary.mockClear();
-          const local = await getAgentLocalStatuses(config);
+          const { agentStatus: local } = await collectStatusLocalSnapshot(config);
           expect(local.totalSessions).toBe(2);
           expect(
             local.agents.map((agent) => [
@@ -201,6 +202,58 @@ describe("getStatusSummary read-only session access", () => {
         }
       },
     );
+  });
+
+  it("shares one local session snapshot across the complete status scan", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-status-scan-snapshot-" }, async (state) => {
+      const config = {
+        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+        gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:1", token: "fixture" } },
+        plugins: { enabled: false },
+      };
+      await state.writeConfig(config);
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env });
+      for (let index = 1; index <= 12; index += 1) {
+        replaceSessionEntrySync(
+          { agentId: "main", storePath, sessionKey: `agent:main:scan-${index}` },
+          {
+            sessionId: `scan-${index}`,
+            updatedAt: index,
+            skillsSnapshot: { prompt: "private fixture", skills: [] },
+          },
+        );
+      }
+      const readSummary = vi.spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly");
+      try {
+        const { scanStatus } = await import("../commands/status.scan.js");
+        const timeline = state.path("status-timeline.jsonl");
+        const scan = await withEnvAsync(
+          { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timeline },
+          () => scanStatus({ timeoutMs: 100 }),
+        );
+        expect(scan.agentStatus.totalSessions).toBe(12);
+        expect(scan.agentStatus.agents[0]?.lastUpdatedAt).toBe(12);
+        expect(scan.summary.sessions.count).toBe(12);
+        expect(scan.summary.sessions.recent.map(({ key }) => key)).toEqual(
+          Array.from({ length: 10 }, (_, index) => `agent:main:scan-${12 - index}`),
+        );
+        expect(readSummary).toHaveBeenCalledOnce();
+        expect(JSON.stringify(scan)).not.toContain("private fixture");
+        expect(scan).not.toHaveProperty("sessionStores");
+        (await import("../infra/diagnostics-timeline.js")).flushDiagnosticsTimeline();
+        const timings = fs.readFileSync(timeline, "utf8");
+        for (const stage of [
+          "status.config",
+          "status.gateway-probe",
+          "status.session-stores",
+          "status.summary",
+        ]) {
+          expect(timings).toContain(`"stage":"${stage}"`);
+        }
+      } finally {
+        readSummary.mockRestore();
+      }
+    });
   });
 
   it("keeps an authored context cap through a runtime provider alias", async () => {

@@ -136,9 +136,16 @@ function createStatusUpdateModuleMock(mocks: Pick<StatusScanSharedMocks, "getUpd
 
 function createStatusAgentLocalModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getAgentLocalStatuses">,
-): { getAgentLocalStatuses: StatusScanSharedMocks["getAgentLocalStatuses"] } {
+): {
+  collectStatusLocalSnapshot: (
+    cfg: OpenClawConfig,
+  ) => Promise<{ agentStatus: unknown; sessionStores: undefined }>;
+} {
   return {
-    getAgentLocalStatuses: mocks.getAgentLocalStatuses,
+    collectStatusLocalSnapshot: async (cfg) => ({
+      agentStatus: await mocks.getAgentLocalStatuses(cfg),
+      sessionStores: undefined,
+    }),
   };
 }
 

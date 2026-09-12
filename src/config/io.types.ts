@@ -11,11 +11,15 @@ import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
+export const configWriteCommittedSnapshot = Symbol("configWriteCommittedSnapshot");
+
 export type ConfigWriteResult = {
   persistedHash: string;
   persistedConfig: OpenClawConfig;
   /** Exact resolved source accepted before commit; absent for legacy custom writers. */
   persistedSourceConfig?: OpenClawConfig;
+  /** Internal receipt from the committed inputs, independent of later filesystem reads. */
+  [configWriteCommittedSnapshot]?: { hash: string; sourceConfig: OpenClawConfig };
 };
 
 export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown };
@@ -46,7 +50,7 @@ export type ConfigWriteOptions = {
   ownedConfigPathForWrite?: string;
   /** Rechecks that the config path captured at mutation start is still active. */
   assertConfigPathForWrite?: () => void;
-  /** Internal synchronous live-owner assertion; unlike path provenance, requires rename-only writes. */
+  /** Internal synchronous live-owner assertion checked at guarded publication effects. */
   assertCurrent?: () => void;
   /** Paths that must be removed from the persisted payload. */
   unsetPaths?: string[][];
@@ -86,7 +90,7 @@ export type ConfigWriteOptions = {
   lastTouchedVersionOverride?: string;
   /** Optional runtime candidate preflight; the runtime writer composes its own preflight. */
   preCommitRuntimePreflight?: (sourceConfig: OpenClawConfig) => Promise<unknown>;
-  /** Revalidate authority at the final root-file publication; requires atomic rename. */
+  /** Prepare authority before the synchronous root-file publication phase. */
   beforeCommit?: () => void | Promise<void>;
   /** Snapshot-time hashes for include files that mutation writers may update. */
   includeFileHashesForWrite?: Record<string, string>;

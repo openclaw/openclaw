@@ -5,6 +5,7 @@ import {
   resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ModelCatalogTarget } from "../../../packages/gateway-protocol/src/index.js";
 import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
@@ -42,7 +43,13 @@ import {
   createGatewayControlUiReloadOptions,
   isSameOriginGateway,
 } from "./gateway-control-ui-reload.ts";
-import { createGatewayEventLog, notifyGatewayObservers } from "./gateway-observers.ts";
+import {
+  createGatewayEventLog,
+  createGatewayMetadataObserver,
+  createGatewayEventObserver,
+  notifyGatewayObservers,
+} from "./gateway-observers.ts";
+import { readSuspensionPhase } from "./gateway-readiness.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -61,16 +68,6 @@ const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserC
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
-function readSuspensionPhase(payload: unknown): ApplicationGatewaySnapshot["suspensionPhase"] {
-  const phase = asOptionalRecord(payload)?.phase;
-  return phase === "accepting" ||
-    phase === "preparing" ||
-    phase === "draining" ||
-    phase === "prepared"
-    ? phase
-    : undefined;
-}
-
 export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
@@ -80,6 +77,7 @@ export function createApplicationGateway(
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
+    getModelCatalogTarget?: (gatewayUrl: string) => ModelCatalogTarget | undefined;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
       "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
@@ -131,6 +129,7 @@ export function createApplicationGateway(
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   const eventLog = createGatewayEventLog();
+  const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
   const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
     // Retirement remains valid after a reentrant stop or same-account client replacement.
     notifyGatewayObservers(
@@ -176,7 +175,8 @@ export function createApplicationGateway(
     }, OFFLINE_INDICATOR_DELAY_MS);
   };
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
-    snapshot = { ...snapshot, ...patch };
+    const previous = snapshot;
+    snapshot = { ...previous, ...patch };
     if (snapshot.phase === "connected") {
       clearOfflineIndicatorTimer();
       snapshot.offlineStable = false;
@@ -188,7 +188,9 @@ export function createApplicationGateway(
       snapshot.pluginCapabilities = null;
       scheduleOfflineIndicator();
     }
-    notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
+    if (metadataObserver.synchronize(previous, snapshot)) {
+      notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
+    }
   };
   const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> => {
     if (canvasSurfaceLease) {
@@ -452,6 +454,13 @@ export function createApplicationGateway(
       mode: options.clientOptions?.mode ?? "webchat",
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
+      get modelCatalog() {
+        return client === nextClient
+          ? metadataObserver.captureTarget(
+              options.getModelCatalogTarget?.(nextConnection.gatewayUrl),
+            )
+          : undefined;
+      },
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
@@ -634,22 +643,13 @@ export function createApplicationGateway(
           connect();
         }
       },
-      onEvent: (event) => {
-        // A replaced socket can still deliver queued events; never let it
-        // project presence or history into the current gateway connection.
-        if (client !== nextClient) {
-          return;
-        }
-        try {
-          recordGatewayEvent(event);
-        } catch (error) {
-          // Preserve protocol-client isolation: a broken log subscriber must
-          // not prevent chat, approvals, or the remaining app from updating.
-          console.error("[gateway] event handler error:", error);
-        }
-        const isActiveClient = () => isCurrentClient(nextClient);
-        notifyGatewayObservers(eventListeners, event, "event listener", isActiveClient);
-      },
+      onEvent: createGatewayEventObserver({
+        isAttached: () => client === nextClient,
+        isCurrent: () => isCurrentClient(nextClient),
+        project: (event) => metadataObserver.receive(event, snapshot),
+        record: recordGatewayEvent,
+        listeners: eventListeners,
+      }),
     });
     client = nextClient;
     setSnapshot({

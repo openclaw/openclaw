@@ -201,7 +201,7 @@ export async function summarizeText(
   return await runWithAsyncWorkResources(async (onAcquired) => {
     // Preparation precedes the request timer; the completion and its cleanup own the model.
     const prepared = await resolvedDeps.acquireSimpleCompletionModelWithSelection(
-      { cfg },
+      { cfg, allowBundledStaticCatalogFallback: true },
       (manifestPlugins) => resolveSummaryModelSelection(cfg, config, manifestPlugins),
     );
     if (!("error" in prepared)) {

@@ -251,6 +251,34 @@ describe("msteams setup surface", () => {
     expect(result?.channels?.msteams?.accounts).not.toHaveProperty("default");
   });
 
+  it("preserves an explicit default account webhook path when updating its port", () => {
+    const result = msteamsSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          msteams: {
+            webhook: { path: "/root/messages" },
+            accounts: {
+              Default: {
+                appId: "default-app",
+                appPassword: "default-secret",
+                tenantId: "tenant-id",
+                webhook: { path: "/default/messages", port: 3978 },
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+      input: { webhookPort: 4978 },
+    } as never);
+
+    expect(result?.channels?.msteams?.webhook).toEqual({ path: "/root/messages" });
+    expect(result?.channels?.msteams?.accounts?.Default?.webhook).toEqual({
+      path: "/default/messages",
+      port: 4978,
+    });
+  });
+
   it("promotes root identity when adding a named account", () => {
     expect(
       msteamsSetupAdapter.applyAccountConfig?.({

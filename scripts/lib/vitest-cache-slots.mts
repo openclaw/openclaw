@@ -11,8 +11,8 @@ type CacheSpec = {
 
 /** A slot remains borrowed through retries and the process owner's final join. */
 export function createVitestCacheSlots(concurrency: number, platform = process.platform) {
-  const available = Array.from({ length: concurrency }, (_, index) => index);
-  let nextSlot = concurrency;
+  const idleSlots = new Map<string, number[]>();
+  let nextSlot = 0;
   return async <T extends CacheSpec, R extends { groupJoined: boolean }>(
     spec: T,
     run: (assigned: T) => Promise<R>,
@@ -25,8 +25,12 @@ export function createVitestCacheSlots(concurrency: number, platform = process.p
     ) {
       return run(spec);
     }
-    const slot = available.pop() ?? nextSlot++;
     const configKey = createHash("sha256").update(path.resolve(spec.config)).digest("hex");
+    const cacheKey = path.join(path.resolve(spec.cacheAssignment.root), configKey);
+    const available = idleSlots.get(cacheKey) ?? [];
+    idleSlots.set(cacheKey, available);
+    // Fresh indices stay global: distinct root spellings may alias one directory.
+    const slot = available.pop() ?? nextSlot++;
     const result = await run({
       ...spec,
       cacheAssignment: { ...spec.cacheAssignment, leased: true },

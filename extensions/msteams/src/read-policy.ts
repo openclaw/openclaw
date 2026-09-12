@@ -3,7 +3,11 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveDefaultGroupPolicy } from "../runtime-api.js";
-import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
+import {
+  resolveDefaultMSTeamsAccountId,
+  resolveMSTeamsAccountConfig,
+  withAccountScopedMSTeamsConfig,
+} from "./accounts.js";
 import { listChannelsForTeamWithPageInfo, resolveGraphToken } from "./graph.js";
 import { resolveMSTeamsRouteConfig } from "./policy.js";
 import {
@@ -29,15 +33,16 @@ function sameAccount(ctx: MSTeamsReadContext): boolean {
   return requester !== undefined && requester === requested;
 }
 
-function resolveReadPolicyConfig(cfg: OpenClawConfig, ctx?: MSTeamsReadContext): OpenClawConfig {
-  const accountId = normalizeOptionalString(ctx?.accountId) ?? resolveDefaultMSTeamsAccountId(cfg);
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: resolveMSTeamsAccountConfig(cfg, accountId),
-    },
-  };
+function resolveReadPolicyAccountId(cfg: OpenClawConfig, ctx?: MSTeamsReadContext): string {
+  return normalizeOptionalString(ctx?.accountId) ?? resolveDefaultMSTeamsAccountId(cfg);
+}
+
+function resolveReadPolicyConfig(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
+  return withAccountScopedMSTeamsConfig({
+    cfg,
+    accountId,
+    accountConfig: resolveMSTeamsAccountConfig(cfg, accountId),
+  });
 }
 
 export function isCurrentMSTeamsReadTarget(params: {
@@ -73,6 +78,7 @@ function isStableUserId(value: string): boolean {
 
 async function resolveAllowedDmTarget(
   cfg: OpenClawConfig,
+  accountId: string,
   target: string,
 ): Promise<string | undefined> {
   const teams = cfg.channels?.msteams;
@@ -99,6 +105,7 @@ async function resolveAllowedDmTarget(
   try {
     const [resolvedTarget, ...resolvedEntries] = await resolveMSTeamsUserAllowlist({
       cfg,
+      accountId,
       entries: [userId, ...normalizedEntries.filter((entry) => entry !== "*")],
     });
     if (!resolvedTarget?.resolved || !resolvedTarget.id) {
@@ -117,6 +124,7 @@ async function resolveAllowedDmTarget(
 
 async function resolveDirectDmTarget(
   cfg: OpenClawConfig,
+  accountId: string,
   target: string,
 ): Promise<string | undefined> {
   if (cfg.channels?.msteams?.dmPolicy === "disabled") {
@@ -133,7 +141,7 @@ async function resolveDirectDmTarget(
     return undefined;
   }
   try {
-    const [resolved] = await resolveMSTeamsUserAllowlist({ cfg, entries: [userId] });
+    const [resolved] = await resolveMSTeamsUserAllowlist({ cfg, accountId, entries: [userId] });
     return resolved?.resolved && resolved.id ? `user:${resolved.id}` : undefined;
   } catch {
     return undefined;
@@ -174,6 +182,7 @@ function hasMutableChannelConfig(cfg: OpenClawConfig): boolean {
 
 async function resolveConfiguredBotFrameworkTeamKey(
   cfg: OpenClawConfig,
+  accountId: string,
   graphTeamId: string,
 ): Promise<string | undefined> {
   const configuredTeams = cfg.channels?.msteams?.teams;
@@ -189,7 +198,7 @@ async function resolveConfiguredBotFrameworkTeamKey(
   // Bot Framework identifies a team with a channel conversation id, while
   // Graph reads use the Entra group id. Roster membership proves the mapping
   // without relying on the localized General channel display name.
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(cfg, { accountId });
   const channelResult = await listChannelsForTeamWithPageInfo(token, graphTeamId);
   if (channelResult.truncated) {
     return undefined;
@@ -205,6 +214,7 @@ async function resolveConfiguredBotFrameworkTeamKey(
 
 async function resolveStableChannelTarget(
   cfg: OpenClawConfig,
+  accountId: string,
   target: string,
 ): Promise<string | undefined> {
   if (isStableGraphChannelTarget(target)) {
@@ -214,7 +224,7 @@ async function resolveStableChannelTarget(
     return undefined;
   }
   try {
-    const [resolved] = await resolveMSTeamsChannelAllowlist({ cfg, entries: [target] });
+    const [resolved] = await resolveMSTeamsChannelAllowlist({ cfg, accountId, entries: [target] });
     return resolved?.resolved && resolved.graphTeamId && resolved.channelId
       ? `${resolved.graphTeamId}/${resolved.channelId}`
       : undefined;
@@ -225,6 +235,7 @@ async function resolveStableChannelTarget(
 
 async function resolveAllowedChannelTarget(
   cfg: OpenClawConfig,
+  accountId: string,
   target: string,
 ): Promise<string | undefined> {
   const teams = cfg.channels?.msteams;
@@ -244,7 +255,7 @@ async function resolveAllowedChannelTarget(
     channelName: channelId,
     allowNameMatching: isDangerousNameMatchingEnabled(teams),
   });
-  const stableTarget = await resolveStableChannelTarget(cfg, target);
+  const stableTarget = await resolveStableChannelTarget(cfg, accountId, target);
   if (!directRoute.allowlistConfigured && groupPolicy !== "open" && stableTarget) {
     throw new ToolAuthorizationError(
       'Microsoft Teams read target is not allowed. Configure channels.msteams.teams.<team>.channels for this channel, or deliberately set channels.msteams.groupPolicy to "open".',
@@ -261,7 +272,11 @@ async function resolveAllowedChannelTarget(
     return undefined;
   }
   try {
-    const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(cfg, stableTeamId);
+    const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(
+      cfg,
+      accountId,
+      stableTeamId,
+    );
     if (botFrameworkTeamKey) {
       const allowed = resolveMSTeamsRouteConfig({
         cfg: teams,
@@ -277,6 +292,7 @@ async function resolveAllowedChannelTarget(
     }
     const resolved = await resolveMSTeamsTeamsConfig({
       cfg,
+      accountId,
       teamIdMode: "graph",
       teams: teams.teams,
     });
@@ -301,7 +317,8 @@ export async function assertMSTeamsReadTargetAllowed(params: {
   ctx: MSTeamsReadContext;
   target: string;
 }): Promise<string> {
-  const cfg = resolveReadPolicyConfig(params.cfg, params.ctx);
+  const accountId = resolveReadPolicyAccountId(params.cfg, params.ctx);
+  const cfg = resolveReadPolicyConfig(params.cfg, accountId);
   const target = normalizeTarget(params.target);
   const isChannel = target.includes("/");
   const isDm = /^user:/i.test(target);
@@ -312,10 +329,10 @@ export async function assertMSTeamsReadTargetAllowed(params: {
   const allowedTarget = directOperator
     ? isChannel
       ? resolveMSTeamsReadGroupPolicy(cfg) !== "disabled"
-        ? await resolveStableChannelTarget(cfg, target)
+        ? await resolveStableChannelTarget(cfg, accountId, target)
         : undefined
       : isDm
-        ? await resolveDirectDmTarget(cfg, target)
+        ? await resolveDirectDmTarget(cfg, accountId, target)
         : isChat &&
             resolveMSTeamsReadGroupPolicy(cfg) !== "disabled" &&
             cfg.channels?.msteams?.dmPolicy !== "disabled"
@@ -343,9 +360,9 @@ export async function assertMSTeamsReadTargetAllowed(params: {
                 ? target
                 : undefined
       : isChannel
-        ? await resolveAllowedChannelTarget(cfg, target)
+        ? await resolveAllowedChannelTarget(cfg, accountId, target)
         : isDm
-          ? await resolveAllowedDmTarget(cfg, target)
+          ? await resolveAllowedDmTarget(cfg, accountId, target)
           : isChat
             ? bothUnknownScopesAllowed(cfg)
               ? target
@@ -362,7 +379,8 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
   ctx?: MSTeamsReadContext;
   teamId: string;
 }): Promise<string> {
-  const cfg = resolveReadPolicyConfig(params.cfg, params.ctx);
+  const accountId = resolveReadPolicyAccountId(params.cfg, params.ctx);
+  const cfg = resolveReadPolicyConfig(params.cfg, accountId);
   const teams = cfg.channels?.msteams;
   const groupPolicy = resolveMSTeamsReadGroupPolicy(cfg);
   if (groupPolicy === "disabled") {
@@ -381,6 +399,7 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
       ? (
           await resolveMSTeamsChannelAllowlist({
             cfg,
+            accountId,
             entries: [params.teamId],
           })
         )[0]?.graphTeamId
@@ -396,7 +415,11 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
   let allowed = directRoute.allowlistConfigured ? directRoute.allowed : groupPolicy === "open";
   if (!allowed && teams?.teams) {
     try {
-      const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(cfg, stableTeamId);
+      const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(
+        cfg,
+        accountId,
+        stableTeamId,
+      );
       if (botFrameworkTeamKey) {
         allowed = resolveMSTeamsRouteConfig({
           cfg: teams,
@@ -407,6 +430,7 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
       if (!allowed && hasMutableChannelConfig(cfg)) {
         const resolved = await resolveMSTeamsTeamsConfig({
           cfg,
+          accountId,
           teamIdMode: "graph",
           teams: teams.teams,
         });

@@ -950,6 +950,7 @@ enum class GatewayEvent(
   Agent("agent"),
   Chat("chat"),
   ChatMetadataChanged("chat.metadata.changed"),
+  ModelsSnapshot("models.snapshot"),
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),

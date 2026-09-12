@@ -134,6 +134,7 @@ export type WorkerPlacementDispatchAdmission = <T>(
   request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
   run: (signal?: AbortSignal) => Promise<T>,
   authorize?: () => void,
+  signal?: AbortSignal,
 ) => Promise<T>;
 
 /** Canonical admission rejected the session owner, not a caller or process cancellation. */

@@ -597,6 +597,7 @@ export function createPdfTool(options?: {
         // document after the owning agent run has been cancelled.
         signal?.throwIfAborted();
         const extracted = await extractPdfContent({
+          ...(signal ? { signal } : {}),
           buffer: pdf.buffer,
           maxPages: configuredMaxPages,
           maxPixels: PDF_MAX_PIXELS,

@@ -77,7 +77,8 @@ async function promptMSTeamsAllowFrom(params: {
     }
 
     const resolved = await resolveMSTeamsUserAllowlist({
-      cfg: withMSTeamsAccountConfig(params.cfg, accountId),
+      cfg: params.cfg,
+      accountId,
       entries: parts,
     }).catch(() => null);
 
@@ -119,18 +120,6 @@ async function promptMSTeamsAllowFrom(params: {
       scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(params.cfg, accountId),
     });
   }
-}
-
-function withMSTeamsAccountConfig(cfg: OpenClawConfig, accountId?: string | null): OpenClawConfig {
-  const msteams = resolveMSTeamsAccountConfig(cfg, accountId);
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams:
-        accountId && accountId !== "default" ? { ...msteams, defaultAccount: accountId } : msteams,
-    },
-  };
 }
 
 function shouldScopeMSTeamsDefaultToAccounts(cfg: OpenClawConfig, accountId: string): boolean {
@@ -204,7 +193,8 @@ async function resolveMSTeamsGroupAllowlist(params: {
   }
   try {
     const lookups = await resolveMSTeamsChannelAllowlist({
-      cfg: withMSTeamsAccountConfig(params.cfg, params.accountId),
+      cfg: params.cfg,
+      accountId: params.accountId,
       entries: params.entries,
     });
     const resolvedChannels = lookups.filter(

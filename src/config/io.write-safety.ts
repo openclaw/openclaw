@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isMissingPathError } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
+import { hashConfigIncludeRaw } from "./includes.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
@@ -16,24 +18,77 @@ export function createGuardedConfigFileSystem(
   configPath: string,
   fsModule: typeof fs,
   assertCurrent?: () => void,
+  publication?: {
+    snapshot: ConfigFileSnapshot;
+    includeGraph: { hashes: Record<string, string>; targets: Record<string, string> };
+  },
 ): typeof fs {
-  if (!assertCurrent) {
+  if (!assertCurrent && !publication) {
     return fsModule;
   }
+  let expectedPublication = publication;
+  const assertPublication = () => {
+    assertCurrent?.();
+    if (expectedPublication) {
+      assertBaseSnapshotStillCurrent(
+        expectedPublication.snapshot,
+        configPath,
+        fsModule,
+        expectedPublication.includeGraph,
+      );
+    }
+  };
   const directory = path.dirname(path.resolve(configPath));
   return {
     ...fsModule,
+    mkdirSync: new Proxy(fsModule.mkdirSync, {
+      apply(target, thisArg, args) {
+        assertCurrent?.();
+        return Reflect.apply(target, thisArg, args);
+      },
+    }),
+    fchmodSync: (fd, mode) => {
+      assertCurrent?.();
+      return fsModule.fchmodSync(fd, mode);
+    },
+    renameSync: (source, destination) => {
+      if (destination === configPath) {
+        assertPublication();
+      } else {
+        assertCurrent?.();
+      }
+      return fsModule.renameSync(source, destination);
+    },
+    rmSync: (filePath, options) => {
+      if (filePath === configPath) {
+        assertPublication();
+      }
+      fsModule.rmSync(filePath, options);
+      if (filePath === configPath && expectedPublication) {
+        // Only this successful removal advances the captured root expectation.
+        expectedPublication = {
+          ...expectedPublication,
+          snapshot: { ...expectedPublication.snapshot, exists: false, raw: null },
+        };
+      }
+    },
+    openSync: (filePath, flags, mode) => {
+      if (filePath === configPath) {
+        assertPublication();
+      }
+      return fsModule.openSync(filePath, flags, mode);
+    },
     promises: {
       ...fsModule.promises,
       // Preserve mkdir's overloads while checking immediately at native dispatch.
       mkdir: new Proxy(fsModule.promises.mkdir, {
         apply(target, thisArg, args) {
-          assertCurrent();
+          assertCurrent?.();
           return Reflect.apply(target, thisArg, args);
         },
       }),
       rename: (source, destination) => {
-        assertCurrent();
+        assertCurrent?.();
         return fsModule.promises.rename(source, destination);
       },
       open: async (filePath, flags, mode) => {
@@ -42,7 +97,7 @@ export function createGuardedConfigFileSystem(
           // fs-safe observes this directory handle before applying its mode.
           const chmod = handle.chmod.bind(handle);
           handle.chmod = (nextMode) => {
-            assertCurrent();
+            assertCurrent?.();
             return chmod(nextMode);
           };
         }
@@ -56,11 +111,28 @@ export function assertBaseSnapshotStillCurrent(
   snapshot: ConfigFileSnapshot,
   configPath: string,
   ioFs: typeof fs,
+  includeGraph?: { hashes: Record<string, string>; targets: Record<string, string> },
 ): void {
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
       retryable: false,
     });
+  }
+  for (const [includePath, expectedHash] of Object.entries(includeGraph?.hashes ?? {})) {
+    try {
+      const expectedTarget = includeGraph?.targets[includePath];
+      if (!expectedTarget || path.normalize(ioFs.realpathSync(includePath)) !== expectedTarget) {
+        throw new ConfigMutationConflictError("included config target changed since last load");
+      }
+      if (hashConfigIncludeRaw(ioFs.readFileSync(expectedTarget, "utf-8")) !== expectedHash) {
+        throw new ConfigMutationConflictError("included config changed since last load");
+      }
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+      throw new ConfigMutationConflictError("included config disappeared since last load");
+    }
   }
   // Unreadable snapshots cannot be re-read; destructive guards reject them later.
   if (snapshot.readError) {

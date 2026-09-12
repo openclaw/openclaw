@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { visitSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import {
@@ -8,6 +10,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -223,6 +226,50 @@ it("checks a cached identity reader when invoked after another connection archiv
       expect(() => read("user")).toThrow(/cold storage/);
     } finally {
       race.writer.close();
+    }
+  });
+});
+
+it("identifies a slow transcript matcher while retaining its hot read snapshot", async () => {
+  await withOpenClawTestState({ label: "hot-read-attribution" }, async (state) => {
+    const race = await prepareRace(state);
+    const file = state.path("hot-read.log");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    let clock = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      const found = findTranscriptEventInDatabase(race.database, race.scope.sessionId, () => {
+        expect(race.database.db.isTransaction).toBe(true);
+        clock += 1_200;
+        race.commitArchive();
+        return true;
+      });
+      expect(found).toMatchObject({ event: { id: "answer" } });
+      expect(race.database.db.isTransaction).toBe(false);
+      expect(() => loadTranscriptHeaderSync(race.scope)).toThrow(/cold storage/);
+      await flushLogger();
+      const holds = (await fs.readFile(file, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((record) => record.message === "slow SQLite transaction hold")
+        .map((record) => record["1"]);
+      expect(holds).toEqual([
+        {
+          async: false,
+          elapsedMs: 1_200,
+          isMainThread,
+          operation: "session transcript match read",
+          pid: process.pid,
+          threadId,
+          thresholdMs: 1_000,
+        },
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+      race.writer.close();
+      await flushLogger();
+      setLoggerOverride(null);
     }
   });
 });

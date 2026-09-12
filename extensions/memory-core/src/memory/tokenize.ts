@@ -30,27 +30,30 @@ const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
+  if (!CJK_RE.test(lower)) {
+    return new Set(ascii);
+  }
 
-  // Track CJK characters with their original positions
-  const chars = Array.from(lower);
-  const cjkData: { char: string; index: number }[] = [];
-  for (const [i, char] of chars.entries()) {
+  const tokens = new Set(ascii);
+  const unigrams: string[] = [];
+  let previousCjk: string | undefined;
+  for (const char of lower) {
     if (CJK_RE.test(char)) {
-      cjkData.push({ char, index: i });
+      if (previousCjk !== undefined) {
+        tokens.add(previousCjk + char);
+      }
+      unigrams.push(char);
+      previousCjk = char;
+    } else {
+      previousCjk = undefined;
     }
   }
 
-  // Build bigrams only from originally adjacent CJK characters
-  const bigrams: string[] = [];
-  for (const [i, next] of cjkData.slice(1).entries()) {
-    const previous = cjkData[i];
-    if (previous !== undefined && next.index === previous.index + 1) {
-      bigrams.push(previous.char + next.char);
-    }
+  // Preserve insertion order: ASCII tokens, then bigrams, then unigrams.
+  for (const char of unigrams) {
+    tokens.add(char);
   }
-
-  const unigrams = cjkData.map((d) => d.char);
-  return new Set([...ascii, ...bigrams, ...unigrams]);
+  return tokens;
 }
 
 /**

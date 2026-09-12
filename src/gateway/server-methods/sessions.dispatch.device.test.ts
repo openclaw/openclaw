@@ -758,6 +758,7 @@ describe("sessions.dispatch device targets", () => {
           getPairedDevice: async (deviceId) => pairedNode(deviceId),
         });
         runtime.bindNodeTransport({
+          getCurrentNode: async (nodeId) => nodes.find((node) => node.nodeId === nodeId),
           listCurrentNodes: async () => nodes,
           hasCurrentRunner: () => nodes.length > 0,
           isCurrent: () => true,

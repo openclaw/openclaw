@@ -185,17 +185,19 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
-  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
-  if (
-    !parseAgentSessionKey(raw) &&
-    persistedOwner.kind === "configured" &&
-    persistedOwner.agentId === normalizeAgentId(params.agentId) &&
-    lowered !== "main" &&
-    lowered !== normalizeMainKey(params.cfg.session?.mainKey)
-  ) {
-    return raw;
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed) {
+    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
+    if (
+      persistedOwner.kind === "configured" &&
+      persistedOwner.agentId === normalizeAgentId(params.agentId) &&
+      lowered !== "main" &&
+      lowered !== normalizeMainKey(params.cfg.session?.mainKey)
+    ) {
+      return raw;
+    }
   }
-  const key = parseAgentSessionKey(raw) ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
+  const key = parsed ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
   return resolveSessionStoreKey({
     cfg: params.cfg,
     sessionKey: key,

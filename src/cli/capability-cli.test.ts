@@ -3799,6 +3799,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it.each(["local", "gateway"] as const)(

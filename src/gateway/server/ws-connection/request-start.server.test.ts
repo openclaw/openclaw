@@ -1,6 +1,7 @@
 import { on, once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { performance } from "node:perf_hooks";
+import { constants as zlibConstants, deflateRawSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -75,8 +76,10 @@ function captureGatewayConnection(port: number) {
   };
 }
 
-function maskedFrame(opcode: 0x81 | 0x88 | 0x89 | 0x8a, text: string): Buffer {
-  const payload = Buffer.from(text);
+function maskedFrame(opcode: 0x81 | 0x88 | 0x89 | 0x8a, text: string, compressed = false): Buffer {
+  const payload = compressed
+    ? deflateRawSync(Buffer.from(text), { finishFlush: zlibConstants.Z_SYNC_FLUSH }).subarray(0, -4)
+    : Buffer.from(text);
   if (payload.length >= 126) {
     throw new Error("fixture requires a short masked WebSocket frame");
   }
@@ -84,7 +87,11 @@ function maskedFrame(opcode: 0x81 | 0x88 | 0x89 | 0x8a, text: string): Buffer {
   for (let index = 0; index < payload.length; index++) {
     payload[index] = payload[index]! ^ mask[index % mask.length]!;
   }
-  return Buffer.concat([Buffer.from([opcode, 0x80 | payload.length]), mask, payload]);
+  return Buffer.concat([
+    Buffer.from([opcode | (compressed ? 0x40 : 0), 0x80 | payload.length]),
+    mask,
+    payload,
+  ]);
 }
 
 function injectReceiveChunk(stream: IncomingMessage["socket"], frames: Buffer[]) {
@@ -140,6 +147,7 @@ describe("authenticated operator request starts", () => {
       ws = await openOperatorSocket(port, token);
       await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
       const { stream } = capture.get();
+      const compressedRequests = ws.extensions.includes("permessage-deflate");
       // This case isolates cheap-start batching. Other owner cases advance the
       // work clock to prove the elapsed-work fairness boundary independently.
       const now = performance.now();
@@ -170,6 +178,9 @@ describe("authenticated operator request starts", () => {
               method: "test.trace",
               params: {},
             }),
+            // Chrome compresses small requests whenever the extension is negotiated;
+            // the server's outbound threshold cannot keep these frames raw.
+            compressedRequests,
           ),
         ),
       );
@@ -384,16 +395,13 @@ describe("authenticated operator request starts", () => {
     },
   );
 
-  it("keeps small frames raw, compresses large frames, and accepts compressed post-auth frames above the preauth cap", async () => {
-    // Regression: the deflate extension keeps its own copy of the preauth maxPayload,
-    // so without the extension-aware handoff an authenticated compressed request above
-    // 64 KiB closed the socket with 1009 even though the receiver limit was raised.
+  it("accepts large post-auth frames without negotiating compression", async () => {
     const registry = createEmptyPluginRegistry();
     registry.gatewayHandlers["test.echo"] = async ({ req, respond }) => {
       respond(true, { echoed: (req.params as { text: string }).text });
     };
     setTestPluginRegistry(registry);
-    const token = "gateway-compression-test-token";
+    const token = "gateway-frame-limit-test-token";
     const port = await getGatewayTestPort();
     const capture = captureGatewayConnection(port);
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
@@ -405,7 +413,7 @@ describe("authenticated operator request starts", () => {
         controlUiEnabled: false,
       });
       ws = await openOperatorSocket(port, token);
-      expect(ws.extensions).toContain("permessage-deflate");
+      expect(ws.extensions).toBe("");
       const { stream } = capture.get();
       // Cover both live session/tool events and ordinary final agent results.
       for (const sizeKiB of [6, 20]) {
@@ -437,7 +445,7 @@ describe("authenticated operator request starts", () => {
       const beforeBig = stream.bytesWritten;
       ws.send(JSON.stringify({ type: "req", id: "big", method: "test.echo", params: { text } }));
       await expect(response).resolves.toMatchObject({ ok: true, payload: { echoed: text } });
-      expect(stream.bytesWritten - beforeBig).toBeLessThan(text.length / 4);
+      expect(stream.bytesWritten - beforeBig).toBeGreaterThan(text.length);
     } finally {
       ws?.terminate();
       try {

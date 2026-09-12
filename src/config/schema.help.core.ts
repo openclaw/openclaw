@@ -7,6 +7,8 @@ import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 export const CORE_FIELD_HELP: Record<string, string> = {
   worktreeRoot:
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
+  worktreeAcceleration:
+    "Use filesystem acceleration for new managed worktrees when supported (default: true). Set false to use normal Git checkout and file copying. Applies only to new worktrees.",
   "channels.discord.activities":
     "Discord Activities configuration for presenting core show_widget documents inside Discord. Leave unset to keep Activity routes, presentation, and handlers disabled.",
   "channels.discord.activities.clientSecret":

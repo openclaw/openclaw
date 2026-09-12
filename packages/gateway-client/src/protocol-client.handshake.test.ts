@@ -259,9 +259,48 @@ describe("GatewayProtocolClient connect handshake", () => {
     expect(buildConnectPlan).toHaveBeenCalledWith({
       nonce: "synthetic-nonce",
       challengeTs: 1_700_000_000_123,
+      serverCapabilities: [],
       generation: 1,
     });
     client.stop();
+  });
+
+  it("does not retain an advertised capability after reconnecting to a different Gateway", async () => {
+    vi.useFakeTimers();
+    const buildConnectPlan = vi.fn(() => ({}));
+    const { client, connections } = createHandshakeClient(buildConnectPlan);
+    try {
+      client.start();
+      const first = connections[0];
+      assert.ok(first);
+      first.handlers.open();
+      first.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "first", ts: 1, capabilities: ["model-catalog-snapshot"] },
+        }),
+      );
+      expect(buildConnectPlan).toHaveBeenLastCalledWith({
+        nonce: "first",
+        challengeTs: 1,
+        serverCapabilities: ["model-catalog-snapshot"],
+        generation: 1,
+      });
+      first.handlers.close(1006, "reconnect");
+      await vi.advanceTimersByTimeAsync(10);
+      const second = connections[1];
+      assert.ok(second);
+      receiveConnectChallenge(second);
+      expect(buildConnectPlan).toHaveBeenLastCalledWith({
+        nonce: "synthetic-nonce",
+        challengeTs: 1_800_000_000_000,
+        serverCapabilities: [],
+        generation: 2,
+      });
+    } finally {
+      client.stop();
+    }
   });
 
   it("marks omitted and malformed challenge timestamps as invalid", () => {
@@ -284,6 +323,7 @@ describe("GatewayProtocolClient connect handshake", () => {
     expect(buildConnectPlan).toHaveBeenLastCalledWith({
       nonce: "legacy-nonce",
       challengeTs: null,
+      serverCapabilities: [],
       generation: 1,
     });
 
@@ -306,6 +346,7 @@ describe("GatewayProtocolClient connect handshake", () => {
     expect(buildConnectPlan).toHaveBeenLastCalledWith({
       nonce: "malformed-nonce",
       challengeTs: null,
+      serverCapabilities: [],
       generation: 1,
     });
     secondClient.client.stop();

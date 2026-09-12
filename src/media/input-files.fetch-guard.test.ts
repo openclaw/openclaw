@@ -720,6 +720,9 @@ describe("input file MIME sniffing", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       await pending;
+      const signal = extractPdfContentMock.mock.calls[0]?.[0]?.signal as AbortSignal;
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason).toEqual(new Error("PDF extraction timed out after 1ms"));
     } finally {
       vi.useRealTimers();
     }

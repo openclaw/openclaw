@@ -1,5 +1,5 @@
 ---
-summary: "Runtime config: worktree root, model routing, discovery, updates, ACP, and the wizard"
+summary: "Runtime config: worktree storage and acceleration, model routing, discovery, updates, ACP, and the wizard"
 read_when:
   - Choosing where agent worktrees live
   - Setting model routing or discovery defaults
@@ -7,7 +7,7 @@ read_when:
 title: "Configuration — runtime basics"
 ---
 
-Top-level runtime keys: `worktreeRoot`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
+Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
 
 For the full key index and the other top-level config domains, see [Configuration reference](/gateway/configuration-reference).
 
@@ -24,6 +24,18 @@ Optional global root directory for [managed worktree](/concepts/managed-worktree
 Use an absolute Gateway-host path, `~` for the Gateway user's home directory, or `~/` followed by a folder inside it; relative paths are rejected. OpenClaw creates checkouts at `<worktreeRoot>/<repo-fingerprint>/<name>`. This setting applies to all agents and all managed-worktree owners, with no per-agent override. The shared state database and allocation limits remain under the existing state directory.
 
 Changes affect new allocations only. Registered worktrees retain their original paths for reuse, cleanup, and snapshot restore; existing checkouts are not moved automatically. Keep their original storage available while those records are still needed.
+
+## `worktreeAcceleration`
+
+Optional global boolean for [managed worktree filesystem acceleration](/concepts/managed-worktrees#filesystem-acceleration). Defaults to `true`, which selects an available filesystem backend automatically and otherwise uses normal Git checkout.
+
+```json5
+{
+  worktreeAcceleration: false,
+}
+```
+
+Set `false` to use normal Git checkout and file copying for new worktrees. This option applies across agents and managed-worktree owners; existing checkouts are unchanged. Btrfs on Linux is the initial backend. Repository setup and dependencies remain per-worktree.
 
 ## Models
 

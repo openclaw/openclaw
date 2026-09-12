@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
@@ -88,6 +90,70 @@ function sqliteBytes(databasePath: string) {
 }
 
 describe("shared-state transaction lifecycle participation", () => {
+  it.each(["idle", "held"] as const)(
+    "closes the %s retirement coordinator only after its last owner releases",
+    (custody) => {
+      const root = tempDirs.make("openclaw-state-retirement-custody-");
+      const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
+      const sqlite = requireNodeSqlite();
+      const observed = vi.spyOn(sqlite.DatabaseSync.prototype, "exec");
+      let coordinatorDatabase: DatabaseSync | undefined;
+      let coordinatorPath: string | undefined;
+      try {
+        const warm = acquireStateDatabaseCoordinator({ databasePath: database.path });
+        coordinatorPath = warm.path;
+        const connections = new Set(
+          observed.mock.contexts.filter((context) => context instanceof sqlite.DatabaseSync),
+        );
+        expect(connections.size).toBe(1);
+        coordinatorDatabase = connections.values().next().value;
+        warm.release();
+      } finally {
+        observed.mockRestore();
+      }
+      if (!coordinatorDatabase || !coordinatorPath) {
+        throw new Error("Warm state coordinator did not expose its native connection");
+      }
+      const unrelated = acquireStateDatabaseCoordinator({
+        databasePath: path.join(root, "unrelated.sqlite"),
+        runtimeDirectory: root,
+      });
+      const peer = new sqlite.DatabaseSync(unrelated.path);
+      const outer =
+        custody === "held"
+          ? acquireStateDatabaseCoordinator({ databasePath: database.path })
+          : undefined;
+      const samePathPeer = outer ? new sqlite.DatabaseSync(coordinatorPath) : undefined;
+      try {
+        expect(coordinatorDatabase.isOpen).toBe(true);
+        expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+        expect(database.db.isOpen).toBe(false);
+        if (outer) {
+          expect(coordinatorDatabase.isTransaction).toBe(true);
+          expect(() => samePathPeer?.exec("BEGIN EXCLUSIVE")).toThrow(/locked/);
+          outer.release();
+          samePathPeer?.exec("BEGIN EXCLUSIVE; ROLLBACK");
+          samePathPeer?.close();
+        }
+        expect(coordinatorDatabase.isOpen).toBe(false);
+        fs.unlinkSync(coordinatorPath);
+        expect(() => peer.exec("BEGIN EXCLUSIVE")).toThrow(/locked/);
+        unrelated.release();
+        peer.exec("BEGIN EXCLUSIVE; ROLLBACK");
+      } finally {
+        outer?.release();
+        if (samePathPeer?.isOpen) {
+          samePathPeer.close();
+        }
+        unrelated.release();
+        peer.close();
+        if (coordinatorDatabase.isOpen) {
+          coordinatorDatabase.close();
+        }
+      }
+    },
+  );
+
   it.each(
     ["path", "all"].flatMap((scope) =>
       ["cached", "retained"].map((custody) => ({ scope, custody })),

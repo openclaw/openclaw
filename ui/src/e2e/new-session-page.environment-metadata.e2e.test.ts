@@ -311,6 +311,98 @@ suite.define(() => {
       expect(await selectedRow.locator(".session-menu__check svg").isVisible()).toBe(true);
       expect(await selectionLayout()).toEqual(beforeSelection);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
+
+      const beforeRefresh = (await gateway.getRequests("environments.list")).length;
+      await gateway.emitGatewayEvent("presence", {
+        presence: [{ instanceId: "other-browser", mode: "webchat", roles: ["operator"] }],
+      });
+      await page.locator("openclaw-new-session-page").evaluate(async (element) => {
+        await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+      });
+      expect(await gateway.getRequests("environments.list")).toHaveLength(beforeRefresh);
+      expect(await selectedRow.isEnabled()).toBe(true);
+
+      const catalog = (
+        status: "available" | "unavailable",
+        available: number,
+        label = "Build runner",
+      ) => ({
+        environments: [
+          {
+            id: "node:alpha-device",
+            type: "node",
+            label,
+            status,
+            sessionHost: true,
+            workerSlots: { total: 4, available },
+          },
+        ],
+        profiles: [],
+      });
+      await gateway.deferNext("environments.list");
+      await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
+      await gateway.waitForRequest("environments.list", { after: beforeRefresh });
+      for (let index = 0; index < 31; index += 1) {
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
+      }
+      expect(await gateway.getRequests("environments.list")).toHaveLength(beforeRefresh + 1);
+      await expect.poll(() => selectedRow.isDisabled()).toBe(true);
+      for (let cycle = 1; cycle <= 4; cycle += 1) {
+        await gateway.deferNext("environments.list");
+        await gateway.resolveDeferred(
+          "environments.list",
+          catalog("available", 2, `Build runner ${cycle}`),
+        );
+        await gateway.waitForRequest("environments.list", { after: beforeRefresh + cycle });
+        await expect.poll(() => selectedRow.textContent()).toContain(`Build runner ${cycle}`);
+        expect(await gateway.getRequests("environments.list")).toHaveLength(
+          beforeRefresh + cycle + 1,
+        );
+        expect(await selectedRow.isDisabled()).toBe(true);
+        if (cycle < 4) {
+          for (let index = 0; index < 8; index += 1) {
+            await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+              nodeId: "alpha-device",
+            });
+          }
+        }
+      }
+      await gateway.resolveDeferred("environments.list", catalog("available", 0));
+      await selectedRow.hover();
+      await expect
+        .poll(() => details("alpha-device").textContent())
+        .toContain("No worker slots are available");
+      expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
+
+      // Nodes without a worker-supervisor proof still publish connection presence.
+      for (const connected of [false, true]) {
+        const previousRequests = (await gateway.getRequests("environments.list")).length;
+        await gateway.setMethodResponse(
+          "environments.list",
+          catalog(connected ? "available" : "unavailable", 4),
+        );
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              deviceId: "alpha-device",
+              mode: "node",
+              roles: ["node"],
+              reason: connected ? "connect" : "disconnect",
+            },
+          ],
+        });
+        await gateway.waitForRequest("environments.list", { after: previousRequests });
+        await expect.poll(() => selectedRow.isEnabled()).toBe(connected);
+      }
+      for (const sessionHost of [false, true]) {
+        const previousRequests = (await gateway.getRequests("environments.list")).length;
+        const next = catalog("available", 4);
+        next.environments[0]!.sessionHost = sessionHost;
+        await gateway.setMethodResponse("environments.list", next);
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
+        await gateway.waitForRequest("environments.list", { after: previousRequests });
+        await expect.poll(() => selectedRow.isEnabled()).toBe(sessionHost);
+      }
     } finally {
       await context.close();
     }

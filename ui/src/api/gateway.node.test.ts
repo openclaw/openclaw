@@ -3,11 +3,14 @@ import { createHash, webcrypto } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
+  GATEWAY_SERVER_CAPS,
+  type ConnectParams,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -202,6 +205,7 @@ type ConnectFrame = {
     minProtocol?: number;
     caps?: string[];
     scopes?: string[];
+    modelCatalog?: ConnectParams["modelCatalog"];
     device?: {
       id?: string;
       signedAt?: number;
@@ -370,12 +374,13 @@ async function continueConnect(
   ws: MockWebSocket,
   nonce = "nonce-1",
   challengeTs = 1_800_000_000_000,
+  capabilities?: string[],
 ) {
   ws.emitOpen();
   ws.emitMessage({
     type: "event",
     event: "connect.challenge",
-    payload: { nonce, ts: challengeTs },
+    payload: { nonce, ts: challengeTs, ...(capabilities ? { capabilities } : {}) },
   });
   if (vi.isFakeTimers()) {
     await vi.advanceTimersByTimeAsync(0);
@@ -485,6 +490,47 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each([
+    { advertised: false, modelCatalog: {} },
+    { advertised: false, modelCatalog: { agentId: "alpha" } },
+    { advertised: true, modelCatalog: {} },
+    { advertised: true, modelCatalog: { agentId: "alpha", sessionKey: "agent:alpha:saved" } },
+    { advertised: true, modelCatalog: { agentId: "alpha", shortId: "12345678" } },
+  ])("connects with only advertised catalog input: %j", async ({ advertised, modelCatalog }) => {
+    const onHello = vi.fn();
+    const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL, modelCatalog, onHello });
+    try {
+      client.start();
+      const { ws, connectFrame } = await continueConnect(
+        getLatestWebSocket(),
+        "catalog-challenge",
+        1_800_000_000_000,
+        advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : undefined,
+      );
+      if (advertised) {
+        expect(connectFrame.params?.modelCatalog).toEqual(modelCatalog);
+        expect(connectFrame.params?.caps).toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
+      } else {
+        expect(validatePreviousConnectParams(connectFrame.params)).toBe(true);
+        expect(connectFrame.params).not.toHaveProperty("modelCatalog");
+        expect(connectFrame.params?.caps).not.toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
+      }
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: PROTOCOL_VERSION,
+          auth: { role: "operator", scopes: [] },
+        },
+      });
+      await vi.waitFor(() => expect(onHello).toHaveBeenCalledOnce());
+    } finally {
+      client.stop();
+    }
   });
 
   it("does not publish hello when a response observer closes the browser socket", async () => {

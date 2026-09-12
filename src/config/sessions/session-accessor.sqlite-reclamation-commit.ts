@@ -125,9 +125,13 @@ function authorizeSqliteReclamationCommit(
       try {
         // The Worker already owns BEGIN IMMEDIATE. Acquiring this lock proves
         // COMMIT, ROLLBACK, or connection close finished, even after abrupt exit.
-        runSqliteImmediateTransactionSync(database, () => {
-          settled = true;
-        });
+        runSqliteImmediateTransactionSync(
+          database,
+          () => {
+            settled = true;
+          },
+          { operationLabel: "session.reclamation.commit-settlement" },
+        );
       } catch (error) {
         if (recoveredErrors.length === 0) {
           recoveredErrors.push(error);

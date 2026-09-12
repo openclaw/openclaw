@@ -26,9 +26,29 @@ This setting applies to all managed worktrees, including session, manual, and Wo
 
 Changing `worktreeRoot` affects new allocations. Existing registered worktrees keep their recorded paths for reuse and cleanup, and removed worktrees restore to their original paths. OpenClaw does not move existing checkouts or snapshots when this setting changes. Keep their original storage available until those worktrees are no longer needed.
 
-Outside the default state-owned worktree directory, cleanup acts only on registered worktrees. It leaves unrelated, unregistered folders in your custom location alone.
+Outside the default state-owned worktree directory, cleanup acts only on registered worktrees and acceleration templates. It leaves unrelated, unregistered folders in your custom location alone.
 
 See [Configuration reference](/gateway/config-runtime#worktreeroot) for the option's default and scope.
+
+## Filesystem acceleration
+
+OpenClaw automatically uses filesystem acceleration for new managed worktrees when supported. The initial backend uses Btrfs snapshots on Linux. It requires the `btrfs` command and a writable Btrfs destination; OpenClaw keeps the template on the same filesystem as the new checkout. The source repository itself does not need to be a Btrfs subvolume. Git configurations with checkout filters, sparse checkout, per-worktree configuration, or external attributes use normal Git checkout.
+
+To opt out, set:
+
+```json5
+{
+  worktreeAcceleration: false,
+}
+```
+
+Omitting the option or setting it to `true` enables automatic selection. Setting it to `false` uses normal Git checkout and file copying for new worktrees. Existing worktrees keep their contents and lifecycle. APFS, NTFS, and other unsupported filesystems use the normal Git path today; filesystem backends can be added without changing this option.
+
+OpenClaw maintains one reusable source-only template per repository and destination root. It rebuilds the template when the requested commit or checkout policy changes, and cleanup retires templates unused for seven days. Git continues to own worktree registration, indexes, and branches; the filesystem backend supplies the shared file contents.
+
+If template cleanup cannot acquire its allocation lease or read its cache, OpenClaw logs a warning and continues ordinary worktree and snapshot cleanup. A later cleanup pass retries template retirement.
+
+Templates contain checked-out source only. `.worktreeinclude` provisioning and `.openclaw/worktree-setup.sh` still run separately for each new worktree, under their existing permissions. Dependencies and setup output are not shared through the template. Copy-on-write snapshots share source storage until files change; their actual savings depend on the repository and subsequent writes.
 
 ## Layout and names
 

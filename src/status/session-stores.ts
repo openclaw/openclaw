@@ -2,7 +2,13 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+
+export const STATUS_RECENT_SESSION_LIMIT = 10;
+export type StatusSessionStores = ReturnType<
+  typeof readStatusSessionStores<ReturnType<typeof listGatewayAgentsBasic>["agents"][number]>
+>;
 
 /** One collection owns each physical store's bounded snapshot, including its agent windows. */
 export function createStatusSessionStoreReader(

@@ -136,6 +136,34 @@ afterEach(() => {
 });
 
 describe("resolveModelRuntimePolicy", () => {
+  it.each(["alias-only", "inherited", "hidden"])(
+    "keeps wildcard policy when %s has no own enumerable runtime entry",
+    (modelId) => {
+      const models = {
+        "fixture/alias-only": { alias: "display-name" },
+        "fixture/*": { agentRuntime: { id: "wildcard-runtime" } },
+      };
+      Object.setPrototypeOf(models, {
+        "fixture/inherited": { agentRuntime: { id: "inherited-runtime" } },
+      });
+      Object.defineProperty(models, "fixture/hidden", {
+        value: { agentRuntime: { id: "hidden-runtime" } },
+        enumerable: false,
+      });
+      expect(
+        resolveModelRuntimePolicyBase({
+          config: { agents: { defaults: { models } } },
+          provider: "fixture",
+          modelId,
+        }),
+      ).toEqual({
+        policy: { id: "wildcard-runtime" },
+        source: "model",
+        matchedProvider: "fixture",
+      });
+    },
+  );
+
   it.each(["custom", ""])("merges trimmed provider policy entries for provider %j", (provider) => {
     const config: OpenClawConfig = {
       models: {

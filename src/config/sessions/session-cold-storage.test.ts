@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -374,17 +377,67 @@ describe("cold transcript storage workers", () => {
 
   it("archives several inactive sessions in one maintenance pass and restores both exactly", async () => {
     const fixture = await createBatchFixture();
-    await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
-      archivedTranscripts: 2,
-      externalizedTranscripts: 0,
-    });
-    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
-    expect(
-      readSessionColdTranscript(fixture.database(), fixture.secondScope.sessionId),
-    ).toBeDefined();
-    await restoreSessionColdTranscript(fixture.scope);
-    await restoreSessionColdTranscript(fixture.secondScope);
-    expect(fixture.snapshot()).toEqual(fixture.original);
+    const file = path.join(path.dirname(fixture.scope.storePath), "cold-storage.log");
+    await fs.writeFile(file, "");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
+      (params) => {
+        const withWriteAdmission = params.withWriteAdmission;
+        if (!withWriteAdmission) {
+          return originalWorker(params);
+        }
+        let admissions = 0;
+        return originalWorker({
+          ...params,
+          withWriteAdmission: async (...args) => {
+            // Measure waiting between actual Worker admissions without delaying native work.
+            if (++admissions === 2) {
+              clock += 1_500;
+            }
+            return withWriteAdmission(...args);
+          },
+        });
+      },
+    );
+    try {
+      await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
+        archivedTranscripts: 2,
+        externalizedTranscripts: 0,
+      });
+      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
+      expect(
+        readSessionColdTranscript(fixture.database(), fixture.secondScope.sessionId),
+      ).toBeDefined();
+      await restoreSessionColdTranscript(fixture.scope);
+      await restoreSessionColdTranscript(fixture.secondScope);
+      expect(fixture.snapshot()).toEqual(fixture.original);
+      await flushLogger();
+      const summaries = (await fs.readFile(file, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((record) => record.message === "slow SQLite reclamation Worker operation")
+        .map((record) => record["1"]);
+      expect(summaries).toEqual(
+        ["cold-batch", "cold-restore", "cold-restore"].map((reclamationKind) => ({
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          workerThreadId: expect.any(Number),
+          reclamationKind,
+          elapsedMs: 1_500,
+          outcome: "resolved",
+          exitCode: 0,
+        })),
+      );
+    } finally {
+      vi.restoreAllMocks();
+      await flushLogger();
+      setLoggerOverride(null);
+    }
   });
 
   it("leaves hot and embedded archives untouched while maintenance is disabled", async () => {

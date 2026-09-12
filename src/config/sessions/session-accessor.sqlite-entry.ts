@@ -255,27 +255,20 @@ export function listSessionEntryRows(scope: SessionEntryListScope = {}): Session
  * acceptable degradation (health snapshots) or hides real state (migration detection).
  */
 export function listSessionEntriesReadOnly(
-  scope: SessionEntryListScope & {
-    /** Select exact persisted keys after validating the complete listing snapshot. */
-    sessionKeys?: readonly string[];
-  } = {},
+  scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      listSqliteSessionEntriesFromDatabase(
-        database,
-        resolved,
-        scope,
-        scope.sessionKeys ? new Set(scope.sessionKeys) : undefined,
-      ),
+    (database) => listSqliteSessionEntriesFromDatabase(database, resolved, scope),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
 }
 
 /** Counts durable session rows without materializing entry JSON or warming the entry cache. */
-export function countSessionEntryRowsReadOnly(scope: SessionEntryListScope = {}): number {
+export function countSessionEntryRowsReadOnly(
+  scope: Omit<SessionEntryListScope, "sessionKeys"> = {},
+): number {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     const db = getSessionKysely(database.db);
@@ -323,7 +316,6 @@ function listSqliteSessionEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedSqliteScope,
   scope: SessionEntryListScope,
-  sessionKeys?: ReadonlySet<string>,
 ): SessionEntrySummary[] {
   const projection = scope.projection ?? "full";
   const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
@@ -339,7 +331,7 @@ function listSqliteSessionEntriesFromDatabase(
     iterateSessionEntriesForListing(
       snapshot,
       projection === "list" && scope.clone !== false,
-      sessionKeys,
+      scope.sessionKeys ? new Set(scope.sessionKeys) : undefined,
     ),
   );
 }
@@ -390,7 +382,7 @@ export function listSessionEntriesByStatus(
 
 /** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
 export function listSessionTranscriptInstances(
-  scope: SessionEntryListScope = {},
+  scope: Omit<SessionEntryListScope, "sessionKeys"> = {},
   options: SessionTranscriptInstanceListOptions = {},
 ): SessionTranscriptInstance[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });

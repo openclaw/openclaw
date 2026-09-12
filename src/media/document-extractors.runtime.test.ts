@@ -93,6 +93,37 @@ describe("extractDocumentContent", () => {
     expect(extractionError.cause).toBe(cause);
   });
 
+  it("forwards cancellation and does not try another extractor after the owner aborts", async () => {
+    const abort = new AbortController();
+    const reason = new Error("owning turn cancelled");
+    const first = vi.fn(async (request: DocumentExtractionRequest) => {
+      expect(request.signal).toBe(abort.signal);
+      abort.abort(reason);
+      throw reason;
+    });
+    const second = vi.fn();
+    resolvePluginDocumentExtractorsMock.mockReturnValue(
+      [first, second].map((extract, index) => ({
+        id: `pdf-${index}`,
+        pluginId: "document-extract",
+        label: "PDF",
+        mimeTypes: ["application/pdf"],
+        extract,
+      })),
+    );
+    await expect(
+      extractPdfContent({
+        buffer: Buffer.from("pdf"),
+        maxPages: 1,
+        maxPixels: 100,
+        minTextChars: 1,
+        signal: abort.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).not.toHaveBeenCalled();
+  });
+
   it("replaces cached document extractor callbacks when plugin metadata changes", async () => {
     const oldExtract = vi.fn().mockResolvedValue({ text: "retired", images: [] });
     const newExtract = vi.fn().mockResolvedValue({ text: "replacement", images: [] });

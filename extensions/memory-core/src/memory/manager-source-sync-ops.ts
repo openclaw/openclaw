@@ -29,18 +29,33 @@ import type {
   MemorySyncProgressState,
 } from "./manager-sync-base.js";
 
-const SOURCE_SYNC_YIELD_EVERY = 10;
+const SOURCE_SYNC_YIELD_INTERVAL_MS = 12;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
 const log = createSubsystemLogger("memory");
 
 function createSourceSyncYield(total: number): () => Promise<void> {
   let completed = 0;
+  let workStartedAt = performance.now();
+  let pendingYield: Promise<void> | undefined;
   return async () => {
     completed += 1;
-    if (completed < total && completed % SOURCE_SYNC_YIELD_EVERY === 0) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+    if (
+      !pendingYield &&
+      completed < total &&
+      performance.now() - workStartedAt >= SOURCE_SYNC_YIELD_INTERVAL_MS
+    ) {
+      // Every worker joins the same pause so another worker cannot keep
+      // admitting synchronous work while the event loop is waiting to run.
+      pendingYield = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          workStartedAt = performance.now();
+          pendingYield = undefined;
+          resolve();
+        });
       });
+    }
+    if (pendingYield) {
+      await pendingYield;
     }
   };
 }

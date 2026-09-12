@@ -1287,6 +1287,10 @@ async fn gateway_action(
 }
 
 fn main() {
+    // AppIndicator uses the GTK application name for the tray menu heading.
+    #[cfg(target_os = "linux")]
+    gtk::glib::set_application_name("OpenClaw");
+
     let global_shortcuts_supported = tray::global_shortcuts_supported();
     let quickchat_state = quickchat::QuickChatState::new(global_shortcuts_supported);
     let quickchat_shortcut_state = quickchat_state.clone();

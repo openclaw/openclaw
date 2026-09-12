@@ -87,7 +87,8 @@ function resolveRawMSTeamsAccountConfig(
   const normalized = normalizeAccountId(accountId);
   const msteams = (cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig; // SAFETY: the public config contract owns these optional fields.
   if (normalized === DEFAULT_ACCOUNT_ID) {
-    return msteams;
+    const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
+    return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? msteams;
   }
   const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
   return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? {};

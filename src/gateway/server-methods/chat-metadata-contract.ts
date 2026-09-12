@@ -24,6 +24,8 @@ export type ChatMetadataReadParams = {
   sessionKey?: string;
   requesterProfileId?: string;
   sessionEntry?: ChatMetadataSessionEntry;
+  /** Saved reads expire on the next session mutation in their Gateway context. */
+  isCurrent?: () => boolean;
   draftAccountSelection?: UserModelAccountSelection;
 };
 

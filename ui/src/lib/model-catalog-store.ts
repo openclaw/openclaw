@@ -1,11 +1,20 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
-import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ModelsListParams,
+  ModelsSnapshotEvent,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import {
   invalidateModelCatalogCache,
+  beginModelCatalogRead,
   modelCatalogCache,
+  modelCatalogKey,
+  modelCatalogParams,
+  publishModelCatalogResult,
+  trimModelCatalogCache,
+  type ModelCatalogReadScope,
   type ModelCatalogClient,
   type ModelCatalogEntry,
   type ModelCatalogRequest,
@@ -54,47 +63,18 @@ export function modelCatalogRefreshError(
     : null;
 }
 
-const MAX_CACHED_MODEL_CATALOGS = 64;
-
-function trimModelCatalogCache(cache: Map<string, ModelCatalogEntry>): void {
-  for (const [key, entry] of cache) {
-    if (cache.size <= MAX_CACHED_MODEL_CATALOGS) {
-      return;
-    }
-    if (entry.pending.size === 0) {
-      cache.delete(key);
-    }
-  }
-}
-
-function modelCatalogParams(options: ModelsListParams): ModelsListParams {
-  const { agentId, view = "configured", ...params } = options;
-  return { view, ...params, ...(agentId === undefined ? {} : { agentId: agentId.trim() }) };
-}
-
-function modelCatalogKey(params: ModelsListParams): string {
-  const { refresh: _refresh, ...projection } = params;
-  return JSON.stringify(
-    Object.entries(projection)
-      .filter(([, value]) => value !== undefined)
-      .toSorted(([a], [b]) => a.localeCompare(b)),
-  );
-}
-
 /** A synchronous display read; the Gateway remains the authority for sending and mutations. */
 export function peekModelCatalog(
   client: ModelCatalogClient,
   options: ModelsListParams,
 ): ModelCatalogResult | undefined {
-  const cache = modelCatalogCache.get(client);
+  const cache = modelCatalogCache.get(client)?.entries;
   const key = modelCatalogKey(modelCatalogParams(options));
   const entry = cache?.get(key);
   if (entry?.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
     entry.result = undefined;
     entry.expiresAt = undefined;
-    if (entry.pending.size === 0) {
-      cache?.delete(key);
-    }
+    // Keep ordering until bounded eviction so an older unresolved read cannot refill this slot.
     return undefined;
   }
   if (cache && entry?.result) {
@@ -120,16 +100,17 @@ export async function loadModelCatalog(
       return result;
     }
   }
-  const cache = modelCatalogCache.get(client) ?? new Map<string, ModelCatalogEntry>();
-  modelCatalogCache.set(client, cache);
+  const owner = modelCatalogCache.get(client);
   const key = modelCatalogKey(params);
-  const entry: ModelCatalogEntry = cache.get(key) ?? { scope: params, pending: new Map() };
+  const entry: ModelCatalogEntry = owner?.entries.get(key) ?? { scope: params, pending: new Map() };
   const existing = entry.pending.get(timeoutMs);
   if (existing && !existing.controller?.signal.aborted) {
     return await subscribeToSharedRequest(existing, {}, signal);
   }
 
   const controller = signal ? new AbortController() : undefined;
+  const read = beginModelCatalogRead(client, params, controller?.signal);
+  const cache = read.cache.entries;
   const pending: ModelCatalogRequest = {
     refresh: params.refresh === true,
     controller,
@@ -142,62 +123,48 @@ export async function loadModelCatalog(
       : client.request<ModelCatalogResult>("models.list", params)
     )
       .then((result) => {
-        if (
-          !controller?.signal.aborted &&
-          !result.refreshFailed &&
-          modelCatalogCache.get(client) === cache &&
-          cache.get(key) === entry &&
-          entry.pending.get(timeoutMs) === pending
-        ) {
-          // Ordinary winners retire competing readers, but cannot retire explicit discovery.
-          for (const [budget, request] of entry.pending) {
-            if (pending.refresh || !request.refresh) {
-              entry.pending.delete(budget);
-            }
-          }
-          // Reads in other views during explicit discovery may still describe its old generation.
-          if (params.refresh) {
-            cache.clear();
-            cache.set(key, entry);
-          }
-          entry.result = result;
-          // Cooldown expiry changes readiness without publishing a new Gateway generation.
-          entry.expiresAt = result.models.reduce(
-            (expiresAt, model) => Math.min(expiresAt, model.unavailableUntil ?? Infinity),
-            Infinity,
-          );
-          trimModelCatalogCache(cache);
-        }
+        publishModelCatalogResult(read, params, result);
         return result;
       })
       .finally(() => {
+        read.cache.reads.delete(read);
         if (
-          modelCatalogCache.get(client) === cache &&
+          modelCatalogCache.get(client) === read.cache &&
           cache.get(key) === entry &&
           entry.pending.get(timeoutMs) === pending
         ) {
           entry.pending.delete(timeoutMs);
-          if (!entry.result && entry.pending.size === 0) {
+          if (!entry.result && entry.publishedRead === undefined && entry.pending.size === 0) {
             cache.delete(key);
           }
-          trimModelCatalogCache(cache);
+          trimModelCatalogCache(read.cache);
         }
       }),
   };
   entry.pending.set(timeoutMs, pending);
   cache.delete(key);
   cache.set(key, entry);
-  trimModelCatalogCache(cache);
+  trimModelCatalogCache(read.cache);
   return await subscribeToSharedRequest(pending, {}, signal);
 }
 
 export function subscribeModelCatalogChanges(
   gateway: ApplicationGateway,
   listener: () => void,
+  scope?: ModelCatalogReadScope,
 ): () => void {
   return gateway.subscribeEvents((event) => {
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       listener();
+    } else if (event.event === "models.snapshot" && scope) {
+      // SAFETY: The authenticated connect dispatcher emits this as ModelsSnapshotEvent.
+      const publication = event.payload as ModelsSnapshotEvent;
+      if (
+        modelCatalogKey(modelCatalogParams(scope)) ===
+        modelCatalogKey(modelCatalogParams(publication.scope))
+      ) {
+        listener();
+      }
     }
   });
 }

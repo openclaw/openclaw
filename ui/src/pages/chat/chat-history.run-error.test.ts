@@ -9,6 +9,51 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { reconcileChatRunFromSessionRow, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
+it.each(["matching", "different-run", "unowned", "different-kind"] as const)(
+  "recovers only the failed run's recorded diagnostic from history (%s)",
+  async (source) => {
+    const diagnostic =
+      'This turn ended before a reply: Failed to prepare skill resources: skill="review" ' +
+      'root="/workspace/skills/review" error=Skill tree file could not be read: ' +
+      'path="/workspace/skills/review/CLAUDE.md" error=ENOENT: missing target.';
+    const summary = "Failed to prepare skill resources";
+    const state = makeChatHost({
+      sessionKey: "main",
+      requestHandlers: {
+        "chat.history": {
+          messages: [
+            {
+              role: "custom",
+              customType: source === "different-kind" ? "other-notice" : "run-failed-before-reply",
+              content: diagnostic,
+              __openclaw: {
+                id: "failure-notice",
+                seq: 1,
+                ...(source === "unowned"
+                  ? {}
+                  : { runId: source === "different-run" ? "older-run" : "failed-run" }),
+              },
+            },
+          ],
+          sessionInfo: {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            status: "failed",
+            hasActiveRun: false,
+            lastRunId: "failed-run",
+            lastRunError: summary,
+          },
+        },
+      },
+    });
+    await loadChatHistory(state);
+    const expected = source === "matching" ? diagnostic : summary;
+    expect(state.chatRunError).toMatchObject({ runId: "failed-run", summary: expected });
+    expect(getChatSessionProjection(state).runs["failed-run"]?.errorMessage).toBe(expected);
+  },
+);
+
 it.each([
   undefined,
   { status: "done" },

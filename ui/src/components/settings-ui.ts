@@ -41,6 +41,8 @@ export type SettingsSectionProps = {
   description?: unknown;
   /** Right-aligned inline actions next to the heading (e.g. an Add button). */
   actions?: TemplateResult;
+  /** Section notice above the group, keeping bordered callouts outside the card. */
+  notice?: TemplateResult | typeof nothing;
   /** Extra count shown next to the heading. */
   count?: number;
   /** Marks the group surface as a danger zone. */
@@ -183,7 +185,7 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
     .join(" ");
   return html`
     <section class="settings-section ${props.carapace ? "oc-settings-section" : ""}">
-      ${header}
+      ${header} ${props.notice ?? nothing}
       <div class=${groupClass}>${rows}</div>
     </section>
   `;

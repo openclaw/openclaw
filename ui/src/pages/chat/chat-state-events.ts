@@ -42,6 +42,7 @@ import {
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
@@ -523,6 +524,10 @@ export function handlePageGatewayEvent(
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
 ): void {
+  if (event.event === "models.snapshot") {
+    applyChatModelCatalogSnapshot(state);
+    return;
+  }
   if (event.event === "session.approval") {
     const payload = asNullableRecord(event.payload);
     if (!payload || typeof payload.sessionKey !== "string") {

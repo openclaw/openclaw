@@ -6,6 +6,17 @@
   },
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-code", "kimi-coding"],
+  "modelIdNormalization": {
+    "providers": {
+      "kimi": {
+        "aliases": {
+          "kimi-code": "kimi-for-coding",
+          "k2p5": "kimi-for-coding",
+          "k3[1m]": "k3"
+        }
+      }
+    }
+  },
   "providerRequest": {
     "providers": {
       "kimi": {

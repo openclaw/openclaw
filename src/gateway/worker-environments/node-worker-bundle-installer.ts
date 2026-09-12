@@ -25,9 +25,10 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     if (!transport) {
       throw new Error("Device worker node transport is unavailable");
     }
-    const node = (
-      await racePromiseWithAbortSignal(transport.listCurrentNodes(), params.signal)
-    ).find((candidate) => candidate.nodeId === params.deviceId);
+    const node = await racePromiseWithAbortSignal(
+      transport.getCurrentNode(params.deviceId),
+      params.signal,
+    );
     params.signal?.throwIfAborted();
     if (!node) {
       throw new Error("Device worker node is not connected with the installer dialect");

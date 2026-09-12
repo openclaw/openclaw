@@ -27,7 +27,7 @@ import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createLiveActivity } from "../pages/activity/live-activity.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
@@ -37,6 +37,7 @@ import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
+import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -171,6 +172,43 @@ export function bootstrapApplication(): ApplicationRuntime {
     {
       persistDefaultConnectionSettings: documentMode === null,
       resourceBasePath,
+      getModelCatalogTarget: (gatewayUrl) => {
+        const location = history.location();
+        if (routeIdFromPath(location.pathname, basePath) === "new-session") {
+          const agentId = newSessionLocationFromSearch(location.search).agentId;
+          return agentId ? { agentId } : {};
+        }
+        const selection = loadGatewaySessionSelection(gatewayUrl);
+        const initial = normalizeInitialApplicationLocation(
+          location,
+          basePath,
+          selection.sessionKey,
+          selection.selectedAgentId ?? "",
+        );
+        const target = sessionRefFromPath(initial.pathname, basePath);
+        if (target?.kind === "literal") {
+          return { agentId: target.agentId, sessionKey: target.sessionKey };
+        }
+        if (target?.kind === "main") {
+          return {
+            agentId: target.agentId,
+            sessionKey: buildAgentMainSessionKey({ agentId: target.agentId }),
+          };
+        }
+        if (target?.kind === "short") {
+          return {
+            agentId: target.agentId,
+            shortId: target.shortId,
+            ...(target.slugHint ? { slugHint: target.slugHint } : {}),
+          };
+        }
+        if (isDefaultChatLanding(location, basePath, routeIdFromPath)) {
+          const agentId =
+            parseAgentSessionKey(selection.sessionKey)?.agentId ?? selection.selectedAgentId;
+          return { sessionKey: selection.sessionKey, ...(agentId ? { agentId } : {}) };
+        }
+        return undefined;
+      },
       ...(!hasPendingGateway && startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),

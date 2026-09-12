@@ -37,8 +37,9 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     if (!transport) {
       throw new Error("Prepared workspace node transport is unavailable");
     }
-    const node = (await racePromiseWithAbortSignal(transport.listCurrentNodes(), signal)).find(
-      (candidate) => candidate.nodeId === request.deviceId,
+    const node = await racePromiseWithAbortSignal(
+      transport.getCurrentNode(request.deviceId),
+      signal,
     );
     assertCurrent();
     if (!node || !transport.isCurrent(node)) {

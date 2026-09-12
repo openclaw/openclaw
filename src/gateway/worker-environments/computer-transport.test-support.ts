@@ -208,6 +208,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     return { ok: true, payload: { ok: true } };
   });
   const nodeTransport = {
+    getCurrentNode: vi.fn(async (nodeId: string) => (proof.nodeId === nodeId ? proof : undefined)),
     listCurrentNodes: vi.fn(async () => [proof]),
     hasCurrentRunner: (id) => id === proof.nodeId && state.privateCurrent,
     isCurrent: (candidate) => candidate === proof && state.privateCurrent,

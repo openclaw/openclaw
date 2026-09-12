@@ -47,6 +47,7 @@ import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-req
 import { isStartupNodeConnect } from "./connect-admission.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
 import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
+import { publishConnectModelCatalog } from "./connect-model-catalog.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
 import { resolveHandshakeBrowserSecurityContext } from "./handshake-auth-helpers.js";
 import type {
@@ -389,6 +390,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
         await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+        runDetachedConnectWork(
+          () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
+          (error) =>
+            logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
+        );
         return;
       }
       await authenticatedRequestDispatcher.dispatch(

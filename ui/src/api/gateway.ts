@@ -18,6 +18,7 @@ import {
   type EventFrame,
   type HelloOk,
   resolveGatewayConnectScopes,
+  resolveModelCatalogConnect,
   selectGatewayConnectAuth,
   shouldRetryGatewayWithDeviceToken,
   isRetryableGatewayStartupUnavailableError,
@@ -138,6 +139,7 @@ export type GatewayBrowserClientOptions = {
   mode?: GatewayClientMode;
   instanceId?: string;
   scopes?: string[];
+  modelCatalog?: ConnectParams["modelCatalog"];
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: EventFrame) => void;
   onClose?: (info: {
@@ -279,8 +281,8 @@ export class GatewayBrowserClient {
           retryable: error.retryable,
           retryAfterMs: error.retryAfterMs,
         }),
-      buildConnectPlan: ({ nonce, challengeTs, generation }) =>
-        this.buildConnectPlan(nonce, challengeTs, generation),
+      buildConnectPlan: ({ nonce, challengeTs, generation, serverCapabilities }) =>
+        this.buildConnectPlan(nonce, challengeTs, generation, serverCapabilities),
       buildConnectParams: (plan) => plan.params,
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
       onHello: (hello) => this.opts.onHello?.(hello),
@@ -403,6 +405,7 @@ export class GatewayBrowserClient {
     connectNonce: string | null,
     connectChallengeTs: number | null | undefined,
     generation: number,
+    serverCapabilities: readonly string[],
   ): Promise<ConnectPlan> {
     this.recovery = { ...this.recovery, generation, resolved: false };
     const role = CONTROL_UI_OPERATOR_ROLE;
@@ -473,18 +476,22 @@ export class GatewayBrowserClient {
         scopes,
         device,
         // Tests bind these compact wire literals to the canonical capability registry.
-        caps: [
-          "agent-kind",
-          "approvals",
-          "task-suggestions",
-          "terminal-offset-seq",
-          "terminal-session-metadata",
-          "terminal-upload-path-style",
-          "tool-events",
-          "inline-widgets",
-          "ui-commands",
-          "usage-refreshing",
-        ],
+        ...resolveModelCatalogConnect({
+          modelCatalog: this.opts.modelCatalog,
+          serverCapabilities,
+          caps: [
+            "agent-kind",
+            "approvals",
+            "task-suggestions",
+            "terminal-offset-seq",
+            "terminal-session-metadata",
+            "terminal-upload-path-style",
+            "tool-events",
+            "inline-widgets",
+            "ui-commands",
+            "usage-refreshing",
+          ],
+        }),
         auth: buildGatewayConnectAuth(selectedAuth),
         userAgent: navigator.userAgent,
         locale: navigator.language,

@@ -14,6 +14,7 @@
     "../../dist",
     "../../**/dist/**",
     "../../src/infra/outbound/**",
+    "../../src/infra/sqlite-*.test.ts",
     "../../src/infra/update-managed-service-handoff-database.test.ts",
     "../../src/infra/package-update-activation-journal.test.ts"
   ]

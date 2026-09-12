@@ -40,6 +40,7 @@ export const GATEWAY_EVENTS = [
   "agent",
   "chat",
   "chat.metadata.changed",
+  "models.snapshot",
   "ui.command",
   "session.approval",
   "session.message",

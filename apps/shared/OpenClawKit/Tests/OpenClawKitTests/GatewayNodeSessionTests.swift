@@ -135,6 +135,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
+    private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
@@ -154,6 +155,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
+        challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
@@ -163,6 +165,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
+        self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -253,7 +256,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             if self.challenge.delayNanoseconds > 0 {
                 try await Task.sleep(nanoseconds: self.challenge.delayNanoseconds)
             }
-            return .data(Self.connectChallengeData(nonce: self.challenge.nonce))
+            return .data(Self.connectChallengeData(
+                nonce: self.challenge.nonce,
+                capabilities: self.challengeCapabilities))
         }
         if self.helloDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: self.helloDelayNanoseconds)
@@ -364,11 +369,15 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         handler?(result)
     }
 
-    private static func connectChallengeData(nonce: String) -> Data {
+    private static func connectChallengeData(nonce: String, capabilities: [String]) -> Data {
+        var payload: [String: Any] = ["nonce": nonce, "ts": 1_800_000_000_000]
+        if !capabilities.isEmpty {
+            payload["capabilities"] = capabilities
+        }
         let frame: [String: Any] = [
             "type": "event",
             "event": "connect.challenge",
-            "payload": ["nonce": nonce, "ts": 1_800_000_000_000],
+            "payload": payload,
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
@@ -476,6 +485,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
+    private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     let effectiveTLSFingerprintSHA256: String?
@@ -490,6 +500,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
+        challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil,
         effectiveTLSFingerprintSHA256: String? = nil)
@@ -500,6 +511,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
+        self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
         self.cancelGate = cancelGate
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
@@ -532,6 +544,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
                 helloSessionDefaults: self.helloSessionDefaults,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
+                challengeCapabilities: self.challengeCapabilities,
                 connectError: self.connectError,
                 cancelGate: self.cancelGate)
             self.tasks.append(task)
@@ -3020,6 +3033,25 @@ struct GatewayNodeSessionTests {
         }
         await gateway.disconnect()
         #expect(session.latestTask()?.state != .running)
+    }
+
+    @Test(arguments: [[], ["model-catalog-snapshot", "future-capability"]])
+    func `unknown challenge capabilities preserve native connect without catalog opt in`(
+        capabilities: [String]) async throws
+    {
+        let session = FakeGatewayWebSocketSession(challengeCapabilities: capabilities)
+        let gateway = GatewayNodeSession()
+        try await gateway.connectForTest(
+            testURL("wss://gateway.example.invalid"),
+            options: operatorConnectOptions(),
+            session: session)
+        #expect(await gateway.currentRoute() != nil)
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "connect").first)
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["modelCatalog"] == nil)
+        #expect(params["caps"] as? [String] == [])
+        await gateway.disconnect()
     }
 
     @Test(arguments: [false, true])

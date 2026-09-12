@@ -85,6 +85,7 @@ Used for every other provider.
 
 Details:
 
+- Local extraction runs in a reusable worker so PDF text and image processing do not block the Gateway. Cancelling the agent run stops queued or active extraction.
 - Encrypted PDFs open with the top-level `password` parameter.
 - If the model has no image input and there is no extractable text, the tool errors.
 - If image rendering fails, OpenClaw drops the images and continues with the extracted text.
