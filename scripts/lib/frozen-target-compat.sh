@@ -408,6 +408,7 @@ openclaw_resolve_frozen_typed_onboarding_contract() {
 
 openclaw_resolve_frozen_session_cold_storage_contract() {
   local source_root="${1:?missing selected source root}" authorization_status=0 has_current has_cold has_legacy
+  local has_legacy_duration has_legacy_parsed_duration
 
   export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="required"
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
@@ -422,8 +423,9 @@ openclaw_resolve_frozen_session_cold_storage_contract() {
   [ "$has_cold" = 0 ] || return 0
   has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'export const SessionSchema = z')" || return 2
   if [ "$has_legacy" = 1 ]; then
-    has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'pruneAfter: PositiveDurationSchema.optional()')" || return 2
-    if [ "$has_legacy" = 1 ]; then
+    has_legacy_duration="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'pruneAfter: PositiveDurationSchema.optional()')" || return 2
+    has_legacy_parsed_duration="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'pruneAfter: z.union([z.string(), z.number()]).optional()')" || return 2
+    if [ "$has_legacy_duration" = 1 ] || [ "$has_legacy_parsed_duration" = 1 ]; then
       export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="unsupported"
       return 0
     fi
