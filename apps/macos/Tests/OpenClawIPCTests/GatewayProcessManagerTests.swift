@@ -5,6 +5,60 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@MainActor
+struct GatewayReadinessDeadlinePolicyTests {
+    @Test(arguments: [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ])
+    func `migration extension requires fresh proof only without progress or prior grace`(
+        responsiveProgress: Bool,
+        priorGrace: Bool,
+        requiresLaunchdProof: Bool) throws
+    {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        let decision = try #require(policy.extensionDecision(
+            deadline: Date(timeIntervalSince1970: 1006),
+            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            responsiveStartupProgressObserved: responsiveProgress,
+            freshInstallGraceAuthorized: priorGrace))
+
+        #expect(decision.deadline == Date(timeIntervalSince1970: 1012))
+        #expect(decision.requiresLaunchdProof == requiresLaunchdProof)
+    }
+
+    @Test func `migration extension is capped at the final deadline`() throws {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        let decision = try #require(policy.extensionDecision(
+            deadline: Date(timeIntervalSince1970: 1116),
+            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: false))
+
+        #expect(decision.deadline == Date(timeIntervalSince1970: 1120))
+    }
+
+    @Test(arguments: [1120.0, 1126.0])
+    func `exhausted migration budget cannot extend despite progress and prior grace`(deadline: TimeInterval) {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        #expect(policy.extensionDecision(
+            deadline: Date(timeIntervalSince1970: deadline),
+            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: true) == nil)
+    }
+
+    @Test func `fixed readiness policy refuses migration extensions`() {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.fixed(timeout: 6)
+        #expect(policy.extensionDecision(
+            deadline: Date(timeIntervalSince1970: 1006),
+            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: true) == nil)
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
@@ -1258,61 +1312,6 @@ struct GatewayProcessManagerTests {
             #expect(manager.lastFailureReason == nil)
             #expect(!manager._testHasLaunchAgentReadinessFailure())
             #expect(manager._testControlChannelRefreshForces().last == true)
-
-            await connection.shutdown()
-            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
-        }
-    }
-
-    @Test func `responsive startup progress extends readiness without launchd status proof`() async throws {
-        let port = 19119
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                guard sendIndex > 0,
-                      let id = GatewayWebSocketTestSupport.requestID(from: message)
-                else { return }
-                if sendIndex == 2 {
-                    let response = Data(
-                        """
-                        {"type":"res","id":"\(id)","ok":false,
-                         "error":{"code":"UNAVAILABLE","message":"gateway awaiting authorization"}}
-                        """.utf8)
-                    task.emitReceiveSuccess(.data(response))
-                } else {
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                }
-            })
-        }
-
-        try await self.withLaunchAgentEnvironment(
-            port: port,
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
-        {
-            manager._testClearLaunchAgentReadinessFailure()
-            let descriptor = self.gatewayDescriptor(pid: 4242)
-            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-            defer {
-                manager._testClearLaunchAgentReadinessFailure()
-            }
-
-            // Establish the socket first; the unavailable health reply must exercise
-            // readiness extension without spending its window on the handshake.
-            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
-            manager._testStartLaunchdGatewayReadiness(
-                port: port,
-                pid: 4242,
-                readinessWindow: 0.05,
-                firstInstallReadinessBudget: 0.5)
-            await manager.waitForStartupAttempt()
-
-            #expect(session.snapshotMakeCount() == 1)
-            #expect(session.latestTask()?.snapshotSendCount() == 4)
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .filter { $0.first == "status" }.isEmpty)
-            #expect(manager.status == .running(details: "pid 4242"))
-            #expect(manager.lastFailureReason == nil)
-            #expect(!manager._testHasLaunchAgentReadinessFailure())
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)

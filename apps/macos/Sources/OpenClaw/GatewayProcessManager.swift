@@ -79,9 +79,25 @@ final class GatewayProcessManager {
         case fail
     }
 
-    private enum GatewayReadinessDeadlinePolicy {
+    enum GatewayReadinessDeadlinePolicy {
         case migration(window: TimeInterval, tolerance: TimeInterval)
         case fixed(timeout: TimeInterval)
+
+        func extensionDecision(
+            deadline: Date,
+            finalProbeDeadline: Date,
+            responsiveStartupProgressObserved: Bool,
+            freshInstallGraceAuthorized: Bool) -> (deadline: Date, requiresLaunchdProof: Bool)?
+        {
+            guard case let .migration(window, _) = self,
+                  deadline < finalProbeDeadline
+            else { return nil }
+            // Advance the previous deadline, not the current time, so delayed authorization
+            // cannot restart the budget. Progress or prior grace avoids repeated launchd proof.
+            return (
+                min(deadline.addingTimeInterval(window), finalProbeDeadline),
+                !responsiveStartupProgressObserved && !freshInstallGraceAuthorized)
+        }
     }
 
     private enum GatewayReadinessFailure {
@@ -864,20 +880,21 @@ extension GatewayProcessManager {
         readinessLoop: while true {
             guard self.isCurrentGatewayReadiness(context) else { return .superseded }
             while Date() >= deadline {
-                guard deadline < finalProbeDeadline else { break readinessLoop }
-                guard case .migration = deadlinePolicy else { break readinessLoop }
+                guard let extensionDecision = deadlinePolicy.extensionDecision(
+                    deadline: deadline,
+                    finalProbeDeadline: finalProbeDeadline,
+                    responsiveStartupProgressObserved: responsiveStartupProgressObserved,
+                    freshInstallGraceAuthorized: freshInstallGraceAuthorized)
+                else { break readinessLoop }
                 let extensionAuthorization = await self.authorizeReadinessExtension(
                     context: context,
-                    responsiveStartupProgressObserved: responsiveStartupProgressObserved,
-                    freshInstallGraceAuthorized: freshInstallGraceAuthorized,
+                    requiresLaunchdProof: extensionDecision.requiresLaunchdProof,
                     readinessPID: readinessPID)
                 guard self.isCurrentGatewayReadiness(context) else { return .superseded }
                 guard extensionAuthorization.allowed else { break readinessLoop }
                 readinessPID = extensionAuthorization.readinessPID
                 freshInstallGraceAuthorized = true
-                deadline = min(
-                    deadline.addingTimeInterval(initialWindow),
-                    finalProbeDeadline)
+                deadline = extensionDecision.deadline
                 guard Date() < finalProbeDeadline else { break readinessLoop }
             }
             do {
@@ -966,13 +983,10 @@ extension GatewayProcessManager {
 
     private func authorizeReadinessExtension(
         context: GatewayReadinessContext,
-        responsiveStartupProgressObserved: Bool,
-        freshInstallGraceAuthorized: Bool,
+        requiresLaunchdProof: Bool,
         readinessPID: Int32?) async -> (allowed: Bool, readinessPID: Int32?)
     {
-        if responsiveStartupProgressObserved || freshInstallGraceAuthorized {
-            // One live response or verified launchd owner authorizes the bounded migration window;
-            // repeating launchd status at every boundary would expand the wall-clock budget.
+        if !requiresLaunchdProof {
             return (self.isCurrentGatewayReadiness(context), readinessPID)
         }
         guard self.launchAgentFreshInstallGeneration == context.generation,
