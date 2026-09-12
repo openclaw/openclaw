@@ -255,7 +255,7 @@ async function runPreparedCliAgentOwned(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
-  const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
+  let executePreparedCliRun: typeof import("./cli-runner/execute.runtime.js").executePreparedCliRun;
   const { params } = context;
   const cliFailoverContext = {
     provider: params.provider,
@@ -280,18 +280,8 @@ async function runPreparedCliAgentOwned(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
-  const historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+  let historyMessages: unknown[] = [];
   const promptForHooks = context.promptForHooks ?? params.prompt;
-  const llmInputEvent = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    provider: params.provider,
-    model: context.modelId,
-    systemPrompt: context.systemPrompt,
-    prompt: promptForHooks,
-    historyMessages,
-    imagesCount: params.images?.length ?? 0,
-  } as const;
   const hookContext = {
     runId: params.runId,
     jobId: params.jobId,
@@ -476,6 +466,18 @@ async function runPreparedCliAgentOwned(
   };
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
+    ({ executePreparedCliRun } = await import("./cli-runner/execute.runtime.js"));
+    historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+    const llmInputEvent = {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      provider: params.provider,
+      model: context.modelId,
+      systemPrompt: context.systemPrompt,
+      prompt: promptForHooks,
+      historyMessages,
+      imagesCount: params.images?.length ?? 0,
+    } as const;
     if (isolatedCompletion) {
       const { output, usedHistoryPrompt } = await executeCliAttempt();
       return buildCliRunResult({
