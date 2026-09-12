@@ -9,6 +9,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  type ControlUiMockGatewayScenario,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -28,9 +29,10 @@ const WORK_SESSION_KEY = "agent:main:work";
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function custodianGatewayScenario() {
+function custodianGatewayScenario(): ControlUiMockGatewayScenario {
   return {
     sessionKey: WORK_SESSION_KEY,
+    sessions: [{ key: WORK_SESSION_KEY, label: "Main", kind: "direct", updatedAt: Date.now() }],
     featureMethods: [
       "chat.metadata",
       "chat.startup",
@@ -40,6 +42,15 @@ function custodianGatewayScenario() {
       "openclaw.chat.history",
     ],
     methodResponses: {
+      "sessions.list": {
+        cases: [
+          // The work session does not match the Ask OpenClaw palette query.
+          {
+            match: { search: "Ask OpenClaw" },
+            response: { count: 0, sessions: [] },
+          },
+        ],
+      },
       "openclaw.chat": {
         sessionId: MOCK_SESSION_ID,
         reply: "Machine is healthy. Ask me anything.",
