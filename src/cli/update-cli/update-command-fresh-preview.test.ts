@@ -2,18 +2,15 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { assert, describe, expect, it, vi } from "vitest";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
-import * as updateGlobal from "../../infra/update-global.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
-import * as processIdentity from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -21,11 +18,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import * as oneShotExit from "../one-shot-exit.js";
-import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import * as shared from "./shared.js";
-import * as databaseContext from "./update-command-database-context.js";
 import * as execution from "./update-command-execution.js";
 import * as executorOwner from "./update-command-executor.js";
+import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
@@ -44,106 +40,24 @@ vi.mock("@clack/prompts", async (original) => ({
   confirm: promptConfirm,
 }));
 
-const dirs = createTempDirTracker();
-let root: string;
-let databasePath: string;
-let managedServiceNodeRunner: string | undefined;
+const { fixture, dirs } = installFreshUpdateFixture();
 const inheritedRunIds = [
   undefined,
   "f9ccab65-df92-4ba2-84b9-d15c9c37c9a0",
   "  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ",
   " \t ",
 ] as const;
-const targetMetadata = {
-  target: "2026.9.2",
-  version: "2026.9.2",
-  nodeEngine: null,
-  schemaVersions: { state: 16, agent: 19 },
-};
-
-beforeEach(() => {
-  managedServiceNodeRunner = undefined;
-  const home = dirs.make("openclaw-update-fresh-preview-");
-  root = path.join(home, "installation");
-  fs.mkdirSync(root);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
-  );
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "profile", "openclaw.json"));
-  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-  vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
-  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
-  databasePath = resolveOpenClawStateSqlitePath(process.env);
-  const executorRoot = path.join(home, "executor");
-  fs.mkdirSync(executorRoot);
-  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(executorRoot);
-  // The macOS test sandbox denies /bin/ps. Keep real lease ownership and liveness,
-  // supplying only the stable self identity that the OS probe cannot read here.
-  vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid) =>
-    pid === process.pid ? 1_700_000_000 : null,
-  );
-  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-  vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-  vi.spyOn(commandRun, "prepareUpdateCommand").mockImplementation(async (opts) => ({
-    startedAt: Date.now(),
-    postCoreUpdateResume: false,
-    postCoreUpdateChannel: undefined,
-    timeoutMs: 5_000,
-    shouldRestart: opts.restart !== false,
-    requestedChannel: opts.channel === "stable" ? "stable" : null,
-    devTarget: undefined,
-    controlPlaneUpdateSentinelMeta: null,
-    discoveredRoot: root,
-    installKind: "package",
-    servicePlan: { rootRedirect: null, nodeRunner: managedServiceNodeRunner },
-  }));
-  vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
-  vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation(async () => ({
-    service: undefined,
-    services: new Map(),
-    contexts: [await captureTargetDatabaseSchemaContext(process.env)],
-    managedEnv: undefined,
-  }));
-  vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
-  vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue("2026.9.2");
-  vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({ ...process.env });
-  vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue({
-    manager: "npm",
-    command: "npm",
-    globalRoot: path.dirname(root),
-    packageRoot: root,
-    npmOwner: { version: "11.10.0", lifecyclePolicy: "unflagged" },
-  });
-  vi.spyOn(updateCheck, "resolveNpmChannelTag").mockResolvedValue({
-    tag: "latest",
-    version: "2026.9.2",
-  });
-  vi.spyOn(packageMetadata, "fetchNpmPackageTargetStatus").mockResolvedValue(targetMetadata);
-  vi.spyOn(packageUpdate, "stagePackageInstallUpdate").mockRejectedValue(
-    new Error("Read-only update admission must not stage a package"),
-  );
-});
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  dirs.cleanup();
-});
 
 function expectFreshStatePreserved() {
-  expect(fs.existsSync(databasePath)).toBe(false);
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
   expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-  expect(fs.readdirSync(root)).toEqual(["package.json"]);
+  expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
 }
 
 function createSelectedTargetStateDatabase() {
   openOpenClawStateDatabase();
   closeOpenClawStateDatabaseForTest();
-  const db = new DatabaseSync(databasePath);
+  const db = new DatabaseSync(fixture.databasePath);
   try {
     removePreparedWorkerOwnershipColumns(db);
     db.exec(
@@ -170,7 +84,7 @@ describe("update command admission with fresh state", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ status: "skipped", reason: "downgrade-confirmation-required" }),
     );
-    expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
+    expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
     expectFreshStatePreserved();
   });
 
@@ -180,7 +94,7 @@ describe("update command admission with fresh state", () => {
     const exitAfterOutput = oneShotExit.exitCliAfterOutput;
     const leases: string[] = [];
     vi.spyOn(oneShotExit, "exitCliAfterOutput").mockImplementation((...args) => {
-      leases.push(createManagedHandoffLeaseStore().read(root).kind);
+      leases.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
       return exitAfterOutput(...args);
     });
     await withTriageTerminal(true, async () => {
@@ -237,7 +151,7 @@ describe("update command admission with fresh state", () => {
     };
     const observations: { closed: boolean; lease: string }[] = [];
     const staged = {
-      root,
+      root: fixture.root,
       run: vi.fn(),
       close: vi.fn().mockImplementation(async () => {
         if (cleanup === "release") {
@@ -253,14 +167,14 @@ describe("update command admission with fresh state", () => {
     });
     if (cleanup.includes("coordinator")) {
       vi.spyOn(initialization, "acquireLegacyUpdateInitializationFence").mockReturnValue({
-        path: path.join(root, "fixture-coordinator"),
+        path: path.join(fixture.root, "fixture-coordinator"),
         release: legacyRelease,
       });
     }
     vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
       observations.push({
         closed: staged.close.mock.calls.length === 1,
-        lease: createManagedHandoffLeaseStore().read(root).kind,
+        lease: createManagedHandoffLeaseStore().read(fixture.root).kind,
       });
     });
     if (source === "metadata") {
@@ -307,7 +221,7 @@ describe("update command admission with fresh state", () => {
         }),
       );
     }
-    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(fs.existsSync(fixture.databasePath)).toBe(false);
     expect(staged.run).not.toHaveBeenCalled();
     expect(legacyRelease).toHaveBeenCalledTimes(cleanup.includes("coordinator") ? 1 : 0);
   });
@@ -317,7 +231,11 @@ describe("update command admission with fresh state", () => {
       ok: true,
       value: {},
     });
-    const staged = { root, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+    const staged = {
+      root: fixture.root,
+      run: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
     vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
     vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
       createSelectedTargetStateDatabase();
@@ -327,7 +245,7 @@ describe("update command admission with fresh state", () => {
       throw releaseError;
     });
     vi.spyOn(initialization, "acquireLegacyUpdateInitializationFence").mockReturnValue({
-      path: path.join(root, "fixture-coordinator"),
+      path: path.join(fixture.root, "fixture-coordinator"),
       release,
     });
     await expect(updateCommand({ yes: true, json: true, restart: false })).rejects.toBe(
@@ -336,7 +254,7 @@ describe("update command admission with fresh state", () => {
     expect(staged.close).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(staged.run).not.toHaveBeenCalled();
-    expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
+    expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
@@ -345,18 +263,22 @@ describe("update command admission with fresh state", () => {
       ok: true,
       value: {},
     });
-    const staged = { root, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+    const staged = {
+      root: fixture.root,
+      run: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
     vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
     vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
       createSelectedTargetStateDatabase();
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(path.dirname(root), "changed-profile"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(path.dirname(fixture.root), "changed-profile"));
     });
     const observations: { boundary: string; closed: boolean; lease: string }[] = [];
     const observe = (boundary: string) => {
       observations.push({
         boundary,
         closed: staged.close.mock.calls.length === 1,
-        lease: createManagedHandoffLeaseStore().read(root).kind,
+        lease: createManagedHandoffLeaseStore().read(fixture.root).kind,
       });
     };
     vi.mocked(defaultRuntime.writeJson).mockImplementation(() => observe("report"));
@@ -416,12 +338,12 @@ describe("update command admission with fresh state", () => {
       );
       let leaseAtPublication: string | undefined;
       vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
-        leaseAtPublication = createManagedHandoffLeaseStore().read(root).kind;
+        leaseAtPublication = createManagedHandoffLeaseStore().read(fixture.root).kind;
       });
       let outputAtCleanup = -1;
       let historyAtCleanup: string | undefined;
       const staged = {
-        root,
+        root: fixture.root,
         run: vi.fn(),
         close: vi.fn().mockImplementation(async () => {
           outputAtCleanup = vi.mocked(defaultRuntime.writeJson).mock.calls.length;
@@ -448,7 +370,7 @@ describe("update command admission with fresh state", () => {
       };
       vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
       vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
-        expect(fs.existsSync(databasePath)).toBe(false);
+        expect(fs.existsSync(fixture.databasePath)).toBe(false);
         createSelectedTargetStateDatabase();
       });
       vi.spyOn(execution, "executeMutableUpdate").mockImplementation(async (params) => {
@@ -459,13 +381,13 @@ describe("update command admission with fresh state", () => {
         const result = {
           status: "ok" as const,
           mode: "npm" as const,
-          root,
+          root: fixture.root,
           steps: [],
           durationMs: 1,
         };
         const publish = async (failure?: unknown) => {
           const settled = await resolveSettledUpdateCommandResult(
-            { opts: params.opts, root },
+            { opts: params.opts, root: fixture.root },
             result,
             failure,
           );
@@ -580,7 +502,7 @@ describe("update command admission with fresh state", () => {
   ])(
     "limits fresh-state Node fallback to the service it will refresh (owned=$owned, restart=$restart)",
     async ({ owned, restart, expectedFallback }) => {
-      managedServiceNodeRunner = "/service/node";
+      fixture.managedServiceNodeRunner = "/service/node";
       vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
       vi.spyOn(servicePlan, "gatewayServiceCommandUsesRoot").mockResolvedValue(owned);
       const runtimePreflight = vi
@@ -686,7 +608,11 @@ describe("update command admission with fresh state", () => {
       ok: true,
       value: {},
     });
-    const staged = { root, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+    const staged = {
+      root: fixture.root,
+      run: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
     vi.mocked(packageUpdate.stagePackageInstallUpdate).mockImplementationOnce(async () => {
       writeStoredChannel("beta");
       return staged;
@@ -708,7 +634,7 @@ describe("update command admission with fresh state", () => {
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({
       update: { channel: "beta" },
     });
-    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(fs.existsSync(fixture.databasePath)).toBe(false);
   });
 
   it("accepts target Doctor config changes that preserve the selected stored channel", async () => {
@@ -717,7 +643,11 @@ describe("update command admission with fresh state", () => {
       ok: true,
       value: {},
     });
-    const staged = { root, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+    const staged = {
+      root: fixture.root,
+      run: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
     vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
     const migrated = {
       update: { channel: "stable" },
@@ -741,7 +671,7 @@ describe("update command admission with fresh state", () => {
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(migrated);
     expect(staged.close).toHaveBeenCalledOnce();
     expect(staged.run).not.toHaveBeenCalled();
-    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(fs.existsSync(fixture.databasePath)).toBe(false);
   });
 
   it("keeps fresh staging releasable for a supervised handoff before package activation", async () => {
@@ -762,7 +692,7 @@ describe("update command admission with fresh state", () => {
       value: {},
     });
     const staged = {
-      root,
+      root: fixture.root,
       run: vi.fn().mockRejectedValue(new Error("Unexpected package activation")),
       close: vi.fn().mockResolvedValue(undefined),
     };
@@ -780,8 +710,8 @@ describe("update command admission with fresh state", () => {
 
     expect(staged.close).toHaveBeenCalledOnce();
     expect(staged.run).not.toHaveBeenCalled();
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(fs.readdirSync(root)).toEqual(["package.json"]);
+    expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
   });
 });
 
@@ -813,7 +743,7 @@ it("fresh local artifact reaches compatible target staging without creating pare
     () => "completed",
     (error: unknown) => (error instanceof Error ? error.message : "unknown"),
   );
-  expect(fs.existsSync(databasePath)).toBe(false);
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
   expect(outcome).toBe("artifact-staged");
 });
 
@@ -840,7 +770,7 @@ it.each([16, undefined] as const)(
       expect(privateState).not.toBe(process.env.OPENCLAW_STATE_DIR);
       expect(params.installEnv?.HOME).toBe(process.env.HOME);
       expect(params.managedServiceEnv?.OPENCLAW_STATE_DIR).toBe(process.env.OPENCLAW_STATE_DIR);
-      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(fs.existsSync(fixture.databasePath)).toBe(false);
       return staged;
     });
     const runtime = vi
@@ -851,7 +781,7 @@ it.each([16, undefined] as const)(
       .mockImplementation(async (params) => {
         expect(params.root).toBe(candidate);
         expect(params.env.OPENCLAW_STATE_DIR).toBe(process.env.OPENCLAW_STATE_DIR);
-        expect(fs.existsSync(databasePath)).toBe(false);
+        expect(fs.existsSync(fixture.databasePath)).toBe(false);
         if (schema === 16) {
           createSelectedTargetStateDatabase();
         } else {
@@ -877,7 +807,7 @@ it.each([16, undefined] as const)(
     if (schema === undefined) {
       expect(doctor).not.toHaveBeenCalled();
       expect(admission).not.toHaveBeenCalled();
-      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(fs.existsSync(fixture.databasePath)).toBe(false);
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({ reason: "target-metadata-preflight" }),
       );
@@ -888,7 +818,7 @@ it.each([16, undefined] as const)(
         expect.objectContaining({ target: { version: "2026.9.2", nodeEngine: ">=22" } }),
       );
       expect(admission).toHaveBeenCalledOnce();
-      const db = new DatabaseSync(databasePath, { readOnly: true });
+      const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
       try {
         expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: schema });
       } finally {
@@ -918,7 +848,7 @@ it.each(["node", "concurrent-state"] as const)(
       if (fault === "concurrent-state") {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
-        previous = fs.readFileSync(databasePath);
+        previous = fs.readFileSync(fixture.databasePath);
       }
       return stage;
     });
@@ -944,9 +874,9 @@ it.each(["node", "concurrent-state"] as const)(
     expect(stage.run).not.toHaveBeenCalled();
     expect(stage.close).toHaveBeenCalledOnce();
     if (previous) {
-      expect(fs.readFileSync(databasePath)).toEqual(previous);
+      expect(fs.readFileSync(fixture.databasePath)).toEqual(previous);
     } else {
-      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(fs.existsSync(fixture.databasePath)).toBe(false);
     }
   },
 );
@@ -981,7 +911,7 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
   expect(doctor).not.toHaveBeenCalled();
   expect(admission).not.toHaveBeenCalled();
   expect(stage.close).toHaveBeenCalledOnce();
-  expect(fs.existsSync(databasePath)).toBe(false);
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
 });
 
 it.each([17, 18])(
@@ -1009,7 +939,7 @@ it.each([17, 18])(
       .mockImplementation(async () => {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
-        const db = new DatabaseSync(databasePath);
+        const db = new DatabaseSync(fixture.databasePath);
         try {
           db.exec(`PRAGMA user_version=${schema}; UPDATE schema_meta SET schema_version=${schema}`);
         } finally {
@@ -1021,7 +951,7 @@ it.each([17, 18])(
       .mockImplementation(async (params) => {
         const run = params.opts.run;
         assert(run);
-        const db = new DatabaseSync(databasePath, { readOnly: true });
+        const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
         try {
           expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
         } finally {
