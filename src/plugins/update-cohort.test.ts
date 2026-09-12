@@ -333,4 +333,62 @@ describe("plugin release cohort package reconciliation", () => {
     expect(result.config.plugins?.installs).toEqual(canonicalRecords);
     expect(result.config.plugins?.load?.paths).toEqual(["/plugins/unrelated.js"]);
   });
+
+  it("rejects a repair owner migration when caller authority is revoked before the cohort resumes", async () => {
+    const records = {
+      legacy: { source: "npm", spec: "@example/legacy", installPath: "/plugins/legacy" },
+    } satisfies Record<string, PluginInstallRecord>;
+    const config = { plugins: { installs: records } };
+    const repair = attachPluginInstallOwnerMigrations(
+      {
+        config: {
+          plugins: {
+            installs: {
+              canonical: {
+                source: "npm",
+                spec: "@example/canonical",
+                installPath: "/plugins/canonical",
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        changed: true,
+        outcomes: [],
+      },
+      { legacy: "canonical" },
+    );
+    const failure = new Error("original update authority revoked");
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw failure;
+      }
+    };
+    loadInstalledPluginIndexMock.mockReturnValue(installedIndex({ records }));
+    collectMissingPluginInstallPayloadsMock.mockResolvedValueOnce([
+      { pluginId: "legacy", installPath: "/plugins/legacy", reason: "missing-package-json" },
+    ]);
+    updateNpmInstalledPluginsMock.mockResolvedValue(repair).mockImplementationOnce(async () => {
+      // Revoke after repair returns but before the awaiting cohort continues.
+      queueMicrotask(() => {
+        current = false;
+      });
+      return repair;
+    });
+
+    await expect(
+      convergePluginReleaseCohort({
+        config,
+        channel: "stable",
+        timeoutMs: 60_000,
+        beforePersistentEffect: assertCurrent,
+      }),
+    ).rejects.toBe(failure);
+    expect(updateNpmInstalledPluginsMock).toHaveBeenCalledOnce();
+    expect(updateNpmInstalledPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: ["legacy"], beforePersistentEffect: assertCurrent }),
+    );
+    expect(loadInstalledPluginIndexMock).toHaveBeenCalledOnce();
+    expect(collectMissingPluginInstallPayloadsMock).toHaveBeenCalledOnce();
+  });
 });

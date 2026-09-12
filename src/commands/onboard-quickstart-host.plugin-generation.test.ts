@@ -4,11 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
 
@@ -64,7 +64,7 @@ it("carries a plugin installed during onboarding into the first foreground Gatew
         );
         // Package acquisition is synthetic; the install ledger and post-install invalidation are real.
         await withPluginLifecycleLease({}, async () => {
-          await writePersistedInstalledPluginIndexInstallRecords(
+          await seedInstalledPluginIndex(
             {
               codex: {
                 source: "npm",

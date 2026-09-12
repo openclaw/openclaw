@@ -25,9 +25,9 @@ export const doctorConfigRuntimeEntrypoints = {
     sourceWorkerName: "../flows/doctor-health-contribution-runners.config",
     distWorkerPath: "flows/doctor-health-contribution-runners.config.js",
   },
-  installRecords: {
+  installIndexSeed: {
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../plugins/installed-plugin-index-records",
-    distWorkerPath: "plugins/installed-plugin-index-records.js",
+    sourceWorkerName: "../plugins/test-helpers/installed-plugin-index",
+    distWorkerPath: "test-support/installed-plugin-index.js",
   },
 } as const;

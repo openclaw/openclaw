@@ -40,8 +40,6 @@ type ReadPersistedInstalledPluginIndexFn =
   (typeof import("../plugins/installed-plugin-index-store.js"))["readPersistedInstalledPluginIndex"];
 type RestorePersistedInstalledPluginIndexIfCurrentFn =
   (typeof import("../plugins/installed-plugin-index-store-write.js"))["restorePersistedInstalledPluginIndexIfCurrent"];
-type WritePersistedInstalledPluginIndexInstallRecordsFn =
-  (typeof import("../plugins/installed-plugin-index-records.js"))["writePersistedInstalledPluginIndexInstallRecords"];
 type WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn =
   (typeof import("../plugins/installed-plugin-index-records.js"))["writePersistedInstalledPluginIndexInstallRecordsWithLease"];
 type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
@@ -119,11 +117,6 @@ export const recordPluginInstallMock: UnknownMock = vi.fn();
 const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
   clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
 );
-const writePersistedInstalledPluginIndexInstallRecords: Mock<WritePersistedInstalledPluginIndexInstallRecordsFn> =
-  vi.fn<WritePersistedInstalledPluginIndexInstallRecordsFn>(async (records) => {
-    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
-    return "/tmp/openclaw-state/openclaw.sqlite";
-  });
 export const readPersistedInstalledPluginIndexMock: Mock<ReadPersistedInstalledPluginIndexFn> =
   vi.fn<ReadPersistedInstalledPluginIndexFn>(async () => null);
 const writeMockInstalledIndexWithLease: WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn =
@@ -435,11 +428,6 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
       invokeMock<unknown[], unknown>(loadInstalledPluginIndexInstallRecords, ...args)) as (
       ...args: unknown[]
     ) => unknown,
-    writePersistedInstalledPluginIndexInstallRecords: ((...args: unknown[]) =>
-      invokeMock<unknown[], unknown>(
-        writePersistedInstalledPluginIndexInstallRecords,
-        ...args,
-      )) as (...args: unknown[]) => unknown,
     writePersistedInstalledPluginIndexInstallRecordsWithLease: ((...args: unknown[]) =>
       invokeMock<unknown[], unknown>(
         writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
@@ -944,7 +932,6 @@ export function resetPluginsCliTestState() {
   mockInstalledPluginIndexRevision = 0;
   mockPersistedConfigs.clear();
   loadInstalledPluginIndexInstallRecords.mockReset();
-  writePersistedInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockReset();
   readPersistedInstalledPluginIndexMock.mockReset();
   restorePersistedInstalledPluginIndexIfCurrentMock.mockReset();
@@ -1051,10 +1038,6 @@ export function resetPluginsCliTestState() {
   loadInstalledPluginIndexInstallRecords.mockImplementation(async () =>
     clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
   );
-  writePersistedInstalledPluginIndexInstallRecords.mockImplementation(async (records) => {
-    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
-    return "/tmp/openclaw-state/openclaw.sqlite";
-  });
   readPersistedInstalledPluginIndexMock.mockResolvedValue(null);
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockImplementation(
     writeMockInstalledIndexWithLease,

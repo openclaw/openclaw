@@ -7,8 +7,8 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import {
   createBuiltRuntime,
   runBuiltRuntime,
@@ -50,7 +50,7 @@ async function createDoctorFixture() {
   };
   fs.writeFileSync(configPath, JSON.stringify(config));
   // Start from current config and an existing index; the cases below own Doctor execution.
-  await writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, env, config });
+  await seedInstalledPluginIndex({}, { stateDir, env, config });
   return { root, stateDir, configPath, env, config };
 }
 
@@ -62,10 +62,7 @@ describe("Doctor retired plugin install config", () => {
       const empty = kind === "empty" || kind === "empty-included";
       const included = kind === "included" || kind === "empty-included";
       const durable = { source: "path" as const, installPath: path.join(root, "current-plugin") };
-      await writePersistedInstalledPluginIndexInstallRecords(
-        { existing: durable },
-        { stateDir, env, config },
-      );
+      await seedInstalledPluginIndex({ existing: durable }, { stateDir, env, config });
       const legacy = { source: "path" as const, installPath: path.join(root, "missing-plugin") };
       config.plugins = {
         ...(kind === "empty-included" ? {} : config.plugins),
@@ -171,14 +168,14 @@ describe("Doctor retired plugin install config", () => {
     );
     const configFlowUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configFlow).href;
     const writerUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configHealth).href;
-    const recordsUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.installRecords).href;
+    const seedUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.installIndexSeed).href;
     const result = await runIsolatedModuleScript(
       env,
       `
       import fs from "node:fs";
       const { loadAndMaybeMigrateDoctorConfig } = await import(${JSON.stringify(configFlowUrl)});
       const { runInitialConfigWriteHealth, runWriteConfigHealth } = await import(${JSON.stringify(writerUrl)});
-      const { writePersistedInstalledPluginIndexInstallRecords } = await import(${JSON.stringify(recordsUrl)});
+      const { seedInstalledPluginIndex } = await import(${JSON.stringify(seedUrl)});
       const runtime = { log() {}, error() {}, exit(code) { throw new Error(String(code)); } };
       const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
       const configResult = await loadAndMaybeMigrateDoctorConfig({
@@ -192,7 +189,7 @@ describe("Doctor retired plugin install config", () => {
         invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
         runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
       };
-      await writePersistedInstalledPluginIndexInstallRecords({}, { config: ctx.cfg });
+      await seedInstalledPluginIndex({}, { config: ctx.cfg });
       await runInitialConfigWriteHealth(ctx);
       fs.copyFileSync(ctx.configPath, ${JSON.stringify(path.join(root, "first-write.json"))});
       ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, bind: "loopback" } };

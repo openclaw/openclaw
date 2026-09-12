@@ -27,6 +27,11 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import {
+  copyPluginInstallTransactionRequest,
+  retainPluginInstallTransaction,
+  withPluginInstallTransactions,
+} from "./install-transaction.js";
 import { isUnavailableNpmTarget } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import {
@@ -35,6 +40,7 @@ import {
   resolveNpmInstallRecordSpec,
 } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { formatClawHubInstallFailure, formatNpmInstallFailure } from "./update-attempt.js";
 import {
   buildLoadPathHelpers,
@@ -76,7 +82,22 @@ export async function syncPluginsForUpdateChannel(params: {
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void;
 }): Promise<PluginChannelSyncResult> {
+  return await withPluginLifecycleLease(
+    { env: params.env, assertCurrent: params.beforePersistentEffect },
+    (lease) =>
+      withPluginInstallTransactions(
+        params,
+        () => lease.assertOwned(),
+        syncPluginsForUpdateChannelWithLease,
+      ),
+  );
+}
+
+async function syncPluginsForUpdateChannelWithLease(
+  params: Parameters<typeof syncPluginsForUpdateChannel>[0],
+): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
@@ -223,15 +244,16 @@ export async function syncPluginsForUpdateChannel(params: {
           previousRecords: installs,
           expectedIntegrity,
           onCapabilityConsent: consent.onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
-        const options = {
+        const options = copyPluginInstallTransactionRequest(params, {
           spec,
           config: next,
           mode: "update" as const,
           expectedPluginId: targetPluginId,
           logger,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
-        };
+        });
         let result:
           | Awaited<ReturnType<typeof installPluginFromNpmSpec>>
           | Awaited<ReturnType<typeof installPluginFromClawHub>>;
@@ -244,7 +266,9 @@ export async function syncPluginsForUpdateChannel(params: {
                   expectedIntegrity,
                   trustedSourceLinkedOfficialInstall,
                 });
+          retainPluginInstallTransaction(params, result);
         } catch (error) {
+          params.beforePersistentEffect?.();
           consent.rethrowCallbackError();
           if (!(error instanceof ManagedPluginLifecycleError)) {
             throw error;
@@ -260,6 +284,7 @@ export async function syncPluginsForUpdateChannel(params: {
           };
         }
         consent.rethrowCallbackError();
+        params.beforePersistentEffect?.();
         return { result, capabilityConsent, installSpec: spec };
       };
       const {

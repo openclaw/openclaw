@@ -70,6 +70,12 @@ const withClawPackageLifecycleLeaseMock = vi.fn(
 const tempDirs: string[] = [];
 const capabilityConsentMode = vi.hoisted(() => ({ real: false }));
 
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 vi.mock("./capability-consent.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./capability-consent.js")>();
   return {
@@ -1350,9 +1356,6 @@ describe("updateNpmInstalledPlugins", () => {
   afterEach(() => {
     capabilityConsentMode.real = false;
     vi.unstubAllEnvs();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("does not treat inherited prototype names as install records", async () => {
@@ -5894,7 +5897,9 @@ describe("syncPluginsForUpdateChannel", () => {
 
   it("forwards an explicit env to bundled plugin source resolution", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+    const env = {
+      OPENCLAW_HOME: makeTrackedTempDir("openclaw-plugin-update-home", tempDirs),
+    } as NodeJS.ProcessEnv;
 
     await syncPluginsForUpdateChannel({
       channel: "beta",

@@ -11,9 +11,7 @@ import {
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-record-reader.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
-  refreshPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndexWithLeaseSync,
   type InstalledPluginIndexWriteLease,
   type InstalledPluginIndexWriteReceipt,
@@ -42,19 +40,6 @@ type InstalledPluginIndexRecordRefreshOptions = InstalledPluginIndexRecordStoreO
   Partial<Omit<RefreshInstalledPluginIndexParams, "reason" | "installRecords">> & {
     now?: () => Date;
   };
-
-/** Refreshes persisted installed plugin index records asynchronously. */
-export async function writePersistedInstalledPluginIndexInstallRecords(
-  records: Record<string, PluginInstallRecord>,
-  options: InstalledPluginIndexRecordRefreshOptions = {},
-): Promise<string> {
-  refreshPersistedInstalledPluginIndex({
-    ...options,
-    reason: "source-changed",
-    installRecords: records,
-  });
-  return resolveInstalledPluginIndexStorePath(options);
-}
 
 /** Refresh persisted install records while holding the plugin lifecycle lease. */
 export async function writePersistedInstalledPluginIndexInstallRecordsWithLease(

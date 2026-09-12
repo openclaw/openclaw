@@ -363,12 +363,14 @@ export async function repairRegisteredOpenClawHostLink(params: {
   pluginId: string;
   record: PluginInstallRecord;
   logger: PluginUpdateLogger;
+  beforePersistentEffect?: () => void;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: { [params.pluginId]: params.record },
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
   return result.repaired > 0;
 }
@@ -376,12 +378,14 @@ export async function repairRegisteredOpenClawHostLink(params: {
 export async function repairOpenClawPeerLinksForNpmInstalls(params: {
   config: OpenClawConfig;
   logger: PluginUpdateLogger;
+  beforePersistentEffect?: () => void;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: params.config.plugins?.installs ?? {},
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
+    beforePersistentEffect: params.beforePersistentEffect,
     onPackageReadError: (error, packageDir) => {
       params.logger.warn?.(
         `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,

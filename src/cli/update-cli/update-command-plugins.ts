@@ -20,6 +20,7 @@ import {
 } from "../../plugins/installed-plugin-index-records.js";
 import { isTrustedOfficialPluginInstallRecord } from "../../plugins/official-external-install-records.js";
 import type { MissingPluginInstallPayload } from "../../plugins/payload-verification.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { convergePluginReleaseCohort } from "../../plugins/update-cohort.js";
 import {
@@ -108,7 +109,7 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
-  beforePersistentEffect?: () => void | Promise<void>;
+  assertCurrent?: () => void;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configWriteOptions: ConfigWriteOptions;
@@ -121,6 +122,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
 }): Promise<PostCorePluginUpdateResult> {
+  params.assertCurrent?.();
   const runtime = params.runtime ?? defaultRuntime;
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
@@ -240,6 +242,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
     return false;
   };
 
+  const externalizedBundledPluginBridges = await listPersistedBundledPluginLocationBridges({
+    workspaceDir: params.root,
+  });
+  params.assertCurrent?.();
   const cohort = await convergePluginReleaseCohort({
     config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
     channel: pluginUpdateChannel,
@@ -247,13 +253,13 @@ export async function updatePluginsAfterCoreUpdate(params: {
     versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
     timeoutMs: params.timeoutMs,
     workspaceDir: params.root,
-    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
-      workspaceDir: params.root,
-    }),
+    externalizedBundledPluginBridges,
+    beforePersistentEffect: params.assertCurrent,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
     ...capabilityConsent,
   });
+  params.assertCurrent?.();
   for (const error of cohort.sync.summary.errors) {
     collectPluginOutcome({ ...error, status: "error" });
   }
@@ -291,9 +297,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
-    beforePersistentEffect: params.beforePersistentEffect,
+    beforePersistentEffect: params.assertCurrent,
     ...capabilityConsent,
   });
+  params.assertCurrent?.();
   for (const change of convergence.changes) {
     if (!params.json) {
       runtime.log(theme.muted(change));
@@ -387,7 +394,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     // Installed plugin metadata can own migrations that this process has not loaded yet.
     // Finalization runs fresh doctor plus strict validation before the update can complete.
     await commitPluginInstallRecordsWithConfig({
-      beforePersistentEffect: params.beforePersistentEffect,
+      beforePersistentEffect: params.assertCurrent,
       previousInstallRecords: pluginInstallRecords,
       nextInstallRecords,
       nextConfig,
@@ -398,15 +405,19 @@ export async function updatePluginsAfterCoreUpdate(params: {
         skipPluginValidation: true,
       },
     });
-    await params.beforePersistentEffect?.();
-    await refreshPluginRegistryAfterConfigMutation({
-      configPath: params.configSnapshot.path,
-      reason: "source-changed",
-      workspaceDir: params.root,
-      installRecords: nextInstallRecords,
-      invalidateRuntimeCache: false,
-      logger: pluginLogger,
-    });
+    params.assertCurrent?.();
+    await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, async (lease) =>
+      refreshPluginRegistryAfterConfigMutation({
+        configPath: params.configSnapshot.path,
+        reason: "source-changed",
+        workspaceDir: params.root,
+        installRecords: nextInstallRecords,
+        invalidateRuntimeCache: false,
+        logger: pluginLogger,
+        lease,
+      }),
+    );
+    params.assertCurrent?.();
   }
 
   for (const notice of clawHubTrustNotices) {

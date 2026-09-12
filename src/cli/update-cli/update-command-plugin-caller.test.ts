@@ -2,11 +2,16 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import * as configIO from "../../config/io.factory.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-row.js";
+import { auditDeclaredOpenClawHostDependency } from "../../plugins/plugin-peer-link.js";
+import * as registryRefresh from "../../plugins/registry-refresh.js";
+import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
+import * as pluginUpdates from "../../plugins/update.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
@@ -38,6 +43,11 @@ describe("connected in-process plugin finalization authority", () => {
     "config-revoked",
     "run-replaced",
     "fence-replaced",
+    "cohort-revoked",
+    "cohort-run-replaced",
+    "cohort-fence-replaced",
+    "host-link-recovery",
+    "registry-revoked",
   ] as const)("protects persistence and terminal behavior with %s", async (scenario) => {
     await withOpenClawTestState(
       {
@@ -55,6 +65,28 @@ describe("connected in-process plugin finalization authority", () => {
           state.path("package.json"),
           JSON.stringify({ name: "openclaw", version: VERSION }),
         );
+        const peerPackageDir = state.statePath("npm", "node_modules", "peer-plugin");
+        const peerLink = state.statePath(
+          "npm",
+          "node_modules",
+          "peer-plugin",
+          "node_modules",
+          "openclaw",
+        );
+        if (scenario === "host-link-recovery") {
+          await fs.mkdir(state.statePath("npm", "node_modules", "peer-plugin", "node_modules"), {
+            recursive: true,
+          });
+          await fs.writeFile(
+            state.statePath("npm", "node_modules", "peer-plugin", "package.json"),
+            JSON.stringify({
+              name: "peer-plugin",
+              version: "1.0.0",
+              peerDependencies: { openclaw: "*" },
+            }),
+          );
+          await fs.symlink(state.root, peerLink, "junction");
+        }
         vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
         const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
         const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
@@ -83,13 +115,10 @@ describe("connected in-process plugin finalization authority", () => {
         // this forces the plugin commit without a package fetch or fake convergence result.
         const authoredChannels = { telegram: { enabled: false } };
         await state.writeConfig({ plugins: { enabled: false }, channels: authoredChannels });
-        const configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+        let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
         const currentConfig = { plugins: { enabled: false } };
         await state.writeConfig(currentConfig);
-        await writePersistedInstalledPluginIndexInstallRecords(
-          {},
-          { config: currentConfig, env: state.env },
-        );
+        await seedInstalledPluginIndex({}, { config: currentConfig, env: state.env });
         const originalConfig = await fs.readFile(state.configPath, "utf8");
         const diagnosticPath = await state.writeText(
           "retained-diagnostic.json",
@@ -104,15 +133,26 @@ describe("connected in-process plugin finalization authority", () => {
           OPENCLAW_UPDATE_RUN_HANDOFF: "1",
           [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
         };
-        const created = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        let created = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        let preUpdatePluginInstallRecords = {};
         const readIndex = () => readPersistedInstalledPluginIndexRowSync({ env: state.env });
         let indexAtConvergence: ReturnType<typeof readIndex>;
+        let indexAtRevocation: ReturnType<typeof readIndex>;
         let runAtConvergence: ReturnType<typeof getUpdateRun>;
         let configBoundaryReached = false;
         let refused: unknown;
         let completed: Awaited<ReturnType<typeof finishUpdate>> | undefined;
+        const cohortScenario = scenario.startsWith("cohort-");
+        const npmUpdates = vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins");
+        let convergenceReached = false;
+        let recovering = false;
+        let configAtRegistryRead: string | undefined;
+        let registryRefusal: unknown;
+        const converge = convergence.runPostCorePluginConvergence;
+        const prepare = configPreparation.preparePostCorePluginConfig;
+        const refresh = registryRefresh.refreshPluginRegistryAfterConfigMutation;
 
-        const run: NonNullable<FinishUpdateParams["opts"]["run"]> = {
+        let run: NonNullable<FinishUpdateParams["opts"]["run"]> = {
           runId: created.runId,
           env: state.env,
         };
@@ -146,29 +186,87 @@ describe("connected in-process plugin finalization authority", () => {
                 downgradeRisk: false,
                 opts: { json: true, yes: true, run },
                 controlPlaneUpdateSentinelMeta: null,
-                preUpdatePluginInstallRecords: {},
+                preUpdatePluginInstallRecords,
                 startedAt: Date.now(),
                 updateStepTimeoutMs: 1_000,
               };
-              const converge = convergence.runPostCorePluginConvergence;
+              const unlink = fs.unlink;
+              const unlinkSpy =
+                scenario === "host-link-recovery" && !recovering
+                  ? vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+                      await unlink(file);
+                      if (file === peerLink) {
+                        indexAtConvergence = readIndex();
+                        runAtConvergence = getUpdateRun(created.runId, { env: state.env });
+                        releaseUpdateCommandPreflightForHandoff(fence);
+                      }
+                    })
+                  : undefined;
+              const revokeAtBoundary = () => {
+                fence.assertCurrent();
+                otherFence.assertCurrent();
+                indexAtConvergence = readIndex();
+                runAtConvergence = getUpdateRun(created.runId, { env: state.env });
+                if (scenario === "index-revoked" || scenario === "cohort-revoked") {
+                  releaseUpdateCommandPreflightForHandoff(fence);
+                } else if (scenario === "run-replaced" || scenario === "cohort-run-replaced") {
+                  params.opts.run = { ...run };
+                } else if (scenario === "fence-replaced" || scenario === "cohort-fence-replaced") {
+                  run.executorFence = otherFence;
+                }
+              };
+              if (scenario === "registry-revoked") {
+                vi.spyOn(
+                  registryRefresh,
+                  "refreshPluginRegistryAfterConfigMutation",
+                ).mockImplementationOnce(async (input) => {
+                  const create = configIO.createConfigIO;
+                  const readSpy = vi
+                    .spyOn(configIO, "createConfigIO")
+                    .mockImplementation((options) => {
+                      const io = create(options);
+                      return {
+                        ...io,
+                        readConfigFileSnapshot: async () => {
+                          const snapshot = await io.readConfigFileSnapshot();
+                          configAtRegistryRead = await fs.readFile(state.configPath, "utf8");
+                          indexAtConvergence = readIndex();
+                          runAtConvergence = getUpdateRun(created.runId, { env: state.env });
+                          releaseUpdateCommandPreflightForHandoff(fence);
+                          return snapshot;
+                        },
+                      };
+                    });
+                  try {
+                    return await refresh(input);
+                  } catch (registryError) {
+                    registryRefusal = registryError;
+                    throw registryError;
+                  } finally {
+                    readSpy.mockRestore();
+                  }
+                });
+              }
+              if (cohortScenario) {
+                const sync = pluginUpdates.syncPluginsForUpdateChannel;
+                vi.spyOn(pluginUpdates, "syncPluginsForUpdateChannel").mockImplementationOnce(
+                  async (input) => {
+                    const result = await sync(input);
+                    revokeAtBoundary();
+                    return result;
+                  },
+                );
+              }
               vi.spyOn(convergence, "runPostCorePluginConvergence").mockImplementationOnce(
                 async (input) => {
+                  convergenceReached = true;
                   const result = await converge(input);
-                  fence.assertCurrent();
-                  otherFence.assertCurrent();
-                  indexAtConvergence = readIndex();
-                  runAtConvergence = getUpdateRun(created.runId, { env: state.env });
-                  if (scenario === "index-revoked") {
-                    releaseUpdateCommandPreflightForHandoff(fence);
-                  } else if (scenario === "run-replaced") {
-                    params.opts.run = { ...run };
-                  } else if (scenario === "fence-replaced") {
-                    run.executorFence = otherFence;
+                  if (!cohortScenario) {
+                    revokeAtBoundary();
                   }
                   return result;
                 },
               );
-              const prepare = configPreparation.preparePostCorePluginConfig;
               vi.spyOn(configPreparation, "preparePostCorePluginConfig").mockImplementationOnce(
                 async (input) => {
                   const prepared = await prepare(input);
@@ -178,7 +276,8 @@ describe("connected in-process plugin finalization authority", () => {
                     configBoundaryReached = true;
                     if (scenario === "config-revoked") {
                       fence.assertCurrent();
-                      expect(readIndex()).not.toEqual(indexAtConvergence);
+                      indexAtRevocation = readIndex();
+                      expect(indexAtRevocation).not.toEqual(indexAtConvergence);
                       releaseUpdateCommandPreflightForHandoff(fence);
                     }
                   };
@@ -194,19 +293,23 @@ describe("connected in-process plugin finalization authority", () => {
                 expect(getUpdateRun(created.runId, { env: state.env })).toEqual(runAtConvergence);
                 expect(json).not.toHaveBeenCalled();
                 throw cause;
+              } finally {
+                unlinkSpy?.mockRestore();
               }
             });
           });
-        const terminal = withUpdateFailureTriage(
-          { json: true, yes: true, run },
-          { root: state.root, env: targetEnv },
-          async () => {
-            await withUpdateCommandTerminalResult((registerRun) => {
-              registerRun(run);
-              return execution();
-            });
-          },
-        );
+        const finishWithTerminal = () =>
+          withUpdateFailureTriage(
+            { json: true, yes: true, run },
+            { root: state.root, env: targetEnv },
+            async () => {
+              await withUpdateCommandTerminalResult((registerRun) => {
+                registerRun(run);
+                return execution();
+              });
+            },
+          );
+        const terminal = finishWithTerminal();
         if (scenario === "healthy") {
           await terminal;
           expect(refused).toBeUndefined();
@@ -228,17 +331,22 @@ describe("connected in-process plugin finalization authority", () => {
             automaticTriage: undefined,
             result: { status: "error" },
           });
-          expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-          // Config refusal rolls back the tentative index through its existing owner.
-          // Index refusal must not write even a new index revision.
+          expect(await fs.readFile(state.configPath, "utf8")).toBe(
+            scenario === "registry-revoked" ? configAtRegistryRead : originalConfig,
+          );
+          // A tentative commit is not permission to compensate after its caller is revoked.
+          // Both refusal paths preserve the exact row, including its revision.
           if (scenario === "config-revoked") {
-            expect(JSON.parse(readIndex()!.value_json).index).toEqual(
-              JSON.parse(indexAtConvergence!.value_json).index,
-            );
+            expect(indexAtRevocation).toBeDefined();
+            expect(readIndex()).toEqual(indexAtRevocation);
             expect(configBoundaryReached).toBe(true);
           } else {
             expect(readIndex()).toEqual(indexAtConvergence);
-            expect(configBoundaryReached).toBe(false);
+            expect(configBoundaryReached).toBe(scenario === "registry-revoked");
+          }
+          if (scenario === "registry-revoked") {
+            expect(configAtRegistryRead).toBeDefined();
+            expect(refused).toBe(registryRefusal);
           }
           const reported = json.mock.calls[0]?.[0];
           expect(reported).toMatchObject({
@@ -249,7 +357,7 @@ describe("connected in-process plugin finalization authority", () => {
                 name: "update executor settlement",
                 exitCode: 1,
                 stderrTail: expect.stringContaining(
-                  scenario === "run-replaced" || scenario === "fence-replaced"
+                  scenario.endsWith("run-replaced") || scenario.endsWith("fence-replaced")
                     ? "Package finalization lost its original executor."
                     : "Update executor ownership is no longer current.",
                 ),
@@ -263,6 +371,10 @@ describe("connected in-process plugin finalization authority", () => {
           expect(transport.exec).not.toHaveBeenCalled();
           expect(error).not.toHaveBeenCalled();
         }
+        if (cohortScenario) {
+          expect(npmUpdates).not.toHaveBeenCalled();
+          expect(convergenceReached).toBe(false);
+        }
         expect(indexAtConvergence).toBeDefined();
         expect(runAtPublication).toBeDefined();
         expect(getUpdateRun(created.runId, { env: state.env })).toEqual(runAtPublication);
@@ -270,6 +382,31 @@ describe("connected in-process plugin finalization authority", () => {
         expect(transport.command).not.toHaveBeenCalled();
         expect(json.mock.calls).toHaveLength(1);
         expect(log).not.toHaveBeenCalled();
+        if (scenario === "host-link-recovery") {
+          await expect(fs.lstat(peerLink)).rejects.toMatchObject({ code: "ENOENT" });
+          const firstRunId = created.runId;
+          const firstAssertCurrent = assertOriginalCurrent;
+          recovering = true;
+          configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+          preUpdatePluginInstallRecords =
+            readPersistedInstalledPluginIndexInstallRecords({ env: state.env }) ?? {};
+          created = createUpdateRun({ trigger: "cli" }, { env: state.env });
+          run = { runId: created.runId, env: state.env };
+          completed = undefined;
+          refused = undefined;
+          await finishWithTerminal();
+          expect(firstAssertCurrent).toThrow();
+          expect(getUpdateRun(firstRunId, { env: state.env })?.status).toBe("failed");
+          expect(created.runId).not.toBe(firstRunId);
+          expect(refused).toBeUndefined();
+          expect(completed).toMatchObject({ status: "ok" });
+          expect(runAtPublication?.status).toBe("succeeded");
+          expect(
+            await auditDeclaredOpenClawHostDependency({ packageDir: peerPackageDir }),
+          ).toBeNull();
+          expect(await fs.realpath(peerLink)).not.toBe(await fs.realpath(state.root));
+          expect(json).toHaveBeenCalledTimes(2);
+        }
       },
     );
   });

@@ -4,12 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  loadInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "../../../plugins/installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
+import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import {
   configuredPluginInstallIssueToRepairEffect,
   detectConfiguredPluginInstallHealthIssues,
@@ -56,7 +54,7 @@ async function writePathInstallRecord(params: {
   installPath: string;
   sourcePath?: string;
 }): Promise<void> {
-  await writePersistedInstalledPluginIndexInstallRecords(
+  await seedInstalledPluginIndex(
     {
       [params.pluginId]: {
         source: "path",

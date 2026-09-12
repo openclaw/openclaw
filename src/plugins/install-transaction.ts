@@ -68,6 +68,92 @@ export function resolvePluginInstallTransactionRequest(
   ];
 }
 
+/** Keep direct and deferred installs bound to the owner that admitted them. */
+export async function withPluginInstallTransactions<
+  T extends { beforePersistentEffect?: () => void | Promise<void> },
+  R,
+>(
+  params: T,
+  assertOwned: () => void,
+  run: (params: T, assertCurrent: () => void) => Promise<R>,
+): Promise<R> {
+  const request = resolvePluginInstallTransactionRequest(params);
+  const initiatingAssert = request?.assertOwned;
+  const callerBeforePersistentEffect = params.beforePersistentEffect;
+  const transactions: PluginInstallTransaction[] = [];
+  let refusal: { error: unknown } | undefined;
+  const assertCurrent = () => {
+    if (refusal) {
+      throw refusal.error;
+    }
+    try {
+      initiatingAssert?.();
+      assertOwned();
+    } catch (error) {
+      refusal = { error };
+      throw error;
+    }
+  };
+  assertCurrent();
+  const beforePersistentEffect = () => {
+    try {
+      assertCurrent();
+      const pending = callerBeforePersistentEffect?.();
+      // Planning hooks may await consent. Synchronous hooks stay synchronous;
+      // either form records refusal before an installer can normalize it.
+      return pending?.then(assertCurrent, (error: unknown) => {
+        refusal ??= { error };
+        throw refusal.error;
+      });
+    } catch (error) {
+      refusal ??= { error };
+      throw refusal.error;
+    }
+  };
+  const owned = requestDeferredPluginInstall(
+    { ...params, beforePersistentEffect },
+    request ? request.transactionSink : transactions,
+    assertCurrent,
+  );
+  let result: R;
+  try {
+    result = await run(owned, assertCurrent);
+    // Installers may return ordinary failures after a refused mutation. Keep
+    // that refusal sticky, including falsy values, before settling any siblings.
+    assertCurrent();
+  } catch (error) {
+    if (!request && !refusal) {
+      try {
+        await settlePluginInstallTransactions(transactions, "rollback");
+      } catch (rollbackError) {
+        if (!refusal) {
+          throw new AggregateError([error, rollbackError], "Plugin install recovery failed", {
+            cause: rollbackError,
+          });
+        }
+      }
+    }
+    throw refusal ? refusal.error : error;
+  }
+  // The operation may have persisted its index. Cleanup failure must retain
+  // the published package, never roll it back beneath that committed record.
+  if (!request) {
+    try {
+      await settlePluginInstallTransactions(transactions, "commit");
+    } catch (error) {
+      throw refusal ? refusal.error : error;
+    }
+  }
+  return result;
+}
+
+export function retainPluginInstallTransaction(params: object, result: object): void {
+  const transaction = resolvePluginInstallTransaction(result);
+  if (transaction) {
+    resolvePluginInstallTransactionRequest(params)?.transactionSink?.push(transaction);
+  }
+}
+
 export function attachPluginInstallOwnerMigrations<T extends object>(
   result: T,
   migrations: Readonly<Record<string, string>>,

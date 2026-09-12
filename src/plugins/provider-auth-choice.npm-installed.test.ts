@@ -10,7 +10,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardSelectParams } from "../wizard/prompts.js";
 import { installPluginFromArchive, installPluginFromNpmSpec } from "./install.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields } from "./installs.js";
 import {
   clearPluginLoaderCache,
@@ -19,6 +18,7 @@ import {
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { buildPluginRegistrySnapshotReport } from "./status-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { registryPackages, startStaticRegistry } from "./test-helpers/npm-registry-fixtures.js";
 
 const install = vi.hoisted(() =>
@@ -145,7 +145,7 @@ it.each([
         if (!result.ok) {
           throw new Error(result.error);
         }
-        await writePersistedInstalledPluginIndexInstallRecords(
+        await seedInstalledPluginIndex(
           {
             [pluginId]: {
               source,

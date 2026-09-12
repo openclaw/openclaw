@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import {
   detectPluginRegistryHealthIssues,
   maybeRepairPluginRegistryState,
@@ -75,7 +75,7 @@ async function writeInstallRecords(
   stateDir: string,
   installRecords: Record<string, PluginInstallRecord>,
 ): Promise<void> {
-  await writePersistedInstalledPluginIndexInstallRecords(installRecords, {
+  await seedInstalledPluginIndex(installRecords, {
     stateDir,
     candidates: [],
   });

@@ -1,7 +1,8 @@
 // Covers plugin peer linking for development installs.
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   linkOpenClawPeerDependencies,
@@ -13,6 +14,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -21,6 +23,157 @@ function makeTempDir() {
 }
 
 describe("plugin peer links", () => {
+  describe.each(["direct", "managed", "registered"] as const)("%s repair authority", (entry) => {
+    it.each(["missing-modules", "missing-link", "stale-link", "package-copy"] as const)(
+      "preserves %s on a one-shot authority refusal during preparation",
+      async (layout) => {
+        const root = makeTempDir();
+        const extensionsDir = path.join(root, "extensions");
+        const packageDir = path.join(
+          entry === "registered" ? extensionsDir : path.join(root, "node_modules"),
+          "peer-plugin",
+        );
+        const nodeModulesDir = path.join(packageDir, "node_modules");
+        const linkPath = path.join(nodeModulesDir, "openclaw");
+        const oldHost = path.join(root, "old-host");
+        fs.mkdirSync(packageDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
+        );
+        const siblingDir = path.join(path.dirname(packageDir), "z-peer-plugin");
+        fs.mkdirSync(siblingDir);
+        fs.writeFileSync(
+          path.join(siblingDir, "package.json"),
+          JSON.stringify({ name: "z-peer-plugin", peerDependencies: { openclaw: "*" } }),
+        );
+        if (layout !== "missing-modules") {
+          fs.mkdirSync(nodeModulesDir);
+        }
+        if (layout === "stale-link") {
+          fs.mkdirSync(oldHost);
+          fs.symlinkSync(oldHost, linkPath, "junction");
+        } else if (layout === "package-copy") {
+          fs.mkdirSync(linkPath);
+          fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
+        }
+        const failure = new Error("update authority revoked");
+        let current = true;
+        const warnings: string[] = [];
+        const guarded = {
+          logger: { warn: (message: string) => warnings.push(message) },
+          beforePersistentEffect: () => {
+            if (!current) {
+              current = true;
+              throw failure;
+            }
+          },
+        };
+        const operation =
+          entry === "managed"
+            ? relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot: root, ...guarded })
+            : entry === "registered"
+              ? reconcileRegisteredOpenClawHostLinks({
+                  extensionsDir,
+                  installRecords: {
+                    "peer-plugin": { source: "npm", installPath: packageDir },
+                    "z-peer-plugin": { source: "npm", installPath: siblingDir },
+                  },
+                  mode: "repair",
+                  ...guarded,
+                })
+              : linkOpenClawPeerDependencies({
+                  installedDir: packageDir,
+                  peerDependencies: { openclaw: "*" },
+                  ...guarded,
+                });
+        // Each entry has started asynchronous filesystem preparation but has not mutated yet.
+        current = false;
+        await expect(operation).rejects.toBe(failure);
+        expect(warnings).toEqual([]);
+        expect(fs.existsSync(path.join(siblingDir, "node_modules"))).toBe(false);
+        if (layout === "stale-link") {
+          expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+          expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(oldHost));
+        } else if (layout === "package-copy") {
+          expect(fs.lstatSync(linkPath).isDirectory()).toBe(true);
+          expect(fs.readFileSync(path.join(linkPath, "package.json"), "utf8")).toBe(
+            '{"name":"openclaw"}',
+          );
+        } else {
+          expect(fs.existsSync(linkPath)).toBe(false);
+          expect(fs.existsSync(nodeModulesDir)).toBe(layout === "missing-link");
+        }
+      },
+    );
+  });
+
+  it.each(["symlink", "directory"] as const)(
+    "stops before replacement on a one-shot refusal after removing the old %s",
+    async (existingKind) => {
+      const root = makeTempDir();
+      const packageDir = path.join(root, "peer-plugin");
+      const linkPath = path.join(packageDir, "node_modules", "openclaw");
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      let current = true;
+      if (existingKind === "symlink") {
+        const oldHost = path.join(root, "old-host");
+        fs.mkdirSync(oldHost);
+        fs.symlinkSync(oldHost, linkPath, "junction");
+        const unlink = fsPromises.unlink.bind(fsPromises);
+        vi.spyOn(fsPromises, "unlink").mockImplementation(async (target) => {
+          await unlink(target);
+          current = false;
+        });
+      } else {
+        fs.mkdirSync(linkPath);
+        fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
+        const rm = fsPromises.rm.bind(fsPromises);
+        vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+          await rm(target, options);
+          current = false;
+        });
+      }
+      const failure = new Error("update authority revoked after removal");
+      const warnings: string[] = [];
+      await expect(
+        linkOpenClawPeerDependencies({
+          installedDir: packageDir,
+          peerDependencies: { openclaw: "*" },
+          logger: { warn: (message) => warnings.push(message) },
+          beforePersistentEffect: () => {
+            if (!current) {
+              current = true;
+              throw failure;
+            }
+          },
+        }),
+      ).rejects.toBe(failure);
+      expect(current).toBe(true);
+      expect(fs.existsSync(linkPath)).toBe(false);
+      expect(warnings).toEqual([]);
+    },
+  );
+
+  it("preserves filesystem failure reporting while caller authority remains current", async () => {
+    const packageDir = makeTempDir();
+    fs.mkdirSync(path.join(packageDir, "node_modules"));
+    const failure = new Error("peer link write denied");
+    vi.spyOn(fsPromises, "symlink").mockRejectedValueOnce(failure);
+    const warnings: string[] = [];
+
+    const result = await linkOpenClawPeerDependencies({
+      installedDir: packageDir,
+      peerDependencies: { openclaw: "*" },
+      beforePersistentEffect: () => {},
+      logger: { warn: (message) => warnings.push(message) },
+    });
+
+    expect(result).toEqual({ repaired: 0, skipped: 1 });
+    expect(warnings).toEqual([expect.stringContaining(failure.message)]);
+    expect(fs.existsSync(path.join(packageDir, "node_modules", "openclaw"))).toBe(false);
+  });
+
   it("relinks openclaw peers in the managed npm root", async () => {
     const npmRoot = makeTempDir();
     const packageDir = path.join(npmRoot, "node_modules", "peer-plugin");

@@ -32,6 +32,7 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
   pluginId: string;
   clawhubPackage?: string;
   dryRun: boolean;
+  beforePersistentEffect?: () => void;
   run: () => Promise<T>;
 }): Promise<T | { kind: "exception"; message: string; error: unknown }> {
   try {
@@ -41,6 +42,7 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
     return await withClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: params.clawhubPackage },
       async () => {
+        params.beforePersistentEffect?.();
         markClawPackageIndependentlyOwned({
           kind: "plugin",
           source: "clawhub",

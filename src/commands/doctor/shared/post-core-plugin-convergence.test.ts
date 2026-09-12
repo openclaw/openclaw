@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
@@ -136,6 +137,93 @@ describe("runPostCorePluginConvergence", () => {
       ),
     );
   });
+
+  it.each(["authority", "filesystem"] as const)(
+    "joins admitted peer repairs before reporting a %s failure",
+    async (kind) => {
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
+      const releaseSibling = createDeferred();
+      const refusal = new Error("one-shot peer repair refusal");
+      const laterWrite = vi.fn();
+      let refuse = false;
+      let completed = false;
+      let siblingSettled = false;
+      mocks.listManagedPluginNpmRoots.mockResolvedValue(["first-root", "second-root"]);
+      mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+        async (params: { npmRoot: string; beforePersistentEffect?: () => void }) => {
+          if (params.npmRoot === "first-root") {
+            await secondStarted.promise;
+            refuse = kind === "authority";
+            try {
+              params.beforePersistentEffect?.();
+              throw refusal;
+            } finally {
+              firstStarted.resolve();
+            }
+          }
+          secondStarted.resolve();
+          try {
+            await releaseSibling.promise;
+            params.beforePersistentEffect?.();
+            laterWrite();
+            return { checked: 1, attempted: 1, repaired: 1, skipped: 0 };
+          } finally {
+            siblingSettled = true;
+          }
+        },
+      );
+      const operation = runPostCorePluginConvergence({
+        cfg: { plugins: { enabled: false } },
+        env: {},
+        beforePersistentEffect: () => {
+          if (refuse) {
+            refuse = false;
+            throw refusal;
+          }
+        },
+      })
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
+          completed = true;
+        });
+      try {
+        await firstStarted.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(completed).toBe(false);
+        expect(mocks.runPluginPayloadSmokeCheck).not.toHaveBeenCalled();
+      } finally {
+        releaseSibling.resolve();
+        await operation;
+      }
+      const result = await operation;
+      expect(siblingSettled).toBe(true);
+      if (kind === "authority") {
+        expect("error" in result).toBe(true);
+        if (!("error" in result)) {
+          throw new Error("Expected authority refusal");
+        }
+        expect(result.error).toBe(refusal);
+        expect(laterWrite).not.toHaveBeenCalled();
+        expect(mocks.runPluginPayloadSmokeCheck).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({
+          value: {
+            warnings: [
+              expect.objectContaining({ message: expect.stringContaining(refusal.message) }),
+            ],
+          },
+        });
+        expect(laterWrite).toHaveBeenCalledOnce();
+        expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("checks active payloads without running repair or peer-link convergence", async () => {
     const cfg = {

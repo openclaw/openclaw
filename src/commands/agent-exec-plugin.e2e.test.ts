@@ -7,7 +7,7 @@ import { waitForDead } from "../../test/helpers/process-wait.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -87,7 +87,7 @@ async function writeHarnessPlugin(stateDir: string): Promise<void> {
     };\n`,
     "utf8",
   );
-  await writePersistedInstalledPluginIndexInstallRecords(
+  await seedInstalledPluginIndex(
     {
       "exec-proof": {
         source: "path",

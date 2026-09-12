@@ -10,7 +10,6 @@ import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import {
   cleanupRetainedManagedNpmInstallGenerations,
@@ -18,6 +17,7 @@ import {
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "../plugins/managed-npm-retention.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairStaleManagedNpmInstallGenerations } from "./doctor-plugin-generations.js";
@@ -75,7 +75,7 @@ describe("doctor managed npm generation repair", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_STATE_DIR: stateDir,
     };
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         stale: {
           source: "path",
@@ -89,7 +89,7 @@ describe("doctor managed npm generation repair", () => {
     await withPluginCache(createPluginCache(), async () => {
       expect(await loadInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty("stale");
       await withPluginCache(createPluginCache(), () =>
-        writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, candidates: [] }),
+        seedInstalledPluginIndex({}, { stateDir, candidates: [] }),
       );
       expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty("stale");
 
@@ -109,7 +109,7 @@ describe("doctor managed npm generation repair", () => {
     const npmDir = path.join(stateDir, "npm");
     const activePackageDir = writeManagedGeneration(stateDir, "2026.7.1");
     const stalePackageDir = writeManagedFlat(stateDir, "2026.6.11");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         [PLUGIN_ID]: {
           source: "npm",
@@ -152,7 +152,7 @@ describe("doctor managed npm generation repair", () => {
     const staleTimestamp = new Date("2026-01-01T00:00:00.000Z");
     setInstallTimestamp(activePackageDir, activeTimestamp);
     setInstallTimestamp(stalePackageDir, staleTimestamp);
-    await writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, candidates: [] });
+    await seedInstalledPluginIndex({}, { stateDir, candidates: [] });
     vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
     await maybeRepairPluginRegistryState({

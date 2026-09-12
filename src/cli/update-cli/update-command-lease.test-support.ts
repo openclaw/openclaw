@@ -33,10 +33,10 @@ export async function runUpdateLeaseChild(): Promise<void> {
     );
   const publish = async () => {
     assert.ok(scenario.writerConfig && scenario.writerRecords);
-    const { writePersistedInstalledPluginIndexInstallRecords } =
-      await import("../../plugins/installed-plugin-index-records.js");
+    const { seedInstalledPluginIndex } =
+      await import("../../plugins/test-helpers/installed-plugin-index.js");
     await fs.writeFile(configPath, JSON.stringify(scenario.writerConfig));
-    await writePersistedInstalledPluginIndexInstallRecords(scenario.writerRecords, {
+    await seedInstalledPluginIndex(scenario.writerRecords, {
       config: scenario.writerConfig,
     });
     await record("writer-committed");

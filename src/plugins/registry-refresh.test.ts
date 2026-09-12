@@ -1,12 +1,160 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
+import * as configIO from "../config/io.factory.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-row.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  invalidatePluginRuntimeDiscoveryAfterConfigMutation,
+  refreshPluginRegistryAfterConfigMutation,
+} from "./registry-refresh.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+
+const runtimeCache = vi.hoisted(() => ({ clear: vi.fn() }));
+vi.mock("./loader.js", () => ({ clearPluginRegistryLoadCache: runtimeCache.clear }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  runtimeCache.clear.mockClear();
+});
 
 describe("plugin registry refresh config ownership", () => {
+  it("refuses registry publication when the plugin lease is lost during the committed config read", async () => {
+    await withOpenClawTestState({ label: "registry-refresh-lease-loss" }, async (state) => {
+      const config = { plugins: { enabled: false } };
+      await state.writeConfig(config);
+      await seedInstalledPluginIndex({}, { config, env: state.env });
+      const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+      const controller = new AbortController();
+      const assertCurrent = vi.fn();
+      const warn = vi.fn();
+      const create = configIO.createConfigIO;
+      vi.spyOn(configIO, "createConfigIO").mockImplementation((options) => {
+        const io = create(options);
+        return {
+          ...io,
+          readConfigFileSnapshot: async () => {
+            const snapshot = await io.readConfigFileSnapshot();
+            controller.abort(new Error("plugin lease cancelled"));
+            return snapshot;
+          },
+        };
+      });
+      let registryError: unknown;
+      await expect(
+        withPluginLifecycleLease(
+          { env: state.env, signal: controller.signal, assertCurrent },
+          async (lease) => {
+            try {
+              await refreshPluginRegistryAfterConfigMutation({
+                reason: "source-changed",
+                lease,
+                logger: { warn },
+              });
+            } catch (error) {
+              registryError = error;
+              throw error;
+            }
+          },
+        ),
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(registryError).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+      expect(warn).not.toHaveBeenCalled();
+      expect(runtimeCache.clear).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([undefined, null, false, 0])(
+    "preserves a one-shot transactional authority refusal: %s",
+    async (refusal) => {
+      await withOpenClawTestState(
+        { label: "registry-refresh-transaction-refusal" },
+        async (state) => {
+          const config = { plugins: { enabled: false } };
+          await state.writeConfig(config);
+          await seedInstalledPluginIndex({}, { config, env: state.env });
+          const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+          const warn = vi.fn();
+          await withPluginLifecycleLease({ env: state.env }, async (lease) => {
+            const assertOwnedInTransaction = vi
+              .fn<typeof lease.assertOwnedInTransaction>((database) =>
+                lease.assertOwnedInTransaction(database),
+              )
+              .mockImplementationOnce(() => {
+                // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw falsey values; retain exact refusal identity.
+                throw refusal;
+              });
+            const result = await refreshPluginRegistryAfterConfigMutation({
+              reason: "source-changed",
+              lease: { ...lease, assertOwnedInTransaction },
+              logger: { warn },
+            }).then(
+              () => ({ ok: true }),
+              (error: unknown) => ({ error }),
+            );
+            expect("error" in result).toBe(true);
+            if ("error" in result) {
+              expect(result.error).toBe(refusal);
+            }
+            expect(assertOwnedInTransaction).toHaveBeenCalledOnce();
+          });
+          expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+          expect(warn).not.toHaveBeenCalled();
+          expect(runtimeCache.clear).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
+
+  it("pins record reads and registry publication to the supplied database lease", async () => {
+    await withOpenClawTestState({ label: "registry-refresh-explicit-database" }, async (state) => {
+      const config = { plugins: { enabled: false } };
+      await state.writeConfig(config);
+      await seedInstalledPluginIndex(
+        { default: { source: "archive" } },
+        {
+          config,
+          env: state.env,
+        },
+      );
+      const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+      const filePath = state.path("owned-plugin-state.sqlite");
+      const records = { owned: { source: "archive" as const } };
+      await seedInstalledPluginIndex(records, { config, filePath });
+      await withPluginLifecycleLease({ path: filePath }, async (lease) => {
+        await refreshPluginRegistryAfterConfigMutation({
+          reason: "source-changed",
+          lease,
+          invalidateRuntimeCache: false,
+        });
+      });
+      expect(readPersistedInstalledPluginIndexSync({ filePath })?.installRecords).toEqual(records);
+      expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+    });
+  });
+
+  it("rechecks authority after the runtime cache owner loads", async () => {
+    const refusal = new Error("owner revoked while loading runtime cache");
+    let current = true;
+    const warn = vi.fn();
+    const invalidation = invalidatePluginRuntimeDiscoveryAfterConfigMutation({
+      logger: { warn },
+      assertCurrent: () => {
+        if (!current) {
+          throw refusal;
+        }
+      },
+    });
+    current = false;
+    await expect(invalidation).rejects.toBe(refusal);
+    expect(runtimeCache.clear).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it.each([
     { reason: "source-changed", envSource: "process" },
     { reason: "policy-changed", envSource: "process" },

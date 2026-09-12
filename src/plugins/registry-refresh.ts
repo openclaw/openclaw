@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import type { PluginLifecycleLeaseContext } from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 
@@ -23,12 +24,36 @@ type PluginRegistryRefreshParams = {
   policyPluginIds?: readonly string[];
   traceCommand?: string;
   logger?: PluginRegistryRefreshLogger;
+  lease?: PluginLifecycleLeaseContext;
 };
 
 /** Refresh inventory from the committed file, including deferred runtime changes. */
 export async function refreshPluginRegistryAfterConfigMutation(
   params: PluginRegistryRefreshParams & { configPath?: string },
 ): Promise<void> {
+  const owner = params.lease;
+  let authorityRefusal: { error: unknown } | undefined;
+  const assertAuthority = (assert: () => void) => {
+    if (authorityRefusal) {
+      throw authorityRefusal.error;
+    }
+    try {
+      assert();
+    } catch (error) {
+      authorityRefusal = { error };
+      throw error;
+    }
+  };
+  // A one-shot refusal from either owner check must survive best-effort warning conversion.
+  const lease: PluginLifecycleLeaseContext | undefined = owner
+    ? {
+        ...owner,
+        assertOwned: () => assertAuthority(() => owner.assertOwned()),
+        assertOwnedInTransaction: (database) =>
+          assertAuthority(() => owner.assertOwnedInTransaction(database)),
+      }
+    : undefined;
+  lease?.assertOwned();
   try {
     // Discover post-write state without retiring the Gateway's current generation.
     await withPluginCache(createPluginCache(), async () => {
@@ -36,9 +61,14 @@ export async function refreshPluginRegistryAfterConfigMutation(
         params.installRecords ??
         (await tracePluginLifecyclePhaseAsync(
           "install records load",
-          () => loadInstalledPluginIndexInstallRecords(params.env ? { env: params.env } : {}),
+          () =>
+            loadInstalledPluginIndexInstallRecords({
+              ...(params.env ? { env: params.env } : {}),
+              ...(lease ? { filePath: lease.databasePath } : {}),
+            }),
           { command: params.traceCommand ?? "registry-refresh" },
         ));
+      lease?.assertOwned();
       await tracePluginLifecyclePhaseAsync(
         "registry refresh",
         async () => {
@@ -49,6 +79,7 @@ export async function refreshPluginRegistryAfterConfigMutation(
             observe: false,
             pluginValidation: "core-only",
           }).readConfigFileSnapshot();
+          lease?.assertOwned();
           if (!snapshot.valid) {
             throw new Error(`Config invalid: ${formatConfigIssueSummary(snapshot.issues)}`);
           }
@@ -59,24 +90,39 @@ export async function refreshPluginRegistryAfterConfigMutation(
             ...(params.policyPluginIds ? { policyPluginIds: params.policyPluginIds } : {}),
             ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
             ...(params.env ? { env: params.env } : {}),
+            ...(lease ? { filePath: lease.databasePath, lease } : {}),
           });
         },
         { command: params.traceCommand ?? "registry-refresh", reason: params.reason },
       );
     });
   } catch (error) {
+    lease?.assertOwned();
     params.logger?.warn?.(`Plugin registry refresh failed: ${formatErrorMessage(error)}`);
   }
+  lease?.assertOwned();
   if (params.invalidateRuntimeCache !== false) {
-    await invalidatePluginRuntimeDiscoveryAfterConfigMutation(params);
+    await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
+      ...params,
+      assertCurrent: lease ? () => lease.assertOwned() : undefined,
+    });
   }
 }
 
 export async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params: {
   logger?: PluginRegistryRefreshLogger;
+  assertCurrent?: () => void;
 }): Promise<void> {
+  let clearPluginRegistryLoadCache: typeof import("./loader.js").clearPluginRegistryLoadCache;
   try {
-    const { clearPluginRegistryLoadCache } = await import("./loader.js");
+    ({ clearPluginRegistryLoadCache } = await import("./loader.js"));
+  } catch (error) {
+    params.assertCurrent?.();
+    params.logger?.warn?.(`Plugin runtime cache invalidation failed: ${formatErrorMessage(error)}`);
+    return;
+  }
+  params.assertCurrent?.();
+  try {
     clearPluginRegistryLoadCache();
   } catch (error) {
     params.logger?.warn?.(`Plugin runtime cache invalidation failed: ${formatErrorMessage(error)}`);

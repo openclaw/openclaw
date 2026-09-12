@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
-import {
-  readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({ convergence: vi.fn() }));
@@ -17,8 +16,8 @@ import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("updater plugin commit cancellation", () => {
-  it.each(["index", "config"] as const)(
-    "refuses a cancelled %s write through the real commit owner",
+  it.each(["index", "config", "config-failed"] as const)(
+    "preserves the index and config after %s refusal through the real commit owner",
     async (effect) => {
       await withOpenClawTestState({ label: `updater-plugin-${effect}` }, async (state) => {
         // Config-write custody uses a host control store outside the profile database.
@@ -28,9 +27,10 @@ describe("updater plugin commit cancellation", () => {
         const cfg = { plugins: { enabled: false } };
         await state.writeConfig(cfg);
         const originalConfig = await fs.readFile(state.configPath, "utf8");
-        await writePersistedInstalledPluginIndexInstallRecords({}, { config: cfg, env: state.env });
+        await seedInstalledPluginIndex({}, { config: cfg, env: state.env });
         const controller = new AbortController();
-        const refusal = new Error(`initiating updater revoked before ${effect}`);
+        const refusal = new Error(`updater ${effect} refusal`);
+        const assertCurrent = () => controller.signal.throwIfAborted();
         mocks.convergence.mockImplementationOnce(async () => {
           await Promise.resolve();
           if (effect === "index") {
@@ -50,6 +50,9 @@ describe("updater plugin commit cancellation", () => {
           configSnapshot: await readConfigFileSnapshot(),
           configWriteOptions: {
             beforeCommit: () => {
+              if (effect === "config-failed") {
+                throw refusal;
+              }
               if (effect === "config") {
                 controller.abort(refusal);
               }
@@ -59,9 +62,17 @@ describe("updater plugin commit cancellation", () => {
           pluginInstallRecords: {},
           timeoutMs: 1_000,
           json: true,
-          beforePersistentEffect: () => controller.signal.throwIfAborted(),
+          assertCurrent,
         };
-        await expect(updatePluginsAfterCoreUpdate(params)).rejects.toBe(refusal);
+        const update = () => updatePluginsAfterCoreUpdate(params);
+        await expect(
+          effect === "config-failed"
+            ? withPluginLifecycleLease({ assertCurrent }, update)
+            : update(),
+        ).rejects.toBe(refusal);
+        if (effect === "config-failed") {
+          expect(controller.signal.aborted).toBe(false);
+        }
         expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
         expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
       });
