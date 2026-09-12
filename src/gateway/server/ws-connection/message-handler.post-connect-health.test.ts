@@ -43,6 +43,7 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
 } from "../../server-shared-auth-generation.js";
+import { prepareGatewayReceiverHandoff } from "../ws-receiver.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
@@ -400,6 +401,7 @@ function attachGatewayHarness(options: {
   });
   attachGatewayWsMessageHandler({
     socket,
+    prepareAuthenticatedReceive: (role) => prepareGatewayReceiverHandoff(socket, role),
     connectionWork,
     bootId: "post-connect-health-test-boot",
     upgradeReq: {

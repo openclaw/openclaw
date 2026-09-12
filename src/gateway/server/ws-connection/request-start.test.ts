@@ -3,11 +3,8 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
-import {
-  prepareGatewayReceiverHandoff,
-  raiseGatewayReceiverPayloadLimit,
-  scheduleGatewayRequestStart,
-} from "./request-start.js";
+import { prepareGatewayReceiverHandoff, raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
+import { scheduleGatewayRequestStart } from "./request-start.js";
 
 const permissions: Promise<void>[] = [];
 function requestStart(bytes = 1): Promise<void> {
@@ -149,12 +146,14 @@ describe("authenticated receiver payload limits", () => {
   it("raises the receiver and the negotiated deflate extension together after connect", () => {
     const socket = receiverSocket({ deflate: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES } });
     const handoff = prepareGatewayReceiverHandoff(socket, "operator");
-    expect(handoff).not.toBeNull();
+    expect(handoff.ok).toBe(true);
     expect(payloadLimits(socket)).toEqual({
       receiver: MAX_PREAUTH_PAYLOAD_BYTES,
       deflate: MAX_PREAUTH_PAYLOAD_BYTES,
     });
-    handoff?.();
+    if (handoff.ok) {
+      handoff.value();
+    }
     expect(payloadLimits(socket)).toEqual({
       receiver: MAX_PAYLOAD_BYTES,
       deflate: MAX_PAYLOAD_BYTES,
@@ -171,7 +170,10 @@ describe("authenticated receiver payload limits", () => {
     // A non-writable extension limit would silently keep the preauth cap on
     // compressed frames, so the handshake must fail visibly instead.
     const socket = receiverSocket({ deflate: "readonly" });
-    expect(prepareGatewayReceiverHandoff(socket, "operator")).toBeNull();
+    expect(prepareGatewayReceiverHandoff(socket, "operator")).toMatchObject({
+      ok: false,
+      error: { cause: "unsupported-websocket-receiver" },
+    });
     expect(raiseGatewayReceiverPayloadLimit(socket, 1_024)).toBe(false);
     expect(payloadLimits(socket).receiver).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
   });
