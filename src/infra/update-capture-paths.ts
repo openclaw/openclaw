@@ -17,6 +17,9 @@ function hasPrivacyMarker(directory: string): boolean {
   const markerPath = path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER);
   let before: fs.BigIntStats;
   try {
+    if (!fs.lstatSync(directory).isDirectory()) {
+      return false;
+    }
     before = fs.lstatSync(markerPath, { bigint: true });
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {

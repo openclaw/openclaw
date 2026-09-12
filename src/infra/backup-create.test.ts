@@ -3350,9 +3350,17 @@ describe("createBackupArchive", () => {
       directory: false,
       internal: true,
     },
+    {
+      label: "cyclic relative",
+      relative: true,
+      targetExists: false,
+      directory: false,
+      internal: true,
+      cyclic: true,
+    },
   ])(
     "backupCreateCommand preserves and reports $label links through backupRestoreCommand",
-    async ({ relative, targetExists, directory, internal }) => {
+    async ({ relative, targetExists, directory, internal, cyclic }) => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-backup-symbolic-link-", scenario: "minimal" },
         async (state) => {
@@ -3367,6 +3375,9 @@ describe("createBackupArchive", () => {
           }
           const linkpath = relative ? path.relative(state.stateDir, targetPath) : targetPath;
           await fs.symlink(linkpath, state.statePath("ordinary-link"));
+          if (cyclic) {
+            await fs.symlink("ordinary-link", targetPath);
+          }
           const runtime = createTestRuntime();
           const result = await backupCreateCommand(runtime, {
             output: state.path("backup.tar.gz"),
@@ -3392,7 +3403,11 @@ describe("createBackupArchive", () => {
           await backupRestoreCommand(runtime, { archive: result.archivePath, target: restored });
           const restoredLink = path.join(restored, link.path);
           expect(await fs.readlink(restoredLink)).toBe(linkpath);
-          if (internal) {
+          if (cyclic) {
+            expect(await fs.readlink(path.join(path.dirname(restoredLink), "target.txt"))).toBe(
+              "ordinary-link",
+            );
+          } else if (internal) {
             expect(await fs.readFile(restoredLink, "utf8")).toBe("target\n");
           } else if (!targetExists) {
             await expect(fs.stat(restoredLink)).rejects.toMatchObject({ code: "ENOENT" });
