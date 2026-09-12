@@ -76,9 +76,18 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
 /** Find a case-insensitive Windows path without changing offsets in the original string. */
 function indexOfWindowsPath(input: string, home: string, cursor: number): number {
   const foldedHome = lowercasePreservingWhitespace(home);
-  // Folding the whole display can expand Unicode and shift indices. Fixed-width slices keep
-  // replacement offsets anchored to the original string while retaining Windows casing rules.
-  for (let index = cursor; index <= input.length - home.length; index += 1) {
+  // Resolved Windows homes begin with a drive or UNC prefix. Their first backslash
+  // anchors candidates without folding the input and shifting Unicode offsets.
+  const separatorOffset = home.indexOf("\\");
+  for (
+    let separator = input.indexOf("\\", cursor + separatorOffset);
+    separator !== -1;
+    separator = input.indexOf("\\", separator + 1)
+  ) {
+    const index = separator - separatorOffset;
+    if (index > input.length - home.length) {
+      break;
+    }
     if (lowercasePreservingWhitespace(input.slice(index, index + home.length)) === foldedHome) {
       return index;
     }
