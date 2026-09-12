@@ -35,6 +35,7 @@ import {
   rewriteLegacyAuditBackupCheckpoints,
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
+import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
 
 type SqliteBackupAsset = {
   sourcePath: string;
@@ -358,6 +359,8 @@ export async function createBackupSqliteSnapshotPlan(params: {
     const genericGroup = genericGroups.get(archiveSourcePath);
     const sourceDatabasePath =
       canonicalSource?.sourcePath ?? genericGroup?.sourcePath ?? archiveSourcePath;
+    assertNotUpdateCapturePath(archiveSourcePath, params.inventory.stateDir);
+    assertNotUpdateCapturePath(sourceDatabasePath, params.inventory.stateDir);
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
       const capture = () =>

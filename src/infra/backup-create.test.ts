@@ -3939,7 +3939,7 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("sanitizes every in-state symlink and hardlink alias of a canonical agent SQLite DB", async () => {
+  it.each([false, true])("backupCreateCommand: private agent DB=%s", async (privateTarget) => {
     if (process.platform === "win32") {
       return;
     }
@@ -3954,10 +3954,18 @@ describe("createBackupArchive", () => {
         const outputDir = state.path("backups");
         const extractDir = state.path("extract");
         const agentDir = state.statePath("agents", "main", "agent");
-        const backingDbPath = path.join(agentDir, "backing-agent.sqlite");
+        const backingDir = privateTarget ? state.path("private-agent-db") : agentDir;
+        const backingDbPath = path.join(backingDir, "backing-agent.sqlite");
         const linkedDbPath = path.join(agentDir, "openclaw-agent.sqlite");
         const hardlinkedDbPath = state.statePath("plugins", "dedicated", "._agent-alias.sqlite");
         await fs.mkdir(agentDir, { recursive: true });
+        await fs.mkdir(backingDir, { recursive: true });
+        if (privateTarget) {
+          await fs.writeFile(
+            path.join(backingDir, ".openclaw-private-update-capture"),
+            "openclaw-private-update-capture-v1\n",
+          );
+        }
         await fs.mkdir(path.dirname(hardlinkedDbPath), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
         await fs.mkdir(extractDir, { recursive: true });
@@ -3993,14 +4001,28 @@ describe("createBackupArchive", () => {
         expect((await fs.stat(hardlinkedDbPath)).nlink).toBeGreaterThan(1);
         expect((await fs.stat(`${backingDbPath}-wal`)).size).toBeGreaterThan(0);
         await expect(fs.stat(`${linkedDbPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(`${hardlinkedDbPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(`${hardlinkedDbPath}-wal`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
 
         try {
-          const result = await createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 4, 9, 8, 34, 40),
-          });
+          const create = () =>
+            backupCreateCommand(createTestRuntime(), {
+              output: outputDir,
+              includeWorkspace: false,
+              verify: true,
+            });
+          if (privateTarget) {
+            await expect(create()).rejects.toThrow(
+              "Private update captures are excluded from backups and support exports.",
+            );
+            expect(await fs.readdir(outputDir)).toEqual([]);
+            expect(db.prepare("SELECT value FROM durable_state WHERE id = 1").get()).toEqual({
+              value: "committed-in-wal",
+            });
+            return;
+          }
+          const result = await create();
           const entries = await listArchiveEntryDetails(result.archivePath);
           const archivedDbEntries = entries.filter(
             (entry) =>
