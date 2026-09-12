@@ -2873,7 +2873,6 @@ src/gateway/worker-environments/service-validation.ts	3
 src/gateway/worker-environments/service.ts	1
 src/gateway/worker-environments/state.ts	1
 src/gateway/worker-environments/store.ts	9
-src/gateway/worker-environments/transcript-commit.ts	6
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
 src/gateway/worker-environments/workspace-accepted-publication.ts	1

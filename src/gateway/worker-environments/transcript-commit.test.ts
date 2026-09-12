@@ -8,6 +8,7 @@ import type {
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { findSourceImportBackedges } from "../../../test/helpers/source-import-closure.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -160,6 +161,14 @@ function requireAppendableWorkerMessage(
   }
   return message as Parameters<SessionManager["appendMessage"]>[0];
 }
+
+it("keeps worker transcript admission independent of session execution", () => {
+  expect(
+    findSourceImportBackedges("src/gateway/worker-environments/transcript-commit.ts", [
+      "src/agents/sessions/session-manager.ts",
+    ]),
+  ).toEqual([]);
+});
 
 describe("worker transcript commit application", () => {
   let root: string;
@@ -486,6 +495,59 @@ describe("worker transcript commit application", () => {
     expect(reopened.getLeafId()).toBe(first.result.newLeafId);
   });
 
+  it.each(
+    (["user", "assistant", "toolResult"] as const).flatMap((role) =>
+      [false, true].map((persistedPrefix) => ({ role, persistedPrefix })),
+    ),
+  )(
+    "rejects a role-redacted $role suffix with persisted prefix $persistedPrefix",
+    async ({ role, persistedPrefix }) => {
+      const prefixMessage = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "Already persisted worker input" }],
+        timestamp: 50,
+      };
+      const request = createRequest({
+        messages: persistedPrefix ? [prefixMessage, ...createTurnMessages()] : createTurnMessages(),
+      });
+      const manager = SessionManager.open(sessionTarget);
+      if (persistedPrefix) {
+        const persistedMessage: Parameters<SessionManager["appendMessage"]>[0] & {
+          idempotencyKey: string;
+        } = {
+          ...prefixMessage,
+          idempotencyKey: messageIdempotencyKey(request.seq, 0),
+        };
+        manager.appendMessage(persistedMessage);
+      }
+      const entriesBefore = structuredClone(manager.getEntries());
+      const leafBefore = manager.getLeafId();
+      const entryBefore = structuredClone(
+        loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath }),
+      );
+      const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+      unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+      cfg = { ...cfg, logging: { redactPatterns: [`^${role}$`] } };
+
+      // Check durable state for both thrown errors and returned refusals.
+      const [settled] = await Promise.allSettled([
+        committer.commit({ ...ADMITTED_OWNER, request }),
+      ]);
+
+      const reopened = SessionManager.open(sessionTarget);
+      expect(reopened.getEntries()).toEqual(entriesBefore);
+      expect(reopened.getLeafId()).toBe(leafBefore);
+      expect(loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath })).toEqual(
+        entryBefore,
+      );
+      expect(updates).toEqual([]);
+      expect(settled).toEqual({
+        status: "fulfilled",
+        value: { ok: false, reason: "invalid-batch" },
+      });
+    },
+  );
+
   it("admits an overlapping agent input without invalidating the active worker transcript", async () => {
     setRuntimeConfigSnapshot(cfg);
     const admit = (runId: string, text: string) =>
@@ -713,7 +775,14 @@ describe("worker transcript commit application", () => {
     });
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
-    cfg = { ...cfg };
+    const entriesBeforeReplay = structuredClone(afterInterruption.getEntries());
+    const sessionEntryBeforeReplay = structuredClone(
+      loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath }),
+    );
+    cfg = {
+      ...cfg,
+      logging: { redactPatterns: ["^user$", "^assistant$", "^toolResult$"] },
+    };
 
     let authorityChecks = 0;
     await expect(
@@ -738,7 +807,11 @@ describe("worker transcript commit application", () => {
       },
     });
     const reopened = SessionManager.open(sessionTarget);
+    expect(reopened.getEntries()).toEqual(entriesBeforeReplay);
     expect(reopened.getBranch().map((entry) => entry.id)).toEqual([baseLeafId, localLeafId]);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath })).toEqual(
+      sessionEntryBeforeReplay,
+    );
     if (!replay.ok) {
       throw new Error(`expected interrupted commit replay, received ${replay.reason}`);
     }
