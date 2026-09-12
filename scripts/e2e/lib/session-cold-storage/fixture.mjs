@@ -5,9 +5,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
-
-const execute = promisify(execFile);
 
 // Use the supported legacy import boundary; never backdate the live database.
 export async function seedColdStorageFixture({ stateDir, workspaceDir }) {
@@ -60,6 +57,8 @@ export async function seedColdStorageFixture({ stateDir, workspaceDir }) {
       `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
       { flag: "wx" },
     );
+    // Doctor imports file mutation time, not timestamps inside messages.
+    await fs.utimes(sessionFile, new Date(updatedAt), new Date(updatedAt));
     store[sessionKey] = { sessionId, sessionFile, updatedAt, label };
     sessions.push({ sessionId, sessionKey, label, nonce, ageDays });
   }
@@ -67,20 +66,29 @@ export async function seedColdStorageFixture({ stateDir, workspaceDir }) {
   return sessions;
 }
 
-export async function runCli(context, args, { timeoutMs = 120_000 } = {}) {
-  try {
-    const result = await execute(process.execPath, [context.entry, ...args], {
-      env: context.env,
-      timeout: timeoutMs,
-      maxBuffer: 4 * 1024 * 1024,
-      encoding: "utf8",
-    });
-    return result.stdout;
-  } catch (error) {
-    // execFile's default message includes argv, including the Gateway token.
-    // eslint-disable-next-line preserve-caught-error -- Drop credential-bearing command arguments.
-    throw new Error(`OpenClaw ${args[0]} failed: ${error.stderr || error.code || "unknown error"}`);
-  }
+export function runCli(context, args, { timeoutMs = 120_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      [context.entry, ...args],
+      {
+        env: context.env,
+        timeout: timeoutMs,
+        maxBuffer: 4 * 1024 * 1024,
+        encoding: "utf8",
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          // execFile's message and command contain the Gateway token; retain only diagnostics.
+          reject(
+            new Error(`OpenClaw ${args[0]} failed: ${stderr || error.code || "unknown error"}`),
+          );
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+  });
 }
 
 export async function gatewayCall(context, method, params, { timeoutMs = 30_000 } = {}) {
