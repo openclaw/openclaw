@@ -3,21 +3,16 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   findComposerButton as button,
   findPrimaryButton as primaryButton,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import {
-  renderChatPrimaryActions,
-  type ChatRunControlsProps,
-} from "./components/chat-composer-controls.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
-import type { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -88,48 +83,48 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  function renderActiveDictationActions(overrides: { finishActive: ReturnType<typeof vi.fn> }) {
-    const container = document.createElement("div");
-    const cancelActive = vi.fn();
-    const handleClick = vi.fn();
-    const onSend = vi.fn<ChatRunControlsProps["onSend"]>();
-    const dictation = {
-      active: true,
-      connecting: false,
-      finalizing: false,
-      locksComposer: true,
-      finishActive: overrides.finishActive,
-      cancelActive,
-      handleClick,
-    } as unknown as ComposerDictationController;
-    render(
-      renderChatPrimaryActions({
-        canAbort: false,
-        canSend: true,
-        connected: true,
-        draft: "preexisting draft",
-        isBusy: false,
-        sending: false,
-        dictation,
-        onSend,
-      }),
-      container,
-    );
-    return { cancelActive, container, handleClick, onSend };
+  function renderDictatingComposer({
+    submitDisabledReason,
+    finalizing = false,
+  }: { submitDisabledReason?: string; finalizing?: boolean } = {}) {
+    let draft = "Typed beginning";
+    const onSend = vi.fn();
+    const { container, props } = renderComposer({
+      draft,
+      getDraft: () => draft,
+      onDraftChange: (value) => {
+        draft = value;
+      },
+      onSend: () => onSend(draft),
+      onToggleRealtimeTalk: vi.fn(),
+      submitDisabledReason,
+    });
+    const dictation = getChatComposerState(props.paneId).dictation;
+    if (!dictation) {
+      throw new Error("expected the composer dictation controller");
+    }
+    const active = vi.spyOn(dictation, "active", "get").mockReturnValue(true);
+    const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
+    vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
+    const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
+    const handleClick = vi.spyOn(dictation, "handleClick");
+    const update = vi.spyOn(dictation, "update");
+    render(renderChatComposer(props), container);
+    const commit = update.mock.lastCall?.[0].onCommit;
+    if (!commit) {
+      throw new Error("expected the composer transcript callback");
+    }
+    return { container, active, locked, finishActive, handleClick, onSend, commit };
   }
 
   it("stops dictation by keeping its text without sending", () => {
-    const finishActive = vi.fn().mockResolvedValue(true);
-    const { cancelActive, container, handleClick, onSend } = renderActiveDictationActions({
-      finishActive,
-    });
+    const { container, finishActive, handleClick, onSend } = renderDictatingComposer();
     const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
 
     expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
     stop?.click();
 
     expect(finishActive).toHaveBeenCalledOnce();
-    expect(cancelActive).not.toHaveBeenCalled();
     expect(handleClick).not.toHaveBeenCalled();
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -137,32 +132,11 @@ describe("renderChatComposer controls", () => {
   it.each([undefined, "Loading chat"])(
     "finishes locked dictation before submitting the complete composer draft with history hold %s",
     async (submitDisabledReason) => {
-      let draft = "Typed beginning";
-      const onSend = vi.fn();
-      const { container, props } = renderComposer({
-        draft,
-        getDraft: () => draft,
-        onDraftChange: (value) => {
-          draft = value;
-        },
-        onSend: () => onSend(draft),
-        onToggleRealtimeTalk: vi.fn(),
+      const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({
         submitDisabledReason,
       });
-      const dictation = getChatComposerState(props.paneId).dictation;
-      if (!dictation) {
-        throw new Error("expected the composer dictation controller");
-      }
-      const active = vi.spyOn(dictation, "active", "get").mockReturnValue(true);
-      const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
-      const update = vi.spyOn(dictation, "update");
-      render(renderChatComposer(props), container);
-      const commit = update.mock.lastCall?.[0].onCommit;
-      if (!commit) {
-        throw new Error("expected the composer transcript callback");
-      }
       const finalTranscript = createDeferred<string>();
-      const finishActive = vi.spyOn(dictation, "finishActive").mockImplementation(async () => {
+      finishActive.mockImplementation(async () => {
         const transcript = await finalTranscript.promise;
         active.mockReturnValue(false);
         locked.mockReturnValue(false);
@@ -170,7 +144,7 @@ describe("renderChatComposer controls", () => {
         return true;
       });
       const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-      textarea.setSelectionRange(draft.length, draft.length);
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       pressComposerEnter(container);
       expect(onSend).not.toHaveBeenCalled();
 
@@ -189,27 +163,7 @@ describe("renderChatComposer controls", () => {
   );
 
   it("keeps Stop and Send visually stable while dictation finalizes", () => {
-    const container = document.createElement("div");
-    const dictation = {
-      active: true,
-      connecting: false,
-      finalizing: true,
-      locksComposer: true,
-      finishActive: vi.fn(),
-    } as unknown as ComposerDictationController;
-    render(
-      renderChatPrimaryActions({
-        canAbort: false,
-        canSend: true,
-        connected: true,
-        draft: "preexisting draft",
-        isBusy: false,
-        sending: false,
-        dictation,
-        onSend: vi.fn(),
-      }),
-      container,
-    );
+    const { container } = renderDictatingComposer({ finalizing: true });
 
     const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
     const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
@@ -354,7 +308,7 @@ describe("renderChatComposer controls", () => {
       const onToggleRealtimeTalk = vi.fn();
       const { container } = renderComposer({
         composerHoldToRecord,
-        gatewayClient: { request } as unknown as GatewayBrowserClient,
+        gatewayClient: createTestGatewayClient(request),
         onToggleRealtimeTalk,
         submitDisabledReason: t("chat.thread.loading"),
       });

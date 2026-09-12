@@ -13,7 +13,16 @@ import {
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
-import { applyChatCacheSnapshot } from "./session-message-cache.ts";
+import { applyChatCacheSnapshot, type ChatSessionSnapshot } from "./session-message-cache.ts";
+
+function cachedTranscript(sessionId: string, displayedLeafEntryId: string): ChatSessionSnapshot {
+  return {
+    messages: [],
+    sessionId,
+    displayedLeafEntryId,
+    pagination: { hasMore: false, completeSnapshot: true },
+  };
+}
 
 beforeEach(() => {
   installOutboxBrowserStorage();
@@ -228,12 +237,7 @@ it.each([false, true])(
         "chat.send": { status: "started" },
       },
     });
-    applyChatCacheSnapshot(host, {
-      messages: [],
-      sessionId: "restored-session",
-      displayedLeafEntryId: "restored-leaf",
-      pagination: { hasMore: false, completeSnapshot: true },
-    });
+    applyChatCacheSnapshot(host, cachedTranscript("restored-session", "restored-leaf"));
     const loading = loadChatHistory(host, { startup: true, deferBranches: true });
     const sending = handleSendChat(host);
     try {
@@ -377,12 +381,7 @@ it.each([false, true])(
         "chat.send": { status: "started", messageSeq: 1 },
       },
     });
-    applyChatCacheSnapshot(host, {
-      messages: [],
-      sessionId: "cached-session",
-      displayedLeafEntryId: "cached-leaf",
-      pagination: { hasMore: false, completeSnapshot: true },
-    });
+    applyChatCacheSnapshot(host, cachedTranscript("cached-session", "cached-leaf"));
     const loading = loadChatHistory(host, { startup: true, deferBranches: true });
     const sending = [handleSendChat(host)];
     try {
@@ -458,12 +457,7 @@ it.each(["steer", "interrupt", "queue"] as const)(
         "chat.send": { status: "started", messageSeq: 1 },
       },
     });
-    applyChatCacheSnapshot(host, {
-      messages: [],
-      sessionId: "current-session",
-      displayedLeafEntryId: "cached-leaf",
-      pagination: { hasMore: false, completeSnapshot: true },
-    });
+    applyChatCacheSnapshot(host, cachedTranscript("current-session", "cached-leaf"));
     const loading = loadChatHistory(host, { startup: true, deferBranches: true });
     const sending = handleSendChat(host, undefined, { followUpMode });
     try {
