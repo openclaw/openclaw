@@ -3,6 +3,7 @@
 
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic, type GatewayAgentOwnership } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -12,7 +13,7 @@ import {
   recordAgentDatabaseAdmissions,
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
-import { readStatusSessionStores } from "../status/session-stores.js";
+import { readStatusSessionStores, STATUS_RECENT_SESSION_LIMIT } from "../status/session-stores.js";
 
 export type AgentLocalStatus = {
   id: string;
@@ -27,7 +28,7 @@ export type AgentLocalStatus = {
   lastActiveAgeMs: number | null;
 };
 
-type AgentLocalStatusesResult = {
+export type AgentLocalStatusesResult = {
   defaultId: string | null;
   ownership: GatewayAgentOwnership;
   selectionRequired: boolean;
@@ -37,16 +38,24 @@ type AgentLocalStatusesResult = {
 };
 
 /** Returns per-agent local workspace, bootstrap, session count, and last activity status. */
-export async function getAgentLocalStatuses(
-  cfg: OpenClawConfig,
-): Promise<AgentLocalStatusesResult> {
+export async function collectStatusLocalSnapshot(cfg: OpenClawConfig) {
   if (!hasAgentDatabaseAdmissions()) {
-    recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
+    recordAgentDatabaseAdmissions(
+      await measureCliCommandStartup(
+        "status.agent-admission",
+        () => evaluateAgentDatabaseAdmissions(cfg),
+        { config: cfg },
+      ),
+    );
   }
   const agentList = listGatewayAgentsBasic(cfg);
   const now = Date.now();
 
-  const sessionStores = readStatusSessionStores(cfg, agentList.agents, 1);
+  const sessionStores = await measureCliCommandStartup(
+    "status.session-stores",
+    () => readStatusSessionStores(cfg, agentList.agents, STATUS_RECENT_SESSION_LIMIT),
+    { config: cfg },
+  );
   const statuses: AgentLocalStatus[] = [];
   for (const { agent, path: sessionsPath, count, recent } of sessionStores.byAgent) {
     const agentId = agent.id;
@@ -82,7 +91,7 @@ export async function getAgentLocalStatuses(
   }
 
   const bootstrapPendingCount = statuses.reduce((sum, s) => sum + (s.bootstrapPending ? 1 : 0), 0);
-  return {
+  const agentStatus: AgentLocalStatusesResult = {
     // The gateway keeps a projected first id for wire compatibility. Local status must
     // preserve the selection state so read-only consumers never treat that id as an owner.
     defaultId: agentList.selectionRequired ? null : agentList.defaultId,
@@ -92,4 +101,5 @@ export async function getAgentLocalStatuses(
     totalSessions: sessionStores.count,
     bootstrapPendingCount,
   };
+  return { agentStatus, sessionStores };
 }

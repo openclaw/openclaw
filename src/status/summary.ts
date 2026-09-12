@@ -48,10 +48,12 @@ import {
 } from "../tasks/task-registry.audit.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { readStatusSessionStores } from "./session-stores.js";
+import {
+  readStatusSessionStores,
+  STATUS_RECENT_SESSION_LIMIT,
+  type StatusSessionStores,
+} from "./session-stores.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
-
-const RECENT_SESSION_LIMIT = 10;
 
 const channelSummaryModuleLoader = createLazyImportLoader(
   () => import("../infra/channel-summary.js"),
@@ -370,6 +372,7 @@ export async function getStatusSummary(
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
     hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
+    sessionStores?: StatusSessionStores;
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -488,11 +491,13 @@ export async function getStatusSummary(
 
   const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
 
-  const sessionStores = readStatusSessionStores(
-    cfg,
-    agentList.agents,
-    includeSensitive ? RECENT_SESSION_LIMIT : 0,
-  );
+  const sessionStores =
+    options.sessionStores ??
+    readStatusSessionStores(
+      cfg,
+      agentList.agents,
+      includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
+    );
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
@@ -509,7 +514,7 @@ export async function getStatusSummary(
     ? await sessionDetails.buildSessionRows(
         sortAndLimitBy(
           sessionStores.recent,
-          RECENT_SESSION_LIMIT,
+          STATUS_RECENT_SESSION_LIMIT,
           compareSessionCandidatesByUpdatedAt,
         ),
       )

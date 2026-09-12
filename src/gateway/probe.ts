@@ -19,6 +19,7 @@ import {
 } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import type { StatusSummary } from "../status/types.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   GatewayClient,
@@ -78,7 +79,7 @@ export type GatewayProbeResult = {
   auth: GatewayProbeAuthSummary;
   server?: GatewayProbeServerSummary;
   health: unknown;
-  status: unknown;
+  status: Partial<StatusSummary> | null;
   presence: SystemPresence[] | null;
   configSnapshot: unknown;
 };
@@ -406,7 +407,7 @@ export async function probeGateway(opts: {
       missingScopeErrorDetails?: MissingScopeErrorDetails;
       verifiedRead?: boolean;
       health: unknown;
-      status: unknown;
+      status: Partial<StatusSummary> | null;
       presence: SystemPresence[] | null;
       configSnapshot: unknown;
     }) => {
@@ -555,7 +556,7 @@ export async function probeGateway(opts: {
             }
             const [health, status, presence, configSnapshot] = await Promise.all([
               client.request("health"),
-              client.request("status"),
+              client.request<Partial<StatusSummary>>("status"),
               client.request("system-presence"),
               client.request("config.get", {}),
             ]);

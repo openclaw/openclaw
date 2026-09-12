@@ -24,6 +24,7 @@ import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
+import type { StatusSummary } from "../status/types.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
 
@@ -214,7 +215,7 @@ async function applyLocalStatusRpcFallback(params: {
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
   const status = await loadGatewayCallModule()
     .then(({ callGateway }) =>
-      callGateway({
+      callGateway<Partial<StatusSummary>>({
         config: params.cfg,
         configPath: params.configPath,
         method: "status",

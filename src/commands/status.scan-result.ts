@@ -19,6 +19,7 @@ export type StatusScanResult = Omit<
   | "gatewaySnapshot"
   | "channelsStatus"
   | "runtimeDegradation"
+  | "sessionStores"
 > &
   StatusScanGatewayResult & {
     summary: Awaited<ReturnType<typeof getStatusSummaryFn>>;

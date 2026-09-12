@@ -299,4 +299,30 @@ describe("collectStatusScanOverview", () => {
     });
     expect(result.runtimeDegradation).toBeNull();
   });
+
+  it("reuses runtime degradation from a successful fallback probe without another status RPC", async () => {
+    const bootstrap = await mocks.createStatusScanCoreBootstrap();
+    const gatewaySnapshot = await bootstrap.gatewayProbePromise;
+    const status = {
+      degradedSecretOwners: [],
+      degradedPlugins: [],
+      startupMigrationWarning: "fallback warning",
+    };
+    mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
+      ...bootstrap,
+      gatewayProbePromise: Promise.resolve({
+        ...gatewaySnapshot,
+        gatewayProbe: { ok: true, status },
+      }),
+    });
+    const result = await collectStatusScanOverview({
+      commandName: "status",
+      opts: {},
+      showSecrets: false,
+      includeChannelsData: false,
+    });
+    expect(result.runtimeDegradation?.startupMigrationWarning).toBe("fallback warning");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(result.cfg).toEqual({ session: {} });
+  });
 });

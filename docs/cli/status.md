@@ -57,6 +57,20 @@ and the last update run, or run `openclaw update` again. `openclaw status --deep
 also fetches for that check; it does not change the ledger. See
 [Release channels](/install/development-channels#checking-current-status).
 
+## Status timing
+
+Use the existing diagnostic timeline to locate time spent outside Gateway RPCs:
+
+```bash
+OPENCLAW_DIAGNOSTICS=timeline \
+OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=/tmp/openclaw-status-timeline.jsonl \
+  openclaw status --json
+```
+
+The timeline includes configuration and secret resolution, agent admission,
+local session reads, Gateway probes, and summary collection. Durations include
+waiting; parallel stages overlap and should not be added together.
+
 ## Skills diagnosis
 
 `status --all` reports eligible skills and skills with missing prerequisites for
