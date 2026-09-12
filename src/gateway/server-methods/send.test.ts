@@ -877,6 +877,7 @@ describe("gateway send mirroring", () => {
   it("admits a V2-only action adapter to the real Gateway dispatcher boundary", async () => {
     const plugin = registerMessageActionPlugin({ id: "discord", registrySuffix: "v2-only" });
     plugin.actions = {
+      describeMessageTool: () => ({ actions: ["channel-info"] }),
       conversationReadAuthority: { version: 2, handleAction: async () => jsonResult({ ok: true }) },
       supportsAction: ({ action }) => action === "channel-info",
     };
