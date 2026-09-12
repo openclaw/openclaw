@@ -4,6 +4,11 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
+import {
+  projectProviderCatalogSnapshotRows,
+  projectUpstreamProviderCatalogSnapshot,
+  type ProviderCatalogSnapshot,
+} from "./provider-catalog-snapshot.internal.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
 
 function buildModel(id: string): ModelDefinitionConfig {
@@ -20,6 +25,33 @@ function buildModel(id: string): ModelDefinitionConfig {
 
 describe("live provider catalog projection", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
+
+  it("preserves preview lifecycle when projecting OpenCode metadata", () => {
+    const model = buildModel("preview-model");
+    const seed: ProviderCatalogSnapshot = new Map([[model.id, { model, status: "preview" }]]);
+    const snapshot = projectUpstreamProviderCatalogSnapshot({
+      providerId: "opencode-go",
+      provider: {
+        id: "opencode-go",
+        api: "https://opencode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+        models: {
+          [model.id]: {
+            id: model.id,
+            limit: { context: model.contextWindow, output: model.maxTokens },
+          },
+        },
+      },
+      seed,
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+      defaultBaseUrl: "https://opencode.ai/zen/go/v1",
+    });
+
+    expect(snapshot.get(model.id)).toMatchObject({ status: "preview" });
+    expect(
+      projectProviderCatalogSnapshotRows([{ id: model.id, object: "model" }], snapshot),
+    ).toEqual([]);
+  });
 
   it("keeps cache admission and fallback shared", async () => {
     const release = vi.fn(async () => undefined);
