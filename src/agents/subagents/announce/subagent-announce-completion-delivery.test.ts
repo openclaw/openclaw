@@ -238,6 +238,37 @@ describe("resolveMessagingToolDeliveryEvidence", () => {
     expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
+  it("preserves confirmed source progress when final verification times out", async () => {
+    const resolveEquivalentTarget = vi.fn(
+      async () => await new Promise<string | undefined>(() => {}),
+    );
+
+    await expect(
+      resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "test-requester",
+        result: {
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [
+            {
+              ...result.messagingToolSentTargets[0],
+              to: deliveryTarget.to,
+              sourceReplyFinal: false,
+            },
+            { ...result.messagingToolSentTargets[0], to: "D000000002" },
+          ],
+        },
+        deliveryTarget,
+        timeoutMs: 25,
+        resolveEquivalentTarget,
+      }),
+    ).resolves.toEqual({
+      hasFinalMessagingToolDelivery: false,
+      hasMessagingToolDelivery: true,
+    });
+    expect(resolveEquivalentTarget).toHaveBeenCalledOnce();
+  });
+
   it("cancels losing recipient lookups after a successful match", async () => {
     let pendingLookupCancelled = false;
     const resolveEquivalentTarget = vi.fn(

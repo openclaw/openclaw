@@ -56,6 +56,7 @@ import {
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   enqueueClaimedSessionDelivery: vi.fn((_payload: unknown, _leaseMs: number) => ({
@@ -1363,6 +1364,72 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
+  it("does not direct-fallback after confirmed source progress outlives final verification", async () => {
+    const resolveStalled = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        if (!signal || signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return null;
+    });
+    registerDirectTargetTestChannel("slack", resolveStalled);
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child done" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "user:U123",
+            sourceReplyFinal: false,
+          },
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "D000000002",
+            sourceReplyFinal: true,
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+      getRuntimeConfig: () =>
+        ({
+          session: { dmScope: "main" },
+          agents: { defaults: { subagents: { announceTimeoutMs: 25 } } },
+        }) as never,
+      sendMessage,
+    });
+
+    const result = await sendSubagentAnnounceDirectly({
+      requesterSessionKey: "agent:main:main",
+      targetRequesterSessionKey: "agent:main:main",
+      triggerMessage: "child done",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-progress-timeout-no-fallback",
+      directOrigin: { channel: "slack", accountId: "acct-1", to: "user:U123" },
+      requesterSessionOrigin: { channel: "slack", accountId: "acct-1", to: "user:U123" },
+      requesterIsSubagent: false,
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceTool: "subagent_announce",
+    });
+
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(resolveStalled).toHaveBeenCalledOnce();
+    expect(resolveStalled.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+  });
+
   it("uses an active requester queue as the completion handoff when message-tool delivery is not required", async () => {
     const callGateway = createGatewayMock();
     const transcript = await createRequesterTranscriptFixture("requester-session-1");

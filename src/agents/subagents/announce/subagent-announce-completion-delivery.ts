@@ -407,14 +407,23 @@ export async function resolveMessagingToolDeliveryEvidence(params: {
   const signal = params.signal
     ? AbortSignal.any([params.signal, verificationDeadline.signal])
     : verificationDeadline.signal;
-  const noDelivery = {
+  const noDelivery: {
+    hasFinalMessagingToolDelivery: boolean;
+    hasMessagingToolDelivery: boolean;
+  } = {
     hasFinalMessagingToolDelivery: false,
     hasMessagingToolDelivery: false,
-  } as const;
+  };
+  let confirmedMessagingToolDelivery = false;
   const verificationAborted = new Promise<typeof noDelivery>((resolve) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
-      resolve(noDelivery);
+      resolve({
+        ...noDelivery,
+        // A source progress receipt is independently confirmed even when
+        // final-reply verification is still waiting on another target.
+        hasMessagingToolDelivery: confirmedMessagingToolDelivery,
+      });
     };
     if (signal.aborted) {
       onAbort();
@@ -442,6 +451,14 @@ export async function resolveMessagingToolDeliveryEvidence(params: {
             deliveryTarget,
           ));
       const matchOptions = { resolveEquivalentTarget: equivalentTargetResolver, signal };
+      // Capture exact or aggregate evidence before provider-native final
+      // verification can stall. This deliberately omits a resolver so an
+      // unverified native target cannot be credited as delivered.
+      confirmedMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
+        params.result,
+        params.deliveryTarget,
+        { signal },
+      );
       const hasFinalMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
         params.result,
         params.deliveryTarget,
@@ -451,6 +468,7 @@ export async function resolveMessagingToolDeliveryEvidence(params: {
         hasFinalMessagingToolDelivery,
         hasMessagingToolDelivery:
           hasFinalMessagingToolDelivery ||
+          confirmedMessagingToolDelivery ||
           (await hasMessagingToolDeliveryToSource(
             params.result,
             params.deliveryTarget,

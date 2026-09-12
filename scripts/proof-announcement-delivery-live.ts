@@ -27,7 +27,9 @@ async function waitFor(predicate: () => boolean, description: string, timeoutMs 
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for ${description}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 1));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
   }
 }
 
@@ -86,7 +88,9 @@ type HttpHandler = (request: IncomingMessage, response: ServerResponse) => void;
 
 async function startServer(handler: HttpHandler) {
   const server = createServer(handler);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address() as AddressInfo;
   return {
     baseUrl: `http://127.0.0.1:${address.port}/api/`,
@@ -171,7 +175,9 @@ async function runMixedLookupCase(
   let lookupRequests = 0;
   let matchingLookupCompleted = false;
   let stalledLookupStarted = false;
-  let stalledLookupCancelled = false;
+  let stalledLookupSocketOpenBeforeMatch = false;
+  let stalledLookupSocketClosed = false;
+  let stalledLookupSocket: NonNullable<ServerResponse["socket"]> | undefined;
   const mixedServer = await startServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -180,6 +186,9 @@ async function runMixedLookupCase(
       const requestText = `${request.url ?? ""} ${Buffer.concat(chunks).toString()}`;
       if (requestText.includes(matchingTarget)) {
         setTimeout(() => {
+          stalledLookupSocketOpenBeforeMatch = Boolean(
+            stalledLookupSocket && !stalledLookupSocket.destroyed,
+          );
           matchingLookupCompleted = true;
           response.writeHead(200, { "content-type": "application/json" });
           response.end(
@@ -193,8 +202,13 @@ async function runMixedLookupCase(
       }
       if (requestText.includes(stalledTarget)) {
         stalledLookupStarted = true;
-        request.on("close", () => {
-          stalledLookupCancelled = true;
+        const socket = response.socket;
+        if (!socket) {
+          throw new Error(`${label} stalled lookup has no server socket`);
+        }
+        stalledLookupSocket = socket;
+        socket.once("close", () => {
+          stalledLookupSocketClosed = true;
         });
         return;
       }
@@ -207,14 +221,15 @@ async function runMixedLookupCase(
   const fallbackBefore = fallbackSendCount;
   try {
     const mixed = await announce(origin, `proof:144947:mixed:${label}`);
-    await waitFor(() => stalledLookupCancelled, `${label} stalled lookup cancellation`);
+    await waitFor(() => stalledLookupSocketClosed, `${label} stalled lookup socket close`);
     assert(mixed.delivered, `${label} mixed lookup was not delivered`);
     assert(lookupRequests === 2, `${label} did not make two native lookups`);
     assert(matchingLookupCompleted, `${label} matching lookup did not complete`);
     assert(stalledLookupStarted, `${label} stalled lookup did not start`);
+    assert(stalledLookupSocketOpenBeforeMatch, `${label} socket closed before matching settled`);
     assert(fallbackSendCount === fallbackBefore, `${label} used the fallback sender`);
     console.log(
-      `mixed-${label}: delivered=${mixed.delivered} path=${mixed.path} lookupRequests=${lookupRequests} matchingLookupCompleted=${matchingLookupCompleted} stalledLookupStarted=${stalledLookupStarted} stalledLookupCancelled=${stalledLookupCancelled} fallbackSendCount=${fallbackSendCount - fallbackBefore}`,
+      `mixed-${label}: delivered=${String(mixed.delivered)} path=${mixed.path} lookupRequests=${String(lookupRequests)} matchingLookupCompleted=${String(matchingLookupCompleted)} stalledLookupStarted=${String(stalledLookupStarted)} stalledLookupSocketOpenBeforeMatch=${String(stalledLookupSocketOpenBeforeMatch)} stalledLookupSocketClosed=${String(stalledLookupSocketClosed)} fallbackSendCount=${String(fallbackSendCount - fallbackBefore)}`,
     );
   } finally {
     await mixedServer.close();
@@ -223,11 +238,17 @@ async function runMixedLookupCase(
 
 async function runCallerCancellation() {
   let cancelRequestStarted = false;
-  let cancelRequestClosed = false;
-  const stalledServer = await startServer((request) => {
+  let cancelRequestSocketOpenBeforeAbort = false;
+  let cancelRequestSocketClosed = false;
+  const stalledServer = await startServer((request, response) => {
     cancelRequestStarted = true;
-    request.on("close", () => {
-      cancelRequestClosed = true;
+    const socket = response.socket;
+    if (!socket) {
+      throw new Error("caller cancellation has no server socket");
+    }
+    cancelRequestSocketOpenBeforeAbort = !socket.destroyed;
+    socket.once("close", () => {
+      cancelRequestSocketClosed = true;
     });
     request.resume();
   });
@@ -256,12 +277,16 @@ async function runCallerCancellation() {
     await waitFor(() => cancelRequestStarted, "caller cancellation request");
     controller.abort(new Error("proof cancellation"));
     const cancelled = await pending;
-    await waitFor(() => cancelRequestClosed, "caller cancellation socket close");
+    await waitFor(() => cancelRequestSocketClosed, "caller cancellation socket close");
+    assert(
+      cancelRequestSocketOpenBeforeAbort,
+      "caller cancellation socket was not open before abort",
+    );
     assert(!cancelled.delivered, "caller cancellation was incorrectly delivered");
     const elapsedMs = Date.now() - startedAt;
     assert(elapsedMs < 500, `caller cancellation took too long: ${elapsedMs}ms`);
     console.log(
-      `cancelled-lookup: requestStarted=${cancelRequestStarted} requestClosed=${cancelRequestClosed} returned=true delivered=${cancelled.delivered} elapsedMs=${elapsedMs}`,
+      `cancelled-lookup: requestStarted=${String(cancelRequestStarted)} socketOpenBeforeAbort=${String(cancelRequestSocketOpenBeforeAbort)} socketClosed=${String(cancelRequestSocketClosed)} returned=true delivered=${String(cancelled.delivered)} elapsedMs=${String(elapsedMs)}`,
     );
   } finally {
     await stalledServer.close();
