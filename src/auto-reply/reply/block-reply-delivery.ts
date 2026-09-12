@@ -1,7 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
+import {
+  shouldRetryReplyDispatch,
+  type ReplyDispatchDeliveryOutcome,
+} from "./reply-dispatch-outcome.js";
 
 type BlockReplyDelivery = { outcome: ReplyDispatchDeliveryOutcome; pending?: boolean };
+
+export function hasBlockReplyDeliveryCustody(delivery: BlockReplyDelivery): boolean {
+  return (
+    delivery.pending === true ||
+    (delivery.outcome !== "delivered" && !shouldRetryReplyDispatch(delivery.outcome))
+  );
+}
 
 // Invocation identity survives payload normalization without changing channel callback contracts.
 const deliveries = new AsyncLocalStorage<{ settlement?: Promise<BlockReplyDelivery> }>();

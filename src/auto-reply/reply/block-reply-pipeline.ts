@@ -14,12 +14,9 @@ import {
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
-import { deliverBlockReply } from "./block-reply-delivery.js";
+import { deliverBlockReply, hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
-import {
-  resolveReplyDispatchErrorOutcome,
-  shouldRetryReplyDispatch,
-} from "./reply-dispatch-outcome.js";
+import { resolveReplyDispatchErrorOutcome } from "./reply-dispatch-outcome.js";
 
 /** Streaming block reply pipeline that tracks sent content and media. */
 export type BlockReplyPipeline = {
@@ -37,6 +34,7 @@ export type BlockReplyPipeline = {
   getSentMediaUrls: () => readonly string[];
   getRetryBlockedMediaUrls?: () => readonly string[];
   hasRetryBlockedTerminalDelivery?: () => boolean;
+  hasRetryBlockedDelivery: () => boolean;
 };
 
 /** Optional buffering strategy used before payloads enter block delivery. */
@@ -360,9 +358,6 @@ export function createBlockReplyPipeline(params: {
       : [blockAttemptsByMessage.get(index) ?? []];
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
-  const isRetryBlocked = (attempt: BlockAttempt) =>
-    attempt.pending ||
-    (attempt.outcome !== "delivered" && !shouldRetryReplyDispatch(attempt.outcome));
   const matchesSource = (payload: ReplyPayload, attempts: BlockAttempt[]) => {
     const reply = resolveSendableOutboundReplyParts(payload);
     return (
@@ -391,7 +386,7 @@ export function createBlockReplyPipeline(params: {
       const textOnly = !hasOutboundReplyContent({ ...payload, text: undefined });
       for (const group of matchingAttempts(payload)) {
         const attempts = group.filter((attempt) => attempt.terminal);
-        const blocked = attempts.filter(isRetryBlocked);
+        const blocked = attempts.filter(hasBlockReplyDeliveryCustody);
         const sourcePrefix = normalizeSource(attempts.map((attempt) => attempt.source).join(""));
         if (
           blocked.some((attempt) => attempt.contentKey === contentKey) ||
@@ -428,15 +423,19 @@ export function createBlockReplyPipeline(params: {
       return false;
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
+    hasRetryBlockedDelivery: () =>
+      Array.from(blockAttemptsByMessage.values()).some((attempts) =>
+        attempts.some(hasBlockReplyDeliveryCustody),
+      ),
     hasRetryBlockedTerminalDelivery: () =>
       Array.from(blockAttemptsByMessage.values()).some((attempts) =>
-        attempts.some((attempt) => attempt.terminal && isRetryBlocked(attempt)),
+        attempts.some((attempt) => attempt.terminal && hasBlockReplyDeliveryCustody(attempt)),
       ),
     getRetryBlockedMediaUrls: () =>
       Array.from(
         new Set(
           Array.from(blockAttemptsByMessage.values()).flatMap((attempts) =>
-            attempts.filter(isRetryBlocked).flatMap((attempt) => attempt.mediaUrls),
+            attempts.filter(hasBlockReplyDeliveryCustody).flatMap((attempt) => attempt.mediaUrls),
           ),
         ),
       ),

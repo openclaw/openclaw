@@ -18,6 +18,7 @@ import { dispatchInboundMessageWithBufferedDispatcher } from "./dispatch.js";
 const finalText = "```ts\n" + "const answer = 42;\n".repeat(20) + "```";
 const finalMediaUrl = "https://example.test/final.png";
 const mediaCaption = "Here is the generated image.";
+const fallbackText = "The backup produced a second answer.";
 
 it.each([
   "rejected",
@@ -38,10 +39,20 @@ it.each([
   "direct-confirmed-media",
   "direct-rejected-media",
   "direct-no-delivery",
+  "fallback-ambiguous",
+  "fallback-recovery-owned",
+  "fallback-rejected",
+  "fallback-direct-ambiguous",
+  "fallback-direct-recovery-owned",
+  "fallback-direct-rejected",
 ] as const)(
   "dispatchInboundMessageWithBufferedDispatcher settles %s streamed blocks before final suppression",
   async (scenario) => {
     const timesOut = scenario === "timeout" || scenario === "timeout-media";
+    const fallback = scenario.startsWith("fallback-");
+    const fallbackDirect = scenario.startsWith("fallback-direct-");
+    const fallbackRejected = fallback && scenario.endsWith("-rejected");
+    const fallbackRecoveryOwned = fallback && scenario.endsWith("-recovery-owned");
     const directMedia =
       scenario === "direct-ambiguous-media" ||
       scenario === "direct-recovery-owned-media" ||
@@ -62,14 +73,79 @@ it.each([
       label: "block-streaming-recovery",
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
-    const requests: Array<{ method?: string; url?: string }> = [];
+    const requests: Array<{ method?: string; url?: string; model?: string }> = [];
     const toolRequestBodies: string[] = [];
     const attempted: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
     const delivered: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
+    const fallbackEvents: string[] = [];
     const server = createServer((request, response) => {
-      requests.push({ method: request.method, url: request.url });
+      const requestRecord: { method?: string; url?: string; model?: string } = {
+        method: request.method,
+        url: request.url,
+      };
+      requests.push(requestRecord);
       const sendResponse = () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
+        if (fallback) {
+          const backup = requestRecord.model === "backup";
+          fallbackEvents.push(`request:${requestRecord.model}`);
+          const text = backup ? fallbackText : `${finalText}\nMEDIA:${finalMediaUrl}`;
+          const item = {
+            id: "message-fixture",
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            status: "completed",
+            content: [{ type: "output_text", text, annotations: [] }],
+          };
+          for (const event of [
+            {
+              type: "response.created",
+              response: { id: "response-fixture", status: "in_progress" },
+            },
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...item, status: "in_progress", content: [] },
+            },
+            {
+              type: "response.output_text.delta",
+              item_id: item.id,
+              output_index: 0,
+              content_index: 0,
+              delta: text,
+            },
+            {
+              type: "response.output_text.done",
+              item_id: item.id,
+              output_index: 0,
+              content_index: 0,
+              text,
+            },
+            { type: "response.output_item.done", output_index: 0, item },
+          ]) {
+            response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          }
+          const terminal = {
+            type: backup ? "response.completed" : "response.failed",
+            response: {
+              id: "response-fixture",
+              model: requestRecord.model,
+              status: backup ? "completed" : "failed",
+              output: [item],
+              ...(backup
+                ? {}
+                : {
+                    error: {
+                      code: "insufficient_balance",
+                      message: "Insufficient balance. Top up to continue.",
+                    },
+                  }),
+            },
+          };
+          response.end(`event: ${terminal.type}\ndata: ${JSON.stringify(terminal)}\n\n`);
+          return;
+        }
         if (directMedia && requests.length === 1) {
           response.end(
             `data: ${JSON.stringify({
@@ -113,14 +189,20 @@ it.each([
           })}\n\ndata: [DONE]\n\n`,
         );
       };
-      if (directMedia) {
+      if (directMedia || fallback) {
         const chunks: string[] = [];
         request.setEncoding("utf8");
         request.on("data", (chunk: string) => {
           chunks.push(chunk);
         });
         request.on("end", () => {
-          toolRequestBodies.push(chunks.join(""));
+          const body = chunks.join("");
+          if (fallback) {
+            const parsed: { model: string } = JSON.parse(body);
+            requestRecord.model = parsed.model;
+          } else {
+            toolRequestBodies.push(body);
+          }
           sendResponse();
         });
       } else {
@@ -170,9 +252,17 @@ it.each([
             workspace: state.workspaceDir,
             skipBootstrap: true,
             heartbeat: { every: "0m" },
-            model: { primary: "fixture/answer" },
-            models: { "fixture/answer": { agentRuntime: { id: "openclaw" } } },
-            blockStreamingDefault: directMedia ? "off" : "on",
+            model: {
+              primary: "fixture/answer",
+              ...(fallback ? { fallbacks: ["fixture-backup/backup"] } : {}),
+            },
+            models: {
+              "fixture/answer": { agentRuntime: { id: "openclaw" } },
+              ...(fallback
+                ? { "fixture-backup/backup": { agentRuntime: { id: "openclaw" } } }
+                : {}),
+            },
+            blockStreamingDefault: directMedia || fallbackDirect ? "off" : "on",
             blockStreamingChunk: { minChars: 80, maxChars: 160 },
             blockStreamingCoalesce: { minChars: 1, maxChars: 160, idleMs: 0 },
           },
@@ -183,7 +273,7 @@ it.each([
             fixture: {
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               apiKey: "synthetic-test-key",
-              api: "openai-completions",
+              api: fallback ? "openai-responses" : "openai-completions",
               request: { allowPrivateNetwork: true },
               models: [
                 {
@@ -197,9 +287,34 @@ it.each([
                 },
               ],
             },
+            ...(fallback
+              ? {
+                  "fixture-backup": {
+                    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+                    apiKey: "synthetic-backup-key",
+                    api: "openai-responses" as const,
+                    request: { allowPrivateNetwork: true },
+                    models: [
+                      {
+                        id: "backup",
+                        name: "Backup",
+                        reasoning: false,
+                        input: ["text" as const],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 128000,
+                        maxTokens: 4096,
+                      },
+                    ],
+                  },
+                }
+              : {}),
           },
         },
-        channels: { discord: { streaming: { mode: "off", block: { enabled: !directMedia } } } },
+        channels: {
+          discord: {
+            streaming: { mode: "off", block: { enabled: !directMedia && !fallbackDirect } },
+          },
+        },
         messages: { visibleReplies: "automatic" },
         plugins: {
           slots: { memory: "none" },
@@ -250,6 +365,18 @@ it.each([
               ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
             };
             attempted.push(call);
+            if (fallback && info.kind === "block" && payload.text !== fallbackText) {
+              fallbackEvents.push("primary-block");
+              if (fallbackRejected) {
+                throw noSend;
+              }
+              if (fallbackRecoveryOwned) {
+                const error = new OutboundDeliveryError("retained for recovery", { cause: noSend });
+                error.queueCustody = "held";
+                throw error;
+              }
+              throw new Error("transport response lost after send");
+            }
             if (scenario === "direct-no-delivery" && info.kind === "final") {
               throw noSend;
             }
@@ -365,6 +492,40 @@ it.each([
           { kind: "final", text: mediaCaption },
         ]);
         expect(delivered).toEqual([]);
+        return;
+      }
+      if (fallback) {
+        let providerFailure: unknown;
+        const result = await dispatch.catch((error: unknown) => {
+          providerFailure = error;
+          return undefined;
+        });
+        console.log(
+          JSON.stringify({
+            scenario,
+            requests,
+            fallbackEvents,
+            attempted,
+            delivered,
+            result,
+            providerFailure:
+              providerFailure instanceof Error ? providerFailure.message : providerFailure,
+          }),
+        );
+        expect(fallbackEvents).toContain("primary-block");
+        if (fallbackRejected) {
+          expect(requests.map((entry) => entry.model)).toEqual(["answer", "backup"]);
+          expect(delivered.some((call) => call.text === fallbackText)).toBe(true);
+          expect(providerFailure).toBeUndefined();
+        } else {
+          expect(requests.map((entry) => entry.model)).toEqual(["answer"]);
+          expect(attempted.some((call) => call.text === fallbackText)).toBe(false);
+          if (result) {
+            expect(result.settledReceipt?.hasPendingDelivery).toBe(true);
+          } else {
+            expect(providerFailure).toBeInstanceOf(Error);
+          }
+        }
         return;
       }
       const result = await dispatch;

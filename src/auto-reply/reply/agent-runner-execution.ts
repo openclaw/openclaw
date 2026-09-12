@@ -356,6 +356,7 @@ async function executeAgentTurnInternalLoop(
         state: fallbackCycleState,
         presentation,
         directlySentBlockKeys,
+        directBlockDeliveries,
         notifyAgentRunStart,
         signalExecutionPhaseForTyping,
         notifyUserAboutCompaction,

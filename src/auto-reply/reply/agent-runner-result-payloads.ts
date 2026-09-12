@@ -49,11 +49,11 @@ import {
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -184,9 +184,8 @@ export async function prepareReplyAgentPayloads(state: {
   const retryBlockedSourceReply =
     blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.() === true ||
     directBlockDeliveries?.some(
-      ({ payload, outcome, pending }) =>
-        isReplyPayloadTerminalContent(payload) &&
-        (pending || (outcome !== "delivered" && !shouldRetryReplyDispatch(outcome))),
+      (delivery) =>
+        isReplyPayloadTerminalContent(delivery.payload) && hasBlockReplyDeliveryCustody(delivery),
     ) === true;
   const emptyInteractiveReplyPayload =
     terminalFailurePayload || retryBlockedSourceReply
@@ -284,7 +283,6 @@ export async function prepareReplyAgentPayloads(state: {
       silentExpected: followupRun.run.silentExpected,
       blockStreamingEnabled,
       blockReplyPipeline,
-      directlySentBlockKeys,
       directBlockDeliveries,
       replyToMode,
       replyToChannel,

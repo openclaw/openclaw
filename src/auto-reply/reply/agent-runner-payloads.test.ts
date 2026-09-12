@@ -24,7 +24,7 @@ import {
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
-import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
@@ -56,9 +56,8 @@ type ReplyRouteDedupeCase = {
 
 type DirectBlockDedupeCase = {
   name: string;
-  keyPayloads: Array<Parameters<typeof createBlockReplyContentKey>[0]>;
   payloads: TestReplyPayloadParams["payloads"];
-  directBlockPayloads?: ReplyPayload[];
+  directBlockPayloads: ReplyPayload[];
   params?: Partial<TestReplyPayloadParams>;
   expected?: Record<string, unknown>;
 };
@@ -962,6 +961,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => ["file:///tmp/voice.ogg"],
     };
 
@@ -1000,6 +1000,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => ["file:///tmp/outbound/voice.ogg"],
     };
 
@@ -1022,6 +1023,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     // The pipeline streamed some partial content, but the final text payload was
@@ -1049,6 +1051,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     // The final text-only payload matches what the pipeline already sent,
@@ -1073,6 +1076,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -1095,6 +1099,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     const presentation = {
@@ -1124,6 +1129,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -1149,6 +1155,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => ["/tmp/generated.png"],
     };
 
@@ -1195,6 +1202,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -1380,7 +1388,6 @@ describe("buildReplyPayloads media filter integration", () => {
   it.each<DirectBlockDedupeCase>([
     ...[false, true].map((blockStreamingEnabled) => ({
       name: `drops a final caption already sent with direct media (streaming: ${blockStreamingEnabled})`,
-      keyPayloads: [{ text: "response", mediaUrl: "/tmp/fetched.png" }],
       directBlockPayloads: [
         setReplyPayloadMetadata(
           { text: "response", mediaUrl: "/tmp/fetched.png" },
@@ -1392,7 +1399,6 @@ describe("buildReplyPayloads media filter integration", () => {
     })),
     {
       name: "preserves the same caption from a different assistant message",
-      keyPayloads: [{ text: "response", mediaUrl: "/tmp/fetched.png" }],
       directBlockPayloads: [
         setReplyPayloadMetadata(
           { text: "response", mediaUrl: "/tmp/fetched.png" },
@@ -1402,21 +1408,9 @@ describe("buildReplyPayloads media filter integration", () => {
       payloads: [setReplyPayloadMetadata({ text: "response" }, { assistantMessageIndex: 2 })],
       expected: { text: "response" },
     },
-    {
-      name: "deduplicates final payloads against directly sent block keys regardless of replyToId",
-      keyPayloads: [{ text: "response", replyToId: "post-1" }],
-      payloads: [{ text: "response" }],
-      params: { blockStreamingEnabled: false, blockReplyPipeline: null, replyToMode: "off" },
-    },
-    {
-      name: "deduplicates final payloads against directly sent block keys when streaming is enabled without a pipeline",
-      keyPayloads: [{ text: "response", replyToId: "post-1" }],
-      payloads: [{ text: "response" }],
-      params: { blockStreamingEnabled: true, blockReplyPipeline: null, replyToMode: "off" },
-    },
+
     {
       name: "keeps only final media when the text was sent as a direct block",
-      keyPayloads: [{ text: "response" }],
       directBlockPayloads: [{ text: "response" }],
       payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
       expected: {
@@ -1427,7 +1421,6 @@ describe("buildReplyPayloads media filter integration", () => {
     },
     {
       name: "keeps only final media after a direct block without a streaming pipeline",
-      keyPayloads: [{ text: "response" }],
       directBlockPayloads: [{ text: "response" }],
       payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
@@ -1437,16 +1430,9 @@ describe("buildReplyPayloads media filter integration", () => {
         mediaUrls: ["/tmp/generated.png"],
       },
     },
-    {
-      name: "keeps unmatched text finals when unrelated direct blocks were sent",
-      keyPayloads: [{ mediaUrl: "/tmp/other.png" }],
-      payloads: [{ text: "new final response" }],
-      params: { blockStreamingEnabled: true },
-      expected: { text: "new final response" },
-    },
+
     {
       name: "keeps only final media after multiple direct text blocks",
-      keyPayloads: [{ text: "Preview" }, { text: " below" }],
       directBlockPayloads: [{ text: "Preview" }, { text: " below" }],
       payloads: [{ text: "Preview below\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
@@ -1458,7 +1444,6 @@ describe("buildReplyPayloads media filter integration", () => {
     },
     {
       name: "keeps only final media after repeated identical direct text blocks",
-      keyPayloads: [{ text: "ha" }],
       directBlockPayloads: [{ text: "ha" }, { text: "ha" }],
       payloads: [{ text: "haha\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
@@ -1470,7 +1455,6 @@ describe("buildReplyPayloads media filter integration", () => {
     },
     {
       name: "keeps only media not already sent with a direct block",
-      keyPayloads: [{ text: "response", mediaUrl: "/tmp/already.png" }],
       directBlockPayloads: [{ text: "response", mediaUrl: "/tmp/already.png" }],
       payloads: [{ text: "response", mediaUrls: ["/tmp/already.png", "/tmp/new.png"] }],
       params: { blockStreamingEnabled: true },
@@ -1478,23 +1462,17 @@ describe("buildReplyPayloads media filter integration", () => {
     },
     {
       name: "ignores direct status notices when matching final text",
-      keyPayloads: [{ text: "Compacting", isStatusNotice: true }, { text: "response" }],
-      directBlockPayloads: [{ text: "response" }],
+      directBlockPayloads: [{ text: "Compacting", isStatusNotice: true }, { text: "response" }],
       payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
       expected: { text: undefined, mediaUrls: ["/tmp/generated.png"] },
     },
-  ])("$name", async ({ keyPayloads, payloads, directBlockPayloads, params, expected }) => {
+  ])("$name", async ({ payloads, directBlockPayloads, params, expected }) => {
     const { replyPayloads } = await buildTestReplyPayloads({
-      directlySentBlockKeys: new Set(keyPayloads.map(createBlockReplyContentKey)),
-      ...(directBlockPayloads
-        ? {
-            directBlockDeliveries: directBlockPayloads.map((payload): DirectBlockDelivery => ({
-              payload,
-              outcome: "delivered",
-            })),
-          }
-        : {}),
+      directBlockDeliveries: directBlockPayloads.map((payload): DirectBlockDelivery => ({
+        payload,
+        outcome: "delivered",
+      })),
       payloads,
       ...params,
     });

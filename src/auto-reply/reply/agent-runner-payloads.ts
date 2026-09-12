@@ -167,8 +167,6 @@ export async function buildReplyPayloads(params: {
   silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
-  /** Payload keys sent directly (not via pipeline) during tool flush. */
-  directlySentBlockKeys?: Set<string>;
   /** Direct receipts distinguish confirmed sends from retained retry custody. */
   directBlockDeliveries?: DirectBlockDelivery[];
   replyToMode: ReplyToMode;
@@ -341,17 +339,12 @@ export async function buildReplyPayloads(params: {
   const isDirectBlockRetryBlocked = (payload: ReplyPayload) => {
     const contentKey = createBlockReplyContentKey(payload);
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    return (
-      (!params.directBlockDeliveries?.length &&
-        params.directlySentBlockKeys?.has(contentKey) === true) ||
-      retryBlockedDirectPayloads.some(
-        (sentPayload) =>
-          isReplyPayloadTerminalContent(sentPayload) &&
-          (assistantMessageIndex === undefined ||
-            getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex ===
-              assistantMessageIndex) &&
-          createBlockReplyContentKey(sentPayload) === contentKey,
-      )
+    return retryBlockedDirectPayloads.some(
+      (sentPayload) =>
+        isReplyPayloadTerminalContent(sentPayload) &&
+        (assistantMessageIndex === undefined ||
+          getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex === assistantMessageIndex) &&
+        createBlockReplyContentKey(sentPayload) === contentKey,
     );
   };
   const isDirectTextRetryBlocked = (payload: ReplyPayload): boolean => {
@@ -424,7 +417,7 @@ export async function buildReplyPayloads(params: {
             ? []
             : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
         )
-      : params.directlySentBlockKeys?.size || retryBlockedDirectPayloads.length > 0
+      : retryBlockedDirectPayloads.length > 0
         ? dedupedPayloads.flatMap((payload) =>
             isDirectBlockRetryBlocked(payload)
               ? []

@@ -83,7 +83,6 @@ describe("createBlockReplyDeliveryHandler", () => {
         didLogHeartbeatStrip: false,
         blockStreamingEnabled,
         blockReplyPipeline: null,
-        directlySentBlockKeys,
         directBlockDeliveries,
         replyToMode: "off",
       });
@@ -121,7 +120,6 @@ describe("createBlockReplyDeliveryHandler", () => {
       didLogHeartbeatStrip: false,
       blockStreamingEnabled: true,
       blockReplyPipeline: null,
-      directlySentBlockKeys,
       directBlockDeliveries,
       replyToMode: "off",
     });
