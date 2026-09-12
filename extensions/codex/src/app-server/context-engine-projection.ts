@@ -444,6 +444,15 @@ function renderMessageBody(
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return truncateText(message.summary.trim(), options.maxTextPartChars);
   }
+  if (message.role === "toolResult") {
+    if (options.toolPayloadMode === "elide") {
+      return "";
+    }
+    return truncateText(
+      `tool result: ${message.toolCallId}\n${stableJson(renderCanonicalToolResultPayload(message))}`,
+      options.maxTextPartChars,
+    );
+  }
   if (!hasMessageContent(message)) {
     return "";
   }
@@ -489,7 +498,7 @@ function renderMessagePart(
         options.maxTextPartChars,
       );
     }
-    return `${label} [input omitted]`;
+    return "";
   }
   if (type === "toolResult" || type === "tool_result") {
     const label =
@@ -500,7 +509,7 @@ function renderMessagePart(
         options.maxTextPartChars,
       );
     }
-    return `${label} [content omitted]`;
+    return "";
   }
   return `[${type ?? "non-text"} content omitted]`;
 }
@@ -523,6 +532,28 @@ function renderToolResultPayload(record: Record<string, unknown>): Record<string
     payload[key] = redactPreservedToolValue(key, value);
   }
   return payload;
+}
+
+function renderCanonicalToolResultPayload(
+  message: Extract<AgentMessage, { role: "toolResult" }>,
+): Record<string, unknown> {
+  return {
+    toolCallId: redactSensitiveFieldValue("toolCallId", message.toolCallId),
+    toolName: redactSensitiveFieldValue("toolName", message.toolName),
+    isError: message.isError,
+    content: message.content.map((part) => {
+      if (part.type === "text") {
+        return {
+          type: "text",
+          text: redactSensitiveFieldValue("text", redactToolPayloadText(part.text)),
+        };
+      }
+      if (part.type === "image") {
+        return "[image omitted]";
+      }
+      return "[non-text content omitted]";
+    }),
+  };
 }
 
 const TOOL_PAYLOAD_METADATA_KEYS = new Set([

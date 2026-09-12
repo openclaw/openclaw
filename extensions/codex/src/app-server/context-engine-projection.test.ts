@@ -152,7 +152,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.developerInstructionAddition).toBe("memory recall");
   });
 
-  it("preserves role order and falls back to the raw prompt for empty history", async () => {
+  it("preserves retained role order and falls back to the raw prompt for empty history", async () => {
     const empty = await projectContextEngineAssemblyForCodex({
       assembledMessages: [],
       originalHistoryMessages: [],
@@ -169,7 +169,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
       originalHistoryMessages: [textMessage("user", "seed")],
       prompt: "next",
     });
-    expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree");
+    expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo");
+    expect(ordered.promptText).not.toContain("[toolResult]");
+    expect(ordered.promptText).not.toContain("three");
     expect(ordered.prePromptMessageCount).toBe(1);
   });
 
@@ -234,7 +236,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     },
   );
 
-  it("frames projected history as reference data and omits tool payloads", async () => {
+  it("drops omitted tool-only events while preserving substantive message text", async () => {
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [
         {
@@ -246,8 +248,19 @@ describe("projectContextEngineAssemblyForCodex", () => {
         } as unknown as AgentMessage,
         {
           role: "toolResult",
-          content: [{ type: "toolResult", toolUseId: "call-1", content: "API_KEY=sk-secret" }],
+          toolCallId: "call-1",
+          toolName: "exec",
+          content: [{ type: "text", text: "API_KEY=sk-secret" }],
+          isError: false,
           timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "The operation completed." },
+            { type: "toolCall", name: "read", input: { path: ".env" } },
+          ],
+          timestamp: 3,
         } as unknown as AgentMessage,
       ],
       originalHistoryMessages: [],
@@ -255,10 +268,13 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(result.promptText).toContain("quoted reference data");
-    expect(result.promptText).toContain("tool call: exec [input omitted]");
-    expect(result.promptText).toContain("tool result: call-1 [content omitted]");
+    expect(result.promptText).toContain("[assistant]\nThe operation completed.");
+    expect(result.promptText).not.toContain("tool call");
+    expect(result.promptText).not.toContain("tool result");
+    expect(result.promptText).not.toContain("call-1");
     expect(result.promptText).not.toContain("sk-secret");
     expect(result.promptText).not.toContain("cat .env");
+    expect(result.promptText).not.toContain('path: ".env"');
   });
 
   it("preserves redacted tool payload context for thread bootstrap projections", async () => {
@@ -281,15 +297,16 @@ describe("projectContextEngineAssemblyForCodex", () => {
         } as unknown as AgentMessage,
         {
           role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
           content: [
-            {
-              type: "toolResult",
-              toolUseId: "call-1",
-              content: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
-            },
+            { type: "text", text: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok" },
+            { type: "image", data: "private-base64", mimeType: "image/png" },
           ],
-          timestamp: 2,
-        } as unknown as AgentMessage,
+          details: { internal: "private-detail" },
+          isError: false,
+          timestamp: 1_723_456_789,
+        },
       ],
       originalHistoryMessages: [],
       prompt: "continue",
@@ -305,8 +322,12 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain('"content"');
     expect(result.promptText).toContain("OPENAI_API_KEY=");
     expect(result.promptText).toContain("status ok");
+    expect(result.promptText).toContain("[image omitted]");
     expect(result.promptText).not.toContain("cat .env");
     expect(result.promptText).not.toContain("sk-1234567890abcdef");
+    expect(result.promptText).not.toContain("private-base64");
+    expect(result.promptText).not.toContain("private-detail");
+    expect(result.promptText).not.toContain("1723456789");
   });
 
   it.each(["assistant", "compaction", "branch_summary"] as const)(
