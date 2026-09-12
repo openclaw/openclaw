@@ -608,6 +608,7 @@ describe("discordMessageActions", () => {
       replyToId: "source-message-1",
       mode: "first" as const,
     };
+    const onDeliveryResult = vi.fn();
 
     await discordMessageActions.handleAction?.({
       channel: "discord",
@@ -624,6 +625,7 @@ describe("discordMessageActions", () => {
       mediaReadFile,
       conversationReadOrigin: "delegated",
       reply,
+      onDeliveryResult,
     });
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
@@ -640,6 +642,7 @@ describe("discordMessageActions", () => {
       mediaReadFile,
       conversationReadOrigin: "delegated",
       reply,
+      onDeliveryResult,
     });
   });
 });
