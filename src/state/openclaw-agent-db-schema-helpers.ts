@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
@@ -308,6 +309,9 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
   };
 }
 
+function isOpenClawSharedMemoryDatabasePath(pathname: string): boolean {
+  return pathname.includes(path.sep + "memory" + path.sep + "shared-");
+}
 export function assertExistingAgentSchemaOwner(
   existing: ExistingAgentSchemaMeta | null,
   agentId: string,
@@ -326,6 +330,9 @@ export function assertExistingAgentSchemaOwner(
     throw new Error(`OpenClaw agent database ${pathname} has no agent owner.`);
   }
   if (normalizeAgentId(existing.agentId) !== agentId) {
+    if (isOpenClawSharedMemoryDatabasePath(pathname)) {
+      return;
+    }
     throw new Error(
       `OpenClaw agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
     );

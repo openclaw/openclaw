@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import path from "node:path";
 // Memory Core plugin module implements the concrete memory index manager.
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -75,6 +77,17 @@ export async function closeMemoryIndexManagersForAgent(params: { agentId: string
   for (const purpose of ["default", "maintenance"] as const) {
     await registry.closeForAgent({ ...params, purpose });
   }
+}
+
+function resolveSharedMemoryManagerWorkspaceDir(cfg: OpenClawConfig, agentId: string): string {
+  const systemAgentId = (cfg.agents?.defaults?.systemAgent?.agentId ?? "").trim();
+  const ws = (cfg.agents?.defaults?.workspace ?? "").trim();
+  if (systemAgentId && ws && agentId === systemAgentId) {
+    if (ws === "~") return resolveUserPath(homedir());
+    if (ws.startsWith("~/")) return resolveUserPath(path.join(homedir(), ws.slice(2)));
+    return resolveUserPath(ws);
+  }
+  return resolveAgentWorkspaceDir(cfg, agentId);
 }
 
 export class MemoryIndexManager extends MemorySearchOrchestration implements MemorySearchManager {
@@ -155,7 +168,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           if (!settings) {
             return null;
           }
-          const workspaceDir = source?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+          const workspaceDir =
+            source?.workspaceDir ?? resolveSharedMemoryManagerWorkspaceDir(cfg, agentId);
           const providerRequirement =
             source?.providerRequirement ??
             resolveMemoryEmbeddingProviderRequirement({
