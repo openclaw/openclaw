@@ -19,6 +19,7 @@ import {
   workspaceConfig,
   workspaceTestPlugin,
 } from "../../infra/outbound/message-action-runner.test-support.js";
+import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import {
   MESSAGE_TOOL_DELIVERY_HINTS,
@@ -3485,6 +3486,7 @@ describe("message tool schema scoping", () => {
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
       expect(presentationSchemaJson).toContain('"const":"url"');
+      expect(presentationSchemaJson).toContain('"const":"copy-text"');
       expect(presentationSchemaJson).toContain('"const":"web-app"');
       expect(presentationSchemaJson).toContain('"widgetId"');
       expect(webAppRequiredFields).toEqual(
@@ -4575,6 +4577,19 @@ describe("message tool reasoning tag sanitization", () => {
                   label: `Approve\n${internalContext}`,
                   value: "approve",
                 },
+                {
+                  label: "Copy safe text",
+                  action: {
+                    type: "copy-text",
+                    text: `  SAFE-PREFIX\n${internalContext}\nSAFE-SUFFIX  `,
+                  },
+                },
+                {
+                  label: "Copy internal text",
+                  action: { type: "copy-text", text: internalContext },
+                  value: "must-not-become-active",
+                  url: "https://legacy.example.test",
+                },
               ],
             },
             {
@@ -4598,11 +4613,118 @@ describe("message tool reasoning tag sanitization", () => {
         { type: "input", placeholder: "Pick a lane" },
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve" }],
+          buttons: [
+            { label: "Approve", value: "approve" },
+            {
+              label: "Copy safe text",
+              action: {
+                type: "copy-text",
+                text: "  SAFE-PREFIX\n\nSAFE-SUFFIX  ",
+              },
+            },
+            { label: "Copy internal text" },
+          ],
         },
         {
           type: "select",
           options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
+
+  it("preserves nonempty copy text and prevents sanitized typed actions from reactivating aliases", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy one space",
+                  action: { type: "copy-text", text: " " },
+                },
+                {
+                  label: "Copy internal text",
+                  action: { type: " Copy-Text ", text: internalContext },
+                  value: "must-not-become-active",
+                  callbackData: "must-not-become-active-camel",
+                  callback_data: "must-not-become-active-snake",
+                  url: "https://legacy.example.test",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Copy one space",
+              action: { type: "copy-text", text: " " },
+            },
+            { label: "Copy internal text" },
+          ],
+        },
+      ],
+    });
+    expect(normalizeMessagePresentation(call?.params?.presentation)?.blocks).toEqual([
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Copy one space",
+            action: { type: "copy-text", text: " " },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves literal escaped line breaks in copy-text actions", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123456" });
+    const copyText = String.raw`line one\nline two\r\nline three`;
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123456",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy exact text",
+                  action: { type: "copy-text", text: copyText },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Copy exact text",
+              action: { type: "copy-text", text: copyText },
+            },
+          ],
         },
       ],
     });

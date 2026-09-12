@@ -1217,6 +1217,47 @@ describe("feishuPlugin actions", () => {
     expect(details.chatId).toBe("oc_group_1");
   });
 
+  it("preserves copy-text values as visible fallback in direct sends", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          blocks: [
+            { type: "text", text: "Deployment ready" },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy command",
+                  action: { type: "copy-text", text: "openclaw status" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(requireRecord(card.body, "card body").elements).toEqual([
+      { tag: "markdown", content: "Deployment ready" },
+      {
+        tag: "markdown",
+        content: "<font color='grey'>Actions:\n- Copy command: `openclaw status`</font>",
+      },
+    ]);
+  });
+
   it("falls back to text delivery when presentation text exceeds the card table limit", async () => {
     feishuOutboundSendPayloadMock.mockResolvedValueOnce({
       channel: "feishu",

@@ -32,6 +32,7 @@ export type VisibleTextSuppressionReason =
 function sanitizeUserVisibleToolTextResult(
   text: string,
   bootPrompt: string | undefined,
+  options?: { preserveSourceWhenUnchanged?: boolean },
 ): {
   text: string;
   suppressionReason?: VisibleTextSuppressionReason;
@@ -54,7 +55,15 @@ function sanitizeUserVisibleToolTextResult(
         ? "inbound_metadata_echo"
         : undefined;
   return {
-    text: strippedInbound,
+    // Copy targets are data, not rendered prose. Preserve their exact source
+    // text when the privacy guards made no change; in particular, a literal
+    // `\\n` must not turn into a line break in the copied value. We still run
+    // the normalized form through every guard so escaped delimiter lines
+    // cannot bypass internal-context stripping.
+    text:
+      options?.preserveSourceWhenUnchanged === true && strippedInbound === normalized
+        ? text
+        : strippedInbound,
     ...(suppressionReason ? { suppressionReason } : {}),
   };
 }
@@ -96,6 +105,18 @@ function sanitizeStringArrayParam(
     return sanitized.text;
   });
   return suppressionReason;
+}
+
+function clearPresentationButtonActionTargets(button: Record<string, unknown>): void {
+  // Explicit typed actions own the control. If sanitization removes the target,
+  // legacy shadow fields must not become active fallbacks during normalization.
+  delete button.action;
+  delete button.value;
+  delete button.callbackData;
+  delete button.callback_data;
+  delete button.url;
+  delete button.webApp;
+  delete button.web_app;
 }
 
 function sanitizePresentationTextFieldsResult(
@@ -198,8 +219,25 @@ function sanitizePresentationTextFieldsResult(
           const action = sanitizedButton.action;
           if (action && typeof action === "object" && !Array.isArray(action)) {
             const sanitizedAction = { ...(action as Record<string, unknown>) };
+            const actionType = normalizeOptionalLowercaseString(sanitizedAction.type);
+            if (actionType === "copy-text" && typeof sanitizedAction.text === "string") {
+              const sanitized = sanitizeUserVisibleToolTextResult(
+                sanitizedAction.text,
+                bootPrompt,
+                {
+                  preserveSourceWhenUnchanged: true,
+                },
+              );
+              if (sanitized.text.length > 0) {
+                sanitizedAction.text = sanitized.text;
+                sanitizedButton.action = sanitizedAction;
+              } else {
+                clearPresentationButtonActionTargets(sanitizedButton);
+              }
+              suppressionReason ??= sanitized.suppressionReason;
+            }
             if (
-              (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
+              (actionType === "url" || actionType === "web-app") &&
               typeof sanitizedAction.url === "string"
             ) {
               const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.url, bootPrompt);
@@ -207,20 +245,14 @@ function sanitizePresentationTextFieldsResult(
                 sanitizedAction.url = sanitized.text;
                 sanitizedButton.action = sanitizedAction;
               } else if (
-                sanitizedAction.type === "web-app" &&
+                actionType === "web-app" &&
                 typeof sanitizedAction.widgetId === "string" &&
                 sanitizedAction.widgetId.trim()
               ) {
                 delete sanitizedAction.url;
                 sanitizedButton.action = sanitizedAction;
               } else {
-                // Explicit typed actions own the control. If sanitization removes
-                // the target, legacy shadow fields must not become active fallbacks.
-                delete sanitizedButton.action;
-                delete sanitizedButton.value;
-                delete sanitizedButton.url;
-                delete sanitizedButton.webApp;
-                delete sanitizedButton.web_app;
+                clearPresentationButtonActionTargets(sanitizedButton);
               }
               suppressionReason ??= sanitized.suppressionReason;
             }
