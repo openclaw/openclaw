@@ -37,8 +37,15 @@ it("uses loaded agent names and avatars, preserving default and unknown ownershi
     [...provider.querySelectorAll(".agent-row-chip__name")].map((chip) => chip.textContent),
   ).toEqual(["Home agent", "Research", "retired"]);
   expect(
-    [...provider.querySelectorAll(".agent-row-chip__avatar")].map((chip) => chip.textContent),
-  ).toEqual(["🏡", "🔬", "R"]);
+    [...provider.querySelectorAll(".identity-avatar__text")].map((chip) =>
+      chip.getAttribute("data-avatar"),
+    ),
+  ).toEqual(["🏡", "🔬"]);
+  await vi.waitFor(() =>
+    expect(
+      provider.querySelector('[data-agent-id="retired"] .identity-avatar__agent-face'),
+    ).not.toBeNull(),
+  );
   expect(
     [...provider.querySelectorAll(".agent-row-chip")].map((chip) => [
       chip.getAttribute("data-agent-id"),

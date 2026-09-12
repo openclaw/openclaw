@@ -7,6 +7,7 @@ import type {
   AgentsListResult,
   ModelCatalogEntry,
 } from "../../api/types.ts";
+import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   renderPanelRefreshStatus,
@@ -28,7 +29,7 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -110,9 +111,6 @@ export function renderAgentOverview(params: {
     identityDraft.emoji ?? params.agentIdentity?.emoji ?? agent.identity?.emoji ?? "";
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
-  const identityAvatarText =
-    resolveAgentTextAvatar(agent, params.agentIdentity) ??
-    (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =
@@ -153,13 +151,7 @@ export function renderAgentOverview(params: {
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
             <span class="agent-identity-editor__avatar" aria-hidden="true">
-              ${
-                identityAvatarUrl
-                  ? html`<img src=${identityAvatarUrl} alt="" decoding="async" />`
-                  : html`<span class="agent-identity-editor__avatar-text"
-                      >${identityAvatarText}</span
-                    >`
-              }
+              ${renderAgentIdentityAvatar({ id: agent.id, avatar: identityAvatarUrl, textAvatar: identityDraft.emoji ?? resolveAgentTextAvatar(agent, params.agentIdentity) })}
             </span>
             <div class="agent-identity-editor__fields">
               <label class="field">

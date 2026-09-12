@@ -39,6 +39,7 @@ openclaw-sidebar-agent-roster {
   display: grid;
   place-items: center;
   flex: 0 0 36px;
+  font-size: 22px;
   width: 36px;
   height: 36px;
   border-radius: 11px;
@@ -146,11 +147,6 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__header:focus-within .sidebar-agent-roster__new {
   opacity: 1;
   pointer-events: auto;
-}
-.sidebar-agent-roster__avatar .identity-avatar__agent-face {
-  width: 100%;
-  height: 100%;
-  color: color-mix(in srgb, hsl(var(--identity-hue) 48% 48%) 65%, var(--text));
 }
 .sidebar-tree-summary,
 .sidebar-tree-summary > span,

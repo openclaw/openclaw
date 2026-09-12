@@ -3832,32 +3832,11 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
     filter 120ms ease;
 }
 
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar--text,
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar--icon {
-  width: var(--agent-avatar-glyph-size);
-  height: var(--agent-avatar-glyph-size);
-  background: transparent;
-  color: var(--secondary-foreground);
-  font-size: var(--agent-avatar-glyph-size);
-  line-height: 1;
-}
-
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar img.agent-select__avatar {
-  display: block;
+.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar {
   width: var(--agent-avatar-size);
   height: var(--agent-avatar-size);
-  border-radius: var(--radius-full);
-  object-fit: cover;
-  opacity: var(--agent-avatar-opacity);
-  filter: var(--agent-avatar-filter);
-  transition:
-    opacity 120ms ease,
-    filter 120ms ease;
-}
-
-.sidebar-agent-menu__agent-avatar:has(img.agent-select__avatar) {
-  opacity: 1;
-  filter: none;
+  font-size: var(--agent-avatar-glyph-size);
+  line-height: 1;
 }
 
 .sidebar-agent-menu__agent-switch--active .sidebar-agent-menu__agent-avatar {

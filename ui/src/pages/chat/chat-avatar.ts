@@ -1,6 +1,6 @@
 // Control UI chat module implements chat avatar behavior.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
@@ -11,13 +11,14 @@ import {
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  identityAvatarImage,
+  renderAgentIdentityAvatar,
   resolveIdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
+import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
-  assistantAvatarFallbackUrl,
   isRenderableControlUiAvatarUrl,
+  resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
 } from "../../lib/avatar.ts";
 import {
@@ -35,31 +36,32 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
+import { renderChatAuthorAvatar, renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
 
 export function renderChatAvatar(
   role: string,
-  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
+  assistant?: Pick<AssistantIdentity, "agentId" | "name" | "avatar"> & {
+    textAvatar?: string | null;
+  },
   user?: { name?: string | null; avatar?: string | null },
-  resourceBasePath?: string,
   sender?: SenderIdentity | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   // Attributed multi-user messages show the author's own avatar (profile
   // upload → gateway Gravatar proxy → initials), not the local viewer's.
   if (normalized === "user" && sender) {
+    if (sender.identity?.type === "agent") {
+      return renderChatAuthorAvatar(sender, "chat-avatar assistant");
+    }
     return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
   }
   if (normalized === "assistant") {
     const name = assistant?.name?.trim() || "Assistant";
     return renderAgentAvatar(
+      assistant?.agentId ?? DEFAULT_AGENT_ID,
       name,
       assistant?.avatar,
-      html`<img
-        class="chat-avatar assistant chat-avatar--logo"
-        src=${assistantAvatarFallbackUrl(resourceBasePath ?? "")}
-        alt=${name}
-      />`,
+      assistant?.textAvatar ?? resolveAssistantTextAvatar(assistant?.avatar),
     );
   }
   const userName = resolveLocalUserName(user);
@@ -121,22 +123,15 @@ export function renderChatAvatar(
 }
 
 function renderAgentAvatar(
+  id: string,
   name: string,
   avatar: string | null | undefined,
-  fallback: TemplateResult,
+  textAvatar = resolveAssistantTextAvatar(avatar),
 ) {
   const value = avatar?.trim() || "";
-  if (isAvatarUrl(value)) {
-    return html`<img
-      class="chat-avatar assistant"
-      src=${identityAvatarImage(value)}
-      alt=${name}
-    />`;
-  }
-  const text = resolveAssistantTextAvatar(value);
-  return text
-    ? html`<div class="chat-avatar assistant" role="img" aria-label=${name}>${text}</div>`
-    : fallback;
+  return html`<span class="chat-avatar assistant" role="img" aria-label=${name}>
+    ${renderAgentIdentityAvatar({ id, avatar: isAvatarUrl(value) ? value : null, textAvatar })}
+  </span>`;
 }
 
 type ForwardedAvatarOptions = {
@@ -145,7 +140,7 @@ type ForwardedAvatarOptions = {
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
   assistantName?: string;
   assistantAvatar?: string | null;
-  resourceBasePath?: string;
+  assistantTextAvatar?: string | null;
 };
 
 export function renderForwardedAvatar(agentId: string | undefined, opts: ForwardedAvatarOptions) {
@@ -154,12 +149,12 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
   // avatar for same-agent sessions, and the forward glyph only for
   // unresolvable or legacy sources.
   if (agentId && agentId === opts.agentId) {
-    return renderChatAvatar(
-      "assistant",
-      { name: opts.assistantName ?? "Assistant", avatar: opts.assistantAvatar ?? null },
-      undefined,
-      opts.resourceBasePath,
-    );
+    return renderChatAvatar("assistant", {
+      agentId,
+      name: opts.assistantName ?? "Assistant",
+      avatar: opts.assistantAvatar ?? null,
+      textAvatar: opts.assistantTextAvatar,
+    });
   }
   const agent = agentId ? opts.agents?.find((candidate) => candidate.id === agentId) : undefined;
   if (!agent) {
@@ -168,14 +163,12 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
     </div>`;
   }
   const name = agent.identity?.name?.trim() || agent.id;
+  const avatar = opts.senderAgentAvatars?.get(agent.id) ?? resolveAgentAvatarUrl(agent);
   return renderAgentAvatar(
+    agent.id,
     name,
-    opts.senderAgentAvatars?.get(agent.id),
-    renderUserAvatarSlot(
-      { fallback: resolveAvatarInitials({ id: agent.id, name }), imageUrl: null, pending: false },
-      name,
-      "assistant",
-    ),
+    avatar,
+    resolveAssistantTextAvatar(avatar) ?? resolveAgentTextAvatar(agent),
   );
 }
 

@@ -78,7 +78,7 @@ it("renders the selected label and a data URL image avatar", async () => {
 
   try {
     expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Alpha agent");
-    expect(element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src).toContain(
+    expect(element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
       dataUrl,
     );
   } finally {
@@ -102,7 +102,7 @@ it("prefers the roster-projected avatar URL over the raw local source", async ()
   });
 
   try {
-    expect(element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src).toContain(
+    expect(element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
       dataUrl,
     );
   } finally {
@@ -116,21 +116,19 @@ it("renders an emoji text avatar when no image URL is available", async () => {
   });
 
   try {
-    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "🦉",
-    );
-    expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+    expect(element.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦉");
+    expect(element.querySelector(".agent-select__avatar img")).toBeNull();
   } finally {
     element.remove();
   }
 });
 
-it("falls back to the uppercase agent initial", async () => {
+it("falls back to a generated face for the agent", async () => {
   const element = await createAgentSelect();
 
   try {
-    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "A",
+    await waitForFast(() =>
+      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
     );
   } finally {
     element.remove();
@@ -138,16 +136,14 @@ it("falls back to the uppercase agent initial", async () => {
 });
 
 it("preserves complete grapheme clusters in emoji avatar fallback", async () => {
-  const agent = { id: "family", name: "👨‍👩‍👧‍👦Family" };
+  const agent = { id: "family", name: "Family", identity: { emoji: "👍🏻" } };
   const element = await createAgentSelect({
     options: [{ value: agent.id, label: agent.name, agent }],
     value: agent.id,
   });
 
   try {
-    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "👨‍👩‍👧‍👦",
-    );
+    expect(element.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("👍🏻");
   } finally {
     element.remove();
   }
@@ -175,9 +171,9 @@ it("fetches local avatars with the bearer credential when token auth is active",
   });
 
   try {
-    // Text fallback renders while the authenticated fetch is in flight.
-    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "A",
+    // The generated fallback renders while the authenticated fetch is in flight.
+    await waitForFast(() =>
+      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
     );
     expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
       credentials: "include",
@@ -187,7 +183,7 @@ it("fetches local avatars with the bearer credential when token auth is active",
 
     await waitForFast(() => {
       expect(
-        element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
+        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
       ).toBe("blob:agent-avatar");
     });
     expect(createObjectURL).toHaveBeenCalledTimes(1);
@@ -223,7 +219,7 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
 
   try {
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+    expect(element.querySelector(".agent-select__avatar img")).toBeNull();
 
     setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
     await element.updateComplete;
@@ -235,7 +231,7 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
         signal: expect.any(AbortSignal),
       });
       expect(
-        element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
+        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
       ).toBe("blob:rotated-avatar");
     });
   } finally {
@@ -301,7 +297,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     } as Response);
     await waitForFast(() => {
       expect(
-        element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
+        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
       ).toBe("blob:rotated-avatar");
     });
   } finally {
@@ -343,9 +339,6 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
     expect(fetchInit?.signal?.aborted).toBe(false);
-    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "A",
-    );
 
     await vi.advanceTimersByTimeAsync(29_999);
     expect(fetchInit?.signal?.aborted).toBe(false);
@@ -353,10 +346,8 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
     expect(fetchInit?.signal?.aborted).toBe(true);
 
     await waitForFast(() => {
-      expect(element.querySelector("img.agent-select__avatar")).toBeNull();
-      expect(
-        element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
-      ).toBe("A");
+      expect(element.querySelector(".agent-select__avatar img")).toBeNull();
+      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull();
     });
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -405,10 +396,8 @@ it("aborts a stalled local avatar body after the request deadline", async () => 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchInit?.signal?.aborted).toBe(true);
     await waitForFast(() => {
-      expect(element.querySelector("img.agent-select__avatar")).toBeNull();
-      expect(
-        element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
-      ).toBe("A");
+      expect(element.querySelector(".agent-select__avatar img")).toBeNull();
+      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull();
     });
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -443,7 +432,7 @@ it("fetches a local avatar image without a header when token auth is not active"
     });
     await waitForFast(() => {
       expect(
-        element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
+        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
       ).toBe("blob:unauthenticated-avatar");
     });
   } finally {
@@ -518,8 +507,8 @@ it("shows an unmatched selected value instead of the first option", async () => 
     expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe(
       "system-monitor",
     );
-    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "S",
+    await waitForFast(() =>
+      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
     );
     await waitForFast(() => {
       expect(

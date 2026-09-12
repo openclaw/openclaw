@@ -174,7 +174,9 @@ describe("AppSidebar agent roster", () => {
         agentIds(sidebar).map((id) => `/new?agent=${id}`),
       );
       expect(options[0]?.textContent).toContain("Harbor");
-      expect(options[2]?.querySelector(".identity-avatar__agent-face")).not.toBeNull();
+      await vi.waitFor(() =>
+        expect(options[2]?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+      );
     }
     menus[0]?.dispatchEvent(
       new CustomEvent("wa-select", {

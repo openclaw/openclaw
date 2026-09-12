@@ -96,9 +96,18 @@ export function projectChatTranscript(
       isUiGlobalScopeConfigured(sessionHost) &&
       resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
+  const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
+  const assistantAvatar = resolveAssistantDisplayAvatar({
+    currentAgentId: assistantAgentId,
+    agents: props.agents,
+    assistantAvatar: props.assistantAvatar,
+    assistantAvatarUrl: props.assistantAvatarUrl,
+  });
   const assistantIdentity = {
+    agentId: assistantAgentId,
     name: props.assistantName,
-    avatar: resolveAssistantDisplayAvatar(props),
+    avatar: assistantAvatar.avatar,
+    textAvatar: assistantAvatar.textAvatar,
   };
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
@@ -300,7 +309,7 @@ export function projectChatTranscript(
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
-    showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
+    showAssistantAvatar: avatarPlacement === "gutter",
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
@@ -340,7 +349,8 @@ export function projectChatTranscript(
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
-      agentId: props.currentAgentId ?? props.fullMessageAgentId,
+      assistantTextAvatar: assistantIdentity.textAvatar,
+      agentId: assistantIdentity.agentId,
       agents: props.agents,
       senderAgentAvatars: props.senderAgentAvatars,
       mainKey: props.mainKey,
@@ -664,6 +674,7 @@ export function projectChatTranscript(
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    assistantIdentity.textAvatar,
     props.currentAgentId,
     props.agents,
     props.senderAgentAvatars,

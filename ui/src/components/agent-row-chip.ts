@@ -3,11 +3,12 @@ import { html } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { resolveUiDefaultAgentId } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import "../styles/agent-row-chip.css";
 
 export function renderAgentRowChip(agentId?: string) {
@@ -60,13 +61,7 @@ class AgentRowChip extends OpenClawLightDomElement {
         aria-label=${label}
         title=${label}
       >
-        ${
-          image
-            ? html`<img class="agent-row-chip__avatar" src=${image} alt="" loading="lazy" />`
-            : html`<span class="agent-row-chip__avatar" aria-hidden="true"
-                >${resolveAgentTextAvatar(agent, identity) ?? deriveAvatarInitial(name)}</span
-              >`
-        }
+        ${renderAgentIdentityAvatar({ id, avatar: image, textAvatar: resolveAgentTextAvatar(agent, identity) }, "agent-row-chip__avatar")}
         <span class="agent-row-chip__name">${name}</span>
       </span>`;
     });

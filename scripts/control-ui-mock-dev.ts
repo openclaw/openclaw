@@ -1401,6 +1401,21 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
+function syntheticAvatar(color: "coral" | "green"): string {
+  const background = color === "coral" ? "#ffdbcc" : "#d5efd4";
+  const fill = color === "coral" ? "#e87355" : "#65a879";
+  const artwork = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="18" fill="${background}"/>
+    <path d="M12 28 16 10l13 10h6l13-10 4 18v10a20 20 0 0 1-40 0Z" fill="${fill}"/>
+    <g fill="#253331">
+      <circle cx="24" cy="33" r="3"/>
+      <circle cx="40" cy="33" r="3"/>
+    </g>
+    <path d="M26 43q6 6 12 0" fill="none" stroke="#253331" stroke-width="3" stroke-linecap="round"/>
+  </svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(artwork).toString("base64")}`;
+}
+
 async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
 ): Promise<ControlUiMockGatewayScenario> {
@@ -1412,8 +1427,7 @@ async function createChatPickerScenario(
       name: "Molty",
       theme: "Your everyday coordinator",
       emoji: "🦞",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=",
+      avatar: syntheticAvatar("coral"),
       preview: "I am organizing the next steps for the sample project.",
       sessionLabels: ["Project next steps", "Weekly review"],
     },
@@ -1440,8 +1454,7 @@ async function createChatPickerScenario(
       name: "Bloom",
       theme: "Turns rough drafts into clear stories",
       emoji: "🌱",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGPI2NqGFTEQkPj64w8ag5AEPqPgiDgdmAgAoqhy8cqD9UUAAAAASUVORK5CYII=",
+      avatar: syntheticAvatar("green"),
       preview: "The welcome guide now has a shorter opening and clear examples.",
       sessionLabels: ["Welcome guide", "Story ideas"],
     },

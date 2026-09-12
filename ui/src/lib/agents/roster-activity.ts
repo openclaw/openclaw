@@ -1,5 +1,5 @@
 import type { AgentIdentityResult, AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
-import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../avatar.ts";
+import { resolveAgentAvatarUrl } from "../avatar.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
   resolveUiConversationIdentity,
@@ -39,7 +39,6 @@ export function agentRosterCards(
       model: agent.model?.primary,
       avatar: resolveAgentAvatarUrl(agent, identity),
       textAvatar: resolveAgentTextAvatar(agent, identity),
-      fallback: resolveAgentTextAvatar(agent, identity) ?? deriveAvatarInitial(name),
       mainKey,
       activeNow: sessions.some(isSessionRunActive),
       unreadCount: sessions.filter((row) => row.unread && !row.archived).length,

@@ -2,7 +2,7 @@ import { html, nothing, type Part } from "lit";
 import { directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
 import { live } from "lit/directives/live.js";
-import { UntilDirective } from "lit/directives/until.js";
+import { until, UntilDirective } from "lit/directives/until.js";
 import { readAvatarGatewayContext } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
@@ -12,6 +12,7 @@ import {
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
+import "../styles/identity-avatar.css";
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
 
@@ -36,7 +37,10 @@ export function resolveIdentityAvatarView(identity: IdentityAvatarInput): Identi
 }
 
 /** Reconcile changed images without overwriting event fallback on unchanged rerenders. */
-export function identityAvatarClass(className: string, view: IdentityAvatarView) {
+export function identityAvatarClass(
+  className: string,
+  view: Pick<IdentityAvatarView, "imageUrl" | "pending">,
+) {
   return guard([className, view.imageUrl, view.pending], () =>
     live(`${className}${view.pending ? " is-fallback" : ""}`),
   );
@@ -100,7 +104,7 @@ class IdentityAvatarImageDirective extends UntilDirective<unknown> {
 }
 
 /** Local agent and profile routes share the same authenticated image lease. */
-export const identityAvatarImage = directive(IdentityAvatarImageDirective);
+const identityAvatarImage = directive(IdentityAvatarImageDirective);
 
 /** Render the shared authenticated user image with its canonical event lifecycle. */
 export function renderIdentityAvatarImage({
@@ -110,7 +114,7 @@ export function renderIdentityAvatarImage({
   alt = "",
   ariaHidden = false,
 }: {
-  view: IdentityAvatarView;
+  view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl">;
   fallbackSelector: string;
   className?: string;
   alt?: string;
@@ -128,4 +132,35 @@ export function renderIdentityAvatarImage({
     @error=${(event: Event) => settleIdentityAvatarImage(event, fallbackSelector, true)}
     @load=${(event: Event) => settleIdentityAvatarImage(event, fallbackSelector, false)}
   />`;
+}
+
+/** Agent images and emoji share one fallback across every surface. */
+export function renderAgentIdentityAvatar(
+  agent: { id: string; avatar?: string | null; textAvatar?: string | null },
+  className = "",
+) {
+  const imageUrl = agent.avatar ? (resolveAvatarImageUrl(agent.avatar) ?? agent.avatar) : null;
+  const view = {
+    imageUrl,
+    sourceUrl: agent.avatar ?? undefined,
+    pending: typeof imageUrl !== "string",
+  };
+  return html`<span
+    class=${identityAvatarClass(`identity-avatar--agent ${className}`, view)}
+    aria-hidden="true"
+  >
+    ${renderIdentityAvatarImage({ view, fallbackSelector: ".identity-avatar--agent", className: "identity-avatar__image" })}
+    <span class="identity-avatar__fallback">
+      ${guard([agent.id, agent.textAvatar], () =>
+        until(
+          agent.textAvatar
+            ? html`<span class="identity-avatar__text" data-avatar=${agent.textAvatar}></span>`
+            : import("./agent-avatar-face.ts").then(({ renderAgentAvatarFace }) =>
+                renderAgentAvatarFace(agent.id),
+              ),
+          nothing,
+        ),
+      )}
+    </span>
+  </span>`;
 }

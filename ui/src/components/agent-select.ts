@@ -6,10 +6,11 @@ import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 export type AgentSelectOption = {
@@ -32,23 +33,19 @@ export function renderAgentSelectAvatar(
     imageUrl === undefined && option.agent
       ? resolveAgentAvatarUrl(option.agent, identity)
       : (imageUrl ?? null);
-  if (resolvedImageUrl) {
-    return html`<img class="agent-select__avatar" src=${resolvedImageUrl} alt="" loading="lazy" />`;
-  }
-  if (option.icon) {
+  if (option.icon && !resolvedImageUrl) {
     return html`<span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true"
       >${option.icon}</span
     >`;
   }
-  const text = option.agent ? resolveAgentTextAvatar(option.agent, identity) : null;
-  const fallback = deriveAvatarInitial(option.label) || "?";
-  return html`
-    <span
-      class="agent-select__avatar agent-select__avatar--text"
-      data-avatar=${text ?? fallback}
-      aria-hidden="true"
-    ></span>
-  `;
+  return renderAgentIdentityAvatar(
+    {
+      id: option.agent?.id ?? option.value,
+      avatar: resolvedImageUrl,
+      textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
+    },
+    "agent-select__avatar",
+  );
 }
 
 export function renderAgentSelectCopy(option: AgentSelectOption) {

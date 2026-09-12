@@ -138,8 +138,10 @@ suite.define(() => {
           expect(await group.locator(".identity-avatar__agent-face").count()).toBe(1);
           expect(
             await sidebar
-              .locator('[data-agent-group="research"] .sidebar-agent-roster__avatar')
-              .textContent(),
+              .locator(
+                '[data-agent-group="research"] .sidebar-agent-roster__avatar .identity-avatar__text',
+              )
+              .getAttribute("data-avatar"),
           ).toContain("🔬");
           expect(
             await sidebar

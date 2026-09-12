@@ -1,4 +1,4 @@
-import { html, svg, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -7,7 +7,6 @@ import { t } from "../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { AgentRosterElement } from "../lib/agents/roster-element.ts";
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { newSessionSearch } from "../pages/new-session/location.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
@@ -15,6 +14,7 @@ import { renderSessionListFrame, renderSessionSection } from "./app-sidebar-sess
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
+import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { renderSessionTreeSummary } from "./session-attention-presentation.ts";
 import "../styles/sidebar-agent-roster.css";
@@ -136,7 +136,7 @@ class SidebarAgentRoster extends AgentRosterElement {
                     }}
                   >
                     <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                      ${card.avatar ? html`<img src=${card.avatar} alt="" loading="lazy" />` : (card.textAvatar ?? renderAgentAvatarFallback(card.id))}
+                      ${renderAgentIdentityAvatar(card)}
                     </span>
                     <span class="sidebar-agent-roster__copy"><span>${card.name}</span></span>
                   </a>
@@ -230,7 +230,7 @@ class SidebarNewSessionMenu extends AgentRosterElement {
               href=${`${pathForRoute("new-session", this.host.basePath)}${newSessionSearch(card.id)}`}
               tabindex="-1"
               ><span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                ${card.avatar ? html`<img src=${card.avatar} alt="" loading="lazy" />` : (card.textAvatar ?? renderAgentAvatarFallback(card.id))} </span
+                ${renderAgentIdentityAvatar(card)} </span
               ><span>${card.name}</span></a
             >
           </wa-dropdown-item>`,
@@ -260,24 +260,4 @@ export function renderSidebarAgentRoster(
     .sections=${sections}
     .involvingMe=${host.sessionInvolvingMeFilterActive}
   ></openclaw-sidebar-agent-roster>`;
-}
-
-/** Agent artwork shares the identity renderer; explicit images/text win at the caller. */
-function renderAgentAvatarFallback(agentId: string) {
-  const seed = fnv1aUtf16(agentId);
-  const ears =
-    seed % 2 === 0
-      ? svg`<path d="M7 15V6l7 5h4l7-5v9" />`
-      : svg`<path d="M8 14Q3 7 8 6q5 0 6 6h4q1-6 6-6 5 1 0 8" />`;
-  return html`<svg
-    class="identity-avatar__agent-face"
-    viewBox="0 0 32 32"
-    aria-hidden="true"
-    style=${`--identity-hue: ${seed % 360}`}
-  >
-    ${svg`<rect width="32" height="32" rx="11" fill="currentColor" opacity=".14" />
-    <g fill="currentColor" opacity=".4">${ears}<rect x="6" y="11" width="20" height="17" rx="9" /></g>
-    <g fill="currentColor"><circle cx="12" cy="17" r="1.5" /><circle cx="20" cy="17" r="1.5" /></g>
-    <path d="M13 22q3 3 6 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />`}
-  </svg>`;
 }

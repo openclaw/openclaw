@@ -133,9 +133,9 @@ describe("AppSidebar agent chip", () => {
       const rustRow = [
         ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch"),
       ].find((row) => row.textContent?.includes("rust-claw"));
-      expect(
-        rustRow?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
-      ).toBe("🦀");
+      expect(rustRow?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+        "🦀",
+      );
     });
   });
 
@@ -230,10 +230,8 @@ describe("AppSidebar agent chip", () => {
     expect(agentRows).toHaveLength(2);
     expect(agentRows[0]?.classList.contains("sidebar-agent-menu__agent-switch--active")).toBe(true);
     expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-tile")).not.toBeNull();
-    expect(menu?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "🦞",
-    );
-    expect(menu?.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src).toContain(
+    expect(menu?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
+    expect(menu?.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
       "data:image/png;base64,eA==",
     );
     const switchMenu = menu;

@@ -15,7 +15,7 @@ import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { redactLoginFailureError } from "../lib/connection-hints.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -112,17 +112,15 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
       gateway.connection.token.trim() ||
       gateway.connection.password.trim()),
   );
-  const cardAvatarText =
-    (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
-    (deriveAvatarInitial(cardName || cardAgentId) || "?");
   return html`
     <openclaw-sidebar-agent-card
       .agentName=${cardName}
+      .agentId=${cardAgentId}
       .avatarUrl=${
         cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
       }
       .avatarAuthReady=${avatarAuthReady}
-      .avatarText=${cardAvatarText}
+      .avatarText=${resolveAgentTextAvatar(cardAgent ?? { identity: {} }, cardIdentity)}
       .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
       .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
       .menuUnread=${menuUnread}

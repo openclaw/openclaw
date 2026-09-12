@@ -54,7 +54,7 @@ describe("agent roster activity", () => {
     expect(cards.map((card) => card.id)).toEqual(["harbor", "ember", "empty"]);
     expect(cards[1]).toMatchObject({
       name: "Ember",
-      fallback: "🔥",
+      textAvatar: "🔥",
       activeNow: true,
       lastActiveAt: 6,
       preview: "Main summary",

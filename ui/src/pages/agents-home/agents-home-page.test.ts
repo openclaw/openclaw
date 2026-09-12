@@ -80,7 +80,7 @@ function createPage(pageSize = 2) {
         agentId,
         name: agentId === "ember" ? "Ember" : "Harbor",
         avatar: "",
-        emoji: "🔥",
+        emoji: agentId === "harbor" ? "⚓" : "",
       } satisfies AgentIdentityResult;
     }
     if (method === "sessions.subscribe") {
@@ -189,7 +189,12 @@ describe("AgentsHomePage", () => {
     expect(cards.map((card) => card.querySelector("h2")?.textContent)).toEqual(["Ember", "Harbor"]);
     expect(cards[0]?.textContent).toContain("Builds small tools");
     expect(cards[0]?.textContent).toContain("example/model-small");
-    expect(cards[0]?.textContent).toContain("🔥");
+    await vi.waitFor(() =>
+      expect(cards[0]?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
+    expect(cards[1]?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+      "⚓",
+    );
     expect(cards[0]?.querySelector(".agents-home__working")?.textContent).toBe("Working now");
     expect(cards[1]?.querySelector(".agents-home__working")).toBeNull();
     expect(cards[0]?.querySelector(".agents-home__preview")?.textContent?.trim()).toBe(
