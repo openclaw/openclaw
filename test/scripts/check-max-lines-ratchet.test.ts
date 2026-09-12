@@ -6,8 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectCurrentSuppressionState,
   collectLintDisableDirectives,
-  hasAllRuleDisable,
-  hasMaxLinesDisable,
   isGovernedSourcePath,
   main,
 } from "../../scripts/check-max-lines-ratchet.mts";
@@ -84,32 +82,23 @@ describe("check-max-lines-ratchet", () => {
     ]);
   });
 
-  it("recognizes suppressions without matching reason prose", () => {
-    expect(hasMaxLinesDisable("/* oxlint-disable max-lines -- TODO: split. */\n")).toBe(true);
-    expect(hasMaxLinesDisable("// eslint-disable-next-line no-console, max-lines\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable */\n")).toBe(false);
-    expect(hasMaxLinesDisable("// oxlint-disable-line -- all rules\n")).toBe(false);
-    expect(hasMaxLinesDisable("/* oxlint-disable max-lines - TODO: split. */\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable max-lines--temporary */\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable - all rules */\n")).toBe(false);
-    expect(hasMaxLinesDisable("/* oxlint-disable eslint/max-lines */\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable\nmax-lines\n-- TODO: split. */\n")).toBe(true);
-    expect(
-      hasMaxLinesDisable(
-        "export const value = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",
-      ),
-    ).toBe(true);
-    expect(
-      hasMaxLinesDisable("if (true) {\n  const value = 1;\n  /* oxlint-disable max-lines */\n}\n"),
-    ).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable no-console -- mentions max-lines */\n")).toBe(
-      false,
-    );
-    expect(hasMaxLinesDisable("// Example: oxlint-disable max-lines\n")).toBe(false);
-    expect(hasMaxLinesDisable('const example = "/* oxlint-disable max-lines */";\n')).toBe(false);
-    expect(hasAllRuleDisable("/* oxlint-disable */\n")).toBe(true);
-    expect(hasAllRuleDisable("// oxlint-disable-line -- all rules\n")).toBe(true);
-    expect(hasAllRuleDisable("/* oxlint-disable max-lines */\n")).toBe(false);
+  it.each<[string, string[][]]>([
+    ["/* oxlint-disable max-lines -- TODO: split. */\n", [["max-lines"]]],
+    ["// eslint-disable-next-line no-console, max-lines\n", [["no-console", "max-lines"]]],
+    ["/* oxlint-disable */\n", [[]]],
+    ["// oxlint-disable-line -- all rules\n", [[]]],
+    ["/* oxlint-disable max-lines - TODO: split. */\n", [["max-lines"]]],
+    ["/* oxlint-disable max-lines--temporary */\n", [["max-lines"]]],
+    ["/* oxlint-disable - all rules */\n", [[]]],
+    ["/* oxlint-disable eslint/max-lines */\n", [["eslint/max-lines"]]],
+    ["/* oxlint-disable\nmax-lines\n-- TODO: split. */\n", [["max-lines"]]],
+    ["export const value = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n", [["max-lines"]]],
+    ["if (true) {\n  const value = 1;\n  /* oxlint-disable max-lines */\n}\n", [["max-lines"]]],
+    ["/* oxlint-disable no-console -- mentions max-lines */\n", [["no-console"]]],
+    ["// Example: oxlint-disable max-lines\n", []],
+    ['const example = "/* oxlint-disable max-lines */";\n', []],
+  ])("parses directive rules without matching reason prose: %j", (source, directives) => {
+    expect(collectLintDisableDirectives(source)).toEqual(directives);
   });
 
   it("limits source roots and excludes generated output", () => {
@@ -287,7 +276,10 @@ describe("check-max-lines-ratchet", () => {
     fs.rmSync(path.join(root, "src/deleted.ts"));
     expect(main(root)).toBe(0);
 
-    fs.writeFileSync(path.join(root, "src/untracked.ts"), "/* oxlint-disable max-lines */\n");
+    fs.writeFileSync(
+      path.join(root, "src/untracked.ts"),
+      "// eslint-disable-next-line eslint/max-lines\n",
+    );
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root)).toBe(1);

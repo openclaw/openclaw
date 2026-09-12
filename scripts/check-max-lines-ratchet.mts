@@ -79,14 +79,6 @@ export function isMaxLinesRule(rule: string) {
   return rule === "max-lines" || rule.endsWith("/max-lines");
 }
 
-export function hasMaxLinesDisable(source: string, filePath = "source.ts") {
-  return collectLintDisableDirectives(source, filePath).some((rules) => rules.some(isMaxLinesRule));
-}
-
-export function hasAllRuleDisable(source: string, filePath = "source.ts") {
-  return collectLintDisableDirectives(source, filePath).some((rules) => rules.length === 0);
-}
-
 function baselineWithVerifiedRenames(
   root: string,
   baseRef: string,
@@ -150,21 +142,24 @@ export function collectCurrentSuppressionState(
     .filter(Boolean)
     .filter(isGovernedSourcePath)
     .filter((filePath) => staged || fs.existsSync(path.join(root, filePath)));
-  const sources = staged
-    ? [...loadRatchetSources(root, governedPaths)]
-    : governedPaths.map((filePath): [string, string] => [
-        filePath,
-        fs.readFileSync(path.join(root, filePath), "utf8"),
-      ]);
+  const stagedSources = staged ? loadRatchetSources(root, governedPaths) : undefined;
+  const allRules: string[] = [];
+  const explicit: string[] = [];
+  for (const filePath of governedPaths) {
+    const source = stagedSources
+      ? stagedSources.get(filePath)!
+      : fs.readFileSync(path.join(root, filePath), "utf8");
+    const directives = collectLintDisableDirectives(source, filePath);
+    if (directives.some((rules) => rules.length === 0)) {
+      allRules.push(filePath);
+    }
+    if (directives.some((rules) => rules.some(isMaxLinesRule))) {
+      explicit.push(filePath);
+    }
+  }
   return {
-    allRules: sources
-      .filter(([filePath, source]) => hasAllRuleDisable(source, filePath))
-      .map(([filePath]) => filePath)
-      .toSorted(compareStrings),
-    explicit: sources
-      .filter(([filePath, source]) => hasMaxLinesDisable(source, filePath))
-      .map(([filePath]) => filePath)
-      .toSorted(compareStrings),
+    allRules: allRules.toSorted(compareStrings),
+    explicit: explicit.toSorted(compareStrings),
   };
 }
 
