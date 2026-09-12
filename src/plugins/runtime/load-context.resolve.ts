@@ -26,6 +26,7 @@ type PluginRuntimeLoadContextOptions = {
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   preferBuiltPluginArtifacts?: boolean;
+  expectedSourceDigests?: PluginRuntimeLoadContext["expectedSourceDigests"];
 };
 
 /** Resolves config, manifests, install records, and auto-enable state for runtime loads. */
@@ -87,5 +88,6 @@ export function resolvePluginRuntimeLoadContext(
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
     preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts,
+    expectedSourceDigests: options?.expectedSourceDigests,
   };
 }

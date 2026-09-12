@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+  PluginRuntimeApplicationSchema,
+  PluginsChangedEventSchema,
   PluginsListResultSchema,
   PluginsInspectResultSchema,
+  PluginsReloadResultSchema,
   buildCapabilityConsentErrorDetails,
   readCapabilityConsentErrorDetails,
   readInstallPolicyWarningErrorDetails,
@@ -13,6 +16,7 @@ import {
   validatePluginsInstallParams,
   validatePluginsListParams,
   validatePluginsRefreshParams,
+  validatePluginsReloadParams,
   validatePluginsSearchParams,
   validatePluginsCatalogBrowseParams,
   validatePluginsCatalogGetParams,
@@ -22,6 +26,68 @@ import {
 } from "./index.js";
 
 describe("plugin lifecycle protocol validators", () => {
+  it("accepts one bounded batch of exact installed owners for reload", () => {
+    const target = { pluginId: "alpha", installHash: "a".repeat(64) };
+    expect(validatePluginsReloadParams({ plugins: [target] })).toBe(true);
+    expect(
+      validatePluginsReloadParams({
+        plugins: Array.from({ length: 64 }, (_, index) => ({
+          ...target,
+          pluginId: `plugin-${index}`,
+        })),
+      }),
+    ).toBe(true);
+    expect(
+      validatePluginsReloadParams({
+        plugins: [{ ...target, sourceDigests: { alpha: "b".repeat(64) } }],
+      }),
+    ).toBe(true);
+    for (const request of [
+      { plugins: [] },
+      {
+        plugins: Array.from({ length: 65 }, (_, index) => ({
+          ...target,
+          pluginId: `plugin-${index}`,
+        })),
+      },
+      { plugins: [target, target] },
+      { plugins: [{ ...target, installHash: "" }] },
+      { plugins: [{ ...target, installHash: "A".repeat(64) }] },
+      { plugins: [{ ...target, sourceDigests: { alpha: "not-a-digest" } }] },
+      { plugins: [target], pluginId: "alpha" },
+      { plugins: [{ ...target, trusted: true }] },
+    ]) {
+      expect(validatePluginsReloadParams(request)).toBe(false);
+    }
+  });
+
+  it("requires one cohort result with an applied receipt", () => {
+    const runtime = { operationId: "reload", generation: 2, pluginIds: ["alpha", "beta"] };
+    const batch = { ok: true, pluginIds: ["alpha", "beta"], restartRequired: false, runtime };
+    expect(Value.Check(PluginsReloadResultSchema, batch)).toBe(true);
+    expect(
+      Value.Check(PluginsReloadResultSchema, {
+        ...batch,
+        warnings: ["Previous plugin service could not close."],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(PluginsReloadResultSchema, {
+        ok: true,
+        pluginId: "alpha",
+        restartRequired: false,
+      }),
+    ).toBe(false);
+    const { runtime: _runtime, ...withoutReceipt } = batch;
+    for (const result of [
+      withoutReceipt,
+      { ...batch, restartRequired: true },
+      { ...batch, pluginIds: [] },
+      { ...batch, warnings: "cleanup failed" },
+    ]) {
+      expect(Value.Check(PluginsReloadResultSchema, result)).toBe(false);
+    }
+  });
   it("exports install policy warning details from the package root", () => {
     const details: InstallPolicyWarningErrorDetails = {
       installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
@@ -272,11 +338,69 @@ describe("plugin lifecycle protocol validators", () => {
 
   it("validates uninstall requests", () => {
     expect(validatePluginsUninstallParams({ pluginId: "memory-plus" })).toBe(true);
+    expect(validatePluginsUninstallParams({ pluginId: "memory-plus", keepFiles: true })).toBe(true);
+    expect(validatePluginsUninstallParams({ pluginId: "memory-plus", keepFiles: "yes" })).toBe(
+      false,
+    );
     expect(validatePluginsUninstallParams({ pluginId: "" })).toBe(false);
     expect(validatePluginsUninstallParams({})).toBe(false);
   });
 
+  it("keeps targeted reload and its capability acknowledgment closed", () => {
+    expect(validatePluginsReloadParams({ plugins: [{ pluginId: "notes" }] })).toBe(true);
+    expect(
+      validatePluginsReloadParams({
+        plugins: [{ pluginId: "notes", installHash: "a".repeat(64) }],
+        acknowledgeCapabilities: { reviewToken: "reviewed-artifact" },
+      }),
+    ).toBe(true);
+    for (const request of [
+      {},
+      { pluginId: "notes" },
+      { plugins: [{ pluginId: "" }] },
+      { plugins: [{ pluginId: "notes", enabled: true }] },
+      { plugins: [{ pluginId: "notes" }], acknowledgeCapabilities: true },
+      { plugins: [{ pluginId: "notes" }], acknowledgeCapabilities: { reviewToken: "" } },
+      {
+        plugins: [{ pluginId: "notes" }],
+        acknowledgeCapabilities: { reviewToken: "reviewed", extra: true },
+      },
+    ]) {
+      expect(validatePluginsReloadParams(request)).toBe(false);
+    }
+  });
+
+  it("validates applied receipts separately from generation invalidation events", () => {
+    const receipt = {
+      operationId: "plugin-reload",
+      generation: 2,
+      pluginIds: ["notes"],
+      sourceDigests: { notes: "sha256-fixture" },
+    };
+    expect(Value.Check(PluginRuntimeApplicationSchema, receipt)).toBe(true);
+    expect(Value.Check(PluginsChangedEventSchema, { generation: 2 })).toBe(true);
+    expect(Value.Check(PluginsChangedEventSchema, receipt)).toBe(false);
+    expect(Value.Check(PluginRuntimeApplicationSchema, { generation: 2 })).toBe(false);
+    for (const generation of [-1, 1.5, "2"]) {
+      expect(Value.Check(PluginRuntimeApplicationSchema, { ...receipt, generation })).toBe(false);
+      expect(Value.Check(PluginsChangedEventSchema, { generation })).toBe(false);
+    }
+  });
+
   it("validates enablement mutations", () => {
+    expect(
+      validatePluginsSetEnabledParams({
+        pluginId: "workboard",
+        enabled: true,
+        allowlistPolicy: "preserve",
+      }),
+    ).toBe(true);
+    for (const allowlistPolicy of ["widen", "", true, {}]) {
+      expect(
+        validatePluginsSetEnabledParams({ pluginId: "workboard", enabled: true, allowlistPolicy }),
+      ).toBe(false);
+    }
+
     expect(validatePluginsSetEnabledParams({ pluginId: "workboard", enabled: true })).toBe(true);
     expect(
       validatePluginsSetEnabledParams({

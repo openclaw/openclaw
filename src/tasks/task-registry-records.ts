@@ -1,6 +1,9 @@
 // Clones and normalizes task registry records at persistence boundaries.
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskDeliveryState,
+  type TaskRecord,
+} from "./task-registry.types.js";
 
 export function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return {

@@ -55,10 +55,13 @@ suite.define(() => {
       const before = await gateway.getRequests("terminal.input");
       await page.keyboard.press("Control+Backquote");
       if (route === "chat") {
-        await panel.locator(".tp-header").waitFor({ state: "hidden" });
+        const tabLabel = page
+          .locator('[data-region-header="side"] .tabstrip-tab__label')
+          .filter({ hasText: "sh" });
+        await tabLabel.waitFor({ state: "hidden" });
         expect(await gateway.getRequests("terminal.input")).toEqual(before);
         await page.keyboard.press("Control+Backquote");
-        await page.locator("openclaw-terminal-panel .tp-header").waitFor();
+        await tabLabel.waitFor();
       } else {
         await expect
           .poll(async () => (await gateway.getRequests("terminal.input")).length)

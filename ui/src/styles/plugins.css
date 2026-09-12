@@ -706,6 +706,7 @@ h3.settings-row__title {
   font-size: var(--control-ui-text-xs);
   line-height: 1.45;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Row-local message: full-width line under the row's text + controls. */

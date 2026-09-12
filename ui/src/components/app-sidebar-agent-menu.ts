@@ -340,6 +340,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           return;
         }
         switch (value) {
+          case `${COMMAND_VALUE_PREFIX}all-agents`:
+            params.onNavigate("agents-home");
+            break;
           case `${COMMAND_VALUE_PREFIX}capabilities`:
             params.onAskCapabilities(activeId);
             break;
@@ -402,6 +405,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             `
           : nothing
       }
+      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:all-agents">
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
+        <span class="sidebar-customize-menu__text">${t("agentChip.allAgents")}</span>
+      </wa-dropdown-item>
       <wa-dropdown-item
         class="sidebar-customize-menu__item"
         value="command:capabilities"

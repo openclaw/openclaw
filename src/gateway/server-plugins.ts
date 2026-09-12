@@ -5,13 +5,11 @@ import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { activatePluginRegistry } from "../plugins/loader-shared.js";
 import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
-import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -19,6 +17,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import {
   bindGatewayContextResolver,
+  getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -33,7 +32,7 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
-import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
+import type { PluginOrigin } from "../plugins/types.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
@@ -195,10 +194,12 @@ function createGatewayPluginRuntimeBindings(
     Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig">;
   retire: () => void;
 } {
-  let active = true;
   const lifetime = new AbortController();
+  const signal = resolveGatewayContext
+    ? AbortSignal.any([lifetime.signal, getGatewayContextLifetime(resolveGatewayContext).signal])
+    : lifetime.signal;
   const resolveBoundGatewayContext = resolveGatewayContext
-    ? () => (active ? resolveGatewayContext() : undefined)
+    ? () => (signal.aborted ? undefined : resolveGatewayContext())
     : undefined;
   if (resolveBoundGatewayContext) {
     bindGatewayContextResolver(resolveBoundGatewayContext, resolveGatewayContext);
@@ -206,7 +207,6 @@ function createGatewayPluginRuntimeBindings(
   return {
     retire: () => {
       lifetime.abort(new Error("Plugin Gateway runtime retired; duplex invocation cancelled."));
-      active = false;
     },
     runtime: {
       dispatchReplyFromConfig: async (params) => {
@@ -230,35 +230,18 @@ function createGatewayPluginRuntimeBindings(
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
       },
       hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
-      nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, lifetime.signal),
-      subagent: createGatewaySubagentRuntime(
-        resolveBoundGatewayContext,
-        overridePolicies,
-        lifetime.signal,
-      ),
+      nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),
+      subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies, signal),
     },
   };
 }
 
 // ── Plugin loading ──────────────────────────────────────────────────
 
-function createGatewayPluginRegistrationLogger(params?: {
-  suppressInfoLogs?: boolean;
-}): PluginLogger {
-  const logger = createPluginRuntimeLoaderLogger();
-  if (params?.suppressInfoLogs !== true) {
-    return logger;
-  }
-  return {
-    ...logger,
-    info: (_message: string) => undefined,
-  };
-}
-
 export function loadGatewayPlugins(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  autoEnabledReasons?: Readonly<Record<string, string[]>>;
+  autoEnabledReasons: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
   log: {
     info: (msg: string) => void;
@@ -280,38 +263,15 @@ export function loadGatewayPlugins(params: {
   };
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
+  loadIntent: "startup" | "replacement";
+  previousRegistry?: import("../plugins/registry-types.js").PluginRegistry;
+  replacePluginIds?: ReadonlySet<string>;
+  expectedSourceDigests?: Readonly<Record<string, string>>;
+  env?: NodeJS.ProcessEnv;
 }) {
   const started = performance.now();
   const allowProcessHomeSessionCatalogs = allowsProcessHomeSessionScan();
-  const activationAutoEnabled =
-    params.activationSourceConfig !== undefined && params.autoEnabledReasons === undefined
-      ? applyPluginAutoEnable({
-          config: params.activationSourceConfig,
-          env: process.env,
-          ...(params.pluginLookUpTable?.manifestRegistry
-            ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
-            : {}),
-          discovery: params.pluginLookUpTable?.discovery,
-          ambientEnvTriggers: params.ambientEnvTriggers,
-        })
-      : undefined;
-  const autoEnableMs = performance.now() - started;
-  const autoEnabled =
-    params.activationSourceConfig !== undefined || params.autoEnabledReasons !== undefined
-      ? {
-          config: params.cfg,
-          autoEnabledReasons:
-            params.autoEnabledReasons ?? activationAutoEnabled?.autoEnabledReasons ?? {},
-        }
-      : applyPluginAutoEnable({
-          config: params.cfg,
-          env: process.env,
-          manifestRegistry: params.pluginLookUpTable?.manifestRegistry,
-          discovery: params.pluginLookUpTable?.discovery,
-          ambientEnvTriggers: params.ambientEnvTriggers,
-        });
-  const resolvedConfigMs = performance.now() - started;
-  const resolvedConfig = autoEnabled.config;
+  const resolvedConfig = params.cfg;
   const pluginIds = params.pluginIds ?? [
     ...(
       params.pluginLookUpTable ??
@@ -319,7 +279,7 @@ export function loadGatewayPlugins(params: {
         config: resolvedConfig,
         activationSourceConfig: params.activationSourceConfig,
         workspaceDir: params.workspaceDir,
-        env: process.env,
+        env: params.env ?? process.env,
         ambientEnvTriggers: params.ambientEnvTriggers,
       })
     ).startup.pluginIds,
@@ -332,17 +292,20 @@ export function loadGatewayPlugins(params: {
       workspaceDir: params.workspaceDir,
     });
   const loaderMetadata = metadataSnapshot ?? params.pluginLookUpTable;
+  const logger = {
+    ...createPluginRuntimeLoaderLogger(),
+    ...(params.suppressPluginInfoLogs ? { info: () => undefined } : {}),
+  };
   const loadContext: PluginRuntimeLoadContext = {
     rawConfig: params.cfg,
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
-    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    autoEnabledReasons: params.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
-    env: process.env,
-    logger: createGatewayPluginRegistrationLogger({
-      suppressInfoLogs: params.suppressPluginInfoLogs,
-    }),
+    env: params.env ?? process.env,
+    logger,
     preferBuiltPluginArtifacts: true,
+    expectedSourceDigests: params.expectedSourceDigests,
     metadataSnapshot,
     ...(loaderMetadata
       ? {
@@ -351,56 +314,51 @@ export function loadGatewayPlugins(params: {
         }
       : {}),
   };
-  if (pluginIds.length === 0) {
-    const pluginRegistry = createEmptyPluginRegistry();
-    // An empty startup registry still owns the artifact policy for later capability loads.
-    setPluginRuntimeLoadContext(pluginRegistry, loadContext);
-    activatePluginRegistry(pluginRegistry, null, "gateway-bindable", params.workspaceDir);
-    params.startupTrace?.detail("plugins.gateway-load", [
-      ["autoEnableMs", autoEnableMs],
-      ["resolvedConfigMs", resolvedConfigMs],
-      ["pluginIdsMs", pluginIdsMs],
-      ["loadMs", 0],
-      ["pluginIds", "0"],
-      ["pluginCount", 0],
-      ["gatewayHandlerCount", 0],
-    ]);
-    return {
-      pluginRegistry,
-      gatewayMethods: [...params.baseMethods],
-      retireGatewayRuntimeBindings: () => {},
-    };
-  }
   const beforeLoad = performance.now();
   const loaderStatsBefore = getPluginModuleLoaderStats();
-  const gatewayRuntimeBindings = createGatewayPluginRuntimeBindings(
-    params.resolveGatewayContext,
-    resolvePluginSubagentOverridePolicies(resolvedConfig),
-  );
-  const pluginRegistry = loadAndActivateRootPluginRegistry({
-    ...buildPluginRuntimeLoadOptions(loadContext),
-    // Startup registration stays scoped; later capability loads use the complete bound generation.
-    manifestRegistry: params.pluginLookUpTable?.manifestRegistry ?? loadContext.manifestRegistry,
-    allowProcessHomeSessionCatalogs,
-    onlyPluginIds: pluginIds,
-    coreGatewayHandlers: params.coreGatewayHandlers,
-    coreGatewayMethodNames: params.coreGatewayMethodNames,
-    hostServices: params.hostServices,
-    runtimeOptions: {
-      allowGatewaySubagentBinding: true,
-      ...gatewayRuntimeBindings.runtime,
-    },
-    channelPluginLoadIntent: params.channelPluginLoadIntent,
-    startupTrace: params.startupTrace,
-  });
-  setPluginRuntimeLoadContext(pluginRegistry, loadContext);
+  const gatewayRuntimeBindings = pluginIds.length
+    ? createGatewayPluginRuntimeBindings(
+        params.resolveGatewayContext,
+        resolvePluginSubagentOverridePolicies(resolvedConfig),
+      )
+    : undefined;
+  let pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+  try {
+    pluginRegistry = gatewayRuntimeBindings
+      ? loadOpenClawPlugins({
+          ...buildPluginRuntimeLoadOptions(loadContext),
+          activate: false,
+          runtimeSideEffects: true,
+          cache: false,
+          throwOnLoadError: params.loadIntent === "replacement",
+          previousRegistry: params.previousRegistry,
+          replacePluginIds: params.replacePluginIds ? [...params.replacePluginIds] : undefined,
+          // Startup registration stays scoped; later capability loads use the complete bound generation.
+          manifestRegistry:
+            params.pluginLookUpTable?.manifestRegistry ?? loadContext.manifestRegistry,
+          allowProcessHomeSessionCatalogs,
+          onlyPluginIds: pluginIds,
+          coreGatewayHandlers: params.coreGatewayHandlers,
+          coreGatewayMethodNames: params.coreGatewayMethodNames,
+          hostServices: params.hostServices,
+          runtimeOptions: {
+            allowGatewaySubagentBinding: true,
+            ...gatewayRuntimeBindings.runtime,
+          },
+          channelPluginLoadIntent: params.channelPluginLoadIntent,
+          startupTrace: params.startupTrace,
+        })
+      : createEmptyPluginRegistry();
+    setPluginRuntimeLoadContext(pluginRegistry, loadContext);
+  } catch (error) {
+    gatewayRuntimeBindings?.retire();
+    throw error;
+  }
   const loadMs = performance.now() - beforeLoad;
   const loaderStatsAfter = getPluginModuleLoaderStats();
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = uniqueStrings([...params.baseMethods, ...pluginMethods]);
   params.startupTrace?.detail("plugins.gateway-load", [
-    ["autoEnableMs", autoEnableMs],
-    ["resolvedConfigMs", resolvedConfigMs],
     ["pluginIdsMs", pluginIdsMs],
     ["loadMs", loadMs],
     ["pluginIds", String(pluginIds.length)],
@@ -429,6 +387,6 @@ export function loadGatewayPlugins(params: {
   return {
     pluginRegistry,
     gatewayMethods,
-    retireGatewayRuntimeBindings: gatewayRuntimeBindings.retire,
+    retireGatewayRuntimeBindings: gatewayRuntimeBindings?.retire ?? (() => {}),
   };
 }

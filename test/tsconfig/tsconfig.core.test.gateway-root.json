@@ -9,6 +9,8 @@
   ],
   "exclude": [
     "../../src/gateway/session-*.test.ts",
-    "../../src/gateway/session-*.test.tsx"
+    "../../src/gateway/session-*.test.tsx",
+    "../../src/gateway/server*.test.ts",
+    "../../src/gateway/server*.test.tsx"
   ]
 }

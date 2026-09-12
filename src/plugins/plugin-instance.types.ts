@@ -51,6 +51,7 @@ export interface PluginInstanceResource {
 /** Runtime and setup loaders use the same instance-owned captured source. */
 export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginInstanceAdmission {
   controlPlaneInitialized: boolean;
+  sourceDigest?: string;
   bindModuleLoader(
     load: (source: string) => unknown,
     hasSource?: (source: string) => boolean,

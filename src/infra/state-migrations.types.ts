@@ -179,6 +179,7 @@ export type MigrationMessages = {
   changes: string[];
   warnings: string[];
   notices?: string[];
+  rehearsal?: { outsideRootLegacyFileCount: number };
   /** The owner classified every warning as advisory, including a source-preserving skip. */
   warningDisposition?: "recoverable";
   /** An intentional non-outcome can carry advisory warnings without becoming a refusal. */
@@ -214,6 +215,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   warnings: string[];
   notices?: string[];
   refusedAgentDatabasePaths?: readonly string[];
+  rehearsal?: MigrationMessages["rehearsal"];
   refusal?: { code: string; message: string };
 };
 

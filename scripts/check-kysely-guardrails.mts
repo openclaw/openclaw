@@ -146,7 +146,7 @@ const rawSqliteAllowPathGroups = {
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
-    "src/tasks/task-registry.store.sqlite.ts",
+    "src/tasks/task-registry.store.kernel.ts",
   ],
 };
 

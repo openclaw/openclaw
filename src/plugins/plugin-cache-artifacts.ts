@@ -1,13 +1,10 @@
 /** Immutable artifact facts acquired by one plugin cache generation. */
 type PluginArtifactLocation = { modulePath: string; boundaryRoot: string };
 
-export type PluginModuleLoader = (
-  target: string,
-  retain?: (module: NodeJS.Module | undefined) => void,
-) => unknown;
+export type PluginModuleLoader = (target: string) => unknown;
 
 type PluginModuleCacheVariant = {
-  exports?: { value: unknown; module?: NodeJS.Module };
+  exports?: { value: unknown };
   pending?: Promise<unknown>;
 };
 
@@ -47,8 +44,14 @@ export function createPluginCacheArtifacts(): {
   moduleLoaders: Map<string, PluginModuleLoader>;
   sources: Map<string, PluginSourceCacheRecord>;
   sourceAliases: Map<string, string>;
+  runtimeRecordRoots: WeakMap<object, { rootDir: string; resolvedRootDir: string; prefix: string }>;
 } {
-  return { moduleLoaders: new Map(), sources: new Map(), sourceAliases: new Map() };
+  return {
+    moduleLoaders: new Map(),
+    sources: new Map(),
+    sourceAliases: new Map(),
+    runtimeRecordRoots: new WeakMap(),
+  };
 }
 
 export function createPluginRootArtifacts(): PluginRootArtifactCache {

@@ -48,6 +48,8 @@ export type GatewayGmailRestartAbortController = {
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  checkpoint?: () => Promise<void>;
+  assertInvokerOwned?: () => void;
   sourceConfig: OpenClawConfig;
   prepareRestartRuntimeConfig?: () => Promise<OpenClawConfig>;
   runtimeEnv?: NodeJS.ProcessEnv;
@@ -127,9 +129,15 @@ export function assertReloadPublicationCurrent(
 }
 
 export type GatewayPluginReloadResult = {
+  runtime: import("../plugins/lifecycle.js").PluginRuntimeApplication;
   activeChannels: ReadonlySet<ChannelKind>;
-  /** Set when the reload was cancelled mid-flight (e.g. by an in-process restart). */
-  cancelled?: boolean;
+};
+
+export type GatewayRuntimePublication = {
+  /** Synchronous selection; a throw must leave the previous runtime authoritative. */
+  publish: () => void;
+  /** Runs after config and plugin selection have committed; failures cannot restore old state. */
+  afterCommit?: () => void;
 };
 
 export type GatewayReloadHandlerParams = {
@@ -153,11 +161,18 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
-    commitRuntime: (onCommit?: () => void) => Promise<void>;
-    onReplacementTeardownFailure: (error: unknown) => void;
+    changedPaths: readonly string[];
+    pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
+    /** Validate remaining config effects before the prepared plugin owner starts drainage. */
+    prepareConfigEffects: (replacement: {
+      pluginIds: ReadonlySet<string>;
+      channels: ReadonlySet<ChannelKind>;
+    }) => void;
+    commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
+    checkpoint?: () => Promise<void>;
+    assertInvokerOwned?: () => void;
   }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
     info: (msg: string) => void;

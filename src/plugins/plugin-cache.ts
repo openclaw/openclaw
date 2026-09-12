@@ -178,6 +178,10 @@ export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
   return state.scope.run(cache, run);
 }
 
+export function runOutsidePluginCache<T>(run: () => T): T {
+  return state.scope.exit(run);
+}
+
 /** Frozen views retain their producer so deferred access fills the same generation. */
 export function bindPluginMetadataSnapshotCache(snapshot: object, cache = getPluginCache()): void {
   state.snapshotOwners.set(snapshot, cache);
