@@ -655,6 +655,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
+    this.retireReplyMessages();
     this.retireHeaderSessionMutations();
     this.retireDeferredSessionHydration();
     this.sessionDiscussionPanels.clear();

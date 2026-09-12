@@ -118,6 +118,10 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     };
   }
 
+  protected retireReplyMessages(): void {
+    this.replyMessages.clear();
+  }
+
   protected resetReplyNavigation(): void {
     this.activeReplyNavigation = null;
     this.replyNavigationSessionKey = null;
