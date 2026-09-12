@@ -88,26 +88,32 @@ selection, and other channel-specific account concerns in the plugin.
 
 ### Stored account-key selection
 
-Import `resolveChannelAccountKey`, `resolveAccountKey`, `resolveNormalizedAccountEntry`, and
+Import `resolveAccountKey`, `resolveNormalizedAccountEntry`, and
 `ChannelAccountKeyPolicy` from `openclaw/plugin-sdk/account-resolution`.
 Use the selected stored key for writes so an edit preserves the operator's key
 spelling and updates the same entry that readers use.
 
 For registered channel callbacks, use
-`resolveChannelAccountKey(accounts, accountId, channelId)` to consume the selected
+`resolveAccountKey(accounts, accountId, undefined, undefined, { channelId })` to consume the selected
 manifest policy from the owning operation or Gateway snapshot. Keep that metadata
 scope active through reads, setup, and deletion. Do not import a second policy
 from the runtime plugin's manifest: another manifest may own the channel policy.
 
-`resolveAccountKey(accounts, accountId, normalizeAccountId?, policy?)` returns a
+`resolveAccountKey(accounts, accountId, normalizeAccountId?, policy?, options?)` returns a
 stored key or `undefined`:
 
-| Argument             | Meaning                                                                                                                                                                                                                              |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `accounts`           | Authored account map, or `undefined`.                                                                                                                                                                                                |
-| `accountId`          | Requested account id. With a policy, routing normalization runs first and the exact canonical key wins. Without a policy, the exact requested key wins.                                                                              |
-| `normalizeAccountId` | Optional function applied to the requested id and stored keys when no policy is supplied. Omit both for case-insensitive lookup. A policy selects routing normalization.                                                             |
-| `policy`             | Optional `ChannelAccountKeyPolicy` with `canonicalAliasesRequireOwnField`, the account field that must contain its own nonempty string before a canonical-only alias is eligible. Existing case-insensitive matches remain eligible. |
+| Argument               | Meaning                                                                                                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `accounts`             | Authored account map, or `undefined`.                                                                                                                                                                                                |
+| `accountId`            | Requested account id. With a policy, routing normalization runs first and the exact canonical key wins. Without a policy, the exact requested key wins.                                                                              |
+| `normalizeAccountId`   | Optional function applied to the requested id and stored keys when no policy is supplied. Omit both for case-insensitive lookup. A policy selects routing normalization.                                                             |
+| `policy`               | Optional `ChannelAccountKeyPolicy` with `canonicalAliasesRequireOwnField`, the account field that must contain its own nonempty string before a canonical-only alias is eligible. Existing case-insensitive matches remain eligible. |
+| `options.channelId`    | Optional channel whose selected manifest supplies the policy. An explicit `policy` takes precedence. Without a channel or selected policy, the normalizer and case-insensitive behavior stay unchanged.                              |
+| `options.allowMissing` | Return the creation target when no stored key is eligible. Reserved object keys throw before a writer can create an unreadable account.                                                                                              |
+
+The shipped v2026.9.4 SDK does not export `resolveAccountKey`; use these options
+only with a host SDK that supplies this selector and channel context. This does
+not change the behavior of the older entry-returning helpers.
 
 `resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId, policy?)`
 takes the same arguments, requires the normalizer, and returns the selected entry

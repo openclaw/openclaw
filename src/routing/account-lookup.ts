@@ -40,15 +40,10 @@ export function resolveChannelAccountKey<T>(
   accountKeyPolicy?: ChannelAccountKeyPolicy,
   options?: { allowMissing?: boolean },
 ): string | undefined {
-  const policy =
-    accountKeyPolicy ??
-    snapshotReaderSlot
-      .getCurrentPluginMetadataSnapshot?.({
-        allowScopedSnapshot: true,
-        allowWorkspaceScopedSnapshot: true,
-      })
-      ?.owners.channelAccountKeyPolicies?.get(channelId);
-  return resolveAccountKey(accounts, accountId, normalizeAccountId, policy, options);
+  return resolveAccountKey(accounts, accountId, normalizeAccountId, accountKeyPolicy, {
+    ...options,
+    channelId,
+  });
 }
 
 export function resolveChannelAccountEntry<T>(
@@ -96,8 +91,16 @@ export function resolveAccountKey<T>(
   accountId: string,
   normalizeAccountId?: (accountId: string) => string,
   policy?: ChannelAccountKeyPolicy,
-  options?: { allowMissing?: boolean },
+  options?: { allowMissing?: boolean; channelId?: string },
 ): string | undefined {
+  policy ??= options?.channelId
+    ? snapshotReaderSlot
+        .getCurrentPluginMetadataSnapshot?.({
+          allowScopedSnapshot: true,
+          allowWorkspaceScopedSnapshot: true,
+        })
+        ?.owners.channelAccountKeyPolicies?.get(options.channelId)
+    : undefined;
   const normalizer = policy ? normalizeRoutingAccountId : normalizeAccountId;
   const normalize = normalizer ?? normalizeLowercaseStringOrEmpty;
   if (

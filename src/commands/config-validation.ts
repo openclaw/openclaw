@@ -57,7 +57,7 @@ export type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapsh
 export async function withCommandPluginMetadata<T>(
   params: { config: OpenClawConfig; workspaceDir?: string; snapshot?: PluginMetadataSnapshot },
   run: () => T,
-): Promise<T> {
+): Promise<Awaited<T>> {
   const [
     { completePluginMetadataSnapshot, resolvePluginMetadataSnapshot },
     { withPluginMetadataSnapshotScope },
@@ -66,7 +66,7 @@ export async function withCommandPluginMetadata<T>(
     import("../plugins/current-plugin-metadata-snapshot.js"),
   ]);
   const snapshot = completePluginMetadataSnapshot(params) ?? resolvePluginMetadataSnapshot(params);
-  return withPluginMetadataSnapshotScope(snapshot, run, {
+  return await withPluginMetadataSnapshotScope(snapshot, run, {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });

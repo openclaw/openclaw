@@ -1,13 +1,12 @@
-import {
-  normalizeAccountId,
-  resolveChannelAccountKey,
-} from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId, resolveAccountKey } from "openclaw/plugin-sdk/account-resolution";
 
 export function resolveSignalAccountKey<T>(
   accounts: Record<string, T> | undefined,
   accountId: string,
 ): string | undefined {
-  return resolveChannelAccountKey(accounts, normalizeAccountId(accountId), "signal");
+  return resolveAccountKey(accounts, normalizeAccountId(accountId), undefined, undefined, {
+    channelId: "signal",
+  });
 }
 
 export function resolveSignalAccountEntry<T>(

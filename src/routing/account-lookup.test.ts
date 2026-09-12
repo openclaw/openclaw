@@ -1,5 +1,8 @@
 // Account lookup tests cover account matching by id, alias, and chat metadata.
 import { describe, expect, it } from "vitest";
+import { resolveAccountKey as resolvePublicAccountKey } from "../plugin-sdk/account-resolution.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { normalizeAccountId as normalizeRoutingAccountId } from "./account-id.js";
 import {
   resolveAccountEntry,
@@ -18,6 +21,77 @@ describe("SDK resolveAccountKey creation targets", () => {
       }
     },
   );
+});
+
+describe("SDK resolveAccountKey channel context", () => {
+  const accounts = { "Work Phone": { account: "+12025550103" } };
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "phone-owner",
+        channels: ["phone"],
+        channelAccountKeyPolicies: { phone: { canonicalAliasesRequireOwnField: "account" } },
+      },
+    ],
+  });
+
+  it("selects the prepared policy without changing plain or explicit-policy lookups", () => {
+    withPluginMetadataSnapshotScope(snapshot, () => {
+      expect(resolvePublicAccountKey(accounts, "work-phone")).toBeUndefined();
+      expect(resolvePublicAccountKey(accounts, "WORK PHONE")).toBe("Work Phone");
+      expect(
+        resolvePublicAccountKey(accounts, "work-phone", undefined, undefined, {
+          channelId: "phone",
+        }),
+      ).toBe("Work Phone");
+      expect(
+        resolvePublicAccountKey(accounts, "work-phone", undefined, undefined, {
+          channelId: "other",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolvePublicAccountKey(
+          accounts,
+          "work-phone",
+          undefined,
+          { canonicalAliasesRequireOwnField: "token" },
+          { channelId: "phone" },
+        ),
+      ).toBeUndefined();
+      expect(resolvePublicAccountKey(accounts, "work-phone", normalizeRoutingAccountId)).toBe(
+        "Work Phone",
+      );
+      expect(
+        resolvePublicAccountKey(accounts, "work-phone", () => "different", undefined, {
+          channelId: "phone",
+        }),
+      ).toBe("Work Phone");
+    });
+  });
+
+  it("uses channel policy for missing targets and rejects reserved creation through the public entry", () => {
+    withPluginMetadataSnapshotScope(snapshot, () => {
+      expect(
+        resolvePublicAccountKey(undefined, "New Phone", undefined, undefined, {
+          channelId: "phone",
+          allowMissing: true,
+        }),
+      ).toBe("new-phone");
+      expect(
+        resolvePublicAccountKey(undefined, "New Phone", undefined, undefined, {
+          allowMissing: true,
+        }),
+      ).toBe("New Phone");
+      for (const accountId of ["constructor", "__proto__", "prototype"]) {
+        expect(() =>
+          resolvePublicAccountKey(accounts, accountId, undefined, undefined, {
+            channelId: "phone",
+            allowMissing: true,
+          }),
+        ).toThrow(`Account id "${accountId}" is reserved`);
+      }
+    });
+  });
 });
 
 function createAccountsWithPrototypePollution() {
