@@ -149,6 +149,7 @@ type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: readonly RedactPattern[];
   sensitiveFieldPatterns?: readonly RedactPattern[];
+  preserveResourceIdentifiers?: boolean;
 };
 
 type ResolvedRedactOptions = {
@@ -808,6 +809,7 @@ function resolveModelVisibleToolPayloadRedaction(
   const hasUserPatterns = userPatterns && userPatterns.length > 0;
   return {
     mode: "tools",
+    preserveResourceIdentifiers: true,
     patterns: hasUserPatterns
       ? [...userPatterns, ...TOOL_PAYLOAD_REDACT_PATTERNS]
       : TOOL_PAYLOAD_REDACT_PATTERNS,
@@ -886,6 +888,20 @@ export function redactModelVisibleToolPayloadTextWithConfig(
   );
 }
 
+// These exact resource-reference field names need to survive subsequent tool calls.
+// They do not opt out of credential value matching or diagnostic field redaction.
+const RESOURCE_TOKEN_FIELD_KEYS = new Set([
+  "doc_token",
+  "node_token",
+  "obj_token",
+  "page_token",
+  "spreadsheet_token",
+]);
+
+export function isResourceTokenFieldKey(key: string): boolean {
+  return RESOURCE_TOKEN_FIELD_KEYS.has(key);
+}
+
 export function isSensitiveFieldKey(key: string): boolean {
   return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
 }
@@ -902,6 +918,7 @@ function redactSensitiveFieldValueWithOptions(
   options: RedactOptions,
   path: readonly string[] = [key],
   objectPath = true,
+  directFieldValue = true,
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   if (isPublicShareIdPath(path)) {
@@ -951,7 +968,15 @@ function redactSensitiveFieldValueWithOptions(
   ) {
     return exactRedacted;
   }
-  if (sensitiveKey) {
+  if (
+    sensitiveKey &&
+    !(
+      options.preserveResourceIdentifiers &&
+      directFieldValue &&
+      isResourceTokenFieldKey(key) &&
+      !path.slice(0, -1).some(isSensitiveFieldKey)
+    )
+  ) {
     if (isShellReferenceToKey(key, exactRedacted)) {
       return exactRedacted;
     }
@@ -984,11 +1009,16 @@ export function redactModelVisibleSensitiveFieldValueWithConfig(
   key: string,
   value: string,
   loggingConfig?: LoggingConfig,
+  path?: readonly string[],
+  directFieldValue = true,
 ): string {
   return redactSensitiveFieldValueWithOptions(
     key,
     value,
     resolveModelVisibleToolPayloadRedaction(loggingConfig),
+    path,
+    true,
+    directFieldValue,
   );
 }
 
@@ -1013,9 +1043,17 @@ function redactStructuredSecretValue(
   options: RedactOptions,
   path: readonly string[] = key ? [key] : [],
   objectPath = true,
+  directFieldValue = true,
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath);
+    return redactSensitiveFieldValueWithOptions(
+      key,
+      value,
+      options,
+      path,
+      objectPath,
+      directFieldValue,
+    );
   }
   if (value === null || value === undefined) {
     return value;
@@ -1029,7 +1067,7 @@ function redactStructuredSecretValue(
     }
     seen.add(value);
     const out = value.map((entry) =>
-      redactStructuredSecretValue(key, entry, seen, options, path, false),
+      redactStructuredSecretValue(key, entry, seen, options, path, false, false),
     );
     seen.delete(value);
     return out;

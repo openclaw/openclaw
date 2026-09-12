@@ -5,6 +5,8 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
@@ -662,6 +664,97 @@ describe("installSessionToolResultGuard", () => {
     expect(toolResult.details.nested.accessToken[0]).toBe("***");
     expect(serializedToolResult).toContain("visible");
   });
+
+  it("persists reusable resource identifiers without exempting credential values or parents", () => {
+    const identifier = "SyntheticResourceIdentifier1234567890";
+    const registeredSecret = "SyntheticRegisteredResourceValue123456";
+    const customSecret = "SyntheticCustomResourceValue123456";
+    const recognizedSecret = `sk-${"SYNTHETIC".repeat(8)}`;
+    const nestedSecret = "SyntheticNestedCredential123456";
+    const resourceKeys = [
+      "doc_token",
+      "node_token",
+      "obj_token",
+      "page_token",
+      "spreadsheet_token",
+    ];
+    const references = Object.fromEntries(resourceKeys.map((key) => [key, identifier]));
+    const logging = { redactPatterns: [customSecret] };
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      transformMessageForPersistence: (message) => redactTranscriptMessage(message, { logging }),
+      redactLoggingConfig: logging,
+    });
+    registerSecretValueForRedaction(registeredSecret);
+    try {
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "Resource lookup complete." }],
+          details: {
+            resources: [references],
+            registered: { doc_token: registeredSecret },
+            custom: { node_token: customSecret },
+            recognized: { obj_token: recognizedSecret },
+            access_token: { doc_token: nestedSecret },
+          },
+          isError: false,
+          timestamp: Date.now(),
+        }),
+      );
+      const result = expectDefined(
+        getPersistedMessages(sm).find((message) => message.role === "toolResult"),
+        "persisted resource tool result",
+      );
+      expect(result).toMatchObject({ details: { resources: [references] } });
+      const serialized = JSON.stringify(result);
+      for (const secret of [registeredSecret, customSecret, recognizedSecret, nestedSecret]) {
+        expect(serialized).not.toContain(secret);
+      }
+    } finally {
+      resetSecretRedactionRegistryForTest();
+    }
+  });
+
+  it.each([
+    {
+      label: "object",
+      value: { value: "SyntheticOpaqueCredential1234567890" },
+      expected: { value: expect.not.stringContaining("SyntheticOpaqueCredential1234567890") },
+    },
+    {
+      label: "array",
+      value: ["SyntheticOpaqueCredential1234567890"],
+      expected: [expect.not.stringContaining("SyntheticOpaqueCredential1234567890")],
+    },
+    { label: "number", value: 123456, expected: "***" },
+    { label: "boolean", value: true, expected: "***" },
+  ])(
+    "keeps resource-shaped $label details under the sensitive-field policy",
+    ({ value, expected }) => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, {
+        transformMessageForPersistence: (message) => redactTranscriptMessage(message, {}),
+      });
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "Lookup complete." }],
+          details: { doc_token: value },
+          isError: false,
+          timestamp: Date.now(),
+        }),
+      );
+      const result = getPersistedMessages(sm).find((message) => message.role === "toolResult");
+      expect(result).toMatchObject({ details: { doc_token: expected } });
+    },
+  );
 
   it("preserves correlation IDs while backfilling names through redaction", () => {
     const sm = SessionManager.inMemory();

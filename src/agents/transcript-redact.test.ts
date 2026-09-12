@@ -324,7 +324,7 @@ describe("redactTranscriptMessage", () => {
             page_token: "PGabc123XYZ",
             next_page_token: "NXTpage456",
             page_cursor: "PC789",
-            doc_token: "DOCsecret999",
+            doc_token: "DOCresource999",
             app_secret: "REALSECRETzzz",
           },
         },
@@ -340,9 +340,117 @@ describe("redactTranscriptMessage", () => {
     expect(args.page_token).toBe("PGabc123XYZ");
     expect(args.next_page_token).toBe("NXTpage456");
     expect(args.page_cursor).toBe("PC789");
-    // Genuine credentials stay masked.
-    expect(args.doc_token).toBe("***");
+    // Resource references remain usable without weakening authentication fields.
+    expect(args.doc_token).toBe("DOCresource999");
     expect(args.app_secret).toBe("***");
+  });
+
+  describe.each(["toolCall", "toolResult"] as const)("resource identifiers in %s", (kind) => {
+    const resourceKeys = [
+      "doc_token",
+      "node_token",
+      "obj_token",
+      "page_token",
+      "spreadsheet_token",
+    ];
+    const identifier = "SyntheticResourceIdentifier1234567890";
+
+    function redactFields(fields: Record<string, unknown>, patterns?: string[]) {
+      const message = castAgentMessage(
+        kind === "toolCall"
+          ? {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: "resource-call", name: "feishu_doc", arguments: fields },
+              ],
+            }
+          : {
+              role: "toolResult",
+              toolCallId: "resource-call",
+              toolName: "feishu_doc",
+              content: [{ type: "text", text: "Resource lookup complete." }],
+              details: fields,
+              isError: false,
+            },
+      );
+      const result = redactTranscriptMessage(message, cfg("tools", patterns));
+      return kind === "toolCall"
+        ? (msgContent(result) as Array<{ arguments: Record<string, unknown> }>)[0]!.arguments
+        : (result as AgentMessage & { details: Record<string, unknown> }).details;
+    }
+
+    it.each(resourceKeys)("preserves nested %s for a subsequent call", (key) => {
+      const fields = {
+        resources: [{ [key]: identifier }],
+        access_token: "SyntheticAuthValue123456",
+      };
+      const result = redactFields(fields);
+      expect(result.resources).toEqual(fields.resources);
+      expect(result.access_token).not.toBe(fields.access_token);
+    });
+
+    it("keeps resource-keyed arrays sensitive", () => {
+      const result = redactFields({ doc_token: [identifier, [identifier]] });
+      expect(JSON.stringify(result)).not.toContain(identifier);
+    });
+
+    it("keeps non-resource names and credential fields masked", () => {
+      const keys = [
+        "DOC_TOKEN",
+        "Doc_Token",
+        "doc-token",
+        "other_token",
+        "access_token",
+        "app_secret",
+      ];
+      const fields = Object.fromEntries(keys.map((key) => [key, identifier]));
+      for (const value of Object.values(redactFields(fields))) {
+        expect(value).not.toBe(identifier);
+      }
+    });
+
+    it.each(resourceKeys)("keeps %s masked under credential objects and arrays", (key) => {
+      const opaqueCredential = "SyntheticOpaqueCredential1234567890";
+      const fields = {
+        ordinary: { [key]: identifier },
+        access_token: { nested: { [key]: opaqueCredential } },
+        password: [{ nested: [{ [key]: opaqueCredential }] }],
+        authorization: { nested: { [key]: [opaqueCredential] } },
+        doc_token: { [key]: opaqueCredential },
+      };
+      const result = redactFields(fields);
+      expect(result.ordinary).toEqual(fields.ordinary);
+      expect(result).toMatchObject({
+        access_token: { nested: { [key]: expect.any(String) } },
+        password: [{ nested: [{ [key]: expect.any(String) }] }],
+        authorization: { nested: { [key]: [expect.any(String)] } },
+        doc_token: { [key]: expect.any(String) },
+      });
+      expect(JSON.stringify(result)).not.toContain(opaqueCredential);
+      expect(JSON.stringify(fields)).toContain(opaqueCredential);
+    });
+
+    it("masks registered secrets under every resource field", () => {
+      registerSecretValueForRedaction(identifier);
+      try {
+        const fields = Object.fromEntries(resourceKeys.map((key) => [key, identifier]));
+        for (const value of Object.values(redactFields(fields))) {
+          expect(value).not.toBe(identifier);
+        }
+      } finally {
+        resetSecretRedactionRegistryForTest();
+      }
+    });
+
+    it.each([
+      { label: "recognized credential", value: `sk-${"SYNTHETIC".repeat(8)}`, patterns: undefined },
+      { label: "custom pattern", value: identifier, patterns: [identifier] },
+    ])("masks a $label under every resource field", ({ value, patterns }) => {
+      const fields = Object.fromEntries(resourceKeys.map((key) => [key, value]));
+      for (const redacted of Object.values(redactFields(fields, patterns))) {
+        expect(redacted).not.toBe(value);
+      }
+    });
   });
 
   it("still masks a secret-shaped value even under an exempt pagination key (#104992)", () => {
