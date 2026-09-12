@@ -24,6 +24,10 @@ export type DaemonInstallOptions = {
   /** Private updater IPC handoff before native service load. */
   deferActivation?: boolean;
   force?: boolean;
+  /** Allow schema migrations that recreate tables, destroying existing data.
+   *  Defense-in-depth: auto-backups are always created before migration regardless.
+   */
+  acceptDataLoss?: boolean;
   json?: boolean;
 };
 

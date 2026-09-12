@@ -10,6 +10,7 @@ import type { DaemonInstallOptions, DaemonLifecycleOptions } from "./types.js";
 const daemonInstallModuleLoader = createLazyImportLoader(() => import("./install.runtime.js"));
 const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
 const daemonStatusModuleLoader = createLazyImportLoader(() => import("./status.runtime.js"));
+const daemonBackupModuleLoader = createLazyImportLoader(() => import("./backup.runtime.js"));
 
 function resolveJsonOption(cmdOpts: { json?: boolean }, command?: Command): boolean {
   const parentJson = inheritOptionFromParent<boolean>(command, "json", "cli");
@@ -28,6 +29,7 @@ function resolveInstallOptions(
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
+    acceptDataLoss: Boolean(cmdOpts.acceptDataLoss),
     json: resolveJsonOption(cmdOpts, command),
   };
 }
@@ -96,6 +98,12 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--force", "Reinstall if already installed (may restart a running Gateway)", false)
+    .option(
+      "--accept-data-loss",
+      "Allow schema migrations that recreate tables, destroying existing session data. " +
+        "An auto-backup is always created before migration regardless of this flag.",
+      false,
+    )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       const { runDaemonInstall } = await daemonInstallModuleLoader.load();
@@ -160,5 +168,18 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .action(async (cmdOpts, command) => {
       const { runDaemonRestart } = await daemonLifecycleModuleLoader.load();
       await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
+    });
+
+  parent
+    .command("backup")
+    .description("Create a backup of an agent's database before schema migration")
+    .option("--agent <name>", "Agent name to back up")
+    .option("--json", "Output JSON", false)
+    .action(async (cmdOpts, command) => {
+      const { runAgentDbBackup } = await daemonBackupModuleLoader.load();
+      await runAgentDbBackup({
+        agentId: cmdOpts.agent,
+        json: resolveJsonOption(cmdOpts, command),
+      });
     });
 }

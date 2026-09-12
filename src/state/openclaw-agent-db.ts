@@ -27,7 +27,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
-import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { isSqliteSchemaVersionError, readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -102,6 +102,10 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import {
+  runPreMigrationSafetyCheck,
+} from "./openclaw-agent-db-safety.js";
 
 export {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -120,6 +124,11 @@ export {
   readOpenClawAgentDatabaseRegistryToken,
 } from "./openclaw-agent-db-registry.js";
 export { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+export {
+  AgentDataLossError as OpenClawAgentDataLossError,
+  createAgentDbAutoBackup,
+  runPreMigrationSafetyCheck,
+} from "./openclaw-agent-db-safety.js";
 export {
   isIncognitoOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -357,6 +366,23 @@ function* openOpenClawAgentDatabaseSteps(
         openedWalMaintenance = maintenance;
         finishPhase("configuration");
         if (!isValidatedReopen) {
+          // Pre-migration safety check: auto-backup and data-loss gate.
+          // This runs before ensureOpenClawAgentSchema, which may recreate tables
+          // and destroy existing session data during schema migration.
+          const currentSchemaVersion = readSqliteUserVersion(db);
+          if (currentSchemaVersion > 0 && currentSchemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
+            const agentStateDir = path.dirname(pathname);
+            runPreMigrationSafetyCheck({
+              db,
+              dbPath: pathname,
+              agentStateDir,
+              agentId,
+              currentSchemaVersion,
+              targetSchemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+              acceptDataLoss: Boolean(databaseOptions.acceptDataLoss)
+                || String(databaseOptions.env?.OPENCLAW_ACCEPT_DATA_LOSS ?? process.env.OPENCLAW_ACCEPT_DATA_LOSS) === "1",
+            });
+          }
           ensureOpenClawAgentSchema(db, agentId, pathname);
         }
         finishPhase("schema");

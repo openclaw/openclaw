@@ -35,6 +35,11 @@ export type OpenClawAgentDatabase = {
 /** Options for resolving and opening one agent database. */
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
+  /** Allow schema migrations that recreate tables, which may destroy existing data.
+   *  Set by `--accept-data-loss` on the CLI. Without this flag, migrations that would
+   *  drop and recreate populated tables are blocked.
+   */
+  acceptDataLoss?: boolean;
 };
 
 /** Shared-state registry row describing an agent database seen by this process. */
