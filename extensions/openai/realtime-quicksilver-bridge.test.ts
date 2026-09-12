@@ -22,7 +22,6 @@ import {
   FakeSocket,
   sentEvents,
 } from "./realtime-quicksilver-bridge.test-support.js";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
 
 describe("OpenAIQuicksilverVoiceBridge", () => {
   it("connects directly to /v1/live and completes the Frameless Bidi handshake", async () => {
@@ -525,7 +524,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
           const socket = new FakeSocket(false);
           sockets.push(socket);
           queueMicrotask(() => socket.open());
-          return socket as unknown as OpenAIQuicksilverSocket;
+          return socket;
         },
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),

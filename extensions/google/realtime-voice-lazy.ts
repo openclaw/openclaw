@@ -97,10 +97,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     };
   // Loading and connecting finish on separate async boundaries. Keep close ownership
   // here so either late completion closes the provider bridge exactly once.
-  const closeBridge = (loadedBridge = bridge): void | Promise<void> => {
-    if (!loadedBridge) {
-      return;
-    }
+  const closeBridge = (loadedBridge: RealtimeVoiceBridge): void | Promise<void> => {
     if (closedBridges.has(loadedBridge)) {
       return closedBridges.get(loadedBridge);
     }

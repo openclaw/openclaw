@@ -2,6 +2,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRealtimeVoiceAudioQueue } from "openclaw/plugin-sdk/realtime-voice-audio-queue";
 import {
   RealtimeVoiceSessionLifecycle,
+  toStringifiedError,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
   type RealtimeVoiceSessionConnection,
@@ -92,12 +93,7 @@ export function createLazyXaiRealtimeVoiceBridge(
     clearPendingInput();
     req.onClose?.(terminalOutcome);
   };
-  const closeBridge = (
-    loadedBridge: RealtimeVoiceBridge | undefined = bridge,
-  ): void | Promise<void> => {
-    if (!loadedBridge) {
-      return;
-    }
+  const closeBridge = (loadedBridge: RealtimeVoiceBridge): void | Promise<void> => {
     if (closedBridges.has(loadedBridge)) {
       return closedBridges.get(loadedBridge);
     }
@@ -127,9 +123,7 @@ export function createLazyXaiRealtimeVoiceBridge(
         closeOwner = undefined;
         if (outcome === "error") {
           try {
-            req.onError?.(
-              primaryError instanceof Error ? primaryError : new Error(String(primaryError)),
-            );
+            req.onError?.(toStringifiedError(primaryError));
           } catch {
             // Error observers cannot replace the disposal outcome or skip its terminal notification.
           }
