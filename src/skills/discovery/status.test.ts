@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
@@ -13,6 +14,42 @@ type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("refreshes dependency eligibility and installer preference after a binary is installed", async () => {
+    const workspaceDir = tempDirs.make("openclaw-skill-status-");
+    const entries = ["first", "second"].map((name) =>
+      createEntry(name, {
+        baseDir: workspaceDir,
+        metadata: {
+          requires: { bins: ["brew"] },
+          install: [
+            { id: "brew", kind: "brew", formula: "fixture-tool" },
+            { id: "node", kind: "node", package: "fixture-tool" },
+          ],
+        },
+      }),
+    );
+    await withEnvAsync({ PATH: workspaceDir, PATHEXT: ".CMD" }, async () => {
+      const options = { entries, config: { skills: { install: { preferBrew: true } } } };
+      const before = buildWorkspaceSkillStatus(workspaceDir, options);
+      for (const skill of before.skills) {
+        expect(skill.eligible).toBe(false);
+        expect(skill.missing.bins).toEqual(["brew"]);
+        expect(skill.install.map((option) => option.id)).toEqual(["node"]);
+      }
+      await fs.writeFile(
+        path.join(workspaceDir, process.platform === "win32" ? "brew.CMD" : "brew"),
+        "",
+        { mode: 0o755 },
+      );
+      const after = buildWorkspaceSkillStatus(workspaceDir, options);
+      for (const skill of after.skills) {
+        expect(skill.eligible).toBe(true);
+        expect(skill.missing.bins).toEqual([]);
+        expect(skill.install.map((option) => option.id)).toEqual(["brew"]);
+      }
+    });
+  });
+
   it("reports blank env requirements as missing", () => {
     const envName = "OPENCLAW_TEST_BLANK_SKILL_STATUS";
     const original = process.env[envName];

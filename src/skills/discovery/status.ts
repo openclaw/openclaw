@@ -81,11 +81,12 @@ export function resolveSkillStatusEntry<T extends Pick<SkillStatusEntry, "name" 
 function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
   prefs: SkillsInstallPreferences,
+  hasLocalBin: typeof hasBinary,
 ): SkillInstallSpec | undefined {
   const findKind = (kind: SkillInstallSpec["kind"]) => install.find((spec) => spec.kind === kind);
 
   const brewSpec = findKind("brew");
-  const brewAvailable = brewSpec && hasBinary("brew");
+  const brewAvailable = brewSpec && hasLocalBin("brew");
   return (
     (prefs.preferBrew && brewAvailable ? brewSpec : undefined) ??
     findKind("uv") ??
@@ -104,6 +105,7 @@ function selectPreferredInstallSpec(
 function normalizeInstallOptions(
   entry: SkillEntry,
   prefs: SkillsInstallPreferences,
+  hasLocalBin: typeof hasBinary,
 ): SkillInstallOption[] {
   // If the skill is explicitly OS-scoped, don't surface install actions on unsupported platforms.
   // (Installers run locally; remote OS eligibility is handled separately.)
@@ -165,7 +167,7 @@ function normalizeInstallOptions(
     return options;
   }
 
-  const preferred = selectPreferredInstallSpec(filtered, prefs);
+  const preferred = selectPreferredInstallSpec(filtered, prefs, hasLocalBin);
   if (!preferred) {
     return [];
   }
@@ -176,6 +178,7 @@ function normalizeInstallOptions(
 type BuildSkillStatusContext = {
   config?: OpenClawConfig;
   prefs: SkillsInstallPreferences;
+  hasLocalBin: typeof hasBinary;
   eligibility?: SkillEligibilityContext;
   allowBundled: ReadonlySet<string> | undefined;
   agentSkillSet: ReadonlySet<string> | undefined;
@@ -208,7 +211,7 @@ function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): 
     evaluateEntryRequirementsForCurrentPlatform({
       always,
       entry,
-      hasLocalBin: hasBinary,
+      hasLocalBin: context.hasLocalBin,
       remote: eligibility?.remote,
       isEnvSatisfied,
       isConfigSatisfied,
@@ -261,7 +264,7 @@ function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): 
     requirements: required,
     missing,
     configChecks,
-    install: normalizeInstallOptions(entry, prefs),
+    install: normalizeInstallOptions(entry, prefs, context.hasLocalBin),
     ...(clawhub ? { clawhub } : {}),
     ...(skillCard ? { skillCard } : {}),
   };
@@ -316,6 +319,16 @@ export function buildWorkspaceSkillStatus(
       ? clawhubLockRead
       : readClawHubSkillsLockfileStatusSync(managedParentDir);
   const agentSkillSet = agentSkillFilter === undefined ? undefined : new Set(agentSkillFilter);
+  // Missing binaries may appear between reports; reuse probes only within this synchronous read.
+  const binaryAvailability = new Map<string, boolean>();
+  const hasLocalBin = (bin: string): boolean => {
+    let available = binaryAvailability.get(bin);
+    if (available === undefined) {
+      available = hasBinary(bin);
+      binaryAvailability.set(bin, available);
+    }
+    return available;
+  };
   return {
     workspaceDir,
     managedSkillsDir,
@@ -325,6 +338,7 @@ export function buildWorkspaceSkillStatus(
       buildSkillStatus(entry, {
         config: opts?.config,
         prefs,
+        hasLocalBin,
         eligibility: opts?.eligibility,
         allowBundled,
         agentSkillSet,
