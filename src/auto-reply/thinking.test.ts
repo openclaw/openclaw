@@ -359,14 +359,16 @@ describe("listThinkingLevels", () => {
     ];
 
     expect(listThinkingLevelLabels("vllm", "Qwen/Qwen3-8B", catalog)).toEqual(["off", "on"]);
-    expect(
-      resolveSupportedThinkingLevel({
-        provider: "vllm",
-        model: "Qwen/Qwen3-8B",
-        level: "high",
-        catalog,
-      }),
-    ).toBe("low");
+    for (const level of ["high", "adaptive"] as const) {
+      expect(
+        resolveSupportedThinkingLevel({
+          provider: "vllm",
+          model: "Qwen/Qwen3-8B",
+          level,
+          catalog,
+        }),
+      ).toBe("low");
+    }
   });
 
   it("uses canonical Fable params when no provider thinking profile exists", () => {
@@ -849,6 +851,7 @@ describe("listThinkingLevels", () => {
   it("maps unsupported adaptive to medium and unsupported xhigh to high", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "off",
     });
 
     expect(
