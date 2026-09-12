@@ -53,7 +53,7 @@ const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
 /**
  * Maximum gateway-ready output tail retained while waiting for startup.
  */
-export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
+const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 /**
  * Maximum bytes read from the memory_search HTTP response.
  */
@@ -61,7 +61,7 @@ const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 /**
  * Probe query expected to hit the synthetic top-level memory file.
  */
-export const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
+const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",

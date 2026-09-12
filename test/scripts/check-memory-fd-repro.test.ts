@@ -5,10 +5,8 @@ import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  GATEWAY_READY_OUTPUT_MAX_CHARS,
-  MEMORY_SEARCH_PROBE_QUERY,
   classifyMemorySearchInvokeResponse,
   invokeMemorySearch,
   parseArgs,
@@ -19,12 +17,14 @@ import {
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { validateConfigObject } from "../../src/config/validation.js";
 import { withEnv } from "../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = path.resolve("scripts/check-memory-fd-repro.mts");
 const TSX_PRELOAD = path.resolve("scripts/tsx.mjs");
 const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
 const OWNED_PID = 2_147_483_646;
 const FOREIGN_PID = 2_147_483_645;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type OwnershipScenario =
   | "owned-success"
@@ -55,7 +55,7 @@ type GatewaySummary = {
 };
 
 function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fd-owner-")));
+  const root = tempDirs.make("openclaw-fd-owner-");
   const preloadPath = path.join(root, "runtime.mjs");
   const journalPath = path.join(root, "journal.json");
   const outputDir = path.join(root, "output");
@@ -80,7 +80,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "let child, syntheticRoot, launch, attemptedSummary, closed = false, replaced = false;",
         "let wait, requestSettled = false, guardFired = false;",
         "const write = fs.writeFileSync, remove = fs.rmSync;",
-        "const nativeKill = process.kill.bind(process), output = process.stdout.write.bind(process.stdout);",
+        "const nativeKill = process.kill.bind(process);",
         "const record = () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
         "  samples, signals, events, launch, attemptedSummary, closed, alive: Boolean(alive()),",
         "  rootExists: Boolean(syntheticRoot && fs.existsSync(syntheticRoot)),",
@@ -100,13 +100,6 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "        new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
         "    }",
         "  });",
-        "};",
-        "process.stdout.write = (chunk, ...args) => {",
-        "  const result = output(chunk, ...args);",
-        "  if (String(chunk).startsWith('[memory-fd-repro] invoke=')) {",
-        "    requestSettled = true; enterWait('settle');",
-        "  }",
-        "  return result;",
         "};",
         "fs.writeFileSync = (target, ...args) => {",
         "  if (String(target).endsWith('/summary.json')) {",
@@ -191,6 +184,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "  }",
         "  const pid = Number(args[args.indexOf('-p') + 1]);",
         "  samples.push({ pid, alive: Boolean(alive()) });",
+        "  if (cancellation?.[1] === 'settle' && samples.length === 2) enterWait('settle');",
         "  if (scenario.startsWith('primary-')) {",
         "    const code = scenario.split('-')[1];",
         "    return { ...success(), status: 1, stderr: 'measurement denied ' + code };",
@@ -212,6 +206,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "    child[channel].destroy(Object.assign(",
         "      new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
         "  }",
+        "  requestSettled = true;",
         "  return new Response(JSON.stringify({ ok: true, result: { results: [] } }), { status: 200 });",
         "};",
         "process.on('exit', record);",
@@ -403,18 +398,24 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
-  it("clamps oversized memory_search invoke timers before scheduling", async () => {
-    const server = createServer((_request, response) => {
-      setTimeout(() => {
-        response.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({
-            ok: true,
-            result: {
-              content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
-            },
-          }),
-        );
-      }, 25);
+  it("clamps oversized timers and sends the matching memory probe", async () => {
+    let requestBody: unknown;
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        setTimeout(() => {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              ok: true,
+              result: {
+                content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
+              },
+            }),
+          );
+        }, 25);
+      });
     });
     const port = await listen(server);
     try {
@@ -429,6 +430,15 @@ describe("check-memory-fd-repro", () => {
         ok: true,
         resultCount: 0,
       });
+      expect(requestBody).toEqual({
+        tool: "memory_search",
+        args: {
+          query: "Top-level memory file",
+          maxResults: 1,
+          corpus: "memory",
+        },
+        sessionKey: "main",
+      });
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => {
@@ -436,11 +446,6 @@ describe("check-memory-fd-repro", () => {
         });
       });
     }
-  });
-
-  it("uses a fast matching probe query instead of a no-hit stress query", () => {
-    expect(MEMORY_SEARCH_PROBE_QUERY).toBe("Top-level memory file");
-    expect(MEMORY_SEARCH_PROBE_QUERY).not.toContain("nomatch");
   });
 
   it("writes an offline FTS-only memory search config for repro indexing", () => {
@@ -671,7 +676,13 @@ describe("check-memory-fd-repro", () => {
     const second = updateGatewayReadyOutputState(first, "ghijkl", 8);
     expect(second).toEqual({ tail: "efghijkl", readySeen: false });
     expect(second.tail).toHaveLength(8);
-    expect(GATEWAY_READY_OUTPUT_MAX_CHARS).toBeGreaterThan(1024);
+
+    const defaultBound = updateGatewayReadyOutputState(
+      { tail: "", readySeen: false },
+      "x".repeat(200_000),
+    );
+    expect(defaultBound.tail.length).toBeLessThan(200_000);
+    expect(defaultBound.tail.endsWith("x")).toBe(true);
   });
 
   it("keeps readiness after a coalesced noisy chunk truncates the marker", () => {
