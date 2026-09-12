@@ -153,6 +153,46 @@ async function descriptorOwner(initial: GatewaySessionRow, primary = mainRow) {
 }
 
 describe("session row observations", () => {
+  it("invalidates descriptor reads only for the observed target and current connection", async () => {
+    vi.useFakeTimers();
+    const { gateway, emitEvent, publish } = createGatewayHarness(
+      createTestGatewayClient(async () => sessionsResult([], 1)),
+    );
+    const sessions = createTestSessionCapability(gateway);
+    const invalidated = vi.fn();
+    const observation = sessions.observeRow({ key: "global", agentId: "work" }, () => undefined, {
+      onInvalidate: invalidated,
+    });
+    try {
+      expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
+      const pending = observation.captureReconcile();
+      const event = (agentId: string, key = "global") => ({
+        type: "event" as const,
+        event: "sessions.changed",
+        payload: { agentId, key, reason: "patch" },
+      });
+      emitEvent(event("main"));
+      emitEvent(event("work", "agent:work:unrelated"));
+      expect(invalidated).not.toHaveBeenCalled();
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(invalidated).not.toHaveBeenCalled();
+      emitEvent(event("work"));
+      expect(invalidated).toHaveBeenCalledTimes(1);
+      emitEvent(event("work", "agent:work:unrelated"));
+      expect(observation.row).toEqual(workRow);
+      expect(invalidated).toHaveBeenCalledTimes(1);
+      expect(pending(workRow)).toEqual({ status: "invalidated" });
+      expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
+      publish(false);
+      emitEvent(event("work"));
+      expect(invalidated).toHaveBeenCalledTimes(1);
+    } finally {
+      observation.dispose();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["primary", "managed", "supplemental", "event"] as const)(
     "notifies a retired descriptor after its admitted %s successor is published",
     async (source) => {

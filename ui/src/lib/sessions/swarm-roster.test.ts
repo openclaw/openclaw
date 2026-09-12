@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { SessionCapability, SessionListOptions } from "./index.ts";
-import { createSessionRowProvenance } from "./session-row-provenance.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "./session-capability.test-support.ts";
 import {
   hydrateSwarmSessionRows,
   isSwarmEnabledInConfig,
@@ -14,6 +19,7 @@ import {
 function row(index: number): GatewaySessionRow {
   return {
     key: `agent:worker:subagent:${index}`,
+    sessionId: `child-session-${index}`,
     kind: "direct",
     updatedAt: index,
     spawnedBy: "agent:main:parent",
@@ -21,13 +27,62 @@ function row(index: number): GatewaySessionRow {
   };
 }
 
-function sessionSource(list: SessionCapability["list"], revision: () => number = () => 0) {
-  return {
-    get canonicalListRevision() {
-      return revision();
+function sessionSource(
+  list: SessionCapability["list"],
+  primaryRows: () => GatewaySessionRow[] = () => [],
+) {
+  const client = createTestGatewayClient(async (method, params) => {
+    if (method === "sessions.list") {
+      const rows = primaryRows();
+      return isRecord(params) && params.spawnedBy ? list(params) : result(rows, 0, rows.length);
+    }
+    return { subscribed: true };
+  });
+  const { gateway, emitEvent } = createGatewayHarness(client);
+  const sessions = createTestSessionCapability(gateway);
+  onTestFinished(() => sessions.dispose());
+  return Object.assign(sessions, {
+    publishRow(entry: GatewaySessionRow) {
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { key: entry.key, session: entry, reason: "patch" },
+      });
     },
-    list,
-    inheritRow: createSessionRowProvenance().inheritRow,
+    invalidateParent(key = "agent:main:parent", agentId = "main") {
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { key, agentId, reason: "patch" },
+      });
+    },
+  });
+}
+
+function parentRow(): GatewaySessionRow {
+  return { key: "agent:main:parent", sessionId: "parent-session", kind: "direct" };
+}
+
+function swarmParent(children: GatewaySessionRow[]): GatewaySessionRow {
+  return {
+    ...parentRow(),
+    swarm: {
+      groups: [
+        {
+          groupId: row(0).swarmGroupId!,
+          createdAt: 1,
+          queued: 0,
+          running: children.filter((child) => child.status !== "done").length,
+          done: children.filter((child) => child.status === "done").length,
+          failed: 0,
+          children: children.map((child) => ({
+            sessionKey: child.key,
+            status: child.status === "done" ? "done" : "running",
+          })),
+        },
+      ],
+      otherActiveGroups: 0,
+    },
   };
 }
 
@@ -123,6 +178,170 @@ describe("isSwarmEnabledInConfig", () => {
 });
 
 describe("SwarmRosterHydrator", () => {
+  it("keeps child requests and parent reads independent of unrelated canonical roster publications", async () => {
+    vi.useFakeTimers();
+    let children = [row(0)];
+    const detailedParent = () => swarmParent(children);
+    const list = vi.fn(async () => result(children, 0, children.length));
+    const readParent = vi.fn(async () => detailedParent());
+    const sessions = sessionSource(list, () => {
+      const parent = detailedParent();
+      return [
+        {
+          ...parent,
+          swarm: {
+            ...parent.swarm!,
+            groups: parent.swarm!.groups.map(({ children: _children, ...group }) => group),
+          },
+        },
+      ];
+    });
+    const hydrator = new SwarmRosterHydrator();
+    const params = {
+      sessions,
+      readParent,
+      parentKey: "agent:main:parent",
+      sourceEpoch: 1,
+      currentRows: () => [],
+      onRows: () => undefined,
+    };
+    try {
+      hydrator.update(params);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hydrator.rows.map((entry) => entry.key)).toEqual([row(0).key, parentRow().key]);
+      for (let publication = 0; publication < 10; publication++) {
+        await sessions.refresh({ agentId: "main", force: true });
+        hydrator.update(params);
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(readParent).toHaveBeenCalledTimes(1);
+      expect(hydrator.rows.find((entry) => entry.key === parentRow().key)?.swarm).toEqual(
+        detailedParent().swarm,
+      );
+
+      children = [{ ...row(1), label: "New child", status: "done" }];
+      sessions.invalidateParent();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(readParent).toHaveBeenCalledTimes(2);
+      expect(hydrator.rows).toEqual([
+        expect.objectContaining({ key: row(1).key, label: "New child", status: "done" }),
+        detailedParent(),
+      ]);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
+  it("coalesces a changed parent summary and its event invalidation into one describe", async () => {
+    vi.useFakeTimers();
+    let parent = swarmParent([row(0)]);
+    const readParent = vi.fn(async () => parent);
+    const sessions = sessionSource(vi.fn(async () => result([], 0, 0)));
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions,
+        readParent,
+        parentKey: parent.key,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(readParent).toHaveBeenCalledTimes(1);
+      parent = swarmParent([row(0), row(1)]);
+      sessions.publishRow({
+        ...parent,
+        swarm: {
+          ...parent.swarm!,
+          groups: parent.swarm!.groups.map(({ children: _children, ...group }) => group),
+        },
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(readParent).toHaveBeenCalledTimes(2);
+      expect(hydrator.rows.find((entry) => entry.key === parent.key)?.swarm).toEqual(parent.swarm);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
+  it("rechecks a parent after an invalidated denial without clearing newer intent", async () => {
+    vi.useFakeTimers();
+    const stale = createDeferred<GatewaySessionRow>();
+    const initial = swarmParent([row(0)]);
+    const current = swarmParent([row(1)]);
+    const readParent = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValue(current);
+    const sessions = sessionSource(vi.fn(async () => result([], 0, 0)));
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions,
+        readParent,
+        parentKey: initial.key,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      sessions.invalidateParent();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readParent).toHaveBeenCalledTimes(2);
+      sessions.invalidateParent();
+      stale.reject(
+        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Old parent read denied" }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readParent).toHaveBeenCalledTimes(3);
+      expect(hydrator.rows).toEqual([current]);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
+  it("queues fresh parent membership when a child-only change overlaps an older describe", async () => {
+    vi.useFakeTimers();
+    const stale = createDeferred<GatewaySessionRow>();
+    let children = [row(0)];
+    const initial = swarmParent(children);
+    const current = swarmParent([row(1)]);
+    const readParent = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValue(current);
+    const sessions = sessionSource(vi.fn(async () => result(children, 0, children.length)));
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions,
+        readParent,
+        parentKey: initial.key,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      sessions.invalidateParent();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readParent).toHaveBeenCalledTimes(2);
+      children = [row(1)];
+      sessions.publishRow(children[0]!);
+      await vi.advanceTimersByTimeAsync(250);
+      stale.resolve(initial);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readParent).toHaveBeenCalledTimes(3);
+      expect(hydrator.rows).toEqual([expect.objectContaining({ key: row(1).key }), current]);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
   it("clears rows when the gateway source epoch changes", () => {
     vi.useFakeTimers();
     const onRows = vi.fn();
@@ -131,7 +350,7 @@ describe("SwarmRosterHydrator", () => {
 
     hydrator.update({
       sessions,
-      readParent: async () => ({ key: "agent:main:parent", kind: "direct" as const }),
+      readParent: async () => parentRow(),
       parentKey: "agent:main:parent",
       sourceEpoch: 1,
       currentRows: () => [row(0)],
@@ -141,7 +360,7 @@ describe("SwarmRosterHydrator", () => {
 
     hydrator.update({
       sessions,
-      readParent: async () => ({ key: "agent:main:parent", kind: "direct" as const }),
+      readParent: async () => parentRow(),
       parentKey: "agent:main:parent",
       sourceEpoch: 2,
       currentRows: () => [],
@@ -163,7 +382,7 @@ describe("SwarmRosterHydrator", () => {
 
     const params = {
       sessions,
-      readParent: async () => ({ key: "agent:main:parent", kind: "direct" as const }),
+      readParent: async () => parentRow(),
       parentKey: "agent:main:parent",
       sourceEpoch: 1,
       currentRows: () => currentRows,
@@ -180,7 +399,9 @@ describe("SwarmRosterHydrator", () => {
       expect.objectContaining({ status: "done" }),
     ]);
     currentRows = [{ ...running, status: "failed" }];
+    sessions.publishRow(currentRows[0]!);
     hydrator.update(params);
+    await vi.advanceTimersByTimeAsync(0);
     expect(hydrator.rows.filter((entry) => entry.key !== "agent:main:parent")).toEqual([
       expect.objectContaining({ status: "failed" }),
     ]);
@@ -198,10 +419,11 @@ describe("SwarmRosterHydrator", () => {
       .mockResolvedValue(result([row(0)], 0, 1));
     const hydrator = new SwarmRosterHydrator();
     const sessions = sessionSource(list);
+    const readParent = vi.fn(async () => parentRow());
 
     hydrator.update({
       sessions,
-      readParent: async () => ({ key: "agent:main:parent", kind: "direct" as const }),
+      readParent,
       parentKey: "agent:main:parent",
       sourceEpoch: 1,
       currentRows: () => [],
@@ -210,10 +432,46 @@ describe("SwarmRosterHydrator", () => {
     await vi.runAllTimersAsync();
 
     expect(list).toHaveBeenCalledTimes(4);
+    expect(readParent).toHaveBeenCalledTimes(1);
     expect(hydrator.rows.filter((entry) => entry.key !== "agent:main:parent")).toEqual([
       expect.objectContaining({ key: row(0).key }),
     ]);
     hydrator.dispose();
+  });
+
+  it("backs off parent failures without reloading healthy child rows", async () => {
+    vi.useFakeTimers();
+    const list = vi.fn(async () => result([row(0)], 0, 1));
+    const readParent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("parent unavailable"))
+      .mockRejectedValueOnce(new Error("parent unavailable"))
+      .mockRejectedValueOnce(new Error("parent unavailable"))
+      .mockRejectedValueOnce(new Error("parent unavailable"))
+      .mockResolvedValue(parentRow());
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions: sessionSource(list),
+        parentKey: "agent:main:parent",
+        readParent,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(readParent).toHaveBeenCalledTimes(1);
+      for (const [index, delay] of [1_000, 2_000, 4_000, 8_000].entries()) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(readParent).toHaveBeenCalledTimes(index + 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(readParent).toHaveBeenCalledTimes(index + 2);
+        expect(list).toHaveBeenCalledTimes(1);
+      }
+      expect(hydrator.rows.map((entry) => entry.key)).toEqual([row(0).key, parentRow().key]);
+    } finally {
+      hydrator.dispose();
+    }
   });
   it("fences an old global owner read and clears a denied parent without restoring stale page totals", async () => {
     vi.useFakeTimers();
@@ -225,19 +483,17 @@ describe("SwarmRosterHydrator", () => {
       key: "global",
       kind: "global",
       agentId: "main",
+      sessionId: "main-global-session",
       label: "Old owner",
     };
     const other: GatewaySessionRow = {
       key: "global",
       kind: "global",
       agentId: "other",
+      sessionId: "other-global-session",
       label: "Current owner",
     };
-    let revision = 1;
-    const sessions = sessionSource(
-      vi.fn(async () => result([], 0, 0)),
-      () => revision,
-    );
+    const sessions = sessionSource(vi.fn(async () => result([], 0, 0)));
     const hydrator = new SwarmRosterHydrator();
     const params = {
       sessions,
@@ -254,9 +510,9 @@ describe("SwarmRosterHydrator", () => {
     release(main);
     await vi.advanceTimersByTimeAsync(0);
     expect(hydrator.rows).toEqual([other]);
-    revision += 1;
     const denied = { ...params, agentId: "other", readParent: async () => null };
     hydrator.update(denied);
+    sessions.invalidateParent("global", "other");
     await vi.advanceTimersByTimeAsync(250);
     expect(hydrator.rows).toEqual([]);
     hydrator.update(denied);
@@ -271,16 +527,14 @@ describe("SwarmRosterHydrator", () => {
     });
     const parent: GatewaySessionRow = {
       key: "agent:main:parent",
+      sessionId: "parent-session",
       kind: "direct",
       swarm: {
         groups: [{ groupId: "group", createdAt: 1, queued: 0, running: 0, done: 25, failed: 5 }],
         otherActiveGroups: 0,
       },
     };
-    const sessions = sessionSource(
-      vi.fn(() => childRead),
-      () => 1,
-    );
+    const sessions = sessionSource(vi.fn(() => childRead));
     const hydrator = new SwarmRosterHydrator();
     hydrator.update({
       sessions,
@@ -304,35 +558,34 @@ describe("SwarmRosterHydrator", () => {
       const children = createDeferred<SessionsListResult>();
       const parent: GatewaySessionRow = {
         key: "agent:main:parent",
+        sessionId: "parent-session",
         kind: "direct",
         swarm: {
           groups: [{ groupId: "group", createdAt: 1, queued: 0, running: 1, done: 0, failed: 0 }],
           otherActiveGroups: 0,
         },
       };
-      let revision = 1;
       const sessions = sessionSource(
         vi
           .fn()
           .mockReturnValueOnce(children.promise)
           .mockResolvedValue(result([], 0, 0)),
-        () => revision,
       );
       const onRows = vi.fn();
       const hydrator = new SwarmRosterHydrator();
+      let currentRows = [parent];
       const params = {
         sessions,
         parentKey: parent.key,
         sourceEpoch: 1,
-        currentRows: () => [parent],
+        currentRows: () => currentRows,
         onRows,
       };
       try {
         hydrator.update({ ...params, readParent: async () => parent });
         await vi.advanceTimersByTimeAsync(250);
         expect(hydrator.rows).toEqual([parent]);
-        revision += 1;
-        hydrator.update({
+        const deniedParams = {
           ...params,
           readParent: async () => {
             if (outcome === "denied") {
@@ -343,8 +596,13 @@ describe("SwarmRosterHydrator", () => {
             }
             return null;
           },
-        });
+        };
+        hydrator.update(deniedParams);
+        sessions.invalidateParent();
         await vi.advanceTimersByTimeAsync(250);
+        expect(hydrator.rows).toEqual([]);
+        currentRows = [parent, { ...row(0), label: "Changed after denial" }];
+        hydrator.update(deniedParams);
         expect(hydrator.rows).toEqual([]);
         children.resolve(result([row(0)], 0, 1));
         await vi.advanceTimersByTimeAsync(0);
@@ -364,29 +622,13 @@ describe("hydrateSwarmSessionRows", () => {
       const offset = options.offset ?? 0;
       return result(children.slice(offset, offset + 10_000), offset, children.length);
     });
-    const currentChild = {
-      ...row(0),
-      status: "running" as const,
-      updatedAt: 2_000,
-    } satisfies GatewaySessionRow;
-    const currentRows: GatewaySessionRow[] = [
-      {
-        key: "agent:main:parent",
-        kind: "direct",
-        updatedAt: 2_000,
-      },
-      currentChild,
-    ];
-
     const rows = await hydrateSwarmSessionRows({
       sessions: sessionSource(list),
       parentKey: "agent:main:parent",
-      currentRows,
       isCurrent: () => true,
     });
 
-    expect(rows).toHaveLength(10_056);
-    expect(rows?.find((candidate) => candidate.key === currentChild.key)?.status).toBe("running");
+    expect(rows).toHaveLength(10_055);
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenNthCalledWith(
       1,
@@ -398,20 +640,6 @@ describe("hydrateSwarmSessionRows", () => {
       }),
     );
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 10_000 }));
-  });
-
-  it("prefers the post-request server row when persisted timestamps tie", async () => {
-    const current = { ...row(0), status: "running" as const, updatedAt: 5 };
-    const fetched = { ...row(0), status: "done" as const, updatedAt: 5 };
-
-    const rows = await hydrateSwarmSessionRows({
-      sessions: sessionSource(vi.fn(async () => result([fetched], 0, 1))),
-      parentKey: "agent:main:parent",
-      currentRows: [current],
-      isCurrent: () => true,
-    });
-
-    expect(rows).toEqual([expect.objectContaining({ key: fetched.key, status: "done" })]);
   });
 
   it("restarts pagination when updated rows move across offset boundaries", async () => {
@@ -433,7 +661,6 @@ describe("hydrateSwarmSessionRows", () => {
     const rows = await hydrateSwarmSessionRows({
       sessions: sessionSource(list),
       parentKey: "agent:main:parent",
-      currentRows: [],
       isCurrent: () => true,
     });
 
@@ -475,7 +702,6 @@ describe("hydrateSwarmSessionRows", () => {
     const rows = await hydrateSwarmSessionRows({
       sessions: sessionSource(vi.fn(async () => result([row(0)], 0, 1))),
       parentKey: "agent:main:parent",
-      currentRows: [],
       isCurrent: () => false,
     });
 

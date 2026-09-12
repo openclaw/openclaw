@@ -32,6 +32,7 @@ type RegisteredSessionRow = {
     retired: boolean;
   };
   listener: (row: GatewaySessionRow | null) => void;
+  onInvalidate?: () => void;
   isValid: (sessionId: string) => boolean;
   decorate: (row: GatewaySessionRow) => GatewaySessionRow | null;
 };
@@ -253,12 +254,14 @@ export function createSessionRosterObservations(
       const row =
         projected.row &&
         (held !== null || admitRead) &&
-        acceptsRow(
-          entry,
-          projected.row,
-          projected.readRevision ?? rowRevision(projected.row),
-          admitRead,
-        )
+        // Invalidation fences incoming reads; unrelated passes retain the already-held facts.
+        (projected.row === held ||
+          acceptsRow(
+            entry,
+            projected.row,
+            projected.readRevision ?? rowRevision(projected.row),
+            admitRead,
+          ))
           ? projected.row
           : null;
       const decorated = row ? entry.decorate(row) : null;
@@ -269,9 +272,10 @@ export function createSessionRosterObservations(
         identity(decorated, entry.target.agentId) === identity(row, entry.target.agentId)
           ? inheritRow(decorated, row)
           : null;
-      const invalidatedRevision = !previous.row
-        ? Math.max(previous.invalidatedRevision, projected.invalidateRevision ?? 0)
-        : previous.invalidatedRevision;
+      const invalidatedRevision =
+        !previous.row || entry.onInvalidate
+          ? Math.max(previous.invalidatedRevision, projected.invalidateRevision ?? 0)
+          : previous.invalidatedRevision;
       if (
         row !== previous.row ||
         visible !== previous.visible ||
@@ -335,7 +339,7 @@ export function createSessionRosterObservations(
           listener(snapshot);
         }
       }
-      for (const { entry, snapshot } of rowChanges) {
+      for (const { entry, previous, snapshot } of rowChanges) {
         if (!host.connection.isCurrent(scope)) {
           return;
         }
@@ -345,6 +349,13 @@ export function createSessionRosterObservations(
           entry.snapshot === snapshot
         ) {
           entry.listener(snapshot.visible);
+          if (
+            registrationIsCurrent(entry) &&
+            entry.snapshot === snapshot &&
+            snapshot.invalidatedRevision > previous.invalidatedRevision
+          ) {
+            entry.onInvalidate?.();
+          }
         }
       }
     };
@@ -397,7 +408,7 @@ export function createSessionRosterObservations(
       this: void,
       target: SessionRowTarget,
       listener: (row: GatewaySessionRow | null) => void,
-      options: Pick<RegisteredSessionRow, "isValid" | "decorate">,
+      options: Pick<RegisteredSessionRow, "isValid" | "decorate" | "onInvalidate">,
     ) {
       const entry: RegisteredSessionRow = {
         target: Object.freeze({ ...target }),

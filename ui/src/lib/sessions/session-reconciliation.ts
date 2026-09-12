@@ -266,13 +266,14 @@ export function createSessionReconciliation(host: Host) {
     return rowIsCurrent;
   };
 
-  const observeRow: SessionCapability["observeRow"] = (target, listener) => {
+  const observeRow: SessionCapability["observeRow"] = (target, listener, options) => {
     const { roster, deletions } = host;
     if (!target.key.trim() || !target.agentId.trim()) {
       throw new Error("A session row observation requires a session key and explicit agent.");
     }
     const owned = { key: target.key.trim(), agentId: normalizeAgentId(target.agentId) };
     const registration = roster.registerRow(owned, listener, {
+      onInvalidate: options?.onInvalidate,
       isValid: (sessionId) => deletions.acceptsGeneration(owned.key, sessionId, owned.agentId),
       decorate: (row) =>
         deletions.deletionState(row.key, owned.agentId, row.sessionId)
@@ -533,7 +534,10 @@ export function createSessionReconciliation(host: Host) {
         if (reduced.admittedRow || reduced.deletedKey) {
           acceptedResult ??= reduced;
         }
-        return { row: reduced.row ?? null };
+        return {
+          row: reduced.row ?? null,
+          ...(!reduced.deletedKey ? { invalidateRevision: eventObservation.revision } : {}),
+        };
       },
       false,
       managedAdmissions,
