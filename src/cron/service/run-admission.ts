@@ -506,7 +506,6 @@ export async function executeQueuedCronRun(params: {
   | { kind: "completed"; outcome: TimedCronRunOutcome; handled: boolean }
 > {
   const { state } = params;
-  let activated = false;
   const executeAdmitted = async () => {
     const started = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -572,7 +571,6 @@ export async function executeQueuedCronRun(params: {
       if (activation.kind !== "activated") {
         return undefined;
       }
-      activated = true;
       params.onActivated?.();
       return {
         job: activation.job,
@@ -661,13 +659,16 @@ export async function executeQueuedCronRun(params: {
     executeAdmitted,
     params.admissionRelease,
   ).catch(async (error: unknown) => {
-    if (activated) {
-      await cleanupQueuedCronRunReservations({
-        state,
-        reservations: [{ jobId: params.jobId, reservationIdentity: params.reservationIdentity }],
-        recompute: "maintenance",
-      });
-    }
+    // Admission or queued-phase setup failures never activated this run, so
+    // the durable marker, open receipt, and local reservation all still
+    // belong to it. Batch callers release unclaimed rows as a safety net, but
+    // this reservation is the producer's own lifecycle: leaving it behind
+    // wedges the job behind its own queuedAtMs marker until restart (#139215).
+    await cleanupQueuedCronRunReservations({
+      state,
+      reservations: [{ jobId: params.jobId, reservationIdentity: params.reservationIdentity }],
+      recompute: "maintenance",
+    });
     throw error;
   });
   if (admission.kind === "stopped") {
