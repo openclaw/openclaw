@@ -4,7 +4,7 @@ import { createServer as createHttpsServer } from "node:https";
 import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import tls from "node:tls";
+import tls, { getCACertificates, rootCertificates } from "node:tls";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
@@ -306,6 +306,13 @@ describe("secret egress proxy", () => {
 
   it("activates Node environment proxy support for registered Gateway runs", () => {
     expect(proxyEnv.NODE_USE_ENV_PROXY).toBe("1");
+  });
+
+  it("preserves Node's configured default CAs in the generated trust bundle", () => {
+    const trustBundle = fs.readFileSync(path.join(caDir, "trust-bundle.pem"), "utf8");
+    for (const certificate of [...rootCertificates, ...getCACertificates("default")]) {
+      expect(trustBundle).toContain(certificate);
+    }
   });
 
   it("survives a client that resets a refused tunnel instead of crashing the Gateway", async () => {

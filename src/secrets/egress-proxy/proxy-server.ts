@@ -10,7 +10,7 @@ import { Agent as HttpsAgent, createServer as createHttpsServer } from "node:htt
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex, Readable, Writable } from "node:stream";
-import { rootCertificates } from "node:tls";
+import { getCACertificates, rootCertificates } from "node:tls";
 import { URL } from "node:url";
 import { normalizeExactAllowedHost as normalizeHostname } from "../exact-hostname.js";
 import {
@@ -241,10 +241,15 @@ export async function startSecretEgressProxyServer(params: {
 }): Promise<SecretEgressProxyHandle> {
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
+  const defaultCaCertificates = [
+    ...new Set([...rootCertificates, ...getCACertificates("default")]),
+  ];
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
-  fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
+  fs.writeFileSync(trustBundlePath, `${defaultCaCertificates.join("\n")}\n${caPem}`, {
+    mode: 0o644,
+  });
   const upstreamTlsAgent = new HttpsAgent({
-    ca: [...rootCertificates, caPem],
+    ca: [...defaultCaCertificates, caPem],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
   const allowedHosts =
