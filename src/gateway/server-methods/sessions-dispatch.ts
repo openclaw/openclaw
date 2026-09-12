@@ -692,6 +692,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           sessionId,
           sessionKey: target.canonicalKey,
           agentId: target.target.agentId,
+          ...(params.recoverToGateway ? { recoverToGateway: params.recoverToGateway } : {}),
         },
         sessionMutationAuthorization?.assertCurrent,
       );

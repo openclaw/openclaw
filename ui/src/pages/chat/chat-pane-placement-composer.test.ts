@@ -138,10 +138,16 @@ describe("chat placement composer presentation", () => {
 
   it("projects local restart work ahead of the stale failed placement", () => {
     const row = placementSession("failed", "restart");
+    Object.assign(row.placement!, {
+      recoveryError: "Worker provider no longer recognizes the lease",
+    });
+    expect(presentation(row).runError?.summary).toContain("no longer recognizes the lease");
     const result = presentation(row, { restartingKey: row.key });
 
     expect(result.state).toEqual({ kind: "busy", message: "Restarting session…" });
     expect(result.busyMessage).toBe("Restarting session…");
     expect(result.disabledBanner).toBeUndefined();
+    expect(result.runError).toBeNull();
+    expect(presentation(row).runError?.summary).toContain("no longer recognizes the lease");
   });
 });
