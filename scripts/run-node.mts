@@ -119,6 +119,7 @@ type RuntimePostBuildRequirement = {
   shouldSync: boolean;
   reason: keyof typeof RUNTIME_POSTBUILD_REASON_LABELS;
 };
+type RunNodeExit = number | NodeJS.Signals;
 type SpawnedProcessResult = {
   exitCode: number | null;
   exitSignal: NodeJS.Signals | null;
@@ -1364,7 +1365,7 @@ const createSyncIoTraceStderrFilter = (deps: RunNodeDeps) => {
   };
 };
 
-const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: number) => {
+const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: RunNodeExit) => {
   if (!deps.outputTee) {
     return exitCode;
   }
@@ -1650,7 +1651,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
 }
 
 /** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
-export async function runNodeMain(params: RunNodeMainParams = {}): Promise<number> {
+export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
@@ -1660,7 +1661,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
   deps.outputTee = createRunNodeOutputTee(deps);
 
   try {
-    let exitCode = 1;
+    let exitCode: RunNodeExit = 1;
     if (shouldFastPathExistingDistForGatewayClient(deps)) {
       exitCode = await runOpenClaw(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
