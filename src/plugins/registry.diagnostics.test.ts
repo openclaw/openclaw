@@ -1,9 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-} from "../media-understanding/image-runtime.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
@@ -206,18 +202,10 @@ describe("plugin registration diagnostics", () => {
         "merged media provider",
       );
       expect(provider.describeImage).toBe(
-        single === "absent"
-          ? inheritedImage
-          : single === "custom"
-            ? customImage
-            : describeImageWithModel,
+        single === "absent" ? inheritedImage : single === "custom" ? customImage : undefined,
       );
       expect(provider.describeImages).toBe(
-        multiple === "absent"
-          ? inheritedImages
-          : multiple === "custom"
-            ? customImages
-            : describeImagesWithModel,
+        multiple === "absent" ? inheritedImages : multiple === "custom" ? customImages : undefined,
       );
     },
   );

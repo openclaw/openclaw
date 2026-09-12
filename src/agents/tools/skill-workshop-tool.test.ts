@@ -7,10 +7,7 @@ import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
-import type {
-  SkillWorkshopProposalMutationBudget,
-  SkillWorkshopProposalReviewCompletion,
-} from "../../skills/workshop/types.js";
+import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -239,81 +236,6 @@ describe("skill_workshop tool", () => {
     ).resolves.toMatchObject({ details: { proposals: [] } });
   });
 
-  it("pins the default action enum and blocks work after proposal review completion", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-completion-");
-    let completions = 0;
-    const progress: Array<{ proposalIds: string[]; remaining: number }> = [];
-    let releaseProgress!: () => void;
-    const progressGate = new Promise<void>((resolve) => {
-      releaseProgress = resolve;
-    });
-    let markProgressStarted!: () => void;
-    const progressStarted = new Promise<void>((resolve) => {
-      markProgressStarted = resolve;
-    });
-    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
-    const proposalReviewCompletion: SkillWorkshopProposalReviewCompletion = {
-      phase: "open",
-      complete: async () => {
-        completions += 1;
-      },
-      recordProgress: async (next: { proposalIds: string[]; remaining: number }) => {
-        progress.push(next);
-        markProgressStarted();
-        await progressGate;
-      },
-    };
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      proposalOnly: true,
-      proposalMutationBudget,
-      proposalReviewCompletion,
-    });
-
-    expect(
-      (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual([
-      "create",
-      "prepare_patch",
-      "patch",
-      "update",
-      "read",
-      "revise",
-      "list",
-      "inspect",
-      "evaluate",
-      "apply",
-      "reject",
-      "quarantine",
-      "history",
-      "restore_collection",
-      "complete",
-    ]);
-    const create = tool.execute("call-create-before-complete", {
-      action: "create",
-      name: "Checkpointed Learning",
-      description: "Reuse a checkpointed workflow",
-      proposal_content: "# Checkpointed Learning\n\nFollow the workflow.\n",
-    });
-    await progressStarted;
-    const complete = tool.execute("call-complete", { action: "complete" });
-    await Promise.resolve();
-    expect(completions).toBe(0);
-    releaseProgress();
-    await create;
-    await expect(complete).resolves.toMatchObject({ details: { completed: true } });
-    expect(progress).toHaveLength(1);
-    expect(progress[0]).toMatchObject({ remaining: 0 });
-    expect(progress[0]?.proposalIds).toHaveLength(1);
-    await expect(
-      tool.execute("call-complete-retry", { action: "complete" }),
-    ).resolves.toMatchObject({ details: { completed: true } });
-    expect(completions).toBe(1);
-    await expect(tool.execute("call-list-after-complete", { action: "list" })).rejects.toThrow(
-      "review is already completing or complete",
-    );
-  });
-
   it("revises support files without requiring the proposal body again", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-support-revise-");
     const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main" });
@@ -403,7 +325,7 @@ describe("skill_workshop tool", () => {
     }
 
     expect(proposalMutationBudget.mutatedProposalIds).toEqual(new Set([proposalId]));
-    expect(proposalMutationBudget.successfulMutations).toBe(3);
+    expect(proposalMutationBudget.remaining).toBe(0);
   });
 
   it("is not exposed from sandboxed OpenClaw tool sets", async () => {

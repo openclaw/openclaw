@@ -324,6 +324,7 @@ export async function runTestProjects(
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
           config: plan.config,
+          timingTargets: plan.timingTargets,
           continueOnFailure: true,
           env: baseEnv,
           includeFilePath: null,

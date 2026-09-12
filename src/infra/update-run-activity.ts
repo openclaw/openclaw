@@ -1,0 +1,86 @@
+import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
+import {
+  isExpiredLegacyUpdateRun,
+  LEGACY_UPDATE_RUN_EXPIRED_REASON,
+} from "./update-run-legacy-expiry.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
+
+function updateRunLastActivity(record: UpdateRunRecord): number {
+  return Math.max(
+    record.updatedAtMs,
+    ...record.steps.flatMap((step) => [step.startedAtMs ?? 0, step.endedAtMs ?? 0]),
+  );
+}
+
+export function isStaleIdentitylessUpdateRun(record: UpdateRunRecord): boolean {
+  return (
+    record.status === "running" &&
+    !record.origin.driver &&
+    !record.origin.previousDrivers?.length &&
+    Date.now() - updateRunLastActivity(record) > ABANDONED_UPDATE_RUN_MS
+  );
+}
+
+export function recordedUpdateRunDrivers(record: UpdateRunRecord): UpdateRunDriver[] {
+  return [
+    ...(record.origin.driver ? [record.origin.driver] : []),
+    ...(record.origin.previousDrivers ?? []),
+  ];
+}
+
+/** Only a fresh, unacknowledged recovery may substitute for a full repair invocation. */
+export function isUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord): boolean {
+  return (
+    isAbandonedUpdateRun(record) &&
+    record.finishedAtMs !== null &&
+    record.finishedAtMs <= Date.now() &&
+    Date.now() - record.finishedAtMs <= ABANDONED_UPDATE_RUN_MS &&
+    !record.steps.some((step) => step.step === "reconcile:acknowledged")
+  );
+}
+
+export function isAbandonedUpdateRun(record: UpdateRunRecord): boolean {
+  return (
+    record.status === "failed" &&
+    (record.reason === "abandoned" || record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
+  );
+}
+
+/** Recorded drivers require positive death evidence; untouched legacy admissions have a fixed expiry. */
+export function inspectUpdateRunAbandonment(
+  record: UpdateRunRecord,
+  input: { explicit?: boolean } = {},
+): string | undefined {
+  if (record.status !== "running") {
+    return undefined;
+  }
+  if (isExpiredLegacyUpdateRun(record)) {
+    return LEGACY_UPDATE_RUN_EXPIRED_REASON;
+  }
+  const identityUnavailable = record.steps.some(
+    (step) => step.step === "driver:identity-unavailable",
+  );
+  if (!input.explicit && identityUnavailable) {
+    return undefined;
+  }
+  const drivers = recordedUpdateRunDrivers(record);
+  // Explicit repair need not wait for dead drivers, but an unrecorded adopter may still be working.
+  const requiresInactivity = !input.explicit || !drivers.length || identityUnavailable;
+  if (requiresInactivity && Date.now() - updateRunLastActivity(record) <= ABANDONED_UPDATE_RUN_MS) {
+    return undefined;
+  }
+  if (drivers.length) {
+    return drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")
+      ? "inactive-driver-dead"
+      : undefined;
+  }
+  return input.explicit ? "operator-reconciled-inactive-run" : undefined;
+}
+
+/** Legacy activity cannot prove death; reporting must leave recovery to the operator. */
+export function staleUpdateRunGuidance(record: UpdateRunRecord): string | undefined {
+  return isStaleIdentitylessUpdateRun(record)
+    ? `no activity since ${new Date(updateRunLastActivity(record)).toISOString()}; if no update is running, run \`openclaw update repair\` or start a new \`openclaw update\``
+    : undefined;
+}

@@ -42,7 +42,7 @@ Buzz uses Nostr keypairs for identity:
 
 The relay URL points to one Buzz workspace. Each room has a UUID, and OpenClaw
 treats each configured UUID as a separate group conversation. One Gateway and
-bot identity can serve many rooms; you do not need a Gateway per agent or room.
+bot identity can serve many rooms. You do not need a Gateway per agent or room.
 
 ## Before you start
 
@@ -96,18 +96,28 @@ sender-allowlist settings are preserved when setup is rerun.
 Setup resolves the selected account's `privateKey` and `authTag` SecretRefs
 without replacing the references in your configuration. If a configured secret
 is unavailable, setup reports the error without saving account changes. Make
-the secret available and rerun setup; existing accounts are not disabled.
+the secret available and rerun setup. Existing accounts are not disabled.
 Select at least one authorized room to complete setup, or go back to leave it.
 
 The automatic room-access wait is bounded. If access is not granted in time,
 setup remains open and offers authenticated Retry/Back controls. Every retry
-reuses the same relay and bot identity; the timeout does not disable Buzz or
+reuses the same relay and bot identity. The timeout does not disable Buzz or
 exit setup.
 
 ### Bot approval
 
 Every target room must contain the bot identity with the **Bot** role. An
 existing human member or ordinary room member role is not sufficient.
+
+At startup, OpenClaw skips active configured rooms where the bot lacks the Bot
+role and logs a warning for each skipped room. Other eligible rooms stay online.
+If active configured rooms remain but none has the Bot role, the account cannot
+start.
+
+When the relay reports a membership change for a skipped room, OpenClaw checks
+its signed roster again. A confirmed Bot role starts that room without restarting
+healthy rooms. A live Bot-role downgrade in a subscribed room still cancels the
+account's active work and reconnects with fresh memberships.
 
 Buzz desktop cannot reliably assign the Bot role to an externally managed
 OpenClaw identity. Use the Buzz CLI as the existing human room owner or admin:
@@ -129,7 +139,7 @@ configured Buzz rooms, and finally `OpenClaw`. This replaces the shortened
 public key in Buzz after its profile cache refreshes.
 
 OpenClaw also registers the same public identity in Buzz's agent directory. It
-preserves an existing agent-directory profile and channel-add policy; for a new
+preserves an existing agent-directory profile and channel-add policy. For a new
 profile it allows authorized Buzz users to add the identity. This lets Buzz
 assign the **Bot** role when the identity is invited to additional rooms
 instead of treating it as a normal member. OpenClaw still receives messages
@@ -154,8 +164,8 @@ An explicit presence rejection remains a warning, not a reconnect trigger.
 
 The local Buzz `just dev` relay does not require separate relay membership by
 default. A hosted or closed relay may require the bot public key to be added to
-the workspace community first. Adding community membership grants relay access;
-it does not add the identity to a room with the Bot role.
+the workspace community first. Adding community membership grants relay access.
+It does not add the identity to a room with the Bot role.
 
 ```bash
 buzz-admin add-member --pubkey <BOT_PUBLIC_KEY> --role member
@@ -187,7 +197,7 @@ context when those fields are present. Diff content is not interpreted as an
 OpenClaw command or textual mention.
 
 Typing uses Buzz's ephemeral kind `20002` on the active authenticated Gateway
-connection. Ordinary replies refresh it every three seconds; heartbeat-driven
+connection. Ordinary replies refresh it every three seconds. Heartbeat-driven
 replies use OpenClaw's shared typing interval, which defaults to six seconds.
 OpenClaw stops refreshing when the turn completes, is cancelled, fails, or the
 Gateway shuts down. Typing failures do not block the reply or reconnect the
@@ -222,7 +232,7 @@ The referenced public key must be a current member of the target room. Without
 an explicit identity, unknown names and duplicate profile names fail visibly
 instead of sending text that looks like a mention without notifying anyone.
 When the message contains an explicit identity, unresolved or ambiguous labels
-remain presentation text; include every intended identity explicitly. Ambiguous
+remain presentation text. Include every intended identity explicitly. Ambiguous
 errors list candidate public keys so the sender can retry with the intended
 `nostr:npub...` identity. Out-of-room public keys always fail. Mention-like text
 inside inline or fenced Markdown code is ignored, and one message can carry at
@@ -232,7 +242,7 @@ Connected Gateways resolve names from their existing in-memory directory
 snapshot and do not query the relay per message. Profiles beyond the bounded
 snapshot require an explicit `nostr:npub...` identity. A standalone mention send
 loads membership and profiles through one bounded authenticated relay session,
-publishes, and closes it; standalone messages without mention syntax keep the
+publishes, and closes it. Standalone messages without mention syntax keep the
 existing direct publish path.
 
 ### Directory and sender labels
@@ -259,8 +269,8 @@ connection and in-memory snapshot. A standalone directory command opens one
 bounded authenticated connection, loads the current snapshot, and closes it.
 Ordinary directory errors are logged without reconnecting. If a directory or
 profile subscription does not reach EOSE within 10 seconds, OpenClaw treats the
-Buzz relay session as stalled and recycles only that Buzz account connection;
-the Gateway keeps running.
+Buzz relay session as stalled and recycles only that Buzz account connection.
+The Gateway keeps running.
 
 Archived rooms are omitted from directory results and live room subscriptions.
 If a configured room is archived or restored while OpenClaw is connected, the
@@ -271,7 +281,7 @@ Each configured room uses one room-scoped relay subscription. OpenClaw reserves
 four of Buzz's 1,024 connection subscriptions for membership notifications and
 concurrent profile, membership, and metadata queries, so one account can
 configure up to 1,020 rooms. Near that limit, optional member profile
-subscriptions are reduced first; directory entries continue to work with stable
+subscriptions are reduced first. Directory entries continue to work with stable
 public keys and deterministic fallback labels.
 
 Unique current room names can resolve as outbound targets through OpenClaw's
@@ -326,26 +336,26 @@ Fresh guided setup allows normal messages from current members of the selected
 rooms. OpenClaw loads Buzz's relay-signed room roster before accepting messages,
 checks membership before queuing and again after asynchronous admission, and
 follows live relay-signed roster updates, including role changes. A removal
-invalidates queued messages immediately; cancelled admission is not committed as
+invalidates queued messages immediately. Cancelled admission is not committed as
 processed. Bounded snapshot refreshes confirm membership-change notifications.
 There is no per-message relay query or Gateway polling.
-Removing a sender does not cancel a room turn already admitted for that sender;
-losing the bot's own Bot role or stopping its connection still fences output.
+Removing a sender does not cancel a room turn already admitted for that sender.
+Losing the bot's own Bot role or stopping its connection still fences output.
 
 Startup and reconnect recover eligible messages from the last 24 hours, but
 never from before that room's first activation by this Buzz account. That
-activation floor survives restarts; sender-supplied timestamps do not advance it.
+activation floor survives restarts. Sender-supplied timestamps do not advance it.
 Replay deduplication prevents completed messages from running again.
 
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.
 Each room can override `groupPolicy`, `groupAllowFrom`, or both. An omitted room
-setting inherits the account-wide value; an explicitly empty room allowlist
+setting inherits the account-wide value. An explicitly empty room allowlist
 denies every sender when its effective policy is `"allowlist"`.
 Set `requireMention: true` only when the Buzz client used by those members can
 address the bot identity.
 
-These controls decide who can start an agent run; they do not limit what the
+These controls decide who can start an agent run. They do not limit what the
 routed agent can do after a message is accepted. Treat room messages as
 untrusted input, and configure that agent's [sandbox and tool policy](/gateway/sandbox-vs-tool-policy-vs-elevated)
 for the room's trust level.
@@ -357,7 +367,7 @@ agent under the same mention and sender rules. Within each Gateway, OpenClaw
 limits repeated exchanges between each bot pair in the same relay and room:
 the default budget is 20 accepted messages in 60 seconds, followed by a
 60-second cooldown. Changing threads does not reset the budget. Restarting the
-Gateway clears this in-memory budget; separate Gateways have separate budgets.
+Gateway clears this in-memory budget. Separate Gateways have separate budgets.
 Human messages are unaffected, and suppressed bot turns are logged without
 starting an agent run.
 
@@ -380,14 +390,14 @@ longer in the current room roster are removed before context is included.
 Passive messages do not start an agent run, record a session, or send typing.
 History stays in memory for the current connection, separately for each room and
 thread, and is cleared on reconnect or restart. Each message is truncated to
-512 UTF-8 bytes; the newest complete entries fit within a 1,024-byte rendered
+512 UTF-8 bytes. The newest complete entries fit within a 1,024-byte rendered
 context budget, including labels and markers. Older entries are discarded.
 An accepted turn consumes its context without deleting messages that arrived
 while the reply was running.
 
 Membership is checked against the latest received roster when context is used.
 If the same identity leaves and rejoins before then, its previously authorized
-messages can remain in the window; leaving does not erase conversation history.
+messages can remain in the window. Leaving does not erase conversation history.
 
 ### Reply placement
 
@@ -467,16 +477,16 @@ Set `channels.buzz.responsePrefix` to prefix automatic agent replies, for
 example `"[Support]"`. Use `"auto"` for the routed agent's identity name,
 `"[{model}]"` for its selected model, or `""` to disable an inherited global
 prefix. Explicit `message` tool and CLI text sends also apply literal and
-identity prefixes; see [shared prefix behavior](/concepts/messages#prefixes-threading-and-replies)
+identity prefixes. See [shared prefix behavior](/concepts/messages#prefixes-threading-and-replies)
 for model-dependent templates. A named account can override the root prefix
 with `channels.buzz.accounts.<id>.responsePrefix`.
-CLI sends that omit `--account` use the selected default account's prefix too;
-an account-level `""` suppresses the inherited root prefix.
+CLI sends that omit `--account` use the selected default account's prefix too.
+An account-level `""` suppresses the inherited root prefix.
 
 ### Multiple bot identities
 
 One Gateway can run independent Buzz accounts, each with its own relay, bot key,
-authorization value, and selected rooms. Run `openclaw channels add --channel buzz`
+`authTag`, and selected rooms. Run `openclaw channels add --channel buzz`
 and choose a new account to configure it interactively. Adding a named account
 does not move or replace the existing root identity.
 
@@ -504,18 +514,18 @@ does not move or replace the existing root identity.
 Named accounts inherit root policy and delivery settings, but never root
 `name`, `relayUrl`, `privateKey`, `authTag`, `groups`, or `defaultTo`. Set those
 identity and room fields on each account. An explicit `accounts.default` also
-owns a complete identity and replaces the implicit root identity; it does not
+owns a complete identity and replaces the implicit root identity. It does not
 borrow root credentials or `BUZZ_*` environment variables.
 
 Set `defaultAccount` to select the account used when a command omits `--account`.
 Otherwise the implicit root/default identity is preferred, then the first
 configured account in sorted order. Account keys use lowercase letters, digits,
 hyphens, and underscores, start with a letter or digit, and are at most 64
-characters; `constructor` and `prototype` are reserved.
+characters. `constructor` and `prototype` are reserved.
 
 Use `--account ada` with message and directory commands, and add `accountId: "ada"`
 to a binding's `match` object when routing that bot to an agent. Set
-`channels.buzz.accounts.ada.enabled: false` to disable only Ada;
+`channels.buzz.accounts.ada.enabled: false` to disable only Ada.
 `channels.buzz.enabled: false` disables all Buzz accounts. Buzz does not yet
 support account disabling or deletion through `channels remove`.
 
@@ -547,11 +557,12 @@ openclaw channels add --channel buzz --name "Support bot" \
 ```
 
 Omitting `--name` or supplying a blank name preserves the existing name. This
-command saves credentials and settings; use guided setup to discover and select
+command saves credentials and settings. Use guided setup to discover and select
 rooms before starting a new bot.
 
-If a hosted workspace operator gives you an identity authorization value, set
-the selected identity's `authTag`. The implicit root identity uses
+An `authTag` is the delegated authorization value a hosted workspace operator
+issues for one identity. Set the value the operator gives you on the selected
+identity's `authTag`. The implicit root identity uses
 `channels.buzz.authTag` and can fall back to `BUZZ_AUTH_TAG`. Nested identities,
 including `accounts.default`, use `channels.buzz.accounts.<id>.authTag` and
 never borrow that environment fallback. The field accepts the same plaintext or
@@ -614,7 +625,7 @@ Use `wss://` for hosted relays. Plaintext `ws://` credential URLs are accepted
 only for loopback development relays.
 
 Never use a human owner or admin private key. Private keys and optional
-authorization values are parent-harness secrets and must not appear in logs,
+`authTag` values are parent-harness secrets and must not appear in logs,
 artifacts, screenshots, shell history, or source control.
 
 ## Rotate the bot identity
@@ -643,14 +654,14 @@ These follow-up areas are planned but are not part of the current plugin:
 
 ## Troubleshooting
 
-| Symptom                                      | What to check                                                                                                        |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| No rooms are discovered                      | Confirm this exact bot public key is in the room with the **Bot** role, then rerun the same setup command.           |
-| Authentication fails                         | Check the relay URL, bot private key, closed-relay membership, and any authorization value supplied by the operator. |
-| A message cannot be sent                     | Confirm the bot is a room member with the **Bot** role and that the UUID is configured.                              |
-| The bot receives messages but does not reply | Confirm the sender is still a room member, then check the optional sender allowlist and mention requirement.         |
-| Setup says the Gateway is not running        | Start it with `openclaw gateway`, then run `openclaw channels status --probe`.                                       |
-| Automatic room discovery expires             | Grant the Bot role, then choose Retry; the same identity remains active.                                             |
+| Symptom                                      | What to check                                                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| No rooms are discovered                      | Confirm this exact bot public key is in the room with the **Bot** role, then rerun the same setup command.   |
+| Authentication fails                         | Check the relay URL, bot private key, closed-relay membership, and any `authTag` supplied by the operator.   |
+| A message cannot be sent                     | Confirm the bot is a room member with the **Bot** role and that the UUID is configured.                      |
+| The bot receives messages but does not reply | Confirm the sender is still a room member, then check the optional sender allowlist and mention requirement. |
+| Setup says the Gateway is not running        | Start it with `openclaw gateway`, then run `openclaw channels status --probe`.                               |
+| Automatic room discovery expires             | Grant the Bot role, then choose Retry; the same identity remains active.                                     |
 
 ## Related
 

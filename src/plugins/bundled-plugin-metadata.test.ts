@@ -7,10 +7,8 @@ import { assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
-import {
-  listBundledPluginMetadata,
-  resolveBundledPluginGeneratedPath,
-} from "./bundled-plugin-metadata.js";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 
 type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];

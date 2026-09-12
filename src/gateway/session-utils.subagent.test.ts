@@ -28,7 +28,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { listSessionFixture } from "./session-list.test-support.js";
-import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
   resolveGatewayModelSupportsImages,
@@ -246,14 +245,6 @@ describe("session list subagent metadata", () => {
     expect(all.sessions.find((session) => session.key === controlParentKey)?.childSessions).toEqual(
       [childSessionKey],
     );
-
-    expect(
-      buildSingleRowStoreChildSessionsByKey({
-        store,
-        key: navigationParentKey,
-        now,
-      }).get(navigationParentKey),
-    ).toEqual([childSessionKey]);
   });
 
   test("includes subagent status timing and direct child session keys", async () => {
@@ -1191,6 +1182,51 @@ describe("session list subagent metadata", () => {
     });
     expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
+
+  test.each([false, true])(
+    "omits deleted child sessions while retaining runs (collector=%s)",
+    async (collect) => {
+      const now = Date.now();
+      const parentKey = "agent:main:parent";
+      const childKey = "agent:main:subagent:deleted";
+      const store: Record<string, SessionEntry> = {
+        [parentKey]: { sessionId: "parent", updatedAt: now },
+        [childKey]: { sessionId: "child", updatedAt: now - 1 },
+      };
+      addSubagentRunForTests({
+        runId: "retained-child",
+        childSessionKey: childKey,
+        requesterSessionKey: parentKey,
+        requesterDisplayKey: "parent",
+        task: "retained result",
+        cleanup: "delete",
+        collect,
+        createdAt: now - 5_000,
+        startedAt: now - 4_000,
+        endedAt: now - 1_000,
+        outcome: { status: collect ? "ok" : "error" },
+        cleanupCompletedAt: now - 500,
+      });
+      const list = (spawnedBy?: string) =>
+        listSessionFixture({
+          cfg,
+          storePath: "/tmp/sessions.json",
+          store,
+          opts: { spawnedBy },
+        });
+      const before = await list();
+      expect(before.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([
+        childKey,
+      ]);
+      expect((await list(parentKey)).sessions.map((row) => row.key)).toEqual([childKey]);
+
+      // Session deletion must remove navigation without discarding the retained run/result.
+      delete store[childKey];
+      const after = await list();
+      expect((await list(parentKey)).sessions).toEqual([]);
+      expect(after.sessions.find((row) => row.key === parentKey)?.childSessions).toBeUndefined();
+    },
+  );
 
   test("does not keep old ended registry runs attached as child sessions", async () => {
     const now = Date.now();

@@ -1,5 +1,6 @@
 {
   "id": "migrate-claude",
+  "categories": ["runtime"],
   "activation": {
     "onStartup": false
   },

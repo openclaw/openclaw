@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { closeSync, createWriteStream } from "node:fs";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -67,6 +67,12 @@ function runServiceChildRelay(): void {
       stdio.push("ignore");
     }
     stdio[start.controlFd] = start.controlFd;
+    if (start.lineageFd !== undefined) {
+      while (stdio.length <= start.lineageFd) {
+        stdio.push("ignore");
+      }
+      stdio[start.lineageFd] = start.lineageFd;
+    }
     if (start.secretFd !== undefined) {
       while (stdio.length <= start.secretFd) {
         stdio.push("ignore");
@@ -97,6 +103,10 @@ function runServiceChildRelay(): void {
       return;
     }
     anchor.once("spawn", () => {
+      // Only the anchor and command may retain the host's lineage writer.
+      if (start.lineageFd !== undefined) {
+        closeSync(start.lineageFd);
+      }
       // The anchor inherited these outputs. Close only the relay's duplicate writers
       // so output EOF does not depend on either process giving up cleanup authority.
       if (process.versions.bun) {

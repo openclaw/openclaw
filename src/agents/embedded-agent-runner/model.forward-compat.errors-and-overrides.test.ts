@@ -5,10 +5,14 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { discoverModels } from "../agent-model-discovery.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
+import {
+  catalogCost,
+  configuredPricingCases,
+  staleCost,
+} from "./model.configured-pricing.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
@@ -204,56 +208,20 @@ async function resolveAnthropicModelWithProviderOverrides(overrides: Partial<Mod
 }
 
 describe("resolveModel forward-compat errors and overrides", () => {
-  const catalogCost = {
-    input: 11,
-    output: 22,
-    cacheRead: 3,
-    cacheWrite: 4,
-    tieredPricing: [
-      {
-        input: 33,
-        output: 44,
-        cacheRead: 5,
-        cacheWrite: 6,
-        range: [0, Infinity] as [number, number],
-      },
-    ],
-  };
-  const staleCost = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
-  const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  it.each<{
-    name: string;
-    cost?: Partial<ModelDefinitionConfig["cost"]>;
-    expected: ModelDefinitionConfig["cost"];
-    missingSource?: boolean;
-  }>([
-    { name: "omitted", expected: catalogCost },
-    { name: "empty", cost: {}, expected: catalogCost },
-    {
-      name: "partial",
-      cost: { input: 7 },
-      expected: { input: 7, output: 22, cacheRead: 3, cacheWrite: 4 },
-    },
-    { name: "zero", cost: zeroCost, expected: zeroCost },
-    { name: "full", cost: staleCost, expected: staleCost },
-    {
-      name: "empty tiers",
-      cost: { tieredPricing: [] },
-      expected: { input: 11, output: 22, cacheRead: 3, cacheWrite: 4 },
-    },
-    {
-      name: "authored tiers",
-      cost: { tieredPricing: [{ ...staleCost, range: [0] }] },
-      expected: { ...catalogCost, tieredPricing: [{ ...staleCost, range: [0, Infinity] }] },
-    },
-    { name: "missing source row", missingSource: true, expected: staleCost },
-  ])(
+  it.each(configuredPricingCases)(
     "resolves authored $name cost over the complete discovered schedule",
-    async ({ cost, expected, missingSource }) => {
-      const provider = "pricing-fixture";
-      const modelId = "priced-model";
+    async ({
+      cost,
+      expected,
+      missingSource,
+      sourceModels,
+      provider = "pricing-fixture",
+      modelId = "priced-model",
+      configuredId = modelId,
+      noSnapshot,
+    }) => {
       const model = {
-        ...makeModel(modelId),
+        ...makeModel(configuredId),
         api: "openai-completions" as const,
         input: ["text", "image"] as Array<"text" | "image">,
         contextWindow: 8192,
@@ -266,52 +234,59 @@ describe("resolveModel forward-compat errors and overrides", () => {
       const source = {
         models: {
           providers: {
-            " Pricing-Fixture ": {
+            [` ${provider.toUpperCase()} `]: {
               ...providerConfig,
-              models: missingSource
-                ? []
-                : [
-                    {
-                      id: " priced-model ",
-                      contextWindow: 8192,
-                      ...(cost === undefined ? {} : { cost }),
-                    },
-                  ],
+              models:
+                sourceModels ??
+                (missingSource
+                  ? []
+                  : [
+                      {
+                        id: ` ${modelId} `,
+                        contextWindow: 8192,
+                        ...(cost === undefined ? {} : { cost }),
+                      },
+                    ]),
             },
           },
         },
       } as unknown as OpenClawConfig;
       const catalogModel = {
         ...model,
+        id: modelId,
         provider,
         baseUrl: providerConfig.baseUrl,
         cost: catalogCost,
       };
       mockDiscoveredModel(discoverModels, { provider, modelId, templateModel: catalogModel });
-      setRuntimeConfigSnapshot(runtime, source);
+      if (!noSnapshot) {
+        setRuntimeConfigSnapshot(runtime, source);
+      }
 
-      const result = await resolveModelForTest(provider, modelId, "/tmp/agent", runtime);
-      const fallback = buildConfiguredFallbackModel({
-        provider,
-        modelId,
-        cfg: runtime,
-        manifestAlias: { provider },
-        getStaticCatalogModel: () => catalogModel,
-        runtimeHooks: createRuntimeHooks(),
-      });
+      for (const cfg of [runtime, structuredClone(runtime)]) {
+        const result = await resolveModelForTest(provider, modelId, "/tmp/agent", cfg);
+        const fallback = buildConfiguredFallbackModel({
+          provider,
+          modelId,
+          cfg,
+          manifestAlias: { provider },
+          getStaticCatalogModel: () => catalogModel,
+          runtimeHooks: createRuntimeHooks(),
+        });
 
-      expect(result.error).toBeUndefined();
-      expect(result.model).toMatchObject({
-        provider,
-        id: modelId,
-        input: model.input,
-        contextWindow: 8192,
-        maxTokens: 512,
-        compat: { supportsTools: false },
-        cost: expected,
-      });
-      expect(result.model?.cost).toEqual(expected);
-      expect(fallback?.cost).toEqual(expected);
+        expect(result.error).toBeUndefined();
+        expect(result.model).toMatchObject({
+          provider,
+          id: configuredId,
+          input: model.input,
+          contextWindow: 8192,
+          maxTokens: 512,
+          compat: { supportsTools: false },
+          cost: expected,
+        });
+        expect(result.model?.cost).toEqual(expected);
+        expect(fallback?.cost).toEqual(expected);
+      }
     },
   );
 

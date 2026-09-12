@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   isKnownCliHistoryBoundary,
+  runWithCliHistoryWriter,
   type CliHistoryBoundary,
   type CliHistoryWriter,
 } from "../../config/sessions/cli-history-boundary.js";
@@ -16,7 +17,11 @@ import {
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { assertOwnedTranscriptWriteCommit } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { buildSessionContext, SessionManager } from "../sessions/session-manager.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
@@ -171,7 +176,7 @@ export async function prepareCliHistoryBoundary(
     }
     assertActive();
   };
-  return {
+  const writer: CliHistoryWriter = {
     target: { ...target },
     runId: writerRunId,
     authFingerprint: boundary.authFingerprint,
@@ -199,4 +204,12 @@ export async function prepareCliHistoryBoundary(
       }
     },
   };
+  const authority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  if (!authority) {
+    throw new Error("CLI history writer is no longer active");
+  }
+  bindAgentRunTerminalWriteContext(authority, {
+    run: (write) => runWithCliHistoryWriter(writer, write),
+  });
+  return writer;
 }

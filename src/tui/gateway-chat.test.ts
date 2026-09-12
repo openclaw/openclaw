@@ -1,13 +1,69 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 // Covers gateway-backed chat behavior used by the TUI backend.
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
-const { GatewayClientRequestError } = await import("../gateway/client.js");
+const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
 
 describe("GatewayChatClient", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each([true, false])(
+    "preserves model availability semantics for published-catalog capability %s",
+    async (published) => {
+      const models = [
+        {
+          provider: "fixture",
+          id: "waiting",
+          name: "Waiting",
+          available: false,
+          unavailableReason: "cooldown",
+        },
+        { provider: "fixture", id: "unknown", name: "Unknown" },
+      ];
+      const request = vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue({ models });
+      try {
+        const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+        client.hello = {
+          type: "hello-ok",
+          protocol: 3,
+          server: { version: "test", connId: "catalog-test" },
+          features: {
+            methods: ["models.list"],
+            events: [],
+            capabilities: published ? [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG] : [],
+          },
+          snapshot: {
+            presence: [],
+            health: {},
+            stateVersion: { presence: 0, health: 0 },
+            uptimeMs: 0,
+          },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        };
+
+        const result = await client.listModels({ agentId: "work" });
+
+        expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
+          agentId: "work",
+          ...(published ? { includeDetails: true } : {}),
+        });
+        expect(result).toEqual(
+          published
+            ? models
+            : [
+                { provider: "fixture", id: "waiting", name: "Waiting" },
+                { provider: "fixture", id: "unknown", name: "Unknown" },
+              ],
+        );
+      } finally {
+        request.mockRestore();
+      }
+    },
+  );
 
   it("waits for gateway transport teardown on stop", async () => {
     const client = new GatewayChatClient({

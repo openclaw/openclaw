@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
 import {
@@ -275,11 +276,7 @@ describe("active prompt steering context", () => {
         normalizeMessagesForLlmBoundary(session.messages, options),
       );
     const prefix = project();
-    session.agent.state.messages.push({
-      role: "user",
-      content: "new requirement",
-      timestamp: 1717570860000,
-    });
+    session.agent.state.messages.push(makeUserMessage("new requirement", 1717570860000));
     const steered = project();
     cleanup();
 

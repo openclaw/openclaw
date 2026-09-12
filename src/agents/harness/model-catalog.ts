@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import {
   resolveAgentEffectiveModelPrimary,
@@ -15,6 +16,7 @@ import { collectPreparedModelRuntimeConfiguredRefs } from "../prepared-model-run
 import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
+import { getRegisteredAgentHarness } from "./registry.js";
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
   if (!value) {
@@ -150,9 +152,13 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   const pluginRegistry = params.observationConfig
     ? params.pluginRegistry
     : (params.pluginRegistry ?? getActivePluginRegistry());
-  const harness = pluginRegistry?.agentHarnesses.find(
-    (entry) => entry.harness.id === runtime,
-  )?.harness;
+  // The scoped lookup retains transient catalog resources for executable CLI cleanup.
+  const harness = pluginRegistry
+    ? withPluginRuntimeRegistryScope(
+        pluginRegistry,
+        () => getRegisteredAgentHarness(runtime)?.harness,
+      )
+    : undefined;
   if (!harness?.loadModelCatalog || params.isCurrent?.() === false) {
     return params.snapshot;
   }

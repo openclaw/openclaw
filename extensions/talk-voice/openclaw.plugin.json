@@ -1,5 +1,6 @@
 {
   "id": "talk-voice",
+  "categories": ["voice", "tools"],
   "activation": {
     "onStartup": true
   },

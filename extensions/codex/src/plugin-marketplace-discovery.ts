@@ -2,8 +2,10 @@
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { v2 } from "./app-server/protocol.js";
 
-const PLUGIN_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
-const MAX_PLUGIN_DESCRIPTION_LENGTH = 160;
+// Codex permits dots between plugin-name segments, but not in marketplace names.
+const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
+const MARKETPLACE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+const MAX_PLUGIN_METADATA_LENGTH = 160;
 const SUPPLEMENTAL_MARKETPLACE_KINDS = [
   "workspace-directory",
   "shared-with-me",
@@ -16,6 +18,8 @@ export type CodexAvailablePlugin = {
   id: string;
   pluginName: string;
   marketplaceName: string;
+  displayName?: string;
+  developerName?: string;
   description?: string;
   installed: boolean;
   enabled: boolean;
@@ -37,6 +41,22 @@ export type CodexPluginMarketplaceListRequest = (
   params: v2.PluginListParams,
 ) => Promise<v2.PluginListResponse>;
 
+export function filterCodexMarketplacePlugins(
+  plugins: CodexAvailablePlugin[],
+  query: string,
+  marketplace?: string,
+): CodexAvailablePlugin[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  return plugins.filter(
+    (plugin) =>
+      (!marketplace || plugin.marketplaceName === marketplace) &&
+      (!normalizedQuery ||
+        `${plugin.id} ${plugin.displayName ?? ""} ${plugin.developerName ?? ""} ${plugin.description ?? ""}`
+          .toLowerCase()
+          .includes(normalizedQuery)),
+  );
+}
+
 /** Validates the same identifier segments required by Codex's stable PluginId parser. */
 export function parseCodexPluginMarketplaceId(
   value: string,
@@ -47,7 +67,7 @@ export function parseCodexPluginMarketplaceId(
   }
   const pluginName = value.slice(0, separator);
   const marketplaceName = value.slice(separator + 1);
-  return PLUGIN_SEGMENT_PATTERN.test(pluginName) && PLUGIN_SEGMENT_PATTERN.test(marketplaceName)
+  return PLUGIN_NAME_PATTERN.test(pluginName) && MARKETPLACE_NAME_PATTERN.test(marketplaceName)
     ? { pluginName, marketplaceName }
     : undefined;
 }
@@ -114,7 +134,7 @@ export async function discoverCodexMarketplacePlugins(params: {
   const discovered = new Map<string, CodexAvailablePlugin>();
   const ambiguous = new Set<string>();
   for (const marketplace of marketplaces) {
-    if (!PLUGIN_SEGMENT_PATTERN.test(marketplace.name)) {
+    if (!MARKETPLACE_NAME_PATTERN.test(marketplace.name)) {
       continue;
     }
     for (const summary of marketplace.plugins) {
@@ -127,10 +147,17 @@ export async function discoverCodexMarketplacePlugins(params: {
         continue;
       }
       const previous = discovered.get(id);
+      const pluginInterface = readRecord(summary.interface);
       const next: CodexAvailablePlugin = {
         id,
         pluginName,
         marketplaceName: marketplace.name,
+        displayName: boundedCatalogText(pluginInterface?.displayName) || undefined,
+        developerName: boundedCatalogText(pluginInterface?.developerName) || undefined,
+        description:
+          boundedCatalogText(pluginInterface?.shortDescription) ||
+          boundedCatalogText(pluginInterface?.longDescription) ||
+          undefined,
         installed: summary.installed,
         enabled: summary.enabled,
         available:
@@ -146,10 +173,6 @@ export async function discoverCodexMarketplacePlugins(params: {
           : {}),
         summaryId: summary.id,
       };
-      const description = pluginDescription(summary);
-      if (description) {
-        next.description = description;
-      }
       if (
         previous &&
         (previous.marketplacePath !== next.marketplacePath ||
@@ -205,22 +228,16 @@ function pluginSlug(summary: v2.PluginSummary, marketplaceName: string): string 
     return qualified.pluginName;
   }
   const identitySegment = summary.id.split("/").at(-1);
-  if (identitySegment && PLUGIN_SEGMENT_PATTERN.test(identitySegment)) {
+  if (identitySegment && PLUGIN_NAME_PATTERN.test(identitySegment)) {
     return identitySegment;
   }
-  return PLUGIN_SEGMENT_PATTERN.test(summary.name) ? summary.name : undefined;
+  return PLUGIN_NAME_PATTERN.test(summary.name) ? summary.name : undefined;
 }
 
-function pluginDescription(summary: v2.PluginSummary): string | undefined {
-  const pluginInterface = readRecord(summary.interface);
-  const description = pluginInterface?.shortDescription;
-  if (typeof description !== "string") {
-    return undefined;
+function boundedCatalogText(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
   }
-  return boundedCatalogText(description) || undefined;
-}
-
-function boundedCatalogText(value: string): string {
   let sanitized = "";
   for (const character of value) {
     const codePoint = character.codePointAt(0);
@@ -229,5 +246,5 @@ function boundedCatalogText(value: string): string {
         ? " "
         : character;
   }
-  return sanitized.replace(/\s+/g, " ").trim().slice(0, MAX_PLUGIN_DESCRIPTION_LENGTH);
+  return sanitized.replace(/\s+/g, " ").trim().slice(0, MAX_PLUGIN_METADATA_LENGTH);
 }

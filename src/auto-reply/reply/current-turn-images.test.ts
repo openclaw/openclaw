@@ -393,6 +393,34 @@ describe("resolveCurrentTurnImages", () => {
     expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
   });
 
+  it("does not rehydrate a managed copy of an already-provided inline image", async () => {
+    vi.mocked(resolveAgentTurnAttachments).mockClear();
+    const inlineImage = {
+      type: "image" as const,
+      data: Buffer.from("inline").toString("base64"),
+      mimeType: "image/png",
+    };
+
+    const result = await resolveCurrentTurnImages({
+      ctx: {
+        Body: "inspect",
+        media: [
+          {
+            path: "/state/media/inbound/photo.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: [inlineImage],
+      imageOrder: ["inline"],
+    });
+
+    expect(result).toEqual({ images: [inlineImage], imageOrder: ["inline"] });
+    expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
+  });
+
   it("hydrates only current image facts missing prompt descriptions", async () => {
     const imageData = Buffer.from("second image").toString("base64");
     vi.mocked(resolveAgentTurnAttachments).mockResolvedValueOnce({

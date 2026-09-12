@@ -203,6 +203,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       provider: selection.runtimeProvider ?? selection.provider,
       model: selection.modelId,
       modelFallbacksOverride: [],
+      requestedRouteResolution: "resolved",
       agentHarnessRuntimeOverride: "openclaw",
       authProfileId: selection.profileId,
       authProfileIdSource: selection.profileId ? "user" : undefined,

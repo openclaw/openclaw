@@ -137,6 +137,44 @@ const schemaNameByObject = new Map<object, string>();
 const schemaNameBySignature = new Map<string, string | undefined>();
 const schemaNamesByIdentity = new Map<symbol, Map<string, string | undefined>>();
 
+// These names already appear in generated public field types. Registry ordering
+// must not choose a different nominal type when schemas share the same object.
+const CANONICAL_SCHEMA_ALIASES = new Set([
+  "ArtifactsDownloadParams",
+  "DevicePairSetupDeliveryUncertainEvent",
+  "GatewaySuspendResumeParams",
+  "ProgressCardPutResult",
+  "ProjectsAddResult",
+  "SessionDiscussionOpenResult",
+  "SessionMemberRemoveParams",
+  "UsersAuthConnectCancelParams",
+  "WizardStartResult",
+  "WizardStatusParams",
+]);
+
+function resolveSchemaObjectAliases(
+  definitions: Array<[string, JsonSchema]>,
+): Map<JsonSchema, string> {
+  const aliases = new Map<JsonSchema, string[]>();
+  for (const [name, schema] of definitions) {
+    const names = aliases.get(schema) ?? [];
+    names.push(name);
+    aliases.set(schema, names);
+  }
+  const result = new Map<JsonSchema, string>();
+  for (const [schema, names] of aliases) {
+    if (names.length === 1) {
+      continue;
+    }
+    const [preferred, duplicate] = names.filter((name) => CANONICAL_SCHEMA_ALIASES.has(name));
+    if (preferred === undefined || duplicate !== undefined) {
+      throw new Error(`Choose one canonical Swift schema name for aliases: ${names.join(", ")}`);
+    }
+    result.set(schema, preferred);
+  }
+  return result;
+}
+
 function stableJson(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stableJson);
@@ -156,8 +194,8 @@ function schemaSignature(schema: JsonSchema): string {
   return JSON.stringify(stableJson(schema));
 }
 
-function registerNamedSchema(name: string, schema: JsonSchema): void {
-  schemaNameByObject.set(schema as object, name);
+function registerNamedSchema(name: string, schema: JsonSchema, objectName: string): void {
+  schemaNameByObject.set(schema as object, objectName);
   const signature = schemaSignature(schema);
   registerUniqueName(schemaNameBySignature, signature, name);
   const identity = schema["~openclawClosedObjectIdentity"];
@@ -852,9 +890,10 @@ function emitGatewayFrame(): string {
 
 async function generate() {
   const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
+  const objectAliases = resolveSchemaObjectAliases(definitions);
 
   for (const [name, schema] of definitions) {
-    registerNamedSchema(name, schema);
+    registerNamedSchema(name, schema, objectAliases.get(schema) ?? name);
   }
 
   const parts: string[] = [];

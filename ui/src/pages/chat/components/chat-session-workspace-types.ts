@@ -2,9 +2,13 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
+
+export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
 export type SessionWorkspaceProps = {
+  filter: SessionWorkspaceFilter;
+  browserSearch: string;
   collapsed: boolean;
   sessionKey: string;
   list: SessionWorkspaceListResult | null;
@@ -21,6 +25,7 @@ export type SessionWorkspaceProps = {
   onBrowsePath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
+  onSetFilter: (filter: SessionWorkspaceFilter) => void;
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
@@ -31,6 +36,7 @@ export type SessionWorkspaceProps = {
 };
 
 export type SessionWorkspaceState = {
+  filter: SessionWorkspaceFilter;
   activeId: string | null;
   agentId: string;
   browserPath: string;
@@ -43,7 +49,6 @@ export type SessionWorkspaceState = {
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
-  openRequest?: object;
   pendingReload: boolean;
   sessionKey: string;
 };
@@ -64,9 +69,9 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceDraftScope?: string;
-  sidebarContent: SidebarContent | null;
+  sidebarContent: SidebarSelection | null;
   requestUpdate?: () => void;
-  handleOpenSidebar: (content: SidebarContent | null) => void;
+  handleOpenSidebar: (content: SidebarSelection | null) => void;
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the

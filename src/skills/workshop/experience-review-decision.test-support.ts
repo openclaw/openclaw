@@ -4,7 +4,8 @@ import { expect } from "vitest";
 import type { readSkillReviewOutcomes } from "./collection-review-state.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import type { observeExperienceReview } from "./experience-review-observation.test-support.js";
-import type { getSkillProposalRunProgress, listSkillProposals } from "./service.js";
+import type { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
+import type { listSkillProposals } from "./service.js";
 
 export function assertExperienceReviewDecision(params: {
   observation: Awaited<ReturnType<typeof observeExperienceReview>>;

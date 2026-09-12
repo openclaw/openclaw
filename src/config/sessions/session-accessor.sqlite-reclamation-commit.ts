@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import {
-  isSqliteLockError,
   runSqliteImmediateTransactionSync,
   withSqliteWriteAdmissionService,
 } from "../../infra/sqlite-transaction.js";

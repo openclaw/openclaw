@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
@@ -884,11 +885,7 @@ describe("hasCompletedBootstrapTurn", () => {
   });
 
   it("invalidates a completion marker after compaction", async () => {
-    const firstEntryId = sessionManager.appendMessage({
-      role: "user",
-      content: "hello",
-      timestamp: 1,
-    });
+    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
     sessionManager.appendCompaction("trimmed", firstEntryId, 10);
 
@@ -896,11 +893,7 @@ describe("hasCompletedBootstrapTurn", () => {
   });
 
   it("accepts a newer full bootstrap marker after compaction", async () => {
-    const firstEntryId = sessionManager.appendMessage({
-      role: "user",
-      content: "hello",
-      timestamp: 1,
-    });
+    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
     sessionManager.appendCompaction("trimmed", firstEntryId, 10);
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
@@ -926,11 +919,7 @@ describe("hasCompletedBootstrapTurn", () => {
   });
 
   it("ignores completion markers on an inactive transcript branch", async () => {
-    const firstEntryId = sessionManager.appendMessage({
-      role: "user",
-      content: "hello",
-      timestamp: 1,
-    });
+    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
 

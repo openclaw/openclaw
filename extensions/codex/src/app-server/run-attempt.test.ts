@@ -1,4 +1,5 @@
 // Codex tests cover run attempt plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
@@ -46,6 +47,7 @@ import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
 import {
   consumeCodexAppServerLiveThread,
+  releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError, CodexAppServerClient } from "./client.js";
@@ -487,6 +489,9 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     onYieldDetected: () => undefined,
   });
   const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, layers: [] };
+    }
     if (method === "thread/start") {
       return threadStartResult();
     }
@@ -1172,6 +1177,9 @@ describe("runCodexAppServerAttempt", () => {
       onYieldDetected: () => undefined,
     });
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -3406,6 +3414,7 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    params.inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" };
     params.config = {
       ...params.config,
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -3437,6 +3446,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(hookContext).toMatchObject({
       modelProviderId: params.provider,
       modelId: params.modelId,
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
     });
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
@@ -4720,36 +4730,165 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumedInstructions).not.toContain(updatedGuidance);
   });
 
-  it("injects bounded MEMORY.md when memory tools are unavailable", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const memorySummary = "Memory summary goes here.";
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const turnStartParams = turnStart?.params as {
-      input?: Array<{ text?: string }>;
-    };
-    const inputText = turnStartParams.input?.[0]?.text ?? "";
-    expect(inputText).not.toContain("OpenClaw Workspace Memory");
-    expect(inputText).not.toContain("memory_search");
-    expect(inputText).toContain(memorySummary);
-    const fileStats = new Map(
-      result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
-    );
-    expect(fileStats.get("MEMORY.md")).toMatchObject({
-      rawChars: memorySummary.length,
-      injectedChars: memorySummary.length,
-      truncated: false,
-    });
-  });
+  it.each([
+    "unchanged",
+    "edited",
+    "compacted",
+    "cold resume",
+    "unsubscribed",
+    "compacted during acceptance",
+    "dropped by fitting",
+  ] as const)(
+    "introduces bounded workspace references once per native thread need: %s",
+    async (scenario) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const memorySummary = "Memory summary goes here.";
+      const bootstrap = "Bootstrap reference goes here.";
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+      await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), bootstrap);
+      let oversizedPrefix = scenario === "dropped by fitting";
+      if (oversizedPrefix) {
+        openRunSession(sessionFile).appendMessage(userMessage("Earlier conversation", Date.now()));
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            {
+              hookName: "before_prompt_build",
+              handler: () => ({ prependContext: oversizedPrefix ? "p".repeat(1 << 20) : "" }),
+            },
+          ]),
+        );
+      }
+      let compactDuringAcceptance = false;
+      let harness = createStartedThreadHarness(
+        async (method) => {
+          if (method === "turn/start" && compactDuringAcceptance) {
+            compactDuringAcceptance = false;
+            await harness.notify({
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: { type: "contextCompaction", id: "compact-during-start" },
+              },
+            });
+          }
+        },
+        { persistedThreads: [] },
+      );
+      const runTurn = async () => {
+        const offset = harness.requests.length;
+        const params = createParams(sessionFile, workspaceDir);
+        const compiledPrompts: Array<string | undefined> = [];
+        params.hostCapabilities = Object.freeze({
+          ...params.hostCapabilities,
+          trajectory: Object.freeze({
+            recordEvent: (type: string, data?: { prompt?: string }) => {
+              if (type === "context.compiled") {
+                compiledPrompts.push(data?.prompt);
+              }
+            },
+            flush: async () => undefined,
+          }),
+        });
+        const run = runCodexAppServerAttempt(params);
+        await vi.waitFor(() => {
+          expect(harness.requests.slice(offset).some(({ method }) => method === "turn/start")).toBe(
+            true,
+          );
+        }, fastWait);
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        const result = await run;
+        expect(readAttemptTerminal(result)).toMatchObject({
+          aborted: false,
+          timedOut: false,
+          promptError: null,
+        });
+        const request = harness.requests
+          .slice(offset)
+          .find(({ method }) => method === "turn/start");
+        assert(request, "Expected the reference turn/start request");
+        const input = (request.params as { input: Array<{ text?: string }> }).input[0]?.text ?? "";
+        expect(compiledPrompts).toEqual([input]);
+        return { input, result };
+      };
+      const first = await runTurn();
+      if (oversizedPrefix) {
+        expect(first.input.length).toBeLessThanOrEqual(1 << 20);
+        expect(first.input).toContain("Earlier conversation");
+        expect(first.input).toContain("Current user request:");
+        expect(first.input).not.toContain(memorySummary);
+        expect(first.input).not.toContain(bootstrap);
+      } else {
+        expect(first.input).toContain(memorySummary);
+        expect(first.input).toContain(bootstrap);
+        expect(
+          first.result.systemPromptReport?.injectedWorkspaceFiles.find(
+            (file) => file.name === "MEMORY.md",
+          ),
+        ).toMatchObject({
+          rawChars: memorySummary.length,
+          injectedChars: memorySummary.length,
+          truncated: false,
+        });
+      }
+      expect(first.input).not.toContain("memory_search");
+      compactDuringAcceptance = scenario === "compacted during acceptance";
+      oversizedPrefix = false;
+      const second = await runTurn();
+      if (scenario === "dropped by fitting") {
+        expect(second.input).toContain(memorySummary);
+        expect(second.input).toContain(bootstrap);
+      } else {
+        expect.soft(second.input).not.toContain(memorySummary);
+        expect.soft(second.input).not.toContain(bootstrap);
+        expect
+          .soft(
+            second.result.systemPromptReport?.injectedWorkspaceFiles.find(
+              (file) => file.name === "MEMORY.md",
+            ),
+          )
+          .toMatchObject({ injectedChars: 0, truncated: false });
+      }
+      expect(harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
+      expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(0);
+
+      let expectedMemory = memorySummary;
+      if (scenario === "edited") {
+        expectedMemory = "Updated memory reference.";
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), expectedMemory);
+      } else if (scenario === "compacted") {
+        // Manual compaction may complete while no attempt projector is attached.
+        await harness.notify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "compact-1",
+            item: { type: "contextCompaction", id: "compact-item" },
+          },
+        });
+      } else if (scenario === "cold resume") {
+        harness.close();
+        harness = createResumeHarness("thread-1");
+      } else if (scenario === "unsubscribed") {
+        await releaseCodexAppServerLiveThread(harness.client, "thread-1");
+      }
+      const third = await runTurn();
+      if (scenario === "unchanged" || scenario === "dropped by fitting") {
+        expect.soft(third.input).not.toContain(expectedMemory);
+        expect.soft(third.input).not.toContain(bootstrap);
+      } else {
+        expect(third.input).toContain(expectedMemory);
+        expect(third.input).toContain(bootstrap);
+      }
+      if (scenario === "cold resume" || scenario === "unsubscribed") {
+        expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+      }
+      const fourth = await runTurn();
+      expect.soft(fourth.input).not.toContain(expectedMemory);
+      expect.soft(fourth.input).not.toContain(bootstrap);
+    },
+  );
   it("routes MEMORY.md through memory_get when search is unavailable", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const memorySummary = "Memory summary goes here.";
@@ -4961,7 +5100,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("reports hook-supplied bootstrap files that only expose path and content", async () => {
+  it("reports hook-supplied bootstrap files with unverified delivery on an external connection", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const soulPath = path.join(workspaceDir, "SOUL.md");
     const soulGuidance = "Hook supplied soul guidance.";
@@ -4991,10 +5130,13 @@ describe("runCodexAppServerAttempt", () => {
         name: "SOUL.md",
         path: soulPath,
         rawChars: soulGuidance.length,
-        injectedChars: soulGuidance.length,
-        truncated: false,
+        missing: false,
+        injectionStatus: "native_unverified",
+        injectedChars: null,
+        truncated: null,
       }),
     ]);
+    expect(result.systemPromptReport?.source).toBe("estimate");
   });
   it.each([
     { name: "non-empty legacy HEARTBEAT.md", contents: "Heartbeat checklist goes here." },
@@ -5384,20 +5526,36 @@ describe("runCodexAppServerAttempt", () => {
         completedCount: 2,
         activeCount: 0,
       });
-      if (expectedContext && oversizedHistory) {
-        expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
-      } else if (result.settledTurnFinalizationContext) {
-        expect(result.settledTurnFinalizationContext).toMatchObject({
+      if (expectedContext) {
+        const context = result.settledTurnFinalizationContext;
+        expect(context).toMatchObject({
           source: "harness",
           selection: { ...sourceSelection, authProfileId: selectedProfile },
-          data: [
-            expect.objectContaining({ role: "user" }),
-            expect.objectContaining({ type: "function_call" }),
-            expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
-          ],
         });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+        if (!(context instanceof settledTurnContext.CodexSettledTurnContext)) {
+          throw new Error("Expected complete settled-turn evidence from the harness");
+        }
+        expect(context.data).toHaveLength(oversizedHistory ? 200 : 3);
+        if (oversizedHistory) {
+          expect(context.data[0]).toMatchObject({
+            content: [{ text: expect.stringContaining("Earlier conversation was omitted") }],
+          });
+        }
+        expect(context.data.slice(-3)).toEqual([
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: expect.stringContaining(params.prompt) }],
+          },
+          {
+            type: "function_call",
+            call_id: "tool-settled",
+            name: "bash",
+            arguments: JSON.stringify({ command: "echo sent-to-alice", cwd: workspaceDir }),
+          },
+          { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice" },
+        ]);
+        expect(Object.isFrozen(context)).toBe(true);
       }
     },
   );

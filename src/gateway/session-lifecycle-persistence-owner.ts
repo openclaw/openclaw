@@ -5,6 +5,7 @@ import {
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
+import type { CapturedAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 type LifecyclePersistenceParams = Parameters<typeof persistGatewaySessionLifecycleEvent>[0];
@@ -18,6 +19,7 @@ type ObservedTerminalPersistenceParams = Omit<
   "assertCommitAllowed" | "event"
 > & {
   authority?: TerminalPersistenceAuthority;
+  writeContext?: CapturedAgentRunTerminalWriteContext;
   clientRunId?: string;
   event: AgentEventRuntimePayload;
 };
@@ -76,25 +78,32 @@ export function createSessionLifecyclePersistenceOwner() {
       return existing;
     }
     const authority = params.authority;
-    const promise = persistGatewaySessionLifecycleEvent({
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      event: {
-        ...params.event,
-        ...(params.event.lifecycleGeneration
-          ? { lifecycleGeneration: params.event.lifecycleGeneration }
+    const persist = () =>
+      persistGatewaySessionLifecycleEvent({
+        sessionKey: params.sessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        event: {
+          ...params.event,
+          ...(params.event.lifecycleGeneration
+            ? { lifecycleGeneration: params.event.lifecycleGeneration }
+            : {}),
+          ...(params.event.mainSessionRestartRecovery === true
+            ? { mainSessionRestartRecovery: true as const }
+            : {}),
+          ...(params.clientRunId ? { clientRunId: params.clientRunId } : {}),
+        },
+        ...(authority || params.writeContext
+          ? {
+              assertCommitAllowed: () => {
+                if (authority) {
+                  assertTerminalAuthority(authority);
+                }
+                params.writeContext?.assertCurrent();
+              },
+            }
           : {}),
-        ...(params.event.mainSessionRestartRecovery === true
-          ? { mainSessionRestartRecovery: true as const }
-          : {}),
-        ...(params.clientRunId ? { clientRunId: params.clientRunId } : {}),
-      },
-      ...(authority
-        ? {
-            assertCommitAllowed: () => assertTerminalAuthority(authority),
-          }
-        : {}),
-    });
+      });
+    const promise = params.writeContext ? params.writeContext.run(persist) : persist();
     inFlight.add(promise);
     let entry: PreparedPersistence | undefined;
     const settle = () => {

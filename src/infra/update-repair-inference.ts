@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import {
   listAgentEntries,
   resolveAmbientOwnerAgentId,
@@ -20,8 +17,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "../system-agent/inference-route.js";
-import { cleanupSetupInferenceTempDir } from "../system-agent/setup-inference-persist.js";
-import { runSetupInferenceTest } from "../system-agent/setup-inference-test.js";
+import { runSetupInferenceTurn } from "../system-agent/setup-inference-turn.js";
 
 export type UpdateRepairInferenceResult =
   | {
@@ -43,7 +39,6 @@ export async function selectUpdateRepairInference(params: {
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
   const chains = new Map<string, SystemAgentConfiguredRoute[]>();
   const eligibility = new Map<SystemAgentConfiguredRoute, boolean>();
-  let tempDir: string | undefined;
   try {
     signal.throwIfAborted();
     const owner = resolveAmbientOwnerAgentId(params.config);
@@ -156,22 +151,12 @@ export async function selectUpdateRepairInference(params: {
         accept,
         verify: async (route) => {
           signal.throwIfAborted();
-          tempDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-repair-probe-"));
-          signal.throwIfAborted();
-          const result = await runSetupInferenceTest({
-            plan: {
-              ...route,
-              config: route.runConfig,
-              routeAgentId: route.agentId,
-              modelRef: route.modelLabel,
-              // Repair tools belong to the local host, never an external coding CLI.
-              agentHarnessRuntimeOverride: "openclaw",
-            },
-            tempDir,
+          const result = await runSetupInferenceTurn({
+            route,
             deps: { timeoutMs: Math.max(1, deadline - Date.now()) },
-            authProfileStateMode: "read-only",
             requireExecutionOwner: false,
             signal,
+            runtime: params.runtime,
           });
           signal.throwIfAborted();
           return result.ok
@@ -205,9 +190,5 @@ export async function selectUpdateRepairInference(params: {
     };
   } finally {
     clearTimeout(timeout);
-    // Await the probe before deleting its state: cancellation must drain the embedded run.
-    if (tempDir) {
-      await cleanupSetupInferenceTempDir({ tempDir, deps: {}, runtime: params.runtime });
-    }
   }
 }

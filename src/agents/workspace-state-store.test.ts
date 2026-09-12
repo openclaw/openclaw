@@ -19,7 +19,10 @@ import {
   retireWorkspaceFileCache,
   writeWorkspaceFileCache,
 } from "./workspace-file-cache.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import {
+  resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
+} from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,
@@ -350,6 +353,7 @@ describe("workspace state store", () => {
     fs.unlinkSync(alias);
     fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
 
+    expect(() => readWorkspaceStateSnapshot(alias)).toThrow(WorkspaceAliasRepointedError);
     expect(() => readWorkspaceStateSnapshot(alias)).toThrow(/different current target/u);
   });
 
@@ -527,7 +531,9 @@ describe("workspace state store", () => {
       ) VALUES (?, ?, 99, NULL, NULL, 1)`,
     ).run(identity.workspaceKey, identity.workspacePath);
 
-    expect(() => readWorkspaceStateSnapshot(dir)).toThrow(/version requires openclaw doctor/u);
+    expect(() => readWorkspaceStateSnapshot(dir)).toThrow(
+      /unsupported workspace setup version 99/u,
+    );
     expect(() => deleteState(dir)).not.toThrow();
     const row = db
       .prepare("SELECT workspace_key FROM workspace_setup_state WHERE workspace_key = ?")

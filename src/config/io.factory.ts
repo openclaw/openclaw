@@ -6,6 +6,7 @@ import {
 } from "./io.observe-recovery.js";
 import { recoverConfigFromJsonRootSuffixWithContext } from "./io.recovery.js";
 import {
+  prepareConfigRecoveryFromContext,
   readBestEffortConfigSnapshotFromContext,
   readConfigFileSnapshotForWriteFromContext,
   readConfigFileSnapshotFromContext,
@@ -16,6 +17,7 @@ import {
 import type { ConfigIoFactoryOptions, ConfigSnapshotReadOptions } from "./io.types.js";
 import type { writeConfigFileFromContext } from "./io.write.js";
 import type { ConfigFileSnapshot } from "./types.js";
+import { withConfigWriteLock } from "./write-lock.js";
 
 export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
   const context = createConfigIoContext(options);
@@ -35,6 +37,8 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     readConfigFileSnapshotWithPluginMetadata: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
     readConfigFileSnapshotForWrite: () => readConfigFileSnapshotForWriteFromContext(context),
+    prepareConfigRecovery: (current: ConfigFileSnapshot) =>
+      prepareConfigRecoveryFromContext(context, current),
     promoteConfigSnapshotToLastKnownGood: (snapshot: ConfigFileSnapshot) =>
       promoteConfigSnapshotToLastKnownGoodCore({
         deps: context.deps,
@@ -55,7 +59,11 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       writeOptions: Parameters<typeof writeConfigFileFromContext>[2] = {},
     ) => {
       const { writeConfigFileFromContext } = await import("./io.write.js");
-      return writeConfigFileFromContext(context, config, writeOptions, readInternal);
+      return withConfigWriteLock(
+        context.configPath,
+        () => writeConfigFileFromContext(context, config, writeOptions, readInternal),
+        context.deps.env,
+      );
     },
   };
 }

@@ -1,4 +1,4 @@
-# Gateway Hot Paths
+# Gateway Runtime And Delivery
 
 Gateway server tests and startup paths should not materialize bundled plugin
 runtime when they only need plugin-owned static descriptors.
@@ -21,6 +21,29 @@ runtime when they only need plugin-owned static descriptors.
 - Keep schedulers, pollers, and background loops disabled in manual-RPC tests
   unless the test is specifically proving automatic scheduling or lifecycle
   behavior.
+
+## Best-Effort Callbacks And Telemetry
+
+- When adding or changing best-effort telemetry and callbacks, keep network
+  delivery off turn execution and token delivery paths. Queue outbound work
+  through its lifecycle owner; keep the queue bounded and define visible
+  overflow/coalescing behavior. An inline callback that can wait on a remote
+  endpoint defeats that boundary.
+- Authorization, approval, required persistence, and user-requested delivery are
+  not best-effort telemetry. Classify hooks by their caller contract, not a void
+  return type; preserve required ordering and failure behavior. Callback failure
+  must neither grant permission nor silently discard required work.
+
+## Write Target And Outcome
+
+- Bind a mutation to its intended logical target before its first side effect.
+  A failure must not silently redirect the write to another account, profile,
+  Gateway, or session. Report the failure or reconcile the original target.
+- A timeout can follow an accepted write. Use the existing owner's idempotency
+  and outcome-reconciliation contract before retrying; an error alone does not
+  prove non-execution. Transport retry or explicit failover may follow an existing
+  contract, including model-call auth-profile failover. That is not permission
+  to redirect an unrelated user-bound write to report success.
 
 ## Run Authority And Worker Upgrades
 

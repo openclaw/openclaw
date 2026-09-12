@@ -143,7 +143,7 @@ function registerSessionsLifecycleCommand(
     .command(`${operation} <keys...>`)
     .description(
       destructive
-        ? "Delete stored sessions and their live artifacts via the running gateway"
+        ? "Delete stored sessions and their live artifacts via the running gateway. Retained archives can remain searchable."
         : "Archive stored sessions via the running gateway",
     )
     .option(`--dry-run`, `Preview ${operation} actions without writing`, false);
@@ -157,7 +157,7 @@ function registerSessionsLifecycleCommand(
         `\n${theme.heading("Examples:")}\n${formatHelpExamples(examples)}${
           destructive
             ? `\n\n${theme.muted(
-                "Deletion uses the Control UI lifecycle operation, including transcript archival and runtime cleanup.",
+                "Deletion uses the Control UI lifecycle operation, including transcript archival and runtime cleanup. Retained deleted-session archives can remain eligible for memory search. To remove indexed memories, run `openclaw memory forget --agent <agent-id> --session <id-or-key>` on the Gateway host or container using its state and configuration. Use the agent that owned the deleted session, including for global keys. Memory cleanup runs locally; --url does not forward it to a remote Gateway.",
               )}`
             : ""
         }`,

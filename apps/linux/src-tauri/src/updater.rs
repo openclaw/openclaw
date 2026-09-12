@@ -35,14 +35,23 @@ enum TerminalResultKind {
     PackageUpdateAvailable,
     UpdateReady,
     UpdateFailed,
+    RelaunchFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResultDestination {
     None,
+    Notification,
     Webview,
     WebviewAndNotificationWhenUnfocused,
-    WebviewAndNotification,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum UpdateAction {
+    #[default]
+    Unavailable,
+    OpenDownloadPage,
+    RestartToUpdate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,9 +65,9 @@ enum Platform {
 
 #[derive(Default)]
 pub struct UpdaterState {
+    lifecycle: Mutex<UpdateLifecycle>,
     auto_check_started: AtomicBool,
     check_in_progress: Arc<AtomicBool>,
-    deferred_update: Mutex<Option<DeferredUpdate>>,
     // Set when a manual (tray/command) check is requested. The one in-flight
     // check reads this at emit time so a manual click that lands while the
     // silent startup auto-check is running still surfaces a result instead of
@@ -66,9 +75,114 @@ pub struct UpdaterState {
     manual_pending: Arc<AtomicBool>,
 }
 
-struct DeferredUpdate {
-    update: Update,
+#[derive(Debug)]
+struct DeferredUpdate<T = Update> {
+    update: T,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+enum ReadyUpdate<T = Update> {
+    Installed,
+    Deferred(DeferredUpdate<T>),
+}
+
+#[derive(Debug)]
+enum ClaimedAction<T = Update> {
+    None,
+    OpenDownloadPage,
+    Restart,
+    Install(DeferredUpdate<T>),
+}
+
+// Readiness and its payload have one owner. A claimed installer is busy, not absent.
+struct UpdateLifecycle<T = Update> {
+    ready: Option<ReadyUpdate<T>>,
+    download_available: bool,
+    operation_in_progress: bool,
+}
+
+impl<T> Default for UpdateLifecycle<T> {
+    fn default() -> Self {
+        Self {
+            ready: None,
+            download_available: false,
+            operation_in_progress: false,
+        }
+    }
+}
+
+impl<T> UpdateLifecycle<T> {
+    fn action(&self) -> UpdateAction {
+        if self.operation_in_progress {
+            UpdateAction::Unavailable
+        } else if self.ready.is_some() {
+            UpdateAction::RestartToUpdate
+        } else if self.download_available {
+            UpdateAction::OpenDownloadPage
+        } else {
+            UpdateAction::Unavailable
+        }
+    }
+
+    fn download_started(&mut self) {
+        self.download_available = false;
+    }
+
+    fn record_result(&mut self, result: TerminalResultKind) {
+        match result {
+            TerminalResultKind::NotAvailable => self.download_available = false,
+            TerminalResultKind::PackageUpdateAvailable
+            | TerminalResultKind::UpdateFailed
+            | TerminalResultKind::RelaunchFailed => self.download_available = true,
+            TerminalResultKind::CheckFailed | TerminalResultKind::UpdateReady => {}
+        }
+    }
+
+    fn replace_ready(&mut self, ready: ReadyUpdate<T>) {
+        self.ready = Some(ready);
+        self.download_available = false;
+    }
+
+    fn claim_action(&mut self, relaunch: bool) -> ClaimedAction<T> {
+        if self.operation_in_progress {
+            return ClaimedAction::None;
+        }
+        if relaunch || self.action() == UpdateAction::RestartToUpdate {
+            self.operation_in_progress = true;
+            return match self.ready.take() {
+                Some(ReadyUpdate::Deferred(deferred)) => ClaimedAction::Install(deferred),
+                Some(ReadyUpdate::Installed) | None => ClaimedAction::Restart,
+            };
+        }
+        match self.action() {
+            UpdateAction::OpenDownloadPage => ClaimedAction::OpenDownloadPage,
+            _ => ClaimedAction::None,
+        }
+    }
+
+    fn restore_failed_install(&mut self, deferred: DeferredUpdate<T>) {
+        // A replacement may have finished downloading while the claimed install ran.
+        if self.ready.is_none() {
+            self.ready = Some(ReadyUpdate::Deferred(deferred));
+        }
+        self.operation_in_progress = false;
+    }
+
+    fn begin_self_install(&mut self) -> bool {
+        if self.operation_in_progress {
+            return false;
+        }
+        self.operation_in_progress = true;
+        true
+    }
+
+    fn finish_self_install(&mut self, success: bool) {
+        if success {
+            self.replace_ready(ReadyUpdate::Installed);
+        }
+        self.operation_in_progress = false;
+    }
 }
 
 struct CheckGuard {
@@ -140,28 +254,7 @@ pub fn updater_ready(app: AppHandle) {
 
 #[tauri::command]
 pub fn relaunch(app: AppHandle) {
-    let state = app.state::<UpdaterState>();
-    let deferred = state
-        .deferred_update
-        .lock()
-        .expect("deferred updater state lock poisoned")
-        .take();
-    let Some(deferred) = deferred else {
-        app.restart();
-    };
-
-    let result = deferred.update.install(&deferred.bytes);
-    match result {
-        Ok(()) => app.restart(),
-        Err(error) => {
-            state
-                .deferred_update
-                .lock()
-                .expect("deferred updater state lock poisoned")
-                .replace(deferred);
-            emit_error(&app, error);
-        }
-    }
+    activate(&app, true);
 }
 
 #[tauri::command]
@@ -171,11 +264,49 @@ pub fn open_release_page(app: AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Could not open release page: {error}"))
 }
 
+pub(crate) fn perform_action(app: &AppHandle) {
+    activate(app, false);
+}
+
+fn activate(app: &AppHandle, relaunch: bool) {
+    let action = app
+        .state::<UpdaterState>()
+        .lifecycle
+        .lock()
+        .expect("updater lifecycle lock poisoned")
+        .claim_action(relaunch);
+    refresh_action(app);
+    match action {
+        ClaimedAction::None => {}
+        ClaimedAction::OpenDownloadPage => {
+            if let Err(error) = open_release_page(app.clone()) {
+                crate::notify::notify(app, "OpenClaw", &error);
+            }
+        }
+        ClaimedAction::Restart => app.restart(),
+        ClaimedAction::Install(deferred) => {
+            let app = app.clone();
+            // Installation may block or ask the main thread for native platform work.
+            std::thread::spawn(move || match deferred.update.install(&deferred.bytes) {
+                Ok(()) => app.restart(),
+                Err(error) => {
+                    app.state::<UpdaterState>()
+                        .lifecycle
+                        .lock()
+                        .expect("updater lifecycle lock poisoned")
+                        .restore_failed_install(deferred);
+                    deliver_error(&app, true, TerminalResultKind::RelaunchFailed, error);
+                }
+            });
+        }
+    }
+}
+
 // A manual (tray/command) check surfaces the "up to date" and check-error
 // notices; the launch auto-check runs silent. Manual intent is recorded on the
 // shared state before racing for the single-flight guard, so a manual click
 // that lands while the silent auto-check is running still gets a response
-// (`should_notify` reads it). Once an update is found, download
+// (`manual_requested` reads it). Once an update is found, download
 // progress/ready/errors always surface, since the user has been told an update
 // is coming.
 async fn run_check(app: AppHandle, manual: bool) {
@@ -236,6 +367,12 @@ async fn run_check(app: AppHandle, manual: bool) {
         notes: update.body.clone(),
     };
 
+    app.state::<UpdaterState>()
+        .lifecycle
+        .lock()
+        .expect("updater lifecycle lock poisoned")
+        .download_started();
+    refresh_action(&app);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
         let version = info.version.clone();
@@ -256,30 +393,41 @@ async fn run_check(app: AppHandle, manual: bool) {
     }
 
     emit(&app, AVAILABLE_EVENT, info.clone());
-    let Some(window) = main_window(&app) else {
-        return;
-    };
-    let result = match install_kind {
-        InstallKind::SelfInstall => update
-            .download_and_install(progress_callback(window.clone()), || {})
-            .await
-            .map(|()| None),
-        InstallKind::DeferredInstall => update
-            .download(progress_callback(window.clone()), || {})
-            .await
-            .map(Some),
-        InstallKind::NotifyOnly => unreachable!("notify-only updates return before downloading"),
+    let result = update.download(progress_callback(app.clone()), || {}).await;
+    let result = match result {
+        Ok(bytes) if install_kind == InstallKind::SelfInstall => {
+            let admitted = app
+                .state::<UpdaterState>()
+                .lifecycle
+                .lock()
+                .expect("updater lifecycle lock poisoned")
+                .begin_self_install();
+            if !admitted {
+                // A relaunch already owns the process; do not replace files beneath it.
+                return;
+            }
+            refresh_action(&app);
+            let result = update.install(&bytes);
+            app.state::<UpdaterState>()
+                .lifecycle
+                .lock()
+                .expect("updater lifecycle lock poisoned")
+                .finish_self_install(result.is_ok());
+            result
+        }
+        Ok(bytes) => {
+            app.state::<UpdaterState>()
+                .lifecycle
+                .lock()
+                .expect("updater lifecycle lock poisoned")
+                .replace_ready(ReadyUpdate::Deferred(DeferredUpdate { update, bytes }));
+            Ok(())
+        }
+        Err(error) => Err(error),
     };
     match result {
-        Ok(deferred_bytes) => {
+        Ok(()) => {
             let version = info.version.clone();
-            if let Some(bytes) = deferred_bytes {
-                app.state::<UpdaterState>()
-                    .deferred_update
-                    .lock()
-                    .expect("deferred updater state lock poisoned")
-                    .replace(DeferredUpdate { update, bytes });
-            }
             let notification_body = ready_notification_body(&version);
             deliver_result(
                 &app,
@@ -304,20 +452,40 @@ fn result_delivery(
     main_content_is_remote: bool,
     result: TerminalResultKind,
 ) -> ResultDestination {
-    if manual && main_content_is_remote {
-        return ResultDestination::WebviewAndNotification;
+    if !manual
+        && matches!(
+            result,
+            TerminalResultKind::NotAvailable | TerminalResultKind::CheckFailed
+        )
+    {
+        return ResultDestination::None;
+    }
+    if main_content_is_remote {
+        return ResultDestination::Notification;
     }
     match result {
-        TerminalResultKind::NotAvailable | TerminalResultKind::CheckFailed if !manual => {
-            ResultDestination::None
-        }
-        TerminalResultKind::PackageUpdateAvailable | TerminalResultKind::UpdateReady => {
+        TerminalResultKind::PackageUpdateAvailable
+        | TerminalResultKind::UpdateReady
+        | TerminalResultKind::RelaunchFailed => {
             ResultDestination::WebviewAndNotificationWhenUnfocused
         }
         TerminalResultKind::NotAvailable
         | TerminalResultKind::CheckFailed
         | TerminalResultKind::UpdateFailed => ResultDestination::Webview,
     }
+}
+
+pub(crate) fn current_action(app: &AppHandle) -> UpdateAction {
+    app.state::<UpdaterState>()
+        .lifecycle
+        .lock()
+        .expect("updater lifecycle lock poisoned")
+        .action()
+}
+
+fn refresh_action(app: &AppHandle) {
+    app.state::<crate::DesktopState>()
+        .refresh_update_action(app);
 }
 
 fn begin_check(app: &AppHandle) -> Option<CheckGuard> {
@@ -373,17 +541,19 @@ fn main_content_is_remote(app: &AppHandle, window: Option<&WebviewWindow>) -> bo
     })
 }
 
-fn progress_callback(window: WebviewWindow) -> impl FnMut(usize, Option<u64>) {
+fn progress_callback(app: AppHandle) -> impl FnMut(usize, Option<u64>) {
     let mut downloaded = 0_u64;
     move |chunk_size, total| {
         downloaded = downloaded.saturating_add(chunk_size as u64);
-        let _ = window.emit(PROGRESS_EVENT, Progress { downloaded, total });
+        emit(&app, PROGRESS_EVENT, Progress { downloaded, total });
     }
 }
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     if let Some(window) = main_window(app) {
-        let _ = window.emit(event, payload);
+        if !main_content_is_remote(app, Some(&window)) {
+            let _ = window.emit(event, payload);
+        }
     }
 }
 
@@ -395,19 +565,28 @@ fn deliver_result<S: Serialize + Clone>(
     payload: S,
     notification_body: &str,
 ) {
+    app.state::<UpdaterState>()
+        .lifecycle
+        .lock()
+        .expect("updater lifecycle lock poisoned")
+        .record_result(result);
+    refresh_action(app);
     let window = main_window(app);
     let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
-    if !matches!(destination, ResultDestination::None) {
+    if matches!(
+        destination,
+        ResultDestination::Webview | ResultDestination::WebviewAndNotificationWhenUnfocused
+    ) {
         if let Some(window) = window.as_ref() {
             let _ = window.emit(event, payload);
         }
     }
     let notify = match destination {
         ResultDestination::None | ResultDestination::Webview => false,
+        ResultDestination::Notification => true,
         ResultDestination::WebviewAndNotificationWhenUnfocused => window
             .as_ref()
             .is_some_and(|window| matches!(window.is_focused(), Ok(false))),
-        ResultDestination::WebviewAndNotification => true,
     };
     if notify {
         crate::notify::notify(app, "OpenClaw", notification_body);
@@ -435,20 +614,10 @@ fn deliver_error(
 fn error_notification_body(result: TerminalResultKind, message: &str) -> String {
     let prefix = match result {
         TerminalResultKind::CheckFailed => "Update check failed",
-        TerminalResultKind::UpdateFailed => "Update failed",
+        TerminalResultKind::UpdateFailed | TerminalResultKind::RelaunchFailed => "Update failed",
         _ => unreachable!("only error results have error notification copy"),
     };
     format!("{prefix}: {message}")
-}
-
-fn emit_error(app: &AppHandle, error: impl std::fmt::Display) {
-    emit(
-        app,
-        ERROR_EVENT,
-        UpdateError {
-            message: error.to_string(),
-        },
-    );
 }
 
 fn ready_notification_body(version: &str) -> String {
@@ -524,53 +693,324 @@ mod tests {
             TerminalResultKind::PackageUpdateAvailable,
             TerminalResultKind::UpdateReady,
             TerminalResultKind::UpdateFailed,
+            TerminalResultKind::RelaunchFailed,
         ] {
             assert_eq!(
-                result_delivery(true, true, result),
-                ResultDestination::WebviewAndNotification,
-                "manual {result:?} must have a visible destination when the WebView is remote"
+                observable_delivery(result_delivery(true, true, result)),
+                (false, NotificationDelivery::Always),
+                "manual {result:?} must use native-only delivery when the WebView is remote"
             );
         }
     }
 
     #[test]
-    fn background_result_delivery_preserves_existing_behavior() {
-        let expected = [
-            (TerminalResultKind::NotAvailable, ResultDestination::None),
-            (TerminalResultKind::CheckFailed, ResultDestination::None),
+    fn background_result_delivery_uses_a_compatible_visible_sink() {
+        let local_expected = [
+            (
+                TerminalResultKind::NotAvailable,
+                (false, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::CheckFailed,
+                (false, NotificationDelivery::Never),
+            ),
             (
                 TerminalResultKind::PackageUpdateAvailable,
-                ResultDestination::WebviewAndNotificationWhenUnfocused,
+                (true, NotificationDelivery::WhenUnfocused),
             ),
             (
                 TerminalResultKind::UpdateReady,
-                ResultDestination::WebviewAndNotificationWhenUnfocused,
+                (true, NotificationDelivery::WhenUnfocused),
             ),
-            (TerminalResultKind::UpdateFailed, ResultDestination::Webview),
+            (
+                TerminalResultKind::UpdateFailed,
+                (true, NotificationDelivery::Never),
+            ),
         ];
-        for main_content_is_remote in [false, true] {
-            for (result, destination) in expected {
+        let remote_expected = [
+            (
+                TerminalResultKind::NotAvailable,
+                (false, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::CheckFailed,
+                (false, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::PackageUpdateAvailable,
+                (false, NotificationDelivery::Always),
+            ),
+            (
+                TerminalResultKind::UpdateReady,
+                (false, NotificationDelivery::Always),
+            ),
+            (
+                TerminalResultKind::UpdateFailed,
+                (false, NotificationDelivery::Always),
+            ),
+        ];
+        for (main_content_is_remote, expected) in [(false, local_expected), (true, remote_expected)]
+        {
+            for (result, observable) in expected {
                 assert_eq!(
-                    result_delivery(false, main_content_is_remote, result),
-                    destination
+                    observable_delivery(result_delivery(false, main_content_is_remote, result)),
+                    observable
                 );
             }
         }
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum NotificationDelivery {
+        Never,
+        WhenUnfocused,
+        Always,
+    }
+
+    fn observable_delivery(destination: ResultDestination) -> (bool, NotificationDelivery) {
+        match destination {
+            ResultDestination::None => (false, NotificationDelivery::Never),
+            ResultDestination::Notification => (false, NotificationDelivery::Always),
+            ResultDestination::Webview => (true, NotificationDelivery::Never),
+            ResultDestination::WebviewAndNotificationWhenUnfocused => {
+                (true, NotificationDelivery::WhenUnfocused)
+            }
+        }
+    }
+
+    fn deferred(version: &'static str, bytes: &[u8]) -> ReadyUpdate<&'static str> {
+        ReadyUpdate::Deferred(DeferredUpdate {
+            update: version,
+            bytes: bytes.to_vec(),
+        })
+    }
+
+    fn claimed_installer(action: ClaimedAction<&'static str>) -> DeferredUpdate<&'static str> {
+        match action {
+            ClaimedAction::Install(deferred) => deferred,
+            other => panic!("expected the retained installer, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn manual_local_results_keep_the_in_page_delivery_path() {
+    fn ready_update_survives_failed_replacement_download() {
+        for relaunch in [false, true] {
+            let mut lifecycle = UpdateLifecycle::default();
+            lifecycle.replace_ready(deferred("release-a", b"verified A\0\xff"));
+
+            lifecycle.download_started();
+            assert_eq!(lifecycle.action(), UpdateAction::RestartToUpdate);
+            lifecycle.record_result(TerminalResultKind::UpdateFailed);
+            assert_eq!(lifecycle.action(), UpdateAction::RestartToUpdate);
+
+            let selected = claimed_installer(lifecycle.claim_action(relaunch));
+            assert_eq!(selected.update, "release-a");
+            assert_eq!(selected.bytes, b"verified A\0\xff");
+        }
+    }
+
+    #[test]
+    fn empty_or_failed_checks_preserve_deferred_and_installed_readiness() {
         for result in [
             TerminalResultKind::NotAvailable,
             TerminalResultKind::CheckFailed,
-            TerminalResultKind::PackageUpdateAvailable,
-            TerminalResultKind::UpdateReady,
-            TerminalResultKind::UpdateFailed,
         ] {
-            assert!(!matches!(
-                result_delivery(true, false, result),
-                ResultDestination::None
+            let mut lifecycle = UpdateLifecycle::default();
+            lifecycle.replace_ready(deferred("release-a", b"verified A"));
+            lifecycle.record_result(result);
+            assert_eq!(lifecycle.action(), UpdateAction::RestartToUpdate);
+            let selected = claimed_installer(lifecycle.claim_action(false));
+            assert_eq!(selected.update, "release-a");
+            assert_eq!(selected.bytes, b"verified A");
+
+            let mut installed = UpdateLifecycle::<()>::default();
+            installed.replace_ready(ReadyUpdate::Installed);
+            installed.record_result(result);
+            assert_eq!(installed.action(), UpdateAction::RestartToUpdate);
+            assert!(matches!(
+                installed.claim_action(true),
+                ClaimedAction::Restart
             ));
+        }
+    }
+
+    #[test]
+    fn successful_replacement_selects_new_identity_and_bytes() {
+        let mut lifecycle = UpdateLifecycle::default();
+        lifecycle.replace_ready(deferred("release-a", b"verified A"));
+        lifecycle.download_started();
+        lifecycle.replace_ready(deferred("release-b", b"verified B\0\xff"));
+        lifecycle.record_result(TerminalResultKind::UpdateReady);
+
+        assert_eq!(lifecycle.action(), UpdateAction::RestartToUpdate);
+        let selected = claimed_installer(lifecycle.claim_action(false));
+        assert_eq!(selected.update, "release-b");
+        assert_eq!(selected.bytes, b"verified B\0\xff");
+    }
+
+    #[test]
+    fn failed_install_can_be_retried_from_either_entry_point() {
+        for first_relaunch in [false, true] {
+            let mut lifecycle = UpdateLifecycle::default();
+            lifecycle.replace_ready(deferred("release-a", b"verified A"));
+            let claimed = claimed_installer(lifecycle.claim_action(first_relaunch));
+            assert!(matches!(
+                lifecycle.claim_action(!first_relaunch),
+                ClaimedAction::None
+            ));
+            lifecycle.restore_failed_install(claimed);
+            lifecycle.record_result(TerminalResultKind::RelaunchFailed);
+
+            assert_eq!(lifecycle.action(), UpdateAction::RestartToUpdate);
+            let retry = claimed_installer(lifecycle.claim_action(!first_relaunch));
+            assert_eq!(retry.update, "release-a");
+            assert_eq!(retry.bytes, b"verified A");
+        }
+    }
+
+    #[test]
+    fn replacement_and_failed_install_interleavings_never_restore_stale_bytes() {
+        for replacement_finishes_first in [false, true] {
+            let lifecycle = Mutex::new(UpdateLifecycle::default());
+            lifecycle
+                .lock()
+                .unwrap()
+                .replace_ready(deferred("release-a", b"verified A"));
+            let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+            let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+            std::thread::scope(|scope| {
+                let lifecycle = &lifecycle;
+                let installer = scope.spawn(move || {
+                    let claimed = claimed_installer(lifecycle.lock().unwrap().claim_action(false));
+                    claimed_tx.send(()).unwrap();
+                    finish_rx.recv().unwrap();
+                    assert_eq!(claimed.update, "release-a");
+                    assert_eq!(claimed.bytes, b"verified A");
+                    lifecycle.lock().unwrap().restore_failed_install(claimed);
+                });
+                claimed_rx.recv().unwrap();
+                {
+                    let mut state = lifecycle.lock().unwrap();
+                    state.download_started();
+                    state.record_result(TerminalResultKind::CheckFailed);
+                    assert!(matches!(state.claim_action(true), ClaimedAction::None));
+                    if replacement_finishes_first {
+                        state.replace_ready(deferred("release-b", b"verified B"));
+                        assert!(matches!(state.claim_action(true), ClaimedAction::None));
+                    }
+                }
+                finish_tx.send(()).unwrap();
+                installer.join().unwrap();
+                if !replacement_finishes_first {
+                    lifecycle
+                        .lock()
+                        .unwrap()
+                        .replace_ready(deferred("release-b", b"verified B"));
+                }
+            });
+            let mut state = lifecycle.lock().unwrap();
+            // Delivery of A's error can itself run after B becomes ready.
+            state.record_result(TerminalResultKind::RelaunchFailed);
+            assert_eq!(state.action(), UpdateAction::RestartToUpdate);
+            let selected = claimed_installer(state.claim_action(true));
+            assert_eq!(selected.update, "release-b");
+            assert_eq!(selected.bytes, b"verified B");
+        }
+    }
+
+    #[test]
+    fn installed_update_survives_retry_and_installation_fences_relaunch() {
+        for success in [false, true] {
+            let mut lifecycle = UpdateLifecycle::<()>::default();
+            lifecycle.replace_ready(ReadyUpdate::Installed);
+            lifecycle.download_started();
+            lifecycle.record_result(TerminalResultKind::UpdateFailed);
+            assert_eq!(lifecycle.action(), UpdateAction::RestartToUpdate);
+
+            lifecycle.download_started();
+            assert!(lifecycle.begin_self_install());
+            assert!(!lifecycle.begin_self_install());
+            for relaunch in [false, true] {
+                assert!(matches!(
+                    lifecycle.claim_action(relaunch),
+                    ClaimedAction::None
+                ));
+            }
+            lifecycle.finish_self_install(success);
+            lifecycle.record_result(if success {
+                TerminalResultKind::UpdateReady
+            } else {
+                TerminalResultKind::UpdateFailed
+            });
+            assert_eq!(lifecycle.action(), UpdateAction::RestartToUpdate);
+            assert!(matches!(
+                lifecycle.claim_action(false),
+                ClaimedAction::Restart
+            ));
+            assert!(!lifecycle.begin_self_install());
+        }
+    }
+
+    #[test]
+    fn without_ready_update_failures_offer_download_instead_of_install() {
+        for result in [
+            TerminalResultKind::PackageUpdateAvailable,
+            TerminalResultKind::UpdateFailed,
+            TerminalResultKind::RelaunchFailed,
+        ] {
+            let mut lifecycle = UpdateLifecycle::<()>::default();
+            lifecycle.record_result(result);
+            assert_eq!(lifecycle.action(), UpdateAction::OpenDownloadPage);
+            assert!(matches!(
+                lifecycle.claim_action(false),
+                ClaimedAction::OpenDownloadPage
+            ));
+            lifecycle.record_result(TerminalResultKind::CheckFailed);
+            assert_eq!(lifecycle.action(), UpdateAction::OpenDownloadPage);
+            lifecycle.record_result(TerminalResultKind::NotAvailable);
+            assert_eq!(lifecycle.action(), UpdateAction::Unavailable);
+            assert!(matches!(lifecycle.claim_action(false), ClaimedAction::None));
+            // The existing local relaunch command also supports an ordinary restart.
+            assert!(matches!(
+                lifecycle.claim_action(true),
+                ClaimedAction::Restart
+            ));
+        }
+    }
+
+    #[test]
+    fn manual_local_results_keep_the_in_page_delivery_path() {
+        let expected = [
+            (
+                TerminalResultKind::NotAvailable,
+                (true, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::CheckFailed,
+                (true, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::PackageUpdateAvailable,
+                (true, NotificationDelivery::WhenUnfocused),
+            ),
+            (
+                TerminalResultKind::UpdateReady,
+                (true, NotificationDelivery::WhenUnfocused),
+            ),
+            (
+                TerminalResultKind::UpdateFailed,
+                (true, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::RelaunchFailed,
+                (true, NotificationDelivery::WhenUnfocused),
+            ),
+        ];
+        for (result, observable) in expected {
+            assert_eq!(
+                observable_delivery(result_delivery(true, false, result)),
+                observable
+            );
         }
     }
 }

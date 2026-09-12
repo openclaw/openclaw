@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsDeleteResult } from "../../packages/gateway-protocol/src/index.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getRegistryWorktree,
   WorktreeRemovalContentionError,
@@ -35,15 +36,32 @@ import {
   sessionStoreEntry,
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
-import {
-  initializeRemoteBackedGitWorkspace,
-  setupGatewaySessionsWorktreeTestHarness,
-} from "./test/server-sessions.worktree-fixture.js";
+import { setupGatewaySessionsWorktreeTestHarness } from "./test/server-sessions.worktree-fixture.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-const { createSessionStoreDir, createArchiveWorktreeFixture } =
+const { createSessionStoreDir, createArchiveWorktreeFixture, initializeRemoteBackedGitWorkspace } =
   setupGatewaySessionsWorktreeTestHarness();
 const execFileAsync = promisify(execFile);
+
+test("worktree fixtures keep committed changes and remote cleanup local to each case", async () => {
+  const tempDirs = createTempDirTracker();
+  onTestFinished(tempDirs.cleanup);
+  const firstRoot = tempDirs.make("openclaw-worktree-first-");
+  const first = await initializeRemoteBackedGitWorkspace(firstRoot);
+  await fs.writeFile(path.join(first, "README.md"), "first fixture only\n");
+  await execFileAsync("git", ["-C", first, "commit", "-am", "change first fixture"]);
+  await execFileAsync("git", ["-C", first, "push"]);
+
+  const second = await initializeRemoteBackedGitWorkspace(
+    tempDirs.make("openclaw-worktree-second-"),
+  );
+  await fs.rm(firstRoot, { recursive: true, force: true });
+  await execFileAsync("git", ["-C", second, "fetch", "origin"]);
+  expect(await fs.readFile(path.join(second, "README.md"), "utf8")).toBe("base\n");
+  expect((await execFileAsync("git", ["-C", second, "show", "origin/main:README.md"])).stdout).toBe(
+    "base\n",
+  );
+});
 
 test.each(["none", "restore-failed", "placement-changed"] as const)(
   "inbound admission restores the archived worktree before opening its session (failure=%s)",
@@ -118,10 +136,14 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
           .spyOn(worktreeLifecycle, "synchronizeSessionWorktreeArchive")
           .mockImplementationOnce(async (params) => {
             const assertCurrent = await synchronize(params);
-            heldWriter = runExclusiveSqliteSessionWrite(sqliteScope, async () => {
-              writerStarted.resolve();
-              await releaseWriter.promise;
-            });
+            heldWriter = runExclusiveSqliteSessionWrite(
+              sqliteScope,
+              async () => {
+                writerStarted.resolve();
+                await releaseWriter.promise;
+              },
+              "session.transcript.batch",
+            );
             await writerStarted.promise;
             return assertCurrent;
           })
@@ -359,15 +381,9 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
     },
   } as never;
   let successorWorktreeId: string | undefined;
-  let releaseRemoval = () => {};
-  const removalGate = new Promise<void>((resolve) => {
-    releaseRemoval = resolve;
-  });
+  const { promise: removalGate, resolve: releaseRemoval } = createDeferredCore();
   const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
-  let markRemovalStarted = () => {};
-  const removalStarted = new Promise<void>((resolve) => {
-    markRemovalStarted = resolve;
-  });
+  const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
   const removeSpy = vi.spyOn(managedWorktrees, "remove");
   try {
     const predecessor = await directSessionReq<{

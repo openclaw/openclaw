@@ -40,7 +40,6 @@ export function resolveInstallSafetyOverrides(
 ): InstallSafetyOverrides {
   return {
     config: overrides.config,
-    dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: overrides.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: overrides.trustedSourceLinkedOfficialInstall,
   };

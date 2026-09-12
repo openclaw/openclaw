@@ -254,21 +254,29 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(page.pendingEnabled).toBeNull();
   });
 
-  it("discards a wiki response from a replaced gateway source", async () => {
-    const pending = deferred<unknown>();
-    const client = {
-      request: vi.fn(() => pending.promise),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    document.body.append(page);
-    await page.updateComplete;
+  it.each([false, true])(
+    "discards a wiki response from a replaced gateway source (Lit rebound: %s)",
+    async (rebound) => {
+      const pending = deferred<unknown>();
+      const client = {
+        request: vi.fn(() => pending.promise),
+      } as unknown as GatewayBrowserClient;
+      const page = createPage(contextWithGateway(client, true));
+      document.body.append(page);
+      await page.updateComplete;
 
-    const preview = page.openWikiPage("old.md");
-    await replaceContext(page, contextWithGateway(client, false));
-    pending.resolve({ title: "Old", path: "old.md", content: "stale" });
+      const preview = page.openWikiPage("old.md");
+      const nextContext = contextWithGateway(client, false);
+      if (rebound) {
+        await replaceContext(page, nextContext);
+      } else {
+        page.context = nextContext;
+      }
+      pending.resolve({ title: "Old", path: "old.md", content: "stale" });
 
-    await expect(preview).resolves.toBeNull();
-  });
+      await expect(preview).resolves.toBeNull();
+    },
+  );
 
   it("discards a wiki response across a same-client reconnect", async () => {
     const pending = deferred<unknown>();

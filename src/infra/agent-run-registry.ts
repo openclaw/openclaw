@@ -147,6 +147,7 @@ export function registerAgentRunContext(
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
   }
+  existing.completionSource ??= context.completionSource;
   if (context.isControlUiVisible !== undefined) {
     existing.isControlUiVisible = context.isControlUiVisible;
   }
