@@ -100,6 +100,7 @@ type ChildState = {
   fallbackCompletion?: RecoveredCompletion;
   pendingCompletion?: RecoveredCompletion;
   completionTaskPhase?: "finalize" | "delivery";
+  completionTaskId?: string;
   subscriptionClosed?: true;
   nativeCompletionDelivered: boolean;
   completionDeliveryAttempt: number;
@@ -1257,6 +1258,14 @@ class Monitor {
       return false;
     }
     const runId = codexNativeSubagentRunId(completion.childThreadId);
+    if (
+      child.completionTaskId &&
+      state.taskRuntime?.listTaskRecords().find((task) => task.runId === runId)?.taskId !==
+        child.completionTaskId
+    ) {
+      this.unregisterChild(child);
+      return false;
+    }
     if (child.completionTaskPhase === "finalize") {
       if (!this.claimCompletionDelivery(state, child)) {
         this.unregisterChild(child);
@@ -1272,10 +1281,23 @@ class Monitor {
         progressSummary: completion.result,
         terminalSummary: completion.result,
       });
-      if (state.taskRuntime && !updated?.some((task) => task.runId === runId)) {
+      if (
+        state.taskRuntime &&
+        !updated?.some(
+          (task) =>
+            task.runId === runId &&
+            (!child.completionTaskId || task.taskId === child.completionTaskId),
+        )
+      ) {
         const current = state.taskRuntime.listTaskRecords().find((task) => task.runId === runId);
-        // An absent row or an existing terminal decision must not be recreated.
-        if (!current || (current.status !== "queued" && current.status !== "running")) {
+        // Recovery can rewrite an already-terminal outcome still awaiting delivery.
+        // Only absence or a conflicting terminal decision retires this projection.
+        if (
+          !current ||
+          (current.status !== completion.status &&
+            current.status !== "queued" &&
+            current.status !== "running")
+        ) {
           this.unregisterChild(child);
           return false;
         }
@@ -1292,7 +1314,14 @@ class Monitor {
         runId,
         deliveryStatus: child.nativeCompletionDelivered ? "delivered" : "pending",
       });
-      if (state.taskRuntime && !updated?.some((task) => task.runId === runId)) {
+      if (
+        state.taskRuntime &&
+        !updated?.some(
+          (task) =>
+            task.runId === runId &&
+            (!child.completionTaskId || task.taskId === child.completionTaskId),
+        )
+      ) {
         if (!state.taskRuntime.listTaskRecords().some((task) => task.runId === runId)) {
           this.unregisterChild(child);
           return false;
@@ -1796,13 +1825,11 @@ class Monitor {
       return owner === childState;
     }
     const runId = codexNativeSubagentRunId(childState.childThreadId);
-    if (
-      state.taskRuntime
-        ?.listTaskRecords()
-        .some((task) => task.runId === runId && task.deliveryStatus === "delivered")
-    ) {
+    const task = state.taskRuntime?.listTaskRecords().find((record) => record.runId === runId);
+    if (task?.deliveryStatus === "delivered") {
       return false;
     }
+    childState.completionTaskId = task?.taskId;
     // Delivery no longer needs the app-server client. Keep one process owner
     // across client replacement so fallback steering cannot inject twice.
     completionDeliveryOwners.set(key, childState);
