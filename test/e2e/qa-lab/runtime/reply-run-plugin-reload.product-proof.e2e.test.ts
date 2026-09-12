@@ -1,6 +1,6 @@
-// Product proof for #144809: a plugin hot reload that lands after the 300 s
-// channel-reload deferral must not discard the reply of a claude-cli turn that
-// is still running. Runs a real Gateway with a fake `claude` executable on PATH
+// Product proof for the reload path in #144809: replacing the active backend
+// during a channel config reload must not discard an admitted claude-cli reply.
+// Runs a real Gateway with a fake `claude` executable on PATH
 // that speaks the stdio protocol and answers only after the reload has applied.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -175,7 +175,10 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
             plugins: {
               ...config.plugins,
               allow: [...new Set([...(config.plugins?.allow ?? []), "anthropic"])],
-              entries: { ...config.plugins?.entries, anthropic: { enabled: true } },
+              entries: {
+                ...config.plugins?.entries,
+                anthropic: { enabled: true, subagent: { allowModelOverride: true } },
+              },
             },
             agents: {
               ...config.agents,
@@ -219,22 +222,22 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
           hash?: string;
           config?: { plugins?: { allow?: string[] } };
         };
-        const allowBefore = configBefore.config?.plugins?.allow ?? [];
-        record.allowBefore = allowBefore;
-        // Mirror the reporter: a channel-affecting change plus a plugins.* change
-        // (plugins.* forces reloadPlugins + disposeMcpRuntimes in the reload plan).
+        const pluginsBefore = (await gateway.call("plugins.list", {})) as { generation: number };
+        record.generationBefore = pluginsBefore.generation;
+        // A per-plugin entry change explicitly replaces Anthropic; unrelated allowlist
+        // changes retain it. Tighten an unused fixture policy while preserving the
+        // channel change that exercises active-work deferral and channel restart.
         const patchRaw = {
           channels: { [CHANNEL_ID]: { pollTimeoutMs: 700 } },
-          plugins: { allow: [...new Set([...allowBefore, "discord"])] },
+          plugins: { entries: { anthropic: { subagent: { allowModelOverride: false } } } },
         };
-        // config.patch blocks until the deferred reload applies (300 s), so do not await it.
+        // Observe publication while config.patch awaits the reload's channel tail.
         const patchPromise = gateway
           .call(
             "config.patch",
             {
               raw: JSON.stringify(patchRaw),
               baseHash: configBefore.hash,
-              replacePaths: ["plugins.allow"],
               restartDelayMs: 0,
             },
             { timeoutMs: 900_000 },
@@ -275,7 +278,7 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
               .find(
                 (candidate) =>
                   candidate.includes("config hot reload applied (") &&
-                  candidate.includes("plugins.allow"),
+                  candidate.includes("plugins.entries.anthropic"),
               );
             return line ?? undefined;
           },
@@ -288,7 +291,7 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
           appliedConfigHash?: string | null;
           configRevisionHash?: string;
           config?: {
-            plugins?: { allow?: string[] };
+            plugins?: { entries?: { anthropic?: { subagent?: { allowModelOverride?: boolean } } } };
             channels?: Record<string, { pollTimeoutMs?: number }>;
           };
         };
@@ -296,7 +299,7 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
           hash: configAfter.hash,
           appliedConfigHash: configAfter.appliedConfigHash,
           configRevisionHash: configAfter.configRevisionHash,
-          allow: configAfter.config?.plugins?.allow,
+          anthropic: configAfter.config?.plugins?.entries?.anthropic,
           pollTimeoutMs: configAfter.config?.channels?.[CHANNEL_ID]?.pollTimeoutMs,
         };
         // appliedConfigHash is published by the reload/restart publication; the
@@ -304,7 +307,18 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
         // recovery restart stays pending and that hash is not asserted here. The
         // committed content plus the applied log line are the replacement evidence.
         expect(configAfter.hash).not.toBe(configBefore.hash);
-        expect(configAfter.config?.plugins?.allow).toContain("discord");
+        expect(configAfter.config?.plugins?.entries?.anthropic?.subagent?.allowModelOverride).toBe(
+          false,
+        );
+        const pluginsAfter = (await gateway.call("plugins.list", {})) as {
+          generation: number;
+          plugins: Array<{ id: string; runtime: { state: string } }>;
+        };
+        record.generationAfter = pluginsAfter.generation;
+        expect(pluginsAfter.generation).toBeGreaterThan(pluginsBefore.generation);
+        expect(
+          pluginsAfter.plugins.find((plugin) => plugin.id === "anthropic")?.runtime.state,
+        ).toBe("active");
         expect(configAfter.config?.channels?.[CHANNEL_ID]?.pollTimeoutMs).toBe(700);
         // config.patch must settle before the CLI result. It may report that the
         // committed change still needs a recovery restart (the forced qa-channel
@@ -326,6 +340,27 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
         ) {
           throw new Error(`config.patch did not commit the replacement: ${patchOutcome.error}`);
         }
+
+        // This owner-emitted observation names the retired backend, not merely a
+        // changed registry: its physical cleanup is waiting for this admitted turn.
+        const retirementLine = await waitFor(
+          "retired Anthropic instance before the CLI result",
+          () => {
+            if (fs.existsSync(turnFinishedPath)) {
+              throw new Error("CLI turn finished before Anthropic retirement was observed");
+            }
+            return readGatewayLogs()
+              .split("\n")
+              .map(stripAnsi)
+              .find((line) =>
+                line.includes(
+                  "Plugin anthropic cleanup is deferred until its admitted turn finishes.",
+                ),
+              );
+          },
+          20_000,
+        );
+        record.retirementLine = retirementLine;
 
         const finished = await waitFor(
           "fake claude turn finish",
@@ -371,12 +406,16 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
         const cliTurnAt = Date.parse((cliTurnLine ?? "").slice(0, 29));
         expect(Number.isFinite(appliedAt) && Number.isFinite(cliTurnAt)).toBe(true);
         expect(appliedAt).toBeLessThan(cliTurnAt);
-        expect(interesting.some((line) => line.includes("reloading channels anyway"))).toBe(true);
-        expect(
-          interesting.some((line) =>
-            line.includes("stopping qa-channel channel before plugin reload"),
-          ),
-        ).toBe(true);
+        const channelRestartLine = interesting.find((line) =>
+          line.includes("restarting qa-channel channel"),
+        );
+        expect(channelRestartLine).toBeDefined();
+        const channelRestartAt = Date.parse((channelRestartLine ?? "").slice(0, 29));
+        expect(Number.isFinite(channelRestartAt)).toBe(true);
+        expect(channelRestartAt).toBeLessThan(cliTurnAt);
+        const retiredAt = Date.parse(retirementLine.slice(0, 29));
+        expect(Number.isFinite(retiredAt)).toBe(true);
+        expect(retiredAt).toBeLessThan(cliTurnAt);
         expect(
           interesting.filter((line) => /stream is closed|failed before reply/.test(line)),
         ).toEqual([]);
