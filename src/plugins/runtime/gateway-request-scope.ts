@@ -195,6 +195,12 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   return pluginRuntimeGatewayRequestScope.run(scope, run);
 }
 
+/** Resolves the live Gateway context retained by the current request or detached owner. */
+export function getPluginRuntimeGatewayRequestContext(): GatewayRequestContext | undefined {
+  const scope = pluginRuntimeGatewayRequestScope.getStore();
+  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
+}
+
 /** Runs detached work with its captured Gateway binding, including an explicitly unbound owner. */
 export function withPluginRuntimeGatewayContextResolver<T>(
   resolveGatewayContext: GatewayContextResolver | undefined,

@@ -3,6 +3,7 @@ import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  getPluginRuntimeGatewayRequestContext,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -418,8 +419,7 @@ export function getInProcessGatewayRequestContext(
   if (resolveGatewayContext) {
     return resolveGatewayContext();
   }
-  const scope = getPluginRuntimeGatewayRequestScope();
-  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
+  return getPluginRuntimeGatewayRequestContext();
 }
 
 export async function dispatchGatewayMethodInProcess<T>(
