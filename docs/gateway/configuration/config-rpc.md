@@ -27,6 +27,11 @@ field-level docs and constraints. Use [Configuration reference](/gateway/configu
 when they need the broader config map, defaults, or links to dedicated
 subsystem references.
 
+The built-in `gateway` tool dispatches config reads directly through the Gateway
+that admitted the agent run, without opening a loopback WebSocket. Explicit
+`gatewayUrl` or `gatewayToken` overrides and standalone local agents still use
+the Gateway client. Both paths use the same config handlers and read scopes.
+
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
 rate-limited to 30 requests per 60 seconds, per method, per
