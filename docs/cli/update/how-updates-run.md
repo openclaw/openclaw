@@ -48,6 +48,11 @@ reported cause, then run the warning's exact cleanup command or
 that cannot boot or pass readiness still block completion. See
 [Status and history](/cli/update/status-and-history) to inspect recorded warnings.
 
+Linux service checks treat an implicit systemd unit name and its explicit
+installed name as the same selection, including names with or without the
+`.service` suffix. The updater still rechecks service ownership before stopping
+the Gateway.
+
 The baseline package fingerprint is best effort. If its bounded scan times out,
 the update records a warning and continues with the retained package copy.
 Rollback then verifies the restored directory identity, package version, and

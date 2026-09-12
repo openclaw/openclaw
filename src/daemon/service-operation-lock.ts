@@ -34,7 +34,8 @@ export async function withSystemdServiceReadBinding<T>(
   const key = JSON.stringify([
     env.HOME,
     env.OPENCLAW_PROFILE,
-    env.OPENCLAW_SYSTEMD_UNIT,
+    // Installed service metadata makes the shell's inferred unit explicit.
+    resolveSystemdServiceName(env),
     env.OPENCLAW_STATE_DIR,
     env.XDG_RUNTIME_DIR,
     env.DBUS_SESSION_BUS_ADDRESS,
