@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- Recovery routing keeps the admission decision in one auditable owner. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";

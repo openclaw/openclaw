@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- Persistence projections and fail-closed validators stay paired. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
