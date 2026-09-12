@@ -2,7 +2,7 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import type { RouteId } from "../app-routes.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
-const MOBILE_NAV_MAX_WIDTH = 1100;
+const MOBILE_NAV_MAX_WIDTH = 900;
 const NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH = 600;
 const NATIVE_SHELL_CLASSES = [
   "openclaw-native-macos",
