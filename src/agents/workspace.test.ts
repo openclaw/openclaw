@@ -1058,6 +1058,52 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }
   });
 
+  it("does not mark a pending workspace complete when a lookup failure makes it unreadable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-pending-eacces-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      // Phase 1: real setup seeds an unchanged-template pending workspace:
+      // BOOTSTRAP.md exists, templates match, setup is not yet complete.
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+      const pendingState = await readWorkspaceState(workspaceDir);
+      expect(pendingState.setupCompletedAt).toBeUndefined();
+      await expect(
+        fs.access(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)),
+      ).resolves.toBeUndefined();
+
+      // Phase 2: the dir becomes unreadable (readdir EACCES) but known files
+      // remain writable/searchable (0300). A lookup failure must NOT be treated
+      // as positive completion evidence: pending workspaces must keep their
+      // BOOTSTRAP.md and must not acquire a durable false setupCompletedAt.
+      await fs.chmod(workspaceDir, 0o300);
+      try {
+        await expect(
+          ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true }),
+        ).resolves.toBeDefined();
+      } finally {
+        await fs.chmod(workspaceDir, 0o700);
+      }
+
+      // Phase 3: still pending — BOOTSTRAP.md survives and no false completion.
+      await expect(
+        fs.access(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)),
+      ).resolves.toBeUndefined();
+      const after = await readWorkspaceState(workspaceDir);
+      expect(after.setupCompletedAt).toBeUndefined();
+      expect(after.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats hardlinked bootstrap aliases as unreadable", async () => {
     if (process.platform === "win32") {
       return;

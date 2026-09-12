@@ -417,20 +417,16 @@ async function hasWorkspaceUserContentEvidence(
     }
   }
   // The exact-entry lookup distinguishes an absent optional file from one that
-  // exists but cannot be listed/read. When any lookup fails operationally
-  // (EACCES/EIO on the workspace dir or a skills dir), setup must not abort and
-  // must not mistake an unreadable workspace for an empty one (which could
-  // trigger brand-new detection and reseed/clear existing setup). Treat the
-  // workspace as having user content so setup preserves existing state; the
-  // diagnostics surface separately through the bootstrap loader's guarded reads.
-  try {
-    if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
-      return true;
-    }
-    return await hasWorkspaceSkillEvidence(dir);
-  } catch {
+  // exists but cannot be listed/read. An operational lookup failure (EACCES/EIO)
+  // stays an unknown outcome: it is neither absence nor positive user-content
+  // evidence. Callers decide how to treat the unknown — completion evidence must
+  // not count it as configured (that could persist false completion and remove
+  // BOOTSTRAP.md), while disappearance detection must not count it as empty
+  // (that could reseed/clear an existing workspace).
+  if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
     return true;
   }
+  return await hasWorkspaceSkillEvidence(dir);
 }
 
 async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
@@ -494,12 +490,19 @@ async function workspaceProfileLooksConfigured(params: {
       fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
     ),
   );
-  return (
-    profileFileDiffs.some(Boolean) ||
-    (await hasWorkspaceUserContentEvidence(params.dir, {
+  if (profileFileDiffs.some(Boolean)) {
+    return true;
+  }
+  try {
+    return await hasWorkspaceUserContentEvidence(params.dir, {
       includeGit: params.includeGitEvidence,
-    }))
-  );
+    });
+  } catch {
+    // An operational lookup failure is an unknown, not positive completion
+    // evidence. Treat it as not configured so a pending workspace keeps its
+    // BOOTSTRAP.md and does not acquire a durable false setupCompletedAt.
+    return false;
+  }
 }
 
 async function workspaceRequiredBootstrapLooksCustomized(
@@ -1097,7 +1100,11 @@ export async function ensureAgentWorkspace(params?: {
         }
       }),
     );
-    return existing.every((v) => !v) && !(await hasWorkspaceUserContentEvidence(dir));
+    // An operational lookup failure is an unknown; treat it as having user
+    // content so an unreadable workspace is not mistaken for an empty/brand-new
+    // one (which would reseed or clear existing setup).
+    const hasUserContent = await hasWorkspaceUserContentEvidence(dir).catch(() => true);
+    return existing.every((v) => !v) && !hasUserContent;
   })();
 
   if (isBrandNewWorkspace) {
