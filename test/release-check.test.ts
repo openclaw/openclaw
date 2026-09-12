@@ -163,6 +163,32 @@ describe("packed CLI smoke", () => {
     });
   });
 
+  it("does not inherit provider credentials from the base environment", () => {
+    const env = createPackedCliSmokeEnv({
+      HOME: "/tmp/original-home",
+      OPENAI_API_KEY: "base-openai-secret",
+    });
+
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("does not admit provider credentials through smoke overrides", () => {
+    const env = createPackedCliSmokeEnv(
+      { HOME: "/tmp/original-home" },
+      {
+        HOME: "/tmp/smoke-home",
+        OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+        OPENAI_API_KEY: "override-openai-secret",
+      },
+    );
+
+    expect(env).toMatchObject({
+      HOME: "/tmp/smoke-home",
+      OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+    });
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
   it("skips plugin command discovery during packed completion cache smoke", () => {
     expect(
       createPackedCompletionSmokeEnv(
