@@ -345,11 +345,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
           <div class="workboard-toolbar__filters">
             <div class="workboard-toolbar__navigation">
               ${renderStatusTabs(state, props.onRequestUpdate)}
-              ${renderMobileStatusPicker(
-                state,
-                cardsForFilters("status"),
-                props.onRequestUpdate,
-              )}
+              ${renderMobileStatusPicker(state, cardsForFilters("status"), props.onRequestUpdate)}
             </div>
           </div>
           <div class="workboard-toolbar__tools">

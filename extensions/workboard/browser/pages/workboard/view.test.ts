@@ -823,7 +823,9 @@ describe("renderWorkboard", () => {
       selectStatus("Ready").click();
       renderView();
       expect(container.querySelector(".workboard-board")?.textContent).toContain("Ready card");
-      expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Blocked card");
+      expect(container.querySelector(".workboard-board")?.textContent).not.toContain(
+        "Blocked card",
+      );
       selectStatus("Blocked").click();
       renderView();
       expect(state.statusFilter).toEqual(new Set(["ready", "blocked"]));
