@@ -17,6 +17,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import { registerSubagentDismissedRetentionCases } from "./subagent-registry.persistence.retention.test-support.js";
 import {
   createSubagentRegistryTestDeps,
   gateSubagentRequesterSettlement,
@@ -950,36 +951,10 @@ describe("subagent registry persistence resume", () => {
     },
   );
 
-  it("keeps dismissed terminal delivery dormant and TTL-eligible after restore", async () => {
-    await withRegistryState(async () => {
-      const now = Date.now();
-      const run = createSubagentRunRecord({
-        runId: "run-dismissed-delivery",
-        childSessionKey: "agent:main:subagent:dismissed-delivery",
-        task: "retain no delivery obligation",
-        createdAt: now - 10 * 60_000,
-        endedReason: "subagent-complete",
-        startedAt: now - 9 * 60_000,
-        endedAt: now - 8 * 60_000,
-        outcome: { status: "ok" },
-        expectsCompletionMessage: true,
-        completion: { required: true, resultText: "done", capturedAt: now - 8 * 60_000 },
-        delivery: {
-          status: "discarded",
-          disposition: "intentional_non_delivery",
-          dismissedAt: now - 6 * 60_000,
-        },
-        cleanupHandled: true,
-        cleanupCompletedAt: now - 6 * 60_000,
-      });
-      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-
-      mod.initSubagentRegistry();
-      await mod.testing.sweepOnceForTests();
-
-      expect(announceSpy).not.toHaveBeenCalled();
-      expect(mod.getSubagentRunByRunId(run.runId)).toBeUndefined();
-    });
+  registerSubagentDismissedRetentionCases({
+    getRegistry: () => mod,
+    withRegistryState,
+    announceSpy,
   });
 
   it.each([false, true])(

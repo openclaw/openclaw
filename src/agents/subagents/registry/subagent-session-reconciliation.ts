@@ -16,7 +16,9 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { normalizeStoreSessionKey } from "../../../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -121,6 +123,25 @@ export function resolveSubagentRunOrphanReason(params: {
   now?: number;
   cfg?: OpenClawConfig;
 }): SubagentRunOrphanReason | null {
+  const { entry } = params;
+  // Execution, recovery, and completion obligations outlive individual turns.
+  // Missing session metadata must not steal those owners or manufacture success.
+  if (
+    entry.execution.outcome ||
+    entry.collectorCompletion ||
+    entry.requesterSettleWake ||
+    hasRetainedRequiredCompletionDelivery(entry) ||
+    entry.pauseReason ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    entry.execution.restartRecovery ||
+    entry.terminalOwner === "interrupted-recovery" ||
+    entry.suppressAnnounceReason === "steer-restart" ||
+    entry.execution.status === "queued" ||
+    getAgentRunContext(entry.runId)
+  ) {
+    return null;
+  }
   const childSessionKey = params.entry.childSessionKey?.trim();
   if (!childSessionKey) {
     return "missing-session-entry";
@@ -146,7 +167,7 @@ export function resolveSubagentRunOrphanReason(params: {
     }
     return null;
   } catch {
-    // Best-effort guard: avoid false orphan pruning on transient read/config failures.
+    // A failed read cannot establish orphanhood or authorize terminal settlement.
     return null;
   }
 }

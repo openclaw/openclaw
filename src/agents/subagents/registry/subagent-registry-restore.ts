@@ -19,10 +19,7 @@ import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
-import {
-  reconcileOrphanedRestoredRuns,
-  updateSubagentArchiveAtMs,
-} from "./subagent-registry-helpers.js";
+import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -55,7 +52,6 @@ export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecor
 
 export function createSubagentRegistryRestorer(config: {
   runs: Map<string, SubagentRunRecord>;
-  resumedRuns: Set<string>;
   deps: () => SubagentRegistryDeps;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   bindGatewayOwners: () => boolean;
@@ -93,7 +89,6 @@ export function createSubagentRegistryRestorer(config: {
 }) {
   const {
     runs,
-    resumedRuns,
     deps,
     getGatewayContextResolver,
     bindGatewayOwners,
@@ -358,10 +353,9 @@ export function createSubagentRegistryRestorer(config: {
         return;
       }
       const cfg = deps().getRuntimeConfig();
-      let restoredStateChanged = reconcileOrphanedRestoredRuns({
-        runs,
-        resumedRuns,
-      });
+      // Hydration retains unfinished owners. Gateway-bound resume/sweep must
+      // settle their canonical tasks before normal cleanup may retire them.
+      let restoredStateChanged = false;
       if (backfillSubagentRequesterAgentIds(cfg, runs.values()) > 0) {
         restoredStateChanged = true;
       }

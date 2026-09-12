@@ -15,6 +15,7 @@ import {
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
@@ -24,8 +25,8 @@ import {
   subagentRegistryDeps,
   type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
-import { ANNOUNCE_EXPIRY_MS, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
-import { safeFinalizeSubagentTaskRun } from "./subagent-registry-lifecycle-delivery.js";
+import { ANNOUNCE_EXPIRY_MS } from "./subagent-registry-helpers.js";
+import { finalizeSubagentTaskRun } from "./subagent-registry-lifecycle-delivery.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import {
@@ -241,15 +242,45 @@ export function resumeSubagentRun(runId: string, source: "live" | "restore" = "l
     resumedRuns.add(runId);
     return;
   }
+  const orphanReason = resolveSubagentRunOrphanReason({
+    entry,
+    includeStaleUnended: source === "restore",
+  });
+  if (orphanReason) {
+    // An orphan still owns its task and requester obligation. Settle through
+    // the same completion path before cleanup can remove that ownership.
+    void completionRuntime
+      .completeSubagentRunWithRecovery(
+        {
+          runId,
+          expectedEntry: entry,
+          endedAt: entry.execution.endedAt ?? Date.now(),
+          outcome: { status: "error", error: `subagent run orphaned: ${orphanReason}` },
+          reason: SUBAGENT_ENDED_REASON_ERROR,
+          triggerCleanup: true,
+        },
+        "orphan-resume",
+      )
+      .catch((error: unknown) => {
+        log.warn("failed to settle orphaned subagent run", { runId, error });
+      });
+    return;
+  }
   if (entry.execution.outcome && entry.suppressAnnounceReason !== "steer-restart") {
     // The child result can reach disk before its task projection. Replay that
     // idempotent projection before terminal cleanup exits during restoration.
     // A steer restart deliberately leaves the shared task writable for its
     // successor run, so the retired row must not terminalize it.
-    safeFinalizeSubagentTaskRun(subagentLifecycleController.options, {
-      entry,
-      outcome: entry.execution.outcome,
-    });
+    try {
+      finalizeSubagentTaskRun(subagentLifecycleController.options, {
+        entry,
+        outcome: entry.execution.outcome,
+      });
+    } catch (error) {
+      log.warn("subagent task settlement deferred before cleanup", { runId, error });
+      scheduleSubagentDeliveryResumeRetry(runId, entry, GATEWAY_ADMISSION_RETRY_DELAY_MS);
+      return;
+    }
   }
   const yieldedWakeWaitingForDelivery =
     entry.requesterSettleWake?.requesterYieldBatch === true &&
@@ -305,21 +336,6 @@ export function resumeSubagentRun(runId: string, source: "live" | "restore" = "l
       resumedRuns.add(runId);
       return;
     }
-    const orphanReason = resolveSubagentRunOrphanReason({ entry });
-    if (
-      orphanReason &&
-      reconcileOrphanedRun({
-        runId,
-        entry,
-        reason: orphanReason,
-        source: "resume",
-        runs: subagentRuns,
-        resumedRuns,
-      })
-    ) {
-      persistSubagentRuns(runId);
-      return;
-    }
     if (contextCleanup.suppressAnnounceForSteerRestart(entry)) {
       resumedRuns.add(runId);
       return;
@@ -340,7 +356,6 @@ export function resumeSubagentRun(runId: string, source: "live" | "restore" = "l
 
 const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
-  resumedRuns,
   deps: () => subagentRegistryDeps,
   getGatewayContextResolver: () => activeGatewayContextResolver,
   bindGatewayOwners: () => {

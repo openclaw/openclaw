@@ -15,12 +15,18 @@ import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { resetTaskRegistryMaintenanceRuntimeForTests } from "../../../tasks/task-registry.maintenance.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import { registerSubagentOrphanTaskCases } from "./subagent-registry.persistence.orphan.test-support.js";
 import {
   canonicalSubagentRunFixtures,
   cleanupSubagentRegistryPersistenceTest,
@@ -207,6 +213,9 @@ describe("subagent registry persistence", () => {
   }
 
   beforeEach(() => {
+    resetTaskRegistryMaintenanceRuntimeForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
     testing.setDepsForTest({
@@ -230,9 +239,14 @@ describe("subagent registry persistence", () => {
         stateDir: tempStateDir,
         resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
         resetDeps: () => testing.setDepsForTest(),
+        closeDatabases: () => {
+          resetTaskRegistryForTests({ persist: false });
+          resetTaskFlowRegistryForTests({ persist: false });
+        },
       });
       tempStateDir = null;
     }
+    resetTaskRegistryMaintenanceRuntimeForTests();
     envSnapshot.restore();
   });
 
@@ -732,7 +746,7 @@ describe("subagent registry persistence", () => {
     }
   });
 
-  it("reconciles orphaned restored runs by pruning them from registry", async () => {
+  it("settles orphaned restored runs through canonical completion", async () => {
     const persisted = createPersistedEndedRun({
       runId: "run-orphan-restore",
       childSessionKey: "agent:main:subagent:ghost-restore",
@@ -746,13 +760,14 @@ describe("subagent registry persistence", () => {
     restartRegistry();
     await waitForRegistryWork(async () => {
       const after = readPersistedRegistry();
-      return after.runs?.["run-orphan-restore"] === undefined;
+      return after.runs?.["run-orphan-restore"]?.cleanupCompletedAt !== undefined;
     });
 
-    expect(announceSpy).not.toHaveBeenCalled();
     const after = readPersistedRegistry();
-    expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    expect(after.runs?.["run-orphan-restore"]?.execution).toMatchObject({
+      status: "terminal",
+      outcome: { status: "error", error: "subagent run orphaned: missing-session-entry" },
+    });
   });
 
   it("preserves restored killed tombstones until bounded reconciliation", async () => {
@@ -834,35 +849,11 @@ describe("subagent registry persistence", () => {
     await testing.sweepOnceForTests();
   });
 
-  it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
-    const now = Date.now();
-    const runId = "run-stale-unended-restore";
-    const childSessionKey = "agent:main:subagent:stale-unended-restore";
-    await writePersistedRegistry({
-      version: 2,
-      runs: {
-        [runId]: {
-          runId,
-          childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "stale unended restored work",
-          cleanup: "keep",
-          createdAt: now - 3 * 60 * 60 * 1_000,
-          startedAt: now - 3 * 60 * 60 * 1_000,
-        },
-      },
-    });
-
-    restartRegistry();
-    await waitForRegistryWork(async () => {
-      const after = readPersistedRegistry();
-      return after.runs?.[runId] === undefined;
-    });
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(announceSpy).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  registerSubagentOrphanTaskCases({
+    writePersistedRegistry,
+    writeChildSessionEntry,
+    restartRegistry,
+    waitForRegistryWork,
   });
 
   it("finalizes restored runs whose restart interruption exceeded the recovery window", async () => {
@@ -918,7 +909,7 @@ describe("subagent registry persistence", () => {
     });
   });
 
-  it("removes attachments when pruning orphaned restored runs", async () => {
+  it("removes attachments after canonical orphan completion", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const attachmentsRootDir = path.join(tempStateDir, "attachments");
@@ -1046,7 +1037,7 @@ describe("subagent registry persistence", () => {
     expect(resolved?.execution.endedAt).toBe(220);
   });
 
-  it("resume guard prunes orphan runs before announce retry", async () => {
+  it("resume preserves steer-restart ownership when the child session is missing", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const runId = "run-orphan-resume-guard";
@@ -1080,8 +1071,8 @@ describe("subagent registry persistence", () => {
     await flushQueuedRegistryWork();
 
     expect(announceSpy).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
-    const persisted = loadSubagentRegistryFromSqlite();
-    expect(persisted.has(runId)).toBe(false);
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({ runId, suppressAnnounceReason: "steer-restart" }),
+    ]);
   });
 });
