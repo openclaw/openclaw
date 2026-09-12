@@ -52,6 +52,18 @@ describe("plugin-npm-package-manifest run args", () => {
     expect(() => parseRunArgs(["--run", "--bad", "--", "npm", "pack"])).toThrow(usage);
   });
 
+  it("preserves empty callback arguments after the command separator", () => {
+    const forwarded = ["", "--literal", " \t ", ""];
+    expect(parseRunArgs(["--run", "extensions/slack", "--", "node", ...forwarded])).toEqual({
+      packageDir: "extensions/slack",
+      command: "node",
+      args: forwarded,
+    });
+    expect(() => parseRunArgs(["--run", "extensions/slack", "", "--", "node"])).toThrow(
+      "unexpected plugin npm package manifest run argument",
+    );
+  });
+
   it("rejects unexpected args before the command separator", () => {
     expect(() => parseRunArgs(["--run", "extensions/slack", "extra", "--", "npm"])).toThrow(
       "unexpected plugin npm package manifest run argument: extra",
