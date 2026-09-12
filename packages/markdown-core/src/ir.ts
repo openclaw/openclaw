@@ -866,7 +866,7 @@ function handleLinkClose(state: RenderState) {
   }
   const start = link.labelStart;
   const end = target.text.length;
-  const span = createMarkdownLinkSpan({ start, end, href }, { autoLinked: link.autoLinked });
+  const span = createMarkdownLinkSpan({ start, end, href }, link.autoLinked);
   target.links.push(span);
 }
 
