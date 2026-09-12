@@ -11,6 +11,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -198,6 +199,9 @@ suite.define(() => {
             });
           });
 
+          await page.context().addInitScript((key) => {
+            localStorage.setItem(key, JSON.stringify({ dismissedAtMs: Date.now() }));
+          }, COMMUNITY_INVITE_KEY);
           const response = await page.goto(url.toString());
           expect(response?.status()).toBe(200);
           await waitForControlUiGatewayReady(page);
