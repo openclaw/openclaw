@@ -116,7 +116,9 @@ export function getAgentDir(): string {
   if (envDir) {
     return envDir.replace(/^~(?=\/|$)/, () => homedir());
   }
-  return resolveEffectiveAgentDir({}, resolveAmbientOwnerAgentId({}));
+  return resolveEffectiveAgentDir({}, resolveAmbientOwnerAgentId({}), {
+    legacyStandaloneRead: true,
+  });
 }
 
 /** Get path to managed binaries directory (fd, rg) */

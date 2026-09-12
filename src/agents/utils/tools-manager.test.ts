@@ -69,7 +69,14 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
-  it("reuses managed binaries from the canonical agent directory after migration", async () => {
+  it.each([
+    { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
+    { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
+    { name: "both present", legacy: "payload", canonical: "payload", selected: "canonical" },
+    { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "canonical" },
+    { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
+    { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
+  ])("reuses managed binaries across agent directory migration: $name", async (testCase) => {
     const home = expectDefined(tempAgentDir, "test home");
     const stateDir = join(home, "state");
     vi.stubEnv("HOME", home);
@@ -78,20 +85,33 @@ describe("ensureTool", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
     vi.stubEnv("OPENCLAW_OFFLINE", "1");
-    const binaryPath = join(
-      stateDir,
-      "agents",
-      "main",
-      "agent",
-      "bin",
-      process.platform === "win32" ? "fd.exe" : "fd",
-    );
-    mkdirSync(dirname(binaryPath), { recursive: true });
-    writeFileSync(binaryPath, "migrated binary");
+    const canonicalDir = join(stateDir, "agents", "main", "agent");
+    const legacyDir = join(stateDir, "agent");
+    const binaryName = process.platform === "win32" ? "fd.exe" : "fd";
+    for (const { directory, contents } of [
+      { directory: legacyDir, contents: testCase.legacy },
+      { directory: canonicalDir, contents: testCase.canonical },
+    ]) {
+      if (contents === "payload") {
+        const binaryPath = join(directory, "bin", binaryName);
+        mkdirSync(dirname(binaryPath), { recursive: true });
+        writeFileSync(binaryPath, "managed binary");
+      } else if (contents === "empty") {
+        mkdirSync(directory, { recursive: true });
+      }
+    }
 
+    const { getAgentDir } = await import("../config.js");
+    const { resolveAgentDir } = await import("../agent-scope-config.js");
     const { ensureTool } = await import("./tools-manager.js");
+    const selectedDir = testCase.selected === "legacy" ? legacyDir : canonicalDir;
+    const selectedContents = testCase.selected === "legacy" ? testCase.legacy : testCase.canonical;
 
-    await expect(ensureTool("fd", true)).resolves.toBe(binaryPath);
+    await expect(ensureTool("fd", true)).resolves.toBe(
+      selectedContents === "payload" ? join(selectedDir, "bin", binaryName) : undefined,
+    );
+    expect(getAgentDir()).toBe(selectedDir);
+    expect(resolveAgentDir({}, "main")).toBe(canonicalDir);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     expect(existsSync(join(home, ".openclaw", "agent"))).toBe(false);
   });

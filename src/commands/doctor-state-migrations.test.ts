@@ -1443,12 +1443,10 @@ describe("doctor legacy state migrations", () => {
 
     expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe("legacy2");
     expect(fs.readFileSync(path.join(targetAgentDir, "foo.txt"), "utf-8")).toBe("new");
-    const backups = fs
-      .readdirSync(path.dirname(targetAgentDir))
-      .filter((name) => name.startsWith("agent.legacy-"));
+    const backups = fs.readdirSync(root).filter((name) => name.startsWith("agent.legacy-"));
     expect(backups).toHaveLength(1);
     const backupDir = path.join(
-      path.dirname(targetAgentDir),
+      fs.realpathSync(root),
       expectDefined(backups[0], "conflict quarantine"),
     );
     expect(fs.readdirSync(backupDir)).toEqual(["foo.txt"]);

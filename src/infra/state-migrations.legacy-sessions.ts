@@ -6,6 +6,7 @@ import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
 import { isErrno } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import {
@@ -400,9 +401,7 @@ export async function migrateLegacyAgentDir(
 
   const { legacyDir, targetDir } = detected.agentDir;
   const conflicts: string[] = [];
-  function merge(relative: string) {
-    const from = path.join(legacyDir, relative);
-    const to = path.join(targetDir, relative);
+  function merge(from: string, to: string, relative: string) {
     const source = fs.lstatSync(from);
     const target = fs.lstatSync(to, { throwIfNoEntry: false });
     if (!target) {
@@ -411,7 +410,7 @@ export async function migrateLegacyAgentDir(
       changes.push(`Moved agent file ${relative} → ${destination}`);
     } else if (source.isDirectory() && target.isDirectory()) {
       for (const entry of fs.readdirSync(from)) {
-        merge(path.join(relative, entry));
+        merge(path.join(from, entry), path.join(to, entry), path.join(relative, entry));
       }
       removeDirIfEmpty(from);
     } else if (
@@ -429,14 +428,16 @@ export async function migrateLegacyAgentDir(
   }
 
   try {
+    const stateRoot = fs.realpathSync(detected.stateDir);
     ensureMigrationDir(targetDir);
     const sourceRoot = fs.realpathSync(legacyDir);
     const targetRoot = fs.realpathSync(targetDir);
     if (
       !fs.lstatSync(legacyDir).isDirectory() ||
       !fs.lstatSync(targetDir).isDirectory() ||
-      targetRoot.startsWith(`${sourceRoot}${path.sep}`) ||
-      sourceRoot.startsWith(`${targetRoot}${path.sep}`) ||
+      !isPathInside(stateRoot, sourceRoot) ||
+      isPathInside(sourceRoot, targetRoot) ||
+      isPathInside(targetRoot, sourceRoot) ||
       sourceRoot === targetRoot
     ) {
       return {
@@ -446,12 +447,17 @@ export async function migrateLegacyAgentDir(
         ],
       };
     }
-    for (const entry of fs.readdirSync(legacyDir)) {
-      merge(entry);
+    for (const entry of fs.readdirSync(sourceRoot)) {
+      merge(path.join(sourceRoot, entry), path.join(targetRoot, entry), entry);
     }
     if (conflicts.length > 0) {
-      const backupDir = path.join(path.dirname(targetDir), `agent.legacy-${now()}-${randomUUID()}`);
-      fs.renameSync(legacyDir, backupDir);
+      // Recovery copies stay in the state root, including for external or aliased agentDir targets.
+      const backupDir = path.join(stateRoot, `agent.legacy-${now()}-${randomUUID()}`);
+      const quarantineParent = fs.realpathSync(path.dirname(backupDir));
+      if (quarantineParent !== stateRoot && !isPathInside(stateRoot, quarantineParent)) {
+        throw new Error(`Quarantine parent escaped the state directory: ${quarantineParent}`);
+      }
+      fs.renameSync(sourceRoot, backupDir);
       changes.push(`Quarantined ${conflicts.length} conflicting agent path(s) → ${backupDir}`);
       for (const relative of conflicts) {
         warnings.push(
@@ -459,7 +465,7 @@ export async function migrateLegacyAgentDir(
         );
       }
     } else {
-      removeDirIfEmpty(legacyDir);
+      removeDirIfEmpty(sourceRoot);
     }
   } catch (error) {
     warnings.push(
@@ -470,15 +476,37 @@ export async function migrateLegacyAgentDir(
   return { changes, warnings, warningDisposition: "recoverable" };
 }
 
-export function legacyAgentQuarantineNotices(targetDir: string, now = Date.now()): string[] {
-  const parent = path.dirname(targetDir);
-  const old = safeReadDir(parent).filter((entry) => {
-    const timestamp = /^agent\.legacy-(\d+)(?:-|$)/.exec(entry.name)?.[1];
-    return entry.isDirectory() && timestamp && now - Number(timestamp) > 30 * 24 * 60 * 60 * 1000;
+export function legacyAgentQuarantineNotices(
+  stateDir: string,
+  agentId: string,
+  now = Date.now(),
+): string[] {
+  let stateRoot: string;
+  try {
+    stateRoot = fs.realpathSync(stateDir);
+  } catch {
+    return [];
+  }
+  // Released migrations placed these artifacts under agents/<id>; keep their cleanup hint.
+  return [stateRoot, path.join(stateRoot, "agents", agentId)].flatMap((parent) => {
+    try {
+      const resolvedParent = fs.realpathSync(parent);
+      if (resolvedParent !== stateRoot && !isPathInside(stateRoot, resolvedParent)) {
+        return [];
+      }
+      const old = safeReadDir(resolvedParent).filter((entry) => {
+        const timestamp = /^agent\.legacy-(\d+)(?:-|$)/.exec(entry.name)?.[1];
+        return (
+          entry.isDirectory() && timestamp && now - Number(timestamp) > 30 * 24 * 60 * 60 * 1000
+        );
+      });
+      return old.length > 0
+        ? [
+            `${old.length} legacy agent quarantine(s) older than 30 days in ${resolvedParent}; inspect agent.legacy-* and remove only copies you no longer need.`,
+          ]
+        : [];
+    } catch {
+      return [];
+    }
   });
-  return old.length > 0
-    ? [
-        `${old.length} legacy agent quarantine(s) older than 30 days in ${parent}; inspect agent.legacy-* and remove only copies you no longer need.`,
-      ]
-    : [];
 }

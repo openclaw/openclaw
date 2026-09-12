@@ -1,4 +1,5 @@
 /** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
+import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -14,6 +15,7 @@ import type {
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
@@ -595,11 +597,15 @@ export function tryResolveConfiguredAgentWorkspaceDir(
 }
 
 // Agent state uses the configured agentDir or <state>/agents/<id>/agent.
-// Validation and migration share this read-only lookup; runtime registration stays separate.
+// Default resolution stays canonical for runtime, validation, and migration.
 export function resolveEffectiveAgentDir(
   cfg: OpenClawConfig,
   agentId: string,
-  deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
+  deps?: {
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+    legacyStandaloneRead?: boolean;
+  },
 ): string {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
@@ -607,7 +613,23 @@ export function resolveEffectiveAgentDir(
   if (configured) {
     return resolveUserPath(configured, env, deps?.homedir);
   }
-  return path.join(resolveStateDir(env, deps?.homedir), "agents", id, "agent");
+  const stateDir = resolveStateDir(env, deps?.homedir);
+  const agentDir = path.join(stateDir, "agents", id, "agent");
+  // Shipped 2026.9.x standalone SDKs keep <state>/agent until Doctor migrates it.
+  // Remove this pre-migration read after the migration ships in a release.
+  if (deps?.legacyStandaloneRead && !fs.lstatSync(agentDir, { throwIfNoEntry: false })) {
+    const legacyDir = path.join(stateDir, "agent");
+    try {
+      if (fs.readdirSync(legacyDir).length > 0) {
+        return legacyDir;
+      }
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
+  }
+  return agentDir;
 }
 
 export function resolveAgentDir(

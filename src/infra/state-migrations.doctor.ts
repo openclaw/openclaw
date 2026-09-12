@@ -923,7 +923,7 @@ export async function detectLegacyStateMigrations(params: {
       ...(legacyAgentDirInspection.status === "failed" ? [legacyAgentDirInspection.warning] : []),
       ...deferredWarnings,
     ],
-    notices: [...deferredNotices, ...legacyAgentQuarantineNotices(targetAgentDir)],
+    notices: [...deferredNotices, ...legacyAgentQuarantineNotices(stateDir, targetAgentId)],
     preview,
   };
 }
