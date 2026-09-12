@@ -64,7 +64,7 @@ describe("runEmbeddedAttempt abort races", () => {
           });
         },
         attemptOverrides: {
-          timeoutMs: 250,
+          timeoutMs: 1_000,
           onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
         },
       });
