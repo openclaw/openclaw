@@ -45,12 +45,12 @@ Designed to be called from workflow engines (for example, Lobster via
         "enabled": true,
         "llm": {
           "allowModelOverride": true,
-          "allowedCompletionModels": ["openai/gpt-5.6-sol"],
+          "allowedCompletionModels": ["openai/gpt-6-astra"],
           "allowAuthProfileOverride": true
         },
         "config": {
           "defaultProvider": "openai",
-          "defaultModel": "gpt-5.6-sol",
+          "defaultModel": "gpt-6-astra",
           "defaultAuthProfileId": "main",
           "maxTokens": 800,
           "timeoutMs": 30000

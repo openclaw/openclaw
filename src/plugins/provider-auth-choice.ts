@@ -496,7 +496,6 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           prompter: params.prompter,
           runtime: params.runtime,
           workspaceDir,
-          reviewOfficialArtifacts: true,
           beforePersistentEffect: params.beforePersistentEffect,
         });
         if (!installResult.installed) {

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 
 const CODEX_AGENT_RUNTIME_ID = "codex";
-const CODEX_CATALOG_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";
+const CODEX_CATALOG_DEFAULT_MODEL_REF = "openai/gpt-6-astra";
 
 export function resolveCodexCatalogCreateSession(
   modelConfig: Pick<

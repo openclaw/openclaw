@@ -12,8 +12,8 @@ sidebarTitle: "Models"
 
 | Goal                                              | Use                                                                | Notes                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-5.6-sol`                                               | Fresh subscription setup; sign in with Codex auth.                  |
-| Direct API-key billing for agent turns            | `openai/gpt-5.6-sol` plus an ordered API-key auth profile          | Fresh API-key setup uses the explicit Sol id.                       |
+| ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-6-astra`                                               | Fresh subscription setup; sign in with Codex auth.                  |
+| Direct API-key billing for agent turns            | `openai/gpt-6-astra` plus an ordered API-key auth profile          | Fresh API-key setup uses Astra.                                     |
 | Choose an exact GPT-5.6 tier                      | `openai/gpt-5.6-sol`, `-terra`, or `-luna`                         | Check `models list` for the tiers available to this account.        |
 | Account without GPT-5.6 access                    | `openai/gpt-5.5`                                                   | Explicit recovery choice; OpenClaw does not silently downgrade.     |
 | Direct API-key billing, explicit OpenClaw runtime | `openai/gpt-5.6` plus provider/model `agentRuntime.id: "openclaw"` | Select a normal `openai` API-key profile.                           |
@@ -137,8 +137,8 @@ and [access guide](https://help.openai.com/en/articles/20001325-a-preview-of-gpt
 
 OpenAI's [GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
 documents the bare `openai/gpt-5.6` id as a supported alias for Sol. Fresh
-API-key and ChatGPT/Codex OAuth setup use the canonical `openai/gpt-5.6-sol`
-ref so model pickers do not show both names for the same tier. Run
+API-key and ChatGPT/Codex OAuth setup use `openai/gpt-6-astra`. Existing
+GPT-5.6 selections retain their canonical Sol identity. Run
 `openclaw doctor --fix` to rewrite persisted bare OpenAI refs to that canonical
 identity. The native Codex catalog can show the exact Sol, Terra, and Luna ids depending on
 workspace access. Check the current account with:

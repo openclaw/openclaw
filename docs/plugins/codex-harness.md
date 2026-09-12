@@ -29,7 +29,7 @@ synchronized filesystem. Codex images are materialized directly from typed
 app-server events. Saved-path-only images use the same bounded remote reader.
 Uploads always use the Gateway's configured channel identity and request timeout.
 
-Use canonical OpenAI model refs such as `openai/gpt-5.6-sol`. Do not configure
+Use canonical OpenAI model refs such as `openai/gpt-6-astra`. Do not configure
 legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
@@ -100,7 +100,7 @@ This Codex-native feature is separate from
 [OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
 broader model/provider/runtime split, start with
-[Agent runtimes](/concepts/agent-runtimes): `openai/gpt-5.6-sol` is the model
+[Agent runtimes](/concepts/agent-runtimes): `openai/gpt-6-astra` is the model
 ref, `codex` is the runtime, and Telegram, Discord, Slack, or another
 channel is the communication surface.
 
@@ -155,7 +155,7 @@ Enable the `codex` plugin and select an OpenAI agent model:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
     },
   },
 }

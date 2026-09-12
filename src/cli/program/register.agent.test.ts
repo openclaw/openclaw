@@ -214,7 +214,7 @@ describe("agent command registration", () => {
       "--cwd",
       "/tmp/project",
       "--model",
-      "openai/gpt-5.6-sol",
+      "openai/gpt-5.6-luna",
       "--code-mode",
       "code",
       "--local-model-lean",
@@ -230,7 +230,7 @@ describe("agent command registration", () => {
       "fix it",
       expect.objectContaining({
         cwd: "/tmp/project",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-5.6-luna",
         codeMode: "code",
         localModelLean: true,
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
@@ -266,12 +266,12 @@ describe("agent command registration", () => {
   });
 
   it("accepts parent options before the nested exec command", async () => {
-    await runCli(["agent", "--model", "openai/gpt-5.6-sol", "exec", "fix it", "--json"]);
+    await runCli(["agent", "--model", "openai/gpt-5.6-luna", "exec", "fix it", "--json"]);
 
     expect(agentCliCommandMock).not.toHaveBeenCalled();
     expect(agentExecCommandMock).toHaveBeenCalledWith(
       "fix it",
-      expect.objectContaining({ model: "openai/gpt-5.6-sol", json: true }),
+      expect.objectContaining({ model: "openai/gpt-5.6-luna", json: true }),
       runtime,
     );
   });

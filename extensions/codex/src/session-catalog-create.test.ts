@@ -24,7 +24,7 @@ function configWithAllowedModels(models: string[], runtime?: string): OpenClawCo
 describe("resolveCodexCatalogCreateSession", () => {
   it("advertises the canonical implicit Codex default", () => {
     expect(resolveCodexCatalogCreateSession(modelConfig, {}, "main")).toEqual({
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       agentRuntime: "codex",
     });
   });
@@ -33,11 +33,11 @@ describe("resolveCodexCatalogCreateSession", () => {
     expect(
       resolveCodexCatalogCreateSession(
         modelConfig,
-        configWithAllowedModels(["openai/gpt-5.6-sol"], "openclaw"),
+        configWithAllowedModels(["openai/gpt-6-astra"], "openclaw"),
         "main",
       ),
     ).toEqual({
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       agentRuntime: "codex",
     });
   });
@@ -56,8 +56,8 @@ describe("resolveCodexCatalogCreateSession", () => {
     const config = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": {} },
+          model: { primary: "openai/gpt-6-astra" },
+          models: { "openai/gpt-6-astra": {} },
         },
         list: [
           { id: "main", default: true },
@@ -72,7 +72,7 @@ describe("resolveCodexCatalogCreateSession", () => {
     } satisfies OpenClawConfig;
 
     expect(resolveCodexCatalogCreateSession(modelConfig, config, "main")).toEqual({
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       agentRuntime: "codex",
     });
     expect(resolveCodexCatalogCreateSession(modelConfig, config, "research")).toBeUndefined();

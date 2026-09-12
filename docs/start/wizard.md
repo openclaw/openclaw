@@ -192,7 +192,7 @@ Local mode (default) walks through these steps:
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
    Fresh OpenAI API-key and ChatGPT/Codex setup default to
-   `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+   `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
    supported and resolves to Sol. Re-running setup preserves an existing
    explicit model, including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
    account does not expose GPT-5.6.

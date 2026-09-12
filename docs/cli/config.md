@@ -397,9 +397,9 @@ Example patch:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.6-sol" },
+      model: { primary: "openai/gpt-6-astra" },
       models: {
-        "openai/gpt-5.6-sol": {
+        "openai/gpt-6-astra": {
           agentRuntime: { id: "openclaw" },
           params: { fastMode: true },
         },

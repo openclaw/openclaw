@@ -20,7 +20,7 @@ extension QuickChatModelControlSnapshot {
 @MainActor
 struct QuickChatPowerFeaturesTests {
     private static let solModelChoice = OpenClawChatModelChoice(
-        modelID: "gpt-5.6-sol",
+        modelID: "gpt-5.6-luna",
         name: "Sol",
         provider: "openai",
         contextWindow: 400_000,
@@ -135,7 +135,7 @@ struct QuickChatPowerFeaturesTests {
             recents: [],
             defaultProvider: snapshot.defaultProvider)
 
-        #expect(snapshot.currentModelSelectionID == "openai/gpt-5.6-sol")
+        #expect(snapshot.currentModelSelectionID == "openai/gpt-5.6-luna")
         #expect(snapshot.currentThinkingLevel == "medium")
         #expect(snapshot.thinkingOptions.map(\.id) == ["off", "medium", "high"])
         #expect(sections.providers.map(\.id) == ["openai", "anthropic"])
@@ -169,19 +169,19 @@ struct QuickChatPowerFeaturesTests {
             selectionID: nil,
             appliedSelectionID: nil) == .none)
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
-            appliedSelectionID: "openai/gpt-5.6-sol") == .none)
+            selectionID: "openai/gpt-5.6-luna",
+            appliedSelectionID: "openai/gpt-5.6-luna") == .none)
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
-            appliedSelectionID: "openai/gpt-5.6-sol",
-            currentSessionSelectionID: "anthropic/claude-sonnet-4-6") == .patch("openai/gpt-5.6-sol"))
+            selectionID: "openai/gpt-5.6-luna",
+            appliedSelectionID: "openai/gpt-5.6-luna",
+            currentSessionSelectionID: "anthropic/claude-sonnet-4-6") == .patch("openai/gpt-5.6-luna"))
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
+            selectionID: "openai/gpt-5.6-luna",
             appliedSelectionID: nil,
-            currentSessionSelectionID: "openai/gpt-5.6-sol") == .none)
+            currentSessionSelectionID: "openai/gpt-5.6-luna") == .none)
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
-            appliedSelectionID: nil) == .patch("openai/gpt-5.6-sol"))
+            selectionID: "openai/gpt-5.6-luna",
+            appliedSelectionID: nil) == .patch("openai/gpt-5.6-luna"))
         #expect(QuickChatModelControlLogic.modelPatchDecision(
             selectionID: OpenClawChatViewModel.defaultModelSelectionID,
             appliedSelectionID: nil) == .patch(nil))
@@ -642,7 +642,7 @@ struct QuickChatPowerFeaturesTests {
         {
           "key": "agent:main:main",
           "modelProvider": "openai",
-          "model": "gpt-5.6-sol",
+          "model": "gpt-5.6-luna",
           "thinkingLevel": "medium"
         }
       ]
