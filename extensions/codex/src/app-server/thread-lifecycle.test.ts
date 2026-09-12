@@ -65,6 +65,43 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
 const PROGRESS_CARD_SYSTEM_PROMPT =
   "During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.";
 
+describe("Codex usage attribution", () => {
+  it("labels new OpenClaw threads without rewriting resumed thread attribution", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, { appServer, cwd: "/repo", dynamicTools: [] });
+    const resume = buildThreadResumeParams(params, { appServer, threadId: "thread-1" });
+
+    expect(start.threadSource).toBe("openclaw");
+    expect(resume).not.toHaveProperty("threadSource");
+  });
+
+  it.each(["user", "cron", "heartbeat", "manual", "memory", "overflow"] as const)(
+    "preserves the %s run trigger on each new turn",
+    (trigger) => {
+      const params = { ...createAttemptParams({ provider: "openai" }), trigger };
+      const request = buildTurnStartParams(params, {
+        appServer: createAppServerOptions() as never,
+        threadId: "existing-thread",
+        cwd: "/repo",
+      });
+
+      expect(request.turnTrigger).toBe(trigger);
+    },
+  );
+
+  it("does not guess a human trigger when the caller supplied none", () => {
+    const params = { ...createAttemptParams({ provider: "openai" }), trigger: undefined };
+    const request = buildTurnStartParams(params, {
+      appServer: createAppServerOptions() as never,
+      threadId: "existing-thread",
+      cwd: "/repo",
+    });
+
+    expect(request).not.toHaveProperty("turnTrigger");
+  });
+});
+
 describe("Codex incognito thread persistence", () => {
   it("marks only incognito-shaped harness sessions ephemeral", () => {
     const appServer = createAppServerOptions() as never;

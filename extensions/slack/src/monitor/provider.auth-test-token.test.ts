@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertSlackDetachedTargetAllowed } from "../detached-target-admission.js";
 import { getSlackInstallationKind } from "../installation-identity-state.js";
@@ -476,8 +476,8 @@ describe("presence polling transport", () => {
       enterprise_id: "E1",
       is_enterprise_install: true,
     });
-    getSlackRuntime().state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<T>("slack", {
+    getSlackRuntime().state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("slack", {
         ...options,
         env: options.env ?? process.env,
       });
@@ -513,8 +513,8 @@ describe("presence polling transport", () => {
         },
       },
     });
-    getSlackRuntime().state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<T>("slack", {
+    getSlackRuntime().state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("slack", {
         ...options,
         env: options.env ?? process.env,
       });

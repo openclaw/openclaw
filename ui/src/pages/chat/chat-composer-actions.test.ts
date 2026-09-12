@@ -39,6 +39,26 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
+  it.each([true, false])("keeps submission gated while history is pending: %s", (pending) => {
+    const onSend = vi.fn();
+    const reason = pending ? "Loading chat" : "History failed. Retry to load the conversation.";
+    const { container } = renderComposer({
+      draft: "Keep this draft",
+      submitDisabledReason: reason,
+      submitPending: pending,
+      onSend,
+    });
+    const send = primaryButton(container);
+    expect(send.disabled).toBe(true);
+    expect(send.getAttribute("aria-label")).toBe(reason);
+    expect(send.getAttribute("aria-busy")).toBe(String(pending));
+    expect(send.querySelector(".btn__spinner") !== null).toBe(pending);
+    send.click();
+    pressComposerEnter(container);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
+  });
+
   it.each(
     ["/stop", "/approve approval-123 allow-once", "ordinary draft"].flatMap((draft) =>
       ["keyboard", "button"].map((submission) => ({ draft, submission })),

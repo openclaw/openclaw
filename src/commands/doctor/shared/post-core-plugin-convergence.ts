@@ -28,6 +28,7 @@ import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plug
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "./update-phase.js";
 
 type PostCoreConvergenceWarning = {
+  kind?: "load" | "repair";
   pluginId?: string;
   reason: string;
   message: string;
@@ -39,6 +40,7 @@ type PostCoreConvergenceResult = {
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];
   outcomes?: PluginUpdateOutcome[];
+  repairedPluginIds?: string[];
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
   /**
@@ -221,19 +223,23 @@ export async function runPostCorePluginConvergence(params: {
       })
     : null;
 
+  const warnings: PostCoreConvergenceWarning[] = [];
   const repair = await repairMissingConfiguredPluginInstalls({
     cfg: params.cfg,
     env,
     ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
     onCapabilityConsent: params.onCapabilityConsent,
+    onWarning: ({ message, pluginId }) => {
+      warnings.push({
+        ...(pluginId ? { kind: "repair", pluginId } : {}),
+        reason: message,
+        message,
+        guidance: [REPAIR_GUIDANCE],
+      });
+    },
     beforePersistentEffect: params.beforePersistentEffect,
   });
 
-  const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
-    reason: message,
-    message,
-    guidance: [REPAIR_GUIDANCE],
-  }));
   const peerLinkRepair = await repairInstalledNpmOpenClawHostLinks({
     env,
     installRecords: repair.records,
@@ -290,6 +296,7 @@ export async function runPostCorePluginConvergence(params: {
   }
   for (const failure of smoke.failures) {
     warnings.push({
+      kind: "load",
       pluginId: failure.pluginId,
       reason: `${failure.reason}: ${failure.detail}`,
       message: `Plugin "${failure.pluginId}" failed post-core payload smoke check (${failure.reason}): ${failure.detail}`,
@@ -311,6 +318,7 @@ export async function runPostCorePluginConvergence(params: {
     notices,
     warnings,
     outcomes: repair.outcomes,
+    ...(repair.repairedPluginIds?.length ? { repairedPluginIds: repair.repairedPluginIds } : {}),
     errored:
       repair.outcomes?.some(
         (outcome) =>

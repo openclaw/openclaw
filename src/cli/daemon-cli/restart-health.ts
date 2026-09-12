@@ -51,6 +51,7 @@ function finalizeGatewayRestartSnapshot(
   snapshot: GatewayRestartSnapshot,
   expectedVersion: string | undefined,
   expectedBuildId: string | undefined,
+  requirePluginHealth: boolean,
 ): GatewayRestartSnapshot {
   if (expectedVersion) {
     snapshot.expectedVersion = expectedVersion;
@@ -77,7 +78,10 @@ function finalizeGatewayRestartSnapshot(
       }
     }
   }
-  if (snapshot.activatedPluginErrors?.length || snapshot.channelProbeErrors?.length) {
+  if (
+    (requirePluginHealth && snapshot.activatedPluginErrors?.length) ||
+    snapshot.channelProbeErrors?.length
+  ) {
     snapshot.healthy = false;
   }
   return snapshot;
@@ -89,6 +93,7 @@ export async function inspectGatewayRestart(params: {
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
+  requirePluginHealth?: boolean;
   includeUnknownListenersAsStale?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
@@ -105,10 +110,13 @@ export async function inspectGatewayRestart(params: {
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
-  const requiresGatewayProbe = Boolean(expectedVersion || expectedBuildId);
+  const requiresGatewayProbe = Boolean(
+    expectedVersion || expectedBuildId || params.requirePluginHealth === false,
+  );
   let reachability: GatewayReachability | null = null;
   let probeError: string | undefined;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
+  let unavailablePlugins: GatewayReachability["unavailablePlugins"] = [];
   let channelProbeErrors: Array<{ id: string; error: string }> = [];
   const loadReachability = async () => {
     if (!reachability) {
@@ -121,6 +129,7 @@ export async function inspectGatewayRestart(params: {
       });
       probeError = reachability.probeError;
       activatedPluginErrors = reachability.activatedPluginErrors;
+      unavailablePlugins = reachability.unavailablePlugins;
       channelProbeErrors = reachability.channelProbeErrors;
     }
     return reachability;
@@ -164,12 +173,16 @@ export async function inspectGatewayRestart(params: {
           ...(reachable.activatedPluginErrors.length > 0
             ? { activatedPluginErrors: reachable.activatedPluginErrors }
             : {}),
+          ...(reachable.unavailablePlugins.length > 0
+            ? { unavailablePlugins: reachable.unavailablePlugins }
+            : {}),
           ...(reachable.channelProbeErrors.length > 0
             ? { channelProbeErrors: reachable.channelProbeErrors }
             : {}),
         },
         expectedVersion,
         expectedBuildId,
+        params.requirePluginHealth !== false,
       );
     }
   }
@@ -248,10 +261,12 @@ export async function inspectGatewayRestart(params: {
       ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
       ...(probeError ? { probeError } : {}),
       ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
+      ...(unavailablePlugins.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
     },
     expectedVersion,
     expectedBuildId,
+    params.requirePluginHealth !== false,
   );
 }
 
@@ -304,6 +319,7 @@ export async function waitForGatewayHealthyRestart(params: {
   expectedBuildId?: string | null;
   includeUnknownListenersAsStale?: boolean;
   requireRunningService?: boolean;
+  requirePluginHealth?: boolean;
   supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
   probeHosts?: readonly string[];
@@ -335,6 +351,7 @@ export async function waitForGatewayHealthyRestart(params: {
     env: params.env,
     expectedVersion: params.expectedVersion,
     expectedBuildId: params.expectedBuildId,
+    requirePluginHealth: params.requirePluginHealth,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
     probeContext,
     configuredProbe,
@@ -399,7 +416,7 @@ export async function waitForGatewayHealthyRestart(params: {
       // Callers consume snapshot.healthy; a partial settle must not report recovery at timeout.
       snapshot.healthy = false;
     }
-    if (snapshot.activatedPluginErrors?.length) {
+    if (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) {
       return withWaitContext(snapshot, "plugin-errors", elapsedMs);
     }
     if (snapshot.channelProbeErrors?.length) {
@@ -474,6 +491,7 @@ export async function waitForGatewayHealthyRestart(params: {
       env: params.env,
       expectedVersion: params.expectedVersion,
       expectedBuildId: params.expectedBuildId,
+      requirePluginHealth: params.requirePluginHealth,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
       probeContext,
       configuredProbe,

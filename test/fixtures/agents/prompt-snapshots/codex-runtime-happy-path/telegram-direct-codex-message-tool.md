@@ -102,7 +102,8 @@
   "model": "gpt-5.5",
   "personality": "none",
   "sandbox": "danger-full-access",
-  "serviceName": "OpenClaw"
+  "serviceName": "OpenClaw",
+  "threadSource": "openclaw"
 }
 ```
 
@@ -180,7 +181,8 @@
   "sandboxPolicy": {
     "type": "dangerFullAccess"
   },
-  "threadId": "thread-telegram-direct-codex-message-tool"
+  "threadId": "thread-telegram-direct-codex-message-tool",
+  "turnTrigger": "user"
 }
 ```
 

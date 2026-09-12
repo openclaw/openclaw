@@ -200,6 +200,30 @@ describe("runtime snapshot state", () => {
     },
   );
 
+  it("does not replace explicit config with a pinned snapshot without a source contract", () => {
+    const sourceConfig = createProviderConfigFixture();
+    const resolvedConfig = createProviderConfigFixture("synthetic-resolved-key");
+    const pinned = loadPinnedRuntimeConfig(() => sourceConfig);
+    expect(getRuntimeConfigSourceSnapshot()).toBeNull();
+
+    expect(
+      selectApplicableRuntimeConfig({ inputConfig: resolvedConfig, runtimeConfig: pinned }),
+    ).toBe(resolvedConfig);
+    expect(
+      selectApplicableRuntimeConfig({ inputConfig: sourceConfig, runtimeConfig: pinned }),
+    ).toBe(sourceConfig);
+    expect(selectApplicableRuntimeConfig({ runtimeConfig: pinned })).toBe(pinned);
+
+    // A resolved but unrelated singleton cannot supply credentials for an explicit source either.
+    setRuntimeConfigSnapshot(resolvedConfig);
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: sourceConfig,
+        runtimeConfig: getRuntimeConfigSnapshot(),
+      }),
+    ).toBe(sourceConfig);
+  });
+
   it("matches independently loaded config with equivalent resolution facts", () => {
     const source = createProviderConfigFixture();
     const freshRead = structuredClone(source);

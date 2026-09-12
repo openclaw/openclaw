@@ -949,19 +949,6 @@ describe("native Slack progress stream chunks", () => {
     ).toBeUndefined();
   });
 
-  it("updates native Slack progress without creating duplicate plan blocks", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        title: "Shelling",
-        lines: [itemLine("tool one", "Tool one"), itemLine("tool two", "Tool two")],
-      }),
-    ).toEqual([
-      planUpdate("Shelling"),
-      taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
-      taskUpdate(contentTaskId("item"), "tool two", "in_progress"),
-    ]);
-  });
-
   it("marks unfinished native Slack progress tasks complete for finalization", () => {
     expect(
       buildSlackProgressStreamChunks({

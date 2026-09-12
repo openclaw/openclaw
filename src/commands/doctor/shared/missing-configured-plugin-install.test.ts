@@ -353,6 +353,100 @@ vi.mock("../../../plugins/update.js", async (importOriginal) => {
 });
 
 describe("repairMissingConfiguredPluginInstalls", () => {
+  it("propagates ambiguous managed repair ownership before commit or later repairs", async () => {
+    const actual = await vi.importActual<typeof import("../../../plugins/capability-consent.js")>(
+      "../../../plugins/capability-consent.js",
+    );
+    prepareManagedPluginArtifactConsentHandler.mockImplementation(
+      actual.prepareManagedPluginArtifactConsentHandler,
+    );
+    const { installPluginDirectoryIntoExtensions } =
+      await import("../../../plugins/install-shared.js");
+    const installDir = tempDirs.make("openclaw-doctor-ambiguous-owner-");
+    const sourceDir = tempDirs.make("openclaw-doctor-ambiguous-source-");
+    for (const rootDir of [installDir, sourceDir]) {
+      createColdPluginFixture({ rootDir, pluginId: "demo", packageName: "@example/demo" });
+    }
+    fs.rmSync(path.join(installDir, "package.json"));
+    const originalFiles = fs.readdirSync(installDir).map((file) => ({
+      file,
+      bytes: fs.readFileSync(path.join(installDir, file)),
+    }));
+    const record = { source: "npm" as const, spec: "@example/demo", installPath: installDir };
+    const records = { demo: record, alias: { ...record } };
+    const originalRecords = structuredClone(records);
+    const cfg: OpenClawConfig = {
+      plugins: { entries: { demo: { enabled: true }, later: { enabled: true } } },
+    };
+    const originalConfig = structuredClone(cfg);
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      plugins: [],
+      diagnostics: [],
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      channelPluginEntry({ id: "demo", npmSpec: "@example/demo" }),
+      channelPluginEntry({ id: "later", npmSpec: "@example/later" }),
+    ]);
+    mocks.updateNpmInstalledPlugins.mockImplementation(
+      async ({ config }: { config: OpenClawConfig }) => ({
+        config,
+        changed: false,
+        outcomes: [],
+      }),
+    );
+    mocks.installPluginFromNpmSpec.mockImplementation(
+      async (params: { onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler }) =>
+        installPluginDirectoryIntoExtensions({
+          sourceDir,
+          targetDir: installDir,
+          pluginId: "demo",
+          extensions: ["index.cjs"],
+          logger: {},
+          timeoutMs: 1_000,
+          mode: "update",
+          dryRun: false,
+          copyErrorPrefix: "failed to copy plugin",
+          hasDeps: false,
+          depsLogMessage: "Installing dependencies…",
+          onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        }),
+    );
+    const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>();
+    const beforePersistentEffect = vi.fn();
+    const onWarning = vi.fn();
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+
+    await expect(
+      repairMissingConfiguredPluginInstalls({
+        cfg,
+        env: testEnv,
+        onCapabilityConsent,
+        beforePersistentEffect,
+        onWarning,
+      }),
+    ).rejects.toMatchObject({
+      name: "ManagedPluginLifecycleError",
+      kind: "invalid-request",
+      message: 'Plugin "demo" matches multiple installed package owners.',
+      capabilityConsent: undefined,
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledOnce();
+    expect(onCapabilityConsent).not.toHaveBeenCalled();
+    expect(beforePersistentEffect).not.toHaveBeenCalled();
+    expect(onWarning).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(records).toEqual(originalRecords);
+    expect(cfg).toEqual(originalConfig);
+    expect(fs.readdirSync(installDir)).toEqual(originalFiles.map(({ file }) => file));
+    for (const { file, bytes } of originalFiles) {
+      expect(fs.readFileSync(path.join(installDir, file))).toEqual(bytes);
+    }
+  });
+
   it.each(["legacy", "accepted", "missing", "damaged", "stale-descriptor", "disabled"] as const)(
     "preserves a %s installed artifact when replacement capability consent is pending",
     async (previousState) => {
@@ -4015,6 +4109,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
+    const onWarning = vi.fn();
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
         plugins: {
@@ -4024,8 +4119,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       },
       env: testEnv,
+      onWarning,
     });
 
+    expect(onWarning).toHaveBeenCalledWith({ message: repairWarning });
     expect(result.warnings).toContain(repairWarning);
     expect(result.notices ?? []).not.toContain(repairWarning);
   });
@@ -4622,16 +4719,28 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       error: "network unavailable",
     });
 
-    const result = await repairConfiguredPlugins({
-      tools: {
-        web: {
-          search: {
-            provider: "brave",
+    const onWarning = vi.fn();
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
           },
         },
       },
+      env: testEnv,
+      onWarning,
     });
 
+    expect(onWarning).toHaveBeenCalledWith({
+      pluginId: "brave",
+      message:
+        'Failed to install missing configured plugin "brave" from @openclaw/brave-plugin@2026.5.1-beta.1: network unavailable',
+    });
     expect(fs.existsSync(installDir)).toBe(true);
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(result).toEqual({

@@ -690,6 +690,7 @@ export function applyOutcomeToAuthoritativeJob(
   opts?: {
     deferredNotifications?: DeferredCronNotifications;
     emit?: boolean;
+    triggerStateRetired?: boolean;
     // A requested run retains startup bookkeeping even when it advances ordinary cadence.
     request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
   },
@@ -699,11 +700,13 @@ export function applyOutcomeToAuthoritativeJob(
     currentJob: job,
     activeJobMarker: result.activeJobMarker,
   });
-  const triggerOwnership = resolveCronRunTriggerOwnership({
-    admittedJob: result.job,
-    currentJob: job,
-    activeJobMarker: result.activeJobMarker,
-  });
+  const triggerOwnership = opts?.triggerStateRetired
+    ? "stale"
+    : resolveCronRunTriggerOwnership({
+        admittedJob: result.job,
+        currentJob: job,
+        activeJobMarker: result.activeJobMarker,
+      });
 
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     // Quiet trigger ticks intentionally emit no finished event: run history,

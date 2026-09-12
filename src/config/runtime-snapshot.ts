@@ -329,10 +329,9 @@ export function selectApplicableRuntimeConfig(params: {
     return inputConfig;
   }
   const runtimeSourceConfig = params.runtimeSourceConfig ?? null;
-  if (!runtimeSourceConfig) {
-    return runtimeConfig;
-  }
-  if (configSnapshotsMatch(inputConfig, runtimeSourceConfig)) {
+  // A pinned file config is not an activated secrets snapshot. Without its source
+  // contract, replacing an explicit config can discard command-resolved credentials.
+  if (runtimeSourceConfig && configSnapshotsMatch(inputConfig, runtimeSourceConfig)) {
     return runtimeConfig;
   }
   return inputConfig;

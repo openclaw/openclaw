@@ -243,7 +243,10 @@ With `drain: true`, the same suspension owner instead keeps admission closed
 and cron scheduling paused until existing work settles. Already-owned cron
 completion and reconciliation continue.
 
-Both draining and ready leases last two minutes. Repeat `prepare` before
+Both draining and ready leases share a two-minute budget starting before work
+inspection. Preparation that exhausts that budget resumes scheduling and fails
+instead of returning an expired lease. Clock rollback does not extend the budget.
+Repeat `prepare` before
 `expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
 the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
 existing lease. Use `status` for routine polling and reserve `prepare` for

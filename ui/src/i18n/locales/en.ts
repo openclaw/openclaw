@@ -3468,7 +3468,7 @@ export const en: TranslationMap & {
       sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
-      controlUi: "Control UI",
+      web: "Web",
       cli: "Command line",
       app: "App",
     },
@@ -4711,6 +4711,7 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
       retryStatus: "Status unavailable · Retry",
       viewDetails: "View details",

@@ -35,44 +35,80 @@ suite.define(() => {
     }
   });
 
-  it("shows advertised cloud machines when hovering a profile", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "environments.list": {
-          environments: [],
-          profiles: [
-            {
-              id: "aws",
-              providerId: "crabbox",
-              executionMode: "worker-turn",
-              executionModes: ["worker-turn"],
-              machines: [
-                { id: "standard", label: "Standard", default: true },
-                { id: "fast", label: "Fast" },
-              ],
-            },
-          ],
+  it.each(["hover", "click"] as const)(
+    "keeps cloud machines usable when the picker finishes opening after a profile %s",
+    async (input) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": {
+            environments: [],
+            profiles: [
+              {
+                id: "aws",
+                providerId: "crabbox",
+                executionMode: "worker-turn",
+                executionModes: ["worker-turn"],
+                machines: [
+                  { id: "standard", label: "Standard", default: true },
+                  { id: "fast", label: "Fast" },
+                ],
+              },
+            ],
+          },
+          "worktrees.branches": { branches: [], repositoryStatus: "git" },
         },
-        "worktrees.branches": { branches: [], repositoryStatus: "git" },
-      },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      const where = page.locator("#new-session-where-trigger");
-      await where.click();
-      const picker = page.locator("wa-popover.new-session-page__where-popover");
-      const profile = picker.locator('[data-value="cloud:aws"]');
-      await profile.hover();
-      await picker.locator('[data-value="machine:fast"]').waitFor();
-    } finally {
-      await context.close();
-    }
-  });
+      });
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        const picker = page.locator("wa-popover.new-session-page__where-popover");
+        await picker.evaluate((element) =>
+          (element as HTMLElement).style.setProperty("--show-duration", "60s"),
+        );
+        const where = page.locator("#new-session-where-trigger");
+        await where.click();
+        const popup = picker.locator('wa-popup [part="popup"]').first();
+        await expect
+          .poll(() => popup.evaluate((element) => element.getAnimations().length))
+          .toBe(1);
+        // Hold the actual opening animation until the user has opened cloud configuration.
+        await popup.evaluate((element) => {
+          const animation = element.getAnimations()[0]!;
+          animation.pause();
+          animation.currentTime = Number(animation.effect!.getComputedTiming().duration) - 1;
+        });
+        await expect
+          .poll(() =>
+            picker.getByRole("searchbox").evaluate((element) => element.matches(":focus")),
+          )
+          .toBe(true);
+        const profile = picker.locator('[data-value="cloud:aws"]');
+        await profile[input]();
+        const fast = picker.locator('[data-value="machine:fast"]');
+        await fast.waitFor();
+        await popup.evaluate((element) =>
+          Promise.all(
+            element.getAnimations().map((animation) => {
+              animation.finish();
+              return animation.finished;
+            }),
+          ),
+        );
+        if (input === "click") {
+          expect(await profile.evaluate((element) => element.matches(":focus"))).toBe(true);
+        }
+        await fast.click();
+        await expect.poll(() => where.getAttribute("data-cloud-profile")).toBe("aws");
+        await expect.poll(() => where.getAttribute("data-machine-class")).toBe("fast");
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("keeps an explicitly selected cloud destination when its runtime becomes incompatible", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
