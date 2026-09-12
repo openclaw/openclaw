@@ -577,10 +577,12 @@ function renderSessionListBody(params: {
 
 function renderSessionListToolbar(host: SidebarSessionListHost) {
   const newSessionAccess = host.readNewSessionAccess();
+  const hiddenMainSessionKey = host.mainSessionRow()?.key;
   const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
       <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
+      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       <button
         type="button"
         class="sidebar-session-toolbar__button sidebar-session-sort ${
@@ -616,7 +618,6 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
-  const hiddenMainSessionKey = host.mainSessionRow()?.key;
   return html`
     <section
       class="sidebar-sessions ${
@@ -627,7 +628,6 @@ export function renderSessionList(params: {
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
       ${renderSessionListToolbar(host)}
-      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${
         host.sessionData.sessionMutationError
           ? html`

@@ -5261,6 +5261,7 @@ export const en: TranslationMap & {
       serverUpdatedTitle: "Server updated",
       serverUpdatedRefresh: "Refresh for full capabilities",
       threads: "Sessions",
+      sessionLoadErrorDetails: "Some sessions could not load. Show details",
       otherSessions: "Other",
       groups: "Groups",
       coding: "Coding",

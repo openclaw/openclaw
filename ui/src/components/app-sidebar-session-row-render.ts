@@ -1,4 +1,6 @@
+import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import { html, nothing, type TemplateResult } from "lit";
+import "./web-awesome-popover.ts";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
@@ -436,6 +438,7 @@ export function renderRecentSession(params: {
           </span>
         </span>
       </a>
+      ${childrenExpanded ? renderChildSessionLoadError(host, session.key) : nothing}
       ${
         session.childSessionKeys.length > 0
           ? html`<button
@@ -522,21 +525,47 @@ export function renderChildSessionLoadError(host: SessionListHost, parentKey: st
   if (!error) {
     return nothing;
   }
-  return html`<div
-    class="sidebar-session-error callout danger"
-    data-child-session-error=${parentKey}
-    role="alert"
-  >
-    <span>${error}</span>
-    <button
-      class="sidebar-session-tree__show-more"
-      type="button"
-      data-retry-child-sessions=${parentKey}
-      @click=${() => host.sessionData.retryChildSessions(parentKey)}
+  const triggerId = `${sidebarSessionMetaId(parentKey)}-error-trigger`;
+  const popoverId = `${triggerId}-details`;
+  return html`<span class="sidebar-session-load-error-anchor" data-child-session-error=${parentKey}>
+    <openclaw-tooltip .content=${error}>
+      <button
+        id=${triggerId}
+        class="sidebar-session-toolbar__button sidebar-session-load-error"
+        type="button"
+        aria-label=${t("chat.sidebar.sessionLoadErrorDetails")}
+        aria-haspopup="dialog"
+        aria-controls=${popoverId}
+      >
+        <span aria-hidden="true">${icons.alertTriangle}</span>
+      </button>
+    </openclaw-tooltip>
+    <wa-popover
+      id=${popoverId}
+      class="sidebar-session-load-error__popover"
+      for=${triggerId}
+      placement="bottom-start"
+      without-arrow
+      @wa-show=${(event: Event) => {
+        // SAFETY: This listener is attached directly to the wa-popover instance.
+        const popover = event.currentTarget as WaPopover;
+        popover.dialog.setAttribute("aria-label", t("chat.errorDetails"));
+      }}
     >
-      ${t("common.retry")}
-    </button>
-  </div>`;
+      <div class="sidebar-session-load-error__details">
+        <span>${error}</span>
+        <button
+          class="sidebar-session-tree__show-more"
+          type="button"
+          autofocus
+          data-retry-child-sessions=${parentKey}
+          @click=${() => host.sessionData.retryChildSessions(parentKey)}
+        >
+          ${t("common.retry")}
+        </button>
+      </div>
+    </wa-popover>
+  </span>`;
 }
 
 export function renderSessionTree(params: {
@@ -590,7 +619,6 @@ export function renderSessionTree(params: {
                   </button>`
                 : nothing
             }
-            ${renderChildSessionLoadError(host, session.key)}
             ${
               session.loadingChildren && session.children.length === 0
                 ? html`<span

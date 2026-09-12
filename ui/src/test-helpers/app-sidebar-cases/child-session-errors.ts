@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import {
+  createGateway,
+  createGatewayHarness,
+  createSessionsHarness,
+  mountSidebar,
+} from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -24,6 +30,52 @@ function recoveredChild(key: string, parentKey: string, label: string) {
 }
 
 describe("AppSidebar child-session load errors", () => {
+  it.each(["disconnect", "client replacement"])(
+    "retires a child load after %s without latching a missing-result error",
+    async (retirement) => {
+      const parentKey = "agent:main:parent";
+      const childKey = "agent:worker:child";
+      const pending = createDeferred<SessionsListResult | null>();
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const harness = createSessionsHarness("main", [parentKey]);
+      harness.list
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce(
+          sessionResult([recoveredChild(childKey, parentKey, "Recovered child")]),
+        );
+      const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+      harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
+      await sidebar.updateComplete;
+      const load = sidebar.sessionData.loadChildSessions(parentKey);
+      sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+      await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
+      gateway.publish(
+        retirement === "disconnect"
+          ? { phase: "reconnecting" }
+          : { client: { instanceId: "replacement" } as GatewayBrowserClient },
+      );
+      pending.resolve(null);
+      await load;
+      expect(sidebar.sessionData.childSessionErrorsByParent.size).toBe(0);
+      expect(sidebar.sessionData.loadingChildSessionKeys.size).toBe(0);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
+      if (retirement === "disconnect") {
+        await sidebar.sessionData.loadChildSessions(parentKey);
+        expect(harness.list).toHaveBeenCalledOnce();
+      }
+      gateway.publish({ phase: "connected" });
+      harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
+      await sidebar.updateComplete;
+      await sidebar.sessionData.loadChildSessions(parentKey);
+      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(sidebar.sessionData.childSessionErrorsByParent.size).toBe(0);
+      expect(sidebar.sessionData.childSessionRowsByParent[parentKey]?.[0]?.label).toBe(
+        "Recovered child",
+      );
+    },
+  );
+
   it.each([
     {
       failure: "temporary list failure",
@@ -52,7 +104,9 @@ describe("AppSidebar child-session load errors", () => {
 
       await waitForFast(() => {
         const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
-        expect(alert?.getAttribute("role")).toBe("alert");
+        expect(alert?.querySelector("button")?.getAttribute("aria-label")).toBe(
+          "Some sessions could not load. Show details",
+        );
         expect(alert?.textContent).toContain(visibleError);
       });
       const mountedAlert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
@@ -140,7 +194,10 @@ describe("AppSidebar child-session load errors", () => {
       expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
       await waitForFast(() => {
         const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
-        expect(alert?.getAttribute("role")).toBe("alert");
+        expect(alert?.querySelector("button")?.getAttribute("aria-label")).toBe(
+          "Some sessions could not load. Show details",
+        );
+        expect(alert?.closest(".sidebar-session-toolbar")).not.toBeNull();
         expect(alert?.textContent).toContain("main session children temporarily unavailable");
       });
 

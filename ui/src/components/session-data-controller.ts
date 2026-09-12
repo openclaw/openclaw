@@ -441,6 +441,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.gatewayConnectionRevision = gateway.connectionRevision;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
+    // sessions.list retires requests when the socket disconnects or is replaced.
+    // Fence child loads at the same boundary, before their null result can latch an error.
+    this.resetChildSessionState(true);
     this.presenceInstanceId = client?.instanceId;
     if (!connected) {
       this.presencePayload = undefined;
@@ -524,6 +527,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     if (
       !sessions ||
       !parentKey ||
+      this.context?.gateway.snapshot.phase !== "connected" ||
       this.loadedChildSessionKeys.has(parentKey) ||
       this.childSessionErrorsByParent.has(parentKey) ||
       this.loadingChildSessionKeys.has(parentKey)

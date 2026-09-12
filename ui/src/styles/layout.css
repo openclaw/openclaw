@@ -1254,6 +1254,32 @@ openclaw-settings-save-indicator:empty {
   stroke-linejoin: round;
 }
 
+.sidebar-session-toolbar__button.sidebar-session-load-error {
+  width: 24px;
+  height: 24px;
+  color: var(--danger);
+  opacity: 1;
+}
+
+.sidebar-session-load-error-anchor {
+  display: contents;
+}
+
+.sidebar-session-load-error__popover {
+  --max-width: min(260px, calc(100vw - 16px));
+}
+
+.sidebar-session-load-error__popover::part(body) {
+  padding: 10px;
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-session-load-error__details {
+  display: grid;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
 .sidebar-session-error {
   flex: 0 0 auto;
   padding: 8px 10px;
@@ -2270,12 +2296,18 @@ openclaw-settings-save-indicator:empty {
   pointer-events: none;
 }
 
+.sidebar-recent-session:has(> .sidebar-session-load-error-anchor) {
+  --sidebar-child-session-error-width: 24px;
+}
+
 /* Rows with a child toggle keep it as the rightmost in-flow control; the
    overlaid actions land just left of it, at the link's right edge — the
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  right: calc(
+    var(--sidebar-child-session-toggle-width) + var(--sidebar-child-session-error-width, 0px) + 4px
+  );
 }
 
 .sidebar-recent-session:not(
