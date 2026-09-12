@@ -1,8 +1,4 @@
-/**
- * Image generation background task facade.
- *
- * Binds shared detached media-task lifecycle behavior to image_generate labels and completion messages.
- */
+/** Owns image, music, and video preflight, task admission, and detached completion. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
@@ -22,6 +18,7 @@ import {
   type MediaGenerationExecutionResult,
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
+import type { MediaGenerateActionResult } from "./media-generate-tool-actions-shared.js";
 import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 
 /** Transferred resources belong to queued work through actual generation and persistence. */
@@ -29,6 +26,51 @@ export type MediaGenerationTaskResources = {
   run: <T>(run: () => T | Promise<T>) => Promise<T>;
   release: () => Promise<void>;
 };
+
+/** Preflight retains resources until a duplicate result releases them or task admission takes over. */
+export async function prepareMediaGenerationTask<T extends MediaGenerationExecutionResult>(params: {
+  generationLabel: "image" | "video" | "music";
+  resources?: MediaGenerationTaskResources & { assertOpen: () => void };
+  signal?: AbortSignal;
+  prepare: () => Promise<
+    | { kind: "result"; result: MediaGenerateActionResult }
+    | {
+        kind: "task";
+        params: Omit<
+          Parameters<typeof runMediaGenerationTask<T>>[0],
+          "resources" | "generationLabel"
+        >;
+      }
+  >;
+}) {
+  const { resources, signal, prepare } = params;
+  let prepared: Awaited<ReturnType<typeof prepare>>;
+  try {
+    resources?.assertOpen();
+    prepared = resources ? await resources.run(prepare) : await prepare();
+    if (prepared.kind === "task") {
+      // Cancellation fences admission; accepted work retains resources independently.
+      signal?.throwIfAborted();
+      resources?.assertOpen();
+    }
+  } catch (error) {
+    const title = `${params.generationLabel.charAt(0).toUpperCase()}${params.generationLabel.slice(1)}`;
+    return rethrowAfterMediaCleanup(
+      error,
+      () => resources?.release(),
+      `${title} preflight and cleanup failed`,
+    );
+  }
+  if (prepared.kind === "result") {
+    await resources?.release();
+    return prepared.result;
+  }
+  return runMediaGenerationTask({
+    ...prepared.params,
+    generationLabel: params.generationLabel,
+    resources,
+  });
+}
 
 /** Owns task admission and the shared foreground or detached generation lifecycle. */
 export async function runMediaGenerationTask<T extends MediaGenerationExecutionResult>(params: {
@@ -153,60 +195,37 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   }
 }
 
-/** Detached image generation task handle. */
 export type ImageGenerationTaskHandle = MediaGenerationTaskHandle;
-
-/** Shared lifecycle instance configured for image generation. */
-export const imageGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
-  toolName: "image_generate",
-  taskKind: IMAGE_GENERATION_TASK_KIND,
-  label: "Image generation",
-  queuedProgressSummary: "Queued image generation",
-  generatedLabel: "image",
-  failureProgressSummary: "Image generation failed",
-  eventSource: "image_generation",
-  announceType: "image generation task",
-  completionLabel: "image",
-});
-
-/**
- * Music generation background task facade.
- *
- * Binds shared detached media-task lifecycle behavior to music_generate labels and completion messages.
- */
-
 export type MusicGenerationTaskHandle = MediaGenerationTaskHandle;
-
-/** Shared lifecycle configured with music-specific status text and event metadata. */
-export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
-  toolName: "music_generate",
-  taskKind: MUSIC_GENERATION_TASK_KIND,
-  label: "Music generation",
-  queuedProgressSummary: "Queued music generation",
-  generatedLabel: "track",
-  failureProgressSummary: "Music generation failed",
-  eventSource: "music_generation",
-  announceType: "music generation task",
-  completionLabel: "music",
-});
-
-/**
- * Video-generation background task lifecycle adapters.
- *
- * Specializes the shared media background runner with video status text and completion metadata.
- */
-
 export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
 
-/** Shared lifecycle configured with video-specific status text and event metadata. */
-export const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
-  toolName: "video_generate",
-  taskKind: VIDEO_GENERATION_TASK_KIND,
-  label: "Video generation",
-  queuedProgressSummary: "Queued video generation",
-  generatedLabel: "video",
-  failureProgressSummary: "Video generation failed",
-  eventSource: "video_generation",
-  announceType: "video generation task",
-  completionLabel: "video",
-});
+function createGenerationTaskLifecycle(
+  kind: "image" | "music" | "video",
+  taskKind: Parameters<typeof createMediaGenerationTaskLifecycle>[0]["taskKind"],
+) {
+  const title = `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+  return createMediaGenerationTaskLifecycle({
+    toolName: `${kind}_generate`,
+    taskKind,
+    label: `${title} generation`,
+    queuedProgressSummary: `Queued ${kind} generation`,
+    generatedLabel: kind === "music" ? "track" : kind,
+    failureProgressSummary: `${title} generation failed`,
+    eventSource: `${kind}_generation`,
+    announceType: `${kind} generation task`,
+    completionLabel: kind,
+  });
+}
+
+export const imageGenerationTaskLifecycle = createGenerationTaskLifecycle(
+  "image",
+  IMAGE_GENERATION_TASK_KIND,
+);
+export const musicGenerationTaskLifecycle = createGenerationTaskLifecycle(
+  "music",
+  MUSIC_GENERATION_TASK_KIND,
+);
+export const videoGenerationTaskLifecycle = createGenerationTaskLifecycle(
+  "video",
+  VIDEO_GENERATION_TASK_KIND,
+);

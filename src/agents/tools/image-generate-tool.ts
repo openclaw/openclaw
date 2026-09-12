@@ -9,7 +9,6 @@ import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProvider,
   ImageGenerationProviderOptions,
-  ImageGenerationResolution,
 } from "../../image-generation/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
@@ -48,10 +47,9 @@ import {
 } from "./media-generate-background-shared.js";
 import {
   imageGenerationTaskLifecycle,
-  runMediaGenerationTask,
+  prepareMediaGenerationTask,
   type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
-import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import { acquireImageGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   applyAgentDefaultModelConfig,
@@ -333,10 +331,6 @@ function validateImageGenerationCapabilities(params: {
   count: number;
   inputImageCount: number;
   maxInputImages?: number;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  explicitResolution?: boolean;
 }) {
   const provider = params.provider;
   if (!provider) {
@@ -587,10 +581,6 @@ export function createImageGenerateTool(options?: {
           count,
           inputImageCount: imageInputs.length,
           maxInputImages,
-          size,
-          aspectRatio,
-          resolution: explicitResolution,
-          explicitResolution: Boolean(explicitResolution),
         });
         const referenceMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
         const loadedReferenceImages = await loadImageGenerationReferences({
@@ -623,16 +613,11 @@ export function createImageGenerateTool(options?: {
           count,
           inputImageCount: inputImages.length,
           maxInputImages,
-          size,
-          aspectRatio,
-          resolution,
-          explicitResolution: Boolean(explicitResolution),
         });
         return {
           kind: "task" as const,
           params: {
             lifecycle: imageGenerationTaskLifecycle,
-            generationLabel: "image" as const,
             sessionKey: options?.agentSessionKey,
             requesterAgentId: options?.requesterAgentId,
             requesterOrigin: options?.requesterOrigin,
@@ -687,27 +672,12 @@ export function createImageGenerateTool(options?: {
           },
         };
       };
-      let prepared: Awaited<ReturnType<typeof prepare>>;
-      try {
-        acquired.assertOpen();
-        prepared = await acquired.run(prepare);
-        if (prepared.kind === "task") {
-          // Admission is fenced after preflight; accepted work retains resources independently.
-          signal?.throwIfAborted();
-          acquired.assertOpen();
-        }
-      } catch (error) {
-        return rethrowAfterMediaCleanup(
-          error,
-          () => acquired.release(),
-          "Image preflight and cleanup failed",
-        );
-      }
-      if (prepared.kind === "result") {
-        await acquired.release();
-        return prepared.result;
-      }
-      return runMediaGenerationTask({ ...prepared.params, resources: acquired });
+      return prepareMediaGenerationTask({
+        generationLabel: "image",
+        resources: acquired,
+        signal,
+        prepare,
+      });
     },
   };
 }
