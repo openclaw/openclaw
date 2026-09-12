@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelResolverAdapter } from "../channels/plugins/types.adapters.js";
 import { channelsResolveCommand } from "./channels/resolve.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -51,11 +52,7 @@ vi.mock("./channel-setup/channel-plugin-resolution.js", () => ({
 }));
 
 describe("channelsResolveCommand", () => {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
+  const runtime = createTestRuntime();
 
   beforeEach(() => {
     vi.clearAllMocks();
