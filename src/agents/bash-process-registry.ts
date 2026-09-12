@@ -12,6 +12,7 @@ import type {
   TerminationReason,
 } from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
 
@@ -113,19 +114,50 @@ export interface ProcessSession {
   cursorKeyMode: "unknown" | "normal" | "application";
 }
 
-const runningSessions = new Map<string, ProcessSession>();
-const finishedSessions = new Map<string, ProcessSession & { endedAt: number; expiresAt: number }>();
-// Display uses start chronology; retained records are evicted in completion order.
-let processSessionStartOrders = new WeakMap<object, number>();
-let nextProcessSessionStartOrder = 0;
-// Promotion stays live when process removal clears its presentation state.
-const activeExecSessions = new Map<
-  string,
-  { session: ProcessSession; promoted: boolean; settled?: Deferred }
->();
-let finishedSessionOutputChars = 0;
+/** One process-wide registry state, shared by every module instance that owns it. */
+type BashProcessRegistryState = {
+  runningSessions: Map<string, ProcessSession>;
+  finishedSessions: Map<string, ProcessSession & { endedAt: number; expiresAt: number }>;
+  // Display uses start chronology; retained records are evicted in completion order.
+  processSessionStartOrders: WeakMap<object, number>;
+  nextProcessSessionStartOrder: number;
+  // Promotion stays live when process removal clears its presentation state.
+  activeExecSessions: Map<
+    string,
+    { session: ProcessSession; promoted: boolean; settled?: Deferred }
+  >;
+  finishedSessionOutputChars: number;
+  sweeper: NodeJS.Timeout | null;
+};
 
-let sweeper: NodeJS.Timeout | null = null;
+// State is per PROCESS, not per module instance: this module is inlined into more than one
+// bundle (the shared Gateway chunk and the self-contained worker bundle), and every evaluation
+// would otherwise start its own Maps. Readers served by different copies then disagree about
+// the same run, and state that must be shared across surfaces belongs behind
+// `resolveGlobalSingleton` -- the runtime "Active exec sessions" carrier and the `process` tool
+// are exactly two such readers, and a session admitted through one copy is invisible to the
+// other. Reverting this to module-level state reintroduces that split: a backgrounded run can
+// be live and pollable through one copy while the carrier that is supposed to surface it reports
+// nothing, and an exit processed by one copy leaves a stale record that the other never reaps.
+const registryState = resolveGlobalSingleton<BashProcessRegistryState>(
+  Symbol.for("openclaw.bashProcessRegistry"),
+  () => ({
+    runningSessions: new Map<string, ProcessSession>(),
+    finishedSessions: new Map<string, ProcessSession & { endedAt: number; expiresAt: number }>(),
+    processSessionStartOrders: new WeakMap<object, number>(),
+    nextProcessSessionStartOrder: 0,
+    activeExecSessions: new Map<
+      string,
+      { session: ProcessSession; promoted: boolean; settled?: Deferred }
+    >(),
+    finishedSessionOutputChars: 0,
+    sweeper: null,
+  }),
+);
+
+const runningSessions = registryState.runningSessions;
+const finishedSessions = registryState.finishedSessions;
+const activeExecSessions = registryState.activeExecSessions;
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
 export function isProcessSessionIdTaken(id: string): boolean {
@@ -134,7 +166,10 @@ export function isProcessSessionIdTaken(id: string): boolean {
 
 /** Adds a running session; retention starts only after background completion. */
 export function addSession(session: ProcessSession) {
-  processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
+  registryState.processSessionStartOrders.set(
+    session,
+    registryState.nextProcessSessionStartOrder++,
+  );
   runningSessions.set(session.id, session);
   activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
 }
@@ -146,7 +181,8 @@ export function compareProcessSessionStartOrder(
 ): number {
   return (
     right.startedAt - left.startedAt ||
-    processSessionStartOrders.get(right)! - processSessionStartOrders.get(left)!
+    registryState.processSessionStartOrders.get(right)! -
+      registryState.processSessionStartOrders.get(left)!
   );
 }
 
@@ -166,7 +202,7 @@ function deleteFinishedSession(id: string): boolean {
     return false;
   }
   finishedSessions.delete(id);
-  finishedSessionOutputChars -= session.aggregated.length;
+  registryState.finishedSessionOutputChars -= session.aggregated.length;
   return true;
 }
 
@@ -409,10 +445,11 @@ function moveToFinished(session: ProcessSession) {
     session.id,
     Object.assign(session, { endedAt, expiresAt: endedAt + session.cleanupMs }),
   );
-  finishedSessionOutputChars += session.aggregated.length;
+  registryState.finishedSessionOutputChars += session.aggregated.length;
   while (
     finishedSessions.size > MAX_FINISHED_SESSION_COUNT ||
-    (finishedSessions.size > 1 && finishedSessionOutputChars > MAX_FINISHED_SESSION_OUTPUT_CHARS)
+    (finishedSessions.size > 1 &&
+      registryState.finishedSessionOutputChars > MAX_FINISHED_SESSION_OUTPUT_CHARS)
   ) {
     const oldestSessionId = finishedSessions.keys().next().value;
     if (oldestSessionId === undefined) {
@@ -479,9 +516,9 @@ export function listFinishedSessions() {
 function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
-  processSessionStartOrders = new WeakMap();
-  nextProcessSessionStartOrder = 0;
-  finishedSessionOutputChars = 0;
+  registryState.processSessionStartOrders = new WeakMap();
+  registryState.nextProcessSessionStartOrder = 0;
+  registryState.finishedSessionOutputChars = 0;
   for (const active of activeExecSessions.values()) {
     active.settled?.resolve();
   }
@@ -508,14 +545,14 @@ function scheduleSweeper() {
   if (!Number.isFinite(nextExpiration)) {
     return;
   }
-  sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
-  sweeper.unref?.();
+  registryState.sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
+  registryState.sweeper.unref?.();
 }
 
 function stopSweeper() {
-  if (!sweeper) {
+  if (!registryState.sweeper) {
     return;
   }
-  clearTimeout(sweeper);
-  sweeper = null;
+  clearTimeout(registryState.sweeper);
+  registryState.sweeper = null;
 }

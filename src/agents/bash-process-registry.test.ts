@@ -402,7 +402,7 @@ describe("bash process registry", () => {
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   });
 
-  it("resets its own registry after another module instance replaces the global test API", async () => {
+  it("shares one registry with a later module instance and resets it", async () => {
     const testApiKey = Symbol.for("openclaw.bashProcessRegistryTestApi");
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     const originalTestApi = globalStore[testApiKey];
@@ -420,10 +420,17 @@ describe("bash process registry", () => {
         registrySpecifier
       )) as typeof import("./bash-process-registry.js");
       expect(globalStore[testApiKey]).not.toBe(originalTestApi);
-      expect(reloadedRegistry.listRunningSessions()).toEqual([]);
+      // One registry per process: a later module evaluation observes the session the original
+      // instance admitted instead of starting from its own empty Maps. Per-instance state is
+      // what lets the runtime "Active exec sessions" carrier and the `process` tool disagree
+      // about the same run when the two copies are served by different bundles.
+      expect(reloadedRegistry.listRunningSessions().map((entry) => entry.id)).toContain(
+        "original-registry-session",
+      );
 
       resetProcessRegistryForTests();
       expect(listRunningSessions()).toEqual([]);
+      expect(reloadedRegistry.listRunningSessions()).toEqual([]);
     } finally {
       globalStore[testApiKey] = originalTestApi;
       resetProcessRegistryForTests();
