@@ -5,6 +5,10 @@ import {
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
+import {
+  deferSqlitePostCommitPublication,
+  stageSqliteTransactionState,
+} from "../infra/sqlite-post-commit.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
@@ -17,9 +21,16 @@ import {
   bindTaskFlowRecord,
   deleteTaskFlowRowInDatabase,
   readTaskFlowRegistrySnapshot,
+  updateTaskFlowRecordInDatabase,
   upsertTaskFlowRowInDatabase,
 } from "./task-flow-registry.store.kernel.js";
-import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
+import type {
+  TaskFlowRegistryObservedUpdate,
+  TaskFlowRegistryStoreSnapshot,
+  TaskFlowRegistryUpdate,
+  TaskFlowRegistryUpdatePublication,
+  TaskFlowRegistryUpdateResult,
+} from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 type FlowRegistryDatabase = {
@@ -68,6 +79,25 @@ export function loadTaskFlowRegistryStateFromSqliteReadOnly(): TaskFlowRegistryS
 export function upsertTaskFlowRegistryRecordToSqlite(flow: TaskFlowRecord) {
   withWriteTransaction(({ db }) => {
     upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(flow));
+  });
+}
+
+export function updateTaskFlowRegistryRecordInSqlite(
+  params: TaskFlowRegistryUpdate,
+  preparePublication: (update: TaskFlowRegistryObservedUpdate) => TaskFlowRegistryUpdatePublication,
+): TaskFlowRegistryUpdateResult {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const result = updateTaskFlowRecordInDatabase(db, params);
+    if (result.applied || result.reason !== "invalid_patch") {
+      const publication = preparePublication(result);
+      stageSqliteTransactionState(db, {
+        stage: publication.stage,
+        rollback: publication.rollback,
+        commit: publication.commit,
+      });
+      deferSqlitePostCommitPublication(db, publication.publish);
+    }
+    return result;
   });
 }
 
