@@ -3,6 +3,7 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -270,7 +271,20 @@ describe("application shell pairing access", () => {
       '.settings-sidebar__loading[role="status"][aria-busy="true"]',
     );
     expect(loadingSkeleton?.getAttribute("aria-label")).toBe("Loading…");
-    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-row")).toHaveLength(7);
+    // Legacy operator auth (no scopes) resolves to admin access, so the skeleton
+    // must draw the full admin navigation.
+    const expectedItems = visibleSettingsNavigationGroups(true).reduce(
+      (count, group) => count + group.routes.length,
+      0,
+    );
+    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-item")).toHaveLength(
+      expectedItems,
+    );
+    expect(
+      loadingSkeleton?.querySelectorAll(
+        ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
+      ),
+    ).toHaveLength(expectedItems);
     expect(loadRenderer).toHaveBeenCalledOnce();
   });
 

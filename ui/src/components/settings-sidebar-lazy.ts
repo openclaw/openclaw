@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { titleForRoute } from "../app-navigation.ts";
+import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
@@ -60,19 +60,42 @@ export function renderLazySettingsSidebar(
               ${t("common.retry")}
             </button>
           </div>`
-        : html`<div
-            class="settings-loading-skeleton settings-sidebar__loading"
-            role="status"
-            aria-busy="true"
-            aria-label=${t("common.loading")}
-          >
-            <div class="settings-sidebar__loading-rows" aria-hidden="true">
-              ${Array.from(
-                { length: 7 },
-                () => html`<span class="skeleton settings-sidebar__loading-row"></span>`,
-              )}
-            </div>
-          </div>`
+        : renderSettingsSidebarSkeleton(props)
     }
   </aside>`;
+}
+
+// Mirrors renderSettingsSidebar: search field, then the same navigation groups
+// (label + icon/label rows) the loaded sidebar will draw, so nothing shifts once
+// the module lands.
+function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
+  const groups = visibleSettingsNavigationGroups(
+    Boolean(props.canAdmin),
+    props.nativeDeviceSettings ?? null,
+  );
+  return html`<div class="settings-sidebar__search" aria-hidden="true">
+      <span class="skeleton settings-sidebar__loading-search"></span>
+    </div>
+    <nav
+      class="settings-sidebar__nav settings-loading-skeleton settings-sidebar__loading"
+      role="status"
+      aria-busy="true"
+      aria-label=${t("common.loading")}
+    >
+      ${groups.map(
+        (group) => html`<div class="settings-sidebar__group" aria-hidden="true">
+          ${
+            group.labelKey
+              ? html`<span class="skeleton settings-sidebar__loading-group-label"></span>`
+              : nothing
+          }
+          ${group.routes.map(
+            () => html`<span class="settings-sidebar__item settings-sidebar__loading-item">
+              <span class="skeleton settings-sidebar__loading-icon"></span>
+              <span class="skeleton settings-sidebar__loading-label"></span>
+            </span>`,
+          )}
+        </div>`,
+      )}
+    </nav>`;
 }

@@ -546,27 +546,45 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   line-height: 1.45;
 }
 
-.settings-sidebar__loading {
-  padding: 10px 12px;
-}
-
-.settings-sidebar__loading-rows {
-  display: grid;
-  gap: 12px;
-}
-
-.settings-sidebar__loading-row {
+/* Loading skeleton reuses __nav/__group/__item geometry; only the fills are placeholders. */
+.settings-sidebar__loading-search {
   display: block;
-  width: 82%;
+  width: 100%;
+  height: 34px;
+}
+
+.settings-sidebar__loading-group-label {
+  display: block;
+  width: 64px;
+  height: 9px;
+  margin: 2px 9px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-sidebar__loading-item {
+  pointer-events: none;
+}
+
+.settings-sidebar__loading-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+
+.settings-sidebar__loading-label {
+  display: block;
+  width: 58%;
   height: 12px;
+  border-radius: var(--radius-sm);
 }
 
-.settings-sidebar__loading-row:nth-child(3n + 2) {
+.settings-sidebar__loading-item:nth-child(3n) .settings-sidebar__loading-label {
+  width: 46%;
+}
+
+.settings-sidebar__loading-item:nth-child(3n + 2) .settings-sidebar__loading-label {
   width: 68%;
-}
-
-.settings-sidebar__loading-row:nth-child(3n) {
-  width: 74%;
 }
 
 .settings-sidebar__group {
