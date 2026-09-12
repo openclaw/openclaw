@@ -160,7 +160,7 @@ describe("worker task pool", () => {
                 yieldSignal.addEventListener("abort", requestCheckpoint, { once: true });
               }
               await checkpoint.promise;
-              return { input: null };
+              return { input: null, timeoutMs: 10_000 };
             },
           },
         ),
