@@ -39,6 +39,8 @@ function retirePromotedDefaultAccountFields(
   cfg: OpenClawConfig,
   clearFields: readonly string[],
 ): OpenClawConfig {
+  // SAFETY: Channel sections are plain config objects; the accounts map and
+  // the resolved record are runtime-checked before any field is touched.
   const section = cfg.channels?.line as LineChannelSection | undefined;
   const accounts = section?.accounts;
   if (!accounts || typeof accounts !== "object") {
