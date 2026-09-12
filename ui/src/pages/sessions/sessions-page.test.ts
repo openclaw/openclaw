@@ -664,6 +664,7 @@ describe("sessions page lifecycle", () => {
       message: 'Stop the cloud worker for "Cloud task"?',
       confirmLabel: "Stop worker",
       danger: true,
+      signal: expect.any(AbortSignal),
     });
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
@@ -712,6 +713,7 @@ describe("sessions page lifecycle", () => {
       message: 'Stop the cloud worker for "Cloud task"?',
       confirmLabel: "Stop worker",
       danger: true,
+      signal: expect.any(AbortSignal),
     });
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",

@@ -143,7 +143,7 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private checkpointBusyKey: string | null = null;
   @state() private checkpointErrorByKey: Record<string, string> = {};
 
-  // Async completions belong to one context/capability/connection epoch. Bump
+  // Async completions belong to one context/capability/connection/scope epoch. Bump
   // before releasing locks so stale finally blocks cannot clear newer work.
   private pageEpoch = 0;
   private pluginActionLifetime = new AbortController();
@@ -160,6 +160,8 @@ class SessionsPage extends OpenClawLightDomElement {
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
   private readonly observeAgentScope = watchAgentScope(() => {
+    // Keep same-connection list serialization and session-bound checkpoint reads.
+    this.retirePageOperations();
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     if (!this.deepLinkSessionKey) {
       this.page = 0;
@@ -285,19 +287,23 @@ class SessionsPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private invalidatePageWork() {
+  private retirePageOperations() {
     this.pluginActionLifetime.abort();
     this.pluginActionLifetime = new AbortController();
     this.pageEpoch += 1;
+    this.checkpointBusyKey = null;
+    this.sessionMutationPending = false;
+    this.closeSessionMenu();
+  }
+
+  private invalidatePageWork() {
+    this.retirePageOperations();
     this.clearSearchTimer();
     this.listRequest = undefined;
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     this.resetCheckpointTask();
     this.loading = false;
     this.refreshing = false;
-    this.checkpointBusyKey = null;
-    this.sessionMutationPending = false;
-    this.closeSessionMenu();
   }
 
   private resetProviderState() {
@@ -728,6 +734,7 @@ class SessionsPage extends OpenClawLightDomElement {
         message,
         confirmLabel: t("common.delete"),
         danger: true,
+        signal: this.pluginActionLifetime.signal,
       })) ||
       !this.isRequestScopeCurrent(scope)
     ) {
@@ -825,6 +832,7 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async deleteAllArchived() {
     const scope = this.captureRequestScope();
+    const signal = this.pluginActionLifetime.signal;
     if (!scope || this.loading || this.sessionMutationPending) {
       return;
     }
@@ -872,6 +880,7 @@ class SessionsPage extends OpenClawLightDomElement {
         }),
         confirmLabel: t("common.delete"),
         danger: true,
+        signal,
       })) ||
       !this.isRequestScopeCurrent(scope)
     ) {
@@ -889,6 +898,7 @@ class SessionsPage extends OpenClawLightDomElement {
         message: t("sessionsView.deleteSessionConfirm", { session: label }),
         confirmLabel: t("common.delete"),
         danger: true,
+        signal: this.pluginActionLifetime.signal,
       })) ||
       !this.isRequestScopeCurrent(scope)
     ) {
@@ -910,6 +920,7 @@ class SessionsPage extends OpenClawLightDomElement {
         message: t("sessionsView.stopCloudWorkerConfirm", { session: label }),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         danger: true,
+        signal: this.pluginActionLifetime.signal,
       })) ||
       !this.isRequestScopeCurrent(scope) ||
       !this.requireMutationAccess(scope, stopAction)
@@ -1304,6 +1315,7 @@ class SessionsPage extends OpenClawLightDomElement {
       !(await showConfirmDialog({
         message: t("sessionsView.branchCheckpointConfirm"),
         confirmLabel: t("common.create"),
+        signal: this.pluginActionLifetime.signal,
       })) ||
       !this.isRequestScopeCurrent(scope)
     ) {
@@ -1352,6 +1364,7 @@ class SessionsPage extends OpenClawLightDomElement {
         message: t("sessionsView.restoreCheckpointConfirm"),
         confirmLabel: t("common.restore"),
         danger: true,
+        signal: this.pluginActionLifetime.signal,
       })) ||
       !this.isRequestScopeCurrent(scope)
     ) {
