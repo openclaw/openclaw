@@ -86,6 +86,7 @@ async function sendCoreMessage(params: {
   bestEffort?: boolean;
   reply?: OutboundReplyFacts;
   threadId?: string | number;
+  topLevel?: boolean;
   queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
   payloads?: SendMessageParams["payloads"];
 }): Promise<{ result: MessageSendResult; deliveredText?: string }> {
@@ -116,6 +117,7 @@ async function sendCoreMessage(params: {
     ),
     reply: params.reply,
     threadId: params.threadId,
+    topLevel: params.topLevel,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     dryRun: params.ctx.dryRun,
@@ -304,6 +306,7 @@ export async function executeSendAction(params: {
   bestEffort?: boolean;
   reply?: OutboundReplyFacts;
   threadId?: string | number;
+  topLevel?: boolean;
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
