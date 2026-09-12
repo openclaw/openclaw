@@ -7,6 +7,7 @@ import {
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -261,23 +262,34 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars
   }
 }
 
-function withInputFileTimeout<T>(params: {
-  task: Promise<T>;
+async function withInputFileTimeout<T>(params: {
+  task: (signal: AbortSignal) => Promise<T>;
   timeoutMs: number;
   label: string;
+  signal?: AbortSignal;
 }): Promise<T> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+  const controller = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
+  signal.throwIfAborted();
+  let onAbort!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    onAbort = () => reject(toErrorObject(signal.reason, "Input file extraction aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
   });
-  return Promise.race([params.task, timedOut]).finally(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  });
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${params.label} timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  try {
+    // Legacy extractors may not cooperate, but the worker also receives the deadline cancellation.
+    return await Promise.race([params.task(signal), cancelled]);
+  } finally {
+    clearTimeout(timeout);
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 /** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
@@ -393,6 +405,7 @@ export async function extractFileContentFromSource(params: {
     charset,
     limits,
     config: params.config,
+    ...(signal ? { signal } : {}),
   });
   signal?.throwIfAborted();
   return extracted;
@@ -407,8 +420,10 @@ export async function extractFileContentFromBuffer(params: {
   limits: InputFileLimits;
   config?: OpenClawConfig;
   classification?: AttachmentClassification;
+  signal?: AbortSignal;
 }): Promise<InputFileExtractResult> {
   const { buffer, limits } = params;
+  params.signal?.throwIfAborted();
   const filename = params.filename || "file";
   if (buffer.byteLength > limits.maxBytes) {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
@@ -419,6 +434,7 @@ export async function extractFileContentFromBuffer(params: {
   const classification =
     params.classification ??
     (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
+  params.signal?.throwIfAborted();
   const mimeType = classification.mime;
   const charset = classification.charset ?? params.charset;
 
@@ -433,16 +449,19 @@ export async function extractFileContentFromBuffer(params: {
     const extracted = await withInputFileTimeout({
       label: "PDF extraction",
       timeoutMs: limits.timeoutMs,
-      task: extractPdfContent({
-        buffer,
-        maxPages: limits.pdf.maxPages,
-        maxPixels: limits.pdf.maxPixels,
-        minTextChars: limits.pdf.minTextChars,
-        ...(params.config ? { config: params.config } : {}),
-        onImageExtractionError: (err) => {
-          logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-        },
-      }),
+      signal: params.signal,
+      task: (signal) =>
+        extractPdfContent({
+          buffer,
+          signal,
+          maxPages: limits.pdf.maxPages,
+          maxPixels: limits.pdf.maxPixels,
+          minTextChars: limits.pdf.minTextChars,
+          ...(params.config ? { config: params.config } : {}),
+          onImageExtractionError: (err) => {
+            logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+          },
+        }),
     });
     const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
     return {

@@ -11,6 +11,9 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "build": {
+      "workerEntries": ["./document-extractor.worker.ts"]
+    },
     "extensions": [
       "./index.ts"
     ]

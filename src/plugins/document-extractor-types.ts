@@ -14,6 +14,8 @@ export type DocumentExtractionRequest = {
   minTextChars: number;
   password?: string;
   pageNumbers?: number[];
+  /** Cancels queued extraction and stops active work when supported by the extractor. */
+  signal?: AbortSignal;
   onImageExtractionError?: (error: unknown) => void;
 };
 

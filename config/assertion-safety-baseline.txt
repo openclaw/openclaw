@@ -415,7 +415,6 @@ extensions/discord/src/voice/receive-recovery.ts	5
 extensions/discord/src/voice/sdk-runtime.ts	1
 extensions/discord/src/voice/segment.ts	1
 extensions/discord/src/voice/voice-receive.ts	1
-extensions/document-extract/document-extractor.ts	1
 extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
