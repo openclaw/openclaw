@@ -1695,6 +1695,53 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it.each(["systemd", "launchd"] as const)(
+    "preserves a recorded close failure when %s final cleanup crosses the deadline",
+    async (supervisor) => {
+      vi.clearAllMocks();
+      const deadlineMs =
+        supervisor === "launchd" ? LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000 - 5_000 : 325_000;
+      if (supervisor === "systemd") {
+        process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+        setPlatform("linux");
+      } else {
+        process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+        setPlatform("darwin");
+      }
+      hasManagedProviderLocalServices.mockReturnValue(true);
+      stopManagedProviderLocalServices.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 2_000);
+          }),
+      );
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, runtime } = await createSignaledLoopHarness();
+        close.mockImplementationOnce(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, deadlineMs - 1_000);
+          });
+          throw new Error("close owner failed");
+        });
+        vi.useFakeTimers();
+        try {
+          captureSignal("SIGTERM")();
+          await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+          expect(gatewayLog.error).toHaveBeenCalledWith(
+            "shutdown step failed (gateway server close): close owner failed",
+          );
+          expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        } finally {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it.each([true, false])(
     "bounds abandoned cleanup after managed parking (restore commit=%s)",
     async (restoreCommitted) => {

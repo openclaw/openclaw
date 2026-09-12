@@ -702,17 +702,19 @@ export async function runGatewayLoop(params: {
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
     let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
     let lastDrainCounts = "not observed";
+    let shutdownFailed = false;
     const armForceExitTimer = (forceExitMs: number) => {
       if (forceExitTimer) {
         return;
       }
       forceExitTimer = setTimeout(() => {
+        const cleanExit = nativeStopBudget && !shutdownFailed;
         gatewayLog.warn(
-          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${nativeStopBudget ? "cleanly" : "with incomplete cleanup"}`,
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${cleanExit ? "cleanly" : "with incomplete cleanup"}`,
         );
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-          nativeStopBudget ? 0 : 1,
+          cleanExit ? 0 : 1,
         );
       }, forceExitMs);
       if (params.ownsProcessLifecycle === true) {
@@ -748,7 +750,6 @@ export async function runGatewayLoop(params: {
         | "restored-in-process"
         | "restart-after-exit"
         | undefined;
-      let shutdownFailed = false;
       const requestedRestartDrainTimeoutMs = isRestart
         ? resolveRestartDrainTimeoutMs(restartIntent)
         : 0;

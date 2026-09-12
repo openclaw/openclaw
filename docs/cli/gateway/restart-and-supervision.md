@@ -38,6 +38,9 @@ with status `0`. It does not reuse that unfinished runtime for an in-process
 restart. This lets a requested stop finish cleanly and lets the service manager
 start a fresh Gateway for a restart.
 
+An explicit server-close failure retains exit status `1`, including when final
+provider cleanup crosses the native shutdown deadline.
+
 Foreground/manual Gateways and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
 
