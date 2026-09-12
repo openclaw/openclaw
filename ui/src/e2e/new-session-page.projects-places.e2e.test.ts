@@ -196,12 +196,14 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("system.info");
         const trigger = page.locator("#new-session-where-trigger");
-        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+          late === "system info" ? "Local" : "QA-Gateway",
+        );
         const place = page.locator("wa-popover.new-session-page__where-popover");
         const local = place.locator('[data-value="gateway"]');
         if (late === "recovery scope") {
           await trigger.click();
-          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
+          await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
           const catalogRequests = (await gateway.getRequests("environments.list")).length;
           await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
           await waitForGatewayRecoveryScope(page);
@@ -218,7 +220,7 @@ suite.define(() => {
         if (late === "system info") {
           await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · local");
           await gateway.resolveDeferred("system.info", systemInfo);
-          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
+          await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
         }
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
         await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`, {
@@ -228,9 +230,11 @@ suite.define(() => {
 
         await page.keyboard.press("Escape");
         await replaceGatewayClient(page);
-        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+          "QA-Gateway",
+        );
         await trigger.click();
-        await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
+        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
       } finally {
         try {
           await captureProjectUiProof(
@@ -238,7 +242,9 @@ suite.define(() => {
             page,
             `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
             {
-              surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+              surface: page.locator(
+                '.new-session-page__where-popover wa-popup.popover > [part="popup"]',
+              ),
               content: [page.locator('.new-session-page__where-popover [data-value="gateway"]')],
             },
           );
@@ -361,12 +367,9 @@ suite.define(() => {
       expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
-      const cloud = where.getByRole("button", {
-        name: "aws · Cloud needs a Git checkout",
-        exact: true,
-      });
+      const cloud = where.locator('[data-value="cloud:aws"]');
       await cloud.waitFor();
-      expect(await cloud.isDisabled()).toBe(true);
+      expect(await cloud.getAttribute("aria-disabled")).toBe("true");
       await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");
 

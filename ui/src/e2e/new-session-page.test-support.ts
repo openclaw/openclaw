@@ -430,6 +430,18 @@ export async function openNewSessionPlusMenu(page: Page) {
   return menu;
 }
 
+export async function openCloudConfiguration(picker: Locator, profileId: string) {
+  const card = picker.locator(
+    `.new-session-page__cloud-config-card:has([data-value="cloud:${profileId}"])`,
+  );
+  const configuration = card.locator(".new-session-page__cloud-configuration");
+  if (!(await configuration.isVisible())) {
+    await card.locator(`[data-value="cloud:${profileId}"]`).click();
+  }
+  await configuration.waitFor({ state: "visible" });
+  return configuration;
+}
+
 export async function navigateInApp(page: Page, routeId: string, search = "") {
   await page.evaluate(
     ({ targetRouteId, targetSearch }) => {

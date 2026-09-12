@@ -379,11 +379,8 @@ suite.define(() => {
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await whereTrigger.click();
-      const cloud = where.getByRole("button", {
-        name: "aws · Couldn't verify Git for this folder. Choose it again to retry.",
-        exact: true,
-      });
-      expect(await cloud.isDisabled()).toBe(true);
+      const cloud = where.locator('[data-value="cloud:aws"]');
+      expect(await cloud.getAttribute("aria-disabled")).toBe("true");
       await expect
         .poll(() => tooltipTitleText(cloud))
         .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
