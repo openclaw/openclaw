@@ -152,6 +152,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameImageIdentity?: string;
   } = { value: 0 };
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
+  const inheritedToolAllowlist: string[] = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
@@ -305,6 +306,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     onMessageToolTargetResolved: (required) => {
       requireExplicitMessageTarget = required;
     },
+    inheritedToolAllowlistRef: inheritedToolAllowlist,
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -526,6 +528,15 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ),
       hookContext,
     });
+    if (inheritedToolAllowlist.length > 0) {
+      // Only restrictive parent policy populates this spawn-owned reference.
+      // Capture executable tools after Codex filtering and late MCP materialization.
+      inheritedToolAllowlist.splice(
+        0,
+        inheritedToolAllowlist.length,
+        ...new Set(toolBridge.availableTools.map((tool) => tool.name)),
+      );
+    }
     const captureCronCreatorToolAllowlist = async () => {
       await captureFinalCodexCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
