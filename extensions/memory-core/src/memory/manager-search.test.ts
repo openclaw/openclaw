@@ -503,6 +503,64 @@ describe("searchKeyword FTS MATCH fallback", () => {
 });
 
 describe("searchPathKeyword", () => {
+  it.each([
+    ["unicode61", "common"],
+    ["unicode61", "README.md"],
+    ["trigram", "common"],
+    ["trigram", "README.md"],
+  ] as const)(
+    "resolves first chunks only within the retained %s window for %s",
+    async (ftsTokenizer, query) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        db.prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', '', 0, 0)",
+        ).run("memory/common/00-empty/README.md");
+        for (let index = 0; index < 64; index++) {
+          for (let chunk = 2; chunk >= 0; chunk--) {
+            insertKeywordFixture(db, {
+              id: `path-${index}-chunk-${chunk}`,
+              path: `memory/common/${String(index).padStart(3, "0")}/README.md`,
+              source: index % 2 === 0 ? "memory" : "sessions",
+              startLine: chunk * 5 + 1,
+              endLine: chunk * 5 + 4,
+              text: `body ${index}/${chunk}`,
+            });
+          }
+        }
+        let examinedChunkLines = 0;
+        db.function("observe_path_chunk_line", (line) => {
+          examinedChunkLines++;
+          return line;
+        });
+        db.exec(`
+          ALTER TABLE memory_index_chunks RENAME TO observed_chunks;
+          CREATE VIEW memory_index_chunks AS
+            SELECT id, path, source, observe_path_chunk_line(start_line) AS start_line,
+                   end_line, text FROM observed_chunks;
+        `);
+
+        const results = await searchPathKeywordFixture(db, query, {
+          ftsTokenizer,
+          limit: 2,
+          sourceFilter: {
+            sql: " AND memory_index_paths_fts.source IN (?)",
+            params: ["memory"],
+          },
+        });
+
+        expect(results.map(({ id, snippet }) => ({ id, snippet }))).toEqual([
+          { id: "path-0-chunk-0", snippet: "body 0/0" },
+          { id: "path-2-chunk-0", snippet: "body 2/0" },
+        ]);
+        expect(examinedChunkLines).toBeGreaterThan(0);
+        expect(examinedChunkLines).toBeLessThanOrEqual(16);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it("returns the first scoped chunk and reserves exact precedence for path identifiers", async () => {
     const { db, schema } = createMemorySearchDb();
     try {
