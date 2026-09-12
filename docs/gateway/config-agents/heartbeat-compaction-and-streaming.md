@@ -66,7 +66,25 @@ Selects the agent whose model and credentials own ambient OpenClaw system work: 
 }
 ```
 
-An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a retained legacy default owner, and finally the sole configured agent. Delegated consults with a requesting agent keep that requester as their owner. The four reads above opt in individually; other agent-scoped Gateway methods, such as `tools.*`, `commands.*`, chat history, and session-catalog reads, do not use this setting as a general default. Surfaces that pick one agent's view also keep requiring an explicit choice, because silently adopting this owner would hide the other agents: `openclaw sessions` (add `--agent <id>` or `--all-agents`), `openclaw hooks` status, `openclaw models`, stored session lookup by id, and TUI startup. Ambient work in an ownerless multi-agent fleet fails with an actionable error, except queued-delivery recovery, which records the failing delivery and keeps draining the rest of the queue. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
+An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a retained legacy default owner, and finally the sole configured agent. Delegated consults with a requesting agent keep that requester as their owner.
+
+With `agents.ownership: "explicit"`, this setting also supplies the recorded default
+for operations that support default-agent selection, including the agent-list
+badge, unbound channel routing, unscoped Gateway reads, `openclaw sessions`,
+`openclaw hooks` status, and TUI startup. Doctor records the migrated default here
+so these operations keep the same owner after restart. Explicit bindings, requests,
+and session-store owners take precedence. Use `--agent <id>` to select a different
+agent or `openclaw sessions --all-agents` to inspect the whole fleet. Operations
+that require explicit selection, such as `openclaw models`, keep that requirement.
+
+An ownerless multi-agent fleet has no default badge. Set a configured id with
+`openclaw config set agents.defaults.systemAgent.agentId <id>`. Ambient work
+without an owner fails with an actionable error, except queued-delivery recovery,
+which records the failing delivery and keeps draining the rest of the queue.
+Changing the runtime default does not relocate existing workspaces or legacy data.
+Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for
+inherited credentials and `agents.defaults.sessionStore.agentId` for retired
+`main` session rows or unscoped rows in a fixed `session.store`.
 
 ## `agents.defaults.compaction`
 

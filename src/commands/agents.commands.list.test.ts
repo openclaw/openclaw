@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -87,6 +88,49 @@ describe("agentsListCommand", () => {
     listAgentProvenanceMock.mockReturnValue([]);
     readAgentProvenanceMock.mockReturnValue(undefined);
     summarizeBindingsMock.mockReturnValue(["Telegram default"]);
+  });
+
+  it.each(["main", "research"])(
+    "keeps migrated default %s in JSON after reloading persisted explicit ownership",
+    async (agentId) => {
+      const legacy: OpenClawConfig = {
+        agents: {
+          list: ["main", "research"].map((id) => ({ id, default: id === agentId })),
+        },
+      };
+      const migrated = migratePersistedImplicitMainRoster(legacy).config as OpenClawConfig;
+      const persisted = structuredClone<OpenClawConfig>({
+        ...migrated,
+        agents: { ...migrated.agents, ownership: "explicit" },
+      });
+      expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe(agentId);
+      expect(Object.values(persisted.agents?.entries ?? {}).some((entry) => entry.default)).toBe(
+        false,
+      );
+
+      for (const config of [legacy, persisted]) {
+        requireValidConfigMock.mockResolvedValueOnce(config);
+        const runtime = createRuntime();
+        await agentsListCommand({ json: true }, runtime);
+        expect(runtime.json[0]).toEqual(
+          ["main", "research"].map((id) =>
+            expect.objectContaining({ id, isDefault: id === agentId }),
+          ),
+        );
+      }
+    },
+  );
+
+  it("reports no default for an explicit fleet without a recorded designation", async () => {
+    requireValidConfigMock.mockResolvedValueOnce({
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } satisfies OpenClawConfig);
+    const runtime = createRuntime();
+    await agentsListCommand({ json: true }, runtime);
+    expect(runtime.json[0]).toEqual([
+      expect.objectContaining({ id: "ops", isDefault: false }),
+      expect.objectContaining({ id: "research", isDefault: false }),
+    ]);
   });
 
   it("adds durable provenance to JSON without loading provider details", async () => {

@@ -630,9 +630,6 @@ export function resolveSessionStoreTargets(
     const defaultAgentId =
       requestedAgentId ??
       (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-      // Session-store selection enumerates agents: silently adopting the system
-      // agent would hide the other agents' sessions, so this stays explicit and
-      // offers --agent/--all-agents instead of the ambient owner chain.
       tryResolveLegacyCompatibilityAgentId(cfg) ??
       resolveDefaultAgentId(cfg);
     if (hasAgent) {
@@ -683,7 +680,6 @@ export function resolveSessionStoreTargets(
   }
   const defaultAgentId =
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-    // Explicit selection, not ambient ownership: see listConfiguredSessionStoreAgentIds.
     tryResolveLegacyCompatibilityAgentId(cfg) ??
     resolveDefaultAgentId(cfg);
   return [

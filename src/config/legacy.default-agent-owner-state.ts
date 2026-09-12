@@ -1,4 +1,4 @@
-// Config materialization carries this upgrade-only fact without restoring the retired marker.
+// Migration provenance can differ from an authored systemAgent; data locators must retain it.
 const legacyDefaultAgentIdByConfig = new WeakMap<object, string>();
 
 export function setRetainedLegacyDefaultAgentId(config: object, agentId: string | undefined): void {

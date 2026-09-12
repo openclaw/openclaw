@@ -1386,7 +1386,9 @@ vi.mock("./doctor-config-preflight.js", async () => {
   };
 });
 
-vi.mock("./doctor-config-analysis.js", () => {
+vi.mock("./doctor-config-analysis.js", async (importOriginal) => {
+  const { noteMissingDefaultAgentOwner } =
+    await importOriginal<typeof import("./doctor-config-analysis.js")>();
   function formatConfigKeyPath(parts: Array<string | number>): string {
     if (parts.length === 0) {
       return "<root>";
@@ -1427,6 +1429,7 @@ vi.mock("./doctor-config-analysis.js", () => {
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
     noteMcpOriginWarning: vi.fn(),
+    noteMissingDefaultAgentOwner,
     noteSandboxOriginProxyWarning: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
@@ -1801,6 +1804,27 @@ describe("doctor config flow", () => {
       },
     });
   });
+
+  it.each([false, true])(
+    "explains how to select a default for an ownerless explicit fleet (repair: %s)",
+    async (repair) => {
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      };
+      const result = await runDoctorConfigWithInput({
+        config,
+        parsedConfig: config,
+        repair,
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      expect(result.cfg.agents).toEqual(config.agents);
+      expect(result.shouldWriteConfig).toBe(false);
+      expect(terminalNoteMock).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw config set agents.defaults.systemAgent.agentId <id>"),
+        "Agent ownership",
+      );
+    },
+  );
 
   it("materializes ambient roles for a multi-agent configured default", async () => {
     const rawConfig = {

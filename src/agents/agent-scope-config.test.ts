@@ -16,6 +16,7 @@ import {
   resolveSoleAgentId,
   tryResolveAmbientOwnerAgentId,
   tryResolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
   tryResolveSoleAgentId,
 } from "./agent-scope-config.js";
 
@@ -213,6 +214,36 @@ describe("agent roster resolution", () => {
     expect(cfg.agents?.entries?.ops?.default).toBeUndefined();
     expect(resolveAgentOperationAgentId(cfg)).toBe("ops");
   });
+
+  it("uses the recorded explicit owner ahead of migration provenance and retired markers", () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: {
+        defaults: { systemAgent: { agentId: "research" } },
+        entries: { ops: { default: true }, research: {} },
+      },
+    }).config as OpenClawConfig;
+    migrated.agents!.ownership = "explicit";
+    for (const config of [migrated, structuredClone(migrated)]) {
+      expect(tryResolveLegacyCompatibilityAgentId(config)).toBe("research");
+      expect(resolveAgentOperationAgentId(config)).toBe("research");
+      expect(resolveAmbientOwnerAgentId(config)).toBe("research");
+      expect(tryResolveDefaultAgentId(config)).toBeUndefined();
+    }
+  });
+
+  it.each([undefined, "", "deleted"])(
+    "does not infer an explicit fleet owner from a retired marker with designation %s",
+    (agentId) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId } },
+          entries: { ops: { default: true }, research: {} },
+        },
+      };
+      expect(tryResolveLegacyCompatibilityAgentId(config)).toBeUndefined();
+    },
+  );
 
   it("prefers a per-agent toolProgressDetail over the roster default", () => {
     const defaults = { toolProgressDetail: "explain" as const };

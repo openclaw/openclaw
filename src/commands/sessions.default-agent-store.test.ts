@@ -206,7 +206,6 @@ describe("sessionsCommand default store agent selection", () => {
     loadConfigMock.mockReturnValue({
       agents: {
         ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
         entries: { main: {}, helper: {}, third: {} },
       },
     });
@@ -221,6 +220,29 @@ describe("sessionsCommand default store agent selection", () => {
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
+
+  it.each(["main", "helper"])(
+    "uses the recorded explicit default %s for unscoped session listing",
+    async (agentId) => {
+      loadConfigMock.mockReturnValue({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId } },
+          entries: { main: {}, helper: {}, third: {} },
+        },
+        session: { store: "/tmp/sessions-{agentId}.json" },
+      });
+      const { runtime } = createRuntime();
+
+      await sessionsCommand({}, runtime);
+
+      expect(listSessionEntriesMock).toHaveBeenCalledExactlyOnceWith({
+        agentId,
+        storePath: `/tmp/sessions-${agentId}.json`,
+        projection: "list",
+      });
+    },
+  );
 
   it("uses all configured agent stores with --all-agents", async () => {
     listSessionEntriesMock.mockReset();

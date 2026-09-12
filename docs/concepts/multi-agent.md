@@ -166,10 +166,11 @@ external sends, publication, purchases, deletion, or production changes.
 These delegation settings remain team wiring in config. The role Claws will
 carry them once the separate Claw profile support lands.
 
-The coordinator is an explicit target, not a universal default. Team creation
+The coordinator is an explicit target. Team creation
 sets `agents.defaults.systemAgent.agentId` to the coordinator only when that
-ambient owner is unset; an existing owner is preserved and reported. Other
-surfaces retain their own targeting and [routing bindings](/concepts/agent-bindings).
+owner is unset; an existing owner is preserved and reported. In an explicit fleet,
+this also designates the default for operations that support default-agent selection.
+Explicit targets and [routing bindings](/concepts/agent-bindings) take precedence.
 
 Use `--prefix <p>` to namespace all team ids, `--coordinator <id>` to rename the
 coordinator, and `--workspace-root <dir>` to choose the parent directory for the

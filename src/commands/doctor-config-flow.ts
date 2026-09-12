@@ -27,6 +27,7 @@ import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capabili
 import {
   noteImplicitFallbackClobberWarnings,
   noteMcpOriginWarning,
+  noteMissingDefaultAgentOwner,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
@@ -704,6 +705,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
   noteMcpOriginWarning(cfg);
+  noteMissingDefaultAgentOwner(cfg);
 
   const migrationResult = await finalizeMigrationResult({
     cfg,

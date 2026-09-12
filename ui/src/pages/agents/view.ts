@@ -210,7 +210,9 @@ function buildAgentRosterTree(agents: AgentRosterRow[]) {
 
 export function renderAgents(props: AgentsProps) {
   const agents = props.agentsList?.agents ?? [];
-  const defaultId = props.agentsList?.defaultId ?? null;
+  const defaultId = props.agentsList?.selectionRequired
+    ? null
+    : (props.agentsList?.defaultId ?? null);
   const selectedId = props.selectedAgentId ?? defaultId ?? agents[0]?.id ?? null;
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)

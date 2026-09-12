@@ -32,7 +32,7 @@ import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
+  tryResolveLegacyDataOwnerAgentId,
 } from "./agent-scope-config.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -359,13 +359,14 @@ function resolveSelectedSessionAgentId(params: SessionAgentResolutionParams): st
   );
 }
 
+/** Strict session selection uses explicit context and legacy data ownership. */
 export function resolveSessionAgentIdsStrict(params: SessionAgentResolutionParams): {
   defaultAgentId: string;
   sessionAgentId: string;
 } {
   const selectedAgentId = resolveSelectedSessionAgentId(params);
   const cfg = params.config ?? {};
-  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const compatibilityAgentId = tryResolveLegacyDataOwnerAgentId(cfg);
   const sessionAgentId =
     selectedAgentId ??
     compatibilityAgentId ??
@@ -381,7 +382,7 @@ export function resolveSessionAgentIdStrict(params: SessionAgentResolutionParams
   const cfg = params.config ?? {};
   return (
     selectedAgentId ??
-    tryResolveLegacyCompatibilityAgentId(cfg) ??
+    tryResolveLegacyDataOwnerAgentId(cfg) ??
     resolveDefaultAgentId(cfg, SESSION_AGENT_SELECTION_CONTEXT)
   );
 }

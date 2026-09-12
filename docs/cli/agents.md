@@ -34,6 +34,12 @@ openclaw agents delete work
 
 Options: `--json`, `--bindings` (include full routing rules, not only per-agent counts/summaries).
 
+For an explicit multi-agent roster, the default badge and JSON `isDefault` field
+use `agents.defaults.systemAgent.agentId`. Doctor preserves the migrated default
+there across restarts. Without a designation, every entry reports `isDefault: false`;
+set one with `openclaw config set agents.defaults.systemAgent.agentId <id>`.
+The Control UI's **Set Default** action writes the same designation.
+
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
 
@@ -119,10 +125,10 @@ change global delegation defaults or tool policy. See [Team preset](/concepts/mu
 Delegation remains team wiring in config; the role Claws will carry these
 settings once the separate Claw profile support lands.
 
-The coordinator is an explicit chat target, not a universal default agent. If
+The coordinator is an explicit chat target. If
 `agents.defaults.systemAgent.agentId` is unset, team creation sets it to the
-coordinator for ambient system work. An existing ambient owner is preserved and
-reported. Channel routing still needs bindings to the intended agent.
+coordinator for ambient system work and default-compatible operations. An existing
+owner is preserved and reported. Channel bindings take precedence over this default.
 With `--json`, the summary includes `coordinatorId`, the created `agents` and
 their paths, `ambientOwnerId`, and a `note` when another ambient owner is retained.
 

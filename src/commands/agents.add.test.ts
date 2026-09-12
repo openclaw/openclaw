@@ -596,7 +596,8 @@ describe("agents add command", () => {
 
   it.each([
     { source: "__skip__", copy: false, systemAgent: undefined },
-    { source: "ops", copy: true, systemAgent: { agentId: "main" } },
+    { source: "ops", copy: true, systemAgent: { agentId: "ops" } },
+    { source: "ops", copy: true, systemAgent: undefined },
     { source: "ops", copy: false, systemAgent: undefined },
   ])("adds to an explicit fleet with optional auth copy: %j", async (testCase) => {
     await withAgentsAddStateRoot("openclaw-agents-add-explicit-", async (root) => {
@@ -623,6 +624,13 @@ describe("agents add command", () => {
 
       await agentsAddCommand({}, runtime);
 
+      if (testCase.systemAgent) {
+        expect(wizard.select).not.toHaveBeenCalled();
+        expect(wizard.confirm).toHaveBeenCalledWith({
+          message: 'Copy portable auth profiles from "ops"?',
+          initialValue: false,
+        });
+      }
       expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
       const copied = loadPersistedAuthProfileStore(path.join(root, "agents", "work", "agent"));
       expect(copied?.profiles["openai:portable"] !== undefined).toBe(testCase.copy);

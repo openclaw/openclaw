@@ -3,7 +3,11 @@ import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -15,6 +19,19 @@ type UnrecognizedKeysIssue = ZodIssue & {
   code: "unrecognized_keys";
   keys: PropertyKey[];
 };
+
+export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
+  if (
+    cfg.agents?.ownership === "explicit" &&
+    listAgentEntries(cfg).length > 1 &&
+    !tryResolveLegacyCompatibilityAgentId(cfg)
+  ) {
+    note(
+      `No default agent is designated. Set a configured agent with "${formatCliCommand("openclaw config set agents.defaults.systemAgent.agentId <id>")}".`,
+      "Agent ownership",
+    );
+  }
+}
 
 function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
   return pathValue.filter((part): part is string | number => typeof part !== "symbol");

@@ -748,16 +748,15 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
     if (!entries) {
       return;
     }
-    for (const [id, entry] of Object.entries(entries)) {
-      if (!isRecord(entry)) {
-        continue;
-      }
-      if (id === authoredAgentId) {
-        entry.default = true;
-      } else {
+    for (const entry of Object.values(entries)) {
+      if (isRecord(entry)) {
         delete entry.default;
       }
     }
+    if (Object.keys(entries).length > 1) {
+      setPathValue(draft, ["agents", "ownership"], "explicit");
+    }
+    setPathValue(draft, ["agents", "defaults", "systemAgent", "agentId"], authoredAgentId);
   });
   return true;
 }
