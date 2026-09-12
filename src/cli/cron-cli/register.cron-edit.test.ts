@@ -326,42 +326,24 @@ describe("cron edit command", () => {
     await expectCronEditRejection(args, message);
   });
 
-  it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--best-effort-deliver"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
-      expect.objectContaining({ bestEffortDeliver: true }),
-      {
-        id: "job-1",
-        patch: {
-          delivery: {
-            mode: "announce",
-            bestEffort: true,
-          },
-        },
-      },
-    );
-  });
-
-  it("keeps --no-best-effort-deliver-only edits delivery-only", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--no-best-effort-deliver"], { from: "user" });
+  it.each([
+    {
+      flag: "--best-effort-deliver",
+      bestEffort: true,
+      delivery: { mode: "announce", bestEffort: true },
+    },
+    {
+      flag: "--no-best-effort-deliver",
+      bestEffort: false,
+      delivery: { bestEffort: false },
+    },
+  ])("keeps $flag-only edits delivery-only (#83908)", async ({ flag, bestEffort, delivery }) => {
+    await createCronProgram().parseAsync(["edit", "job-1", flag], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "cron.update",
-      expect.objectContaining({ bestEffortDeliver: false }),
-      {
-        id: "job-1",
-        patch: {
-          delivery: {
-            bestEffort: false,
-          },
-        },
-      },
+      expect.objectContaining({ bestEffortDeliver: bestEffort }),
+      { id: "job-1", patch: { delivery } },
     );
   });
 
