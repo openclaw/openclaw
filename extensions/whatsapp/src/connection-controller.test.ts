@@ -1006,9 +1006,7 @@ describe("WhatsAppConnectionController", () => {
     }
   });
 
-  it("uses messageTimeoutMs * 4 as the app-silence window for fresh connections with no inbound", async () => {
-    // Verifies the watchdog respects appSilenceTimeoutMs = messageTimeoutMs * 4 on first open.
-    // Transport is kept well within its own timeout so only app-silence fires.
+  it("keeps idle chats connected while websocket frames remain active", async () => {
     vi.useFakeTimers();
     const msgTimeoutMs = 100;
     const controllerLocal = new WhatsAppConnectionController({
@@ -1017,7 +1015,7 @@ describe("WhatsAppConnectionController", () => {
       verbose: false,
       keepAlive: true,
       heartbeatSeconds: 1,
-      transportTimeoutMs: 10_000,
+      transportTimeoutMs: 100,
       messageTimeoutMs: msgTimeoutMs,
       watchdogCheckMs: 10,
       reconnectPolicy: {
@@ -1036,18 +1034,17 @@ describe("WhatsAppConnectionController", () => {
 
       const timeouts: string[] = [];
       await controllerLocal.openConnection({
-        connectionId: "conn-app-silence",
+        connectionId: "conn-idle-with-transport",
         createListener: async () => createListenerStub() as never,
         onWatchdogTimeout: () => timeouts.push("timeout"),
       });
 
-      // Just before messageTimeoutMs * 4 — no force-close expected
-      await vi.advanceTimersByTimeAsync(msgTimeoutMs * 4 - 20);
-      expect(timeouts).toHaveLength(0);
+      for (let elapsed = 0; elapsed < msgTimeoutMs * 8; elapsed += 80) {
+        await vi.advanceTimersByTimeAsync(80);
+        sock.ws.emit("frame");
+      }
 
-      // Past messageTimeoutMs * 4 — force-close must fire
-      await vi.advanceTimersByTimeAsync(40);
-      expect(timeouts.length).toBeGreaterThanOrEqual(1);
+      expect(timeouts).toHaveLength(0);
     } finally {
       await controllerLocal.shutdown();
       vi.useRealTimers();
