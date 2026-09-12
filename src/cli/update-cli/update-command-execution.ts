@@ -407,6 +407,7 @@ export async function executeMutableUpdate(
             invocationCwd: params.invocationCwd,
           }),
           executor,
+          timeoutMs: updateStepTimeoutMs,
           nodeRunner: params.packageUpdateNodeRunner,
           signal,
         });

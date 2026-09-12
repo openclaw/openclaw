@@ -94,6 +94,9 @@ open or migrate shared state, so the old Gateway can keep serving while its
 database schema is older than the candidate's. The installed updater runs first;
 this repair takes effect when the candidate it probes contains the fix.
 
+The invoking updater supplies the capability probe's per-step time budget. The
+probe does not impose a separate startup deadline.
+
 Snapshot preparation budgets time for the SQLite database and journal bytes,
 including copying and verification passes, with a five-minute startup floor.
 It uses the larger of that allowance and the configured per-step timeout.
