@@ -13,6 +13,7 @@ import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.ChannelClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
@@ -23,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class WearTalkTestFixture(
   context: Context,
   targetClient: WearRealtimeTalkClient? = null,
+  private val startReply: (suspend (String) -> WearRealtimeTalkSnapshot)? = null,
 ) {
   val events = java.util.concurrent.CopyOnWriteArrayList<String>()
   val input = BlockingInput()
@@ -38,13 +40,18 @@ internal class WearTalkTestFixture(
         expectedNodeId: String?,
         requirePreferredNode: Boolean,
       ): WearRpcResult {
-        check(method == WearRpcMethod.TalkStop)
         check(expectedNodeId == "phone-a" && requirePreferredNode)
+        val attemptId = checkNotNull(params["attemptId"]).jsonPrimitive.content
+        if (method == WearRpcMethod.TalkStart) {
+          val snapshot = checkNotNull(startReply)(attemptId)
+          return WearRpcResult(WearRealtimeTalkCodec.encode(snapshot), null, "phone-a")
+        }
+        check(method == WearRpcMethod.TalkStop)
         mark("rpc-enter")
         rpcEntered.complete(Unit)
         rpcReply.await()
         mark("rpc-reply")
-        return WearRpcResult(WearRealtimeTalkCodec.encode(WearRealtimeTalkSnapshot(attemptId = "attempt-1")), null, "phone-a")
+        return WearRpcResult(WearRealtimeTalkCodec.encode(WearRealtimeTalkSnapshot(attemptId = attemptId)), null, "phone-a")
       }
     }
   val repository = WearGatewayRepository(requester)
@@ -89,11 +96,14 @@ internal class WearTalkTestFixture(
         override fun openChannel(
           nodeId: String,
           path: String,
-        ): Task<Channel> = error("unused")
+        ): Task<Channel> {
+          check(startReply != null && nodeId == "phone-a")
+          return Tasks.forResult(channel)
+        }
 
-        override fun getInputStream(channel: Channel): Task<InputStream> = error("unused")
+        override fun getInputStream(channel: Channel): Task<InputStream> = Tasks.forResult(input)
 
-        override fun getOutputStream(channel: Channel): Task<OutputStream> = error("unused")
+        override fun getOutputStream(channel: Channel): Task<OutputStream> = Tasks.forResult(output)
 
         override fun registerChannelCallback(callback: ChannelCallback): Task<Void> = error("unused")
 

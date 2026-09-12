@@ -82,6 +82,10 @@ android {
     }
   }
 
+  testOptions {
+    unitTests.isIncludeAndroidResources = true
+  }
+
   lint {
     lintConfig = rootProject.file("app/lint.xml")
     warningsAsErrors = true

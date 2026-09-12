@@ -111,6 +111,37 @@ class WearViewModelLifecycleTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun foregroundExitCancelsPendingCaptureIntentAndIgnoresLateCompletion() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val app = RuntimeEnvironment.getApplication() as WearApplication
+      val owner = TestViewModelStoreOwner()
+      val vm = ViewModelProvider(owner, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[WearViewModel::class.java]
+      val client = vm.realtimeTalkClientForTest()
+      val fixture = WearTalkTestFixture(app, client)
+      try {
+        (vm.talkTestField("loadJob") as? Job)?.cancel()
+        testScheduler.runCurrent()
+        fixture.activate()
+        val pending = Job()
+        vm.setTalkTestField("talkStartJob", pending)
+        vm.setTalkTestField("talkAttemptId", "attempt-1")
+        vm.suspendRealtimeTalk()
+        assertFalse(pending.isActive)
+        assertNull(vm.talkTestField("talkAttemptId"))
+        assertFalse(vm.state.value.talkBusy)
+        assertFalse(vm.state.value.realtimeTalk.active)
+        assertEquals(1, fixture.input.closes.get())
+        client.callTalkTestMethod("clearOutput", fixture.attempt, true)
+        assertFalse(client.isCapturing.value)
+      } finally {
+        owner.viewModelStore.clear()
+        Dispatchers.resetMain()
+      }
+    }
+
   @Test
   fun recreatedViewModelGetsALiveTalkClientAfterThePreviousOneClears() {
     val app = RuntimeEnvironment.getApplication() as WearApplication

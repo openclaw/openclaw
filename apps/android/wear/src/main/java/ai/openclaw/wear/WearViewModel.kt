@@ -376,6 +376,28 @@ internal class WearViewModel(
     talkAttemptId = null
   }
 
+  fun cancelPendingRealtimeTalkStart() {
+    if (talkStartJob?.isActive != true) return
+    // Losing RESUMED revokes pending intent without changing an established call.
+    // The canceled start still owns ambiguous phone-side Stop cleanup.
+    talkStartJob?.cancel()
+    talkStartJob = null
+    talkAttemptId = null
+    realtimeTalkClient.disconnectLocal()
+    mutableState.update {
+      it.copy(talkBusy = false, talkStopping = false, realtimeTalk = WearRealtimeTalkSnapshot())
+    }
+  }
+
+  fun suspendRealtimeTalk() {
+    cancelPendingRealtimeTalkStart()
+    if (!mutableState.value.talkStopping && (mutableState.value.realtimeTalk.active || mutableState.value.realtimeCapturing)) {
+      stopRealtimeTalk()
+    } else {
+      realtimeTalkClient.disconnectLocal()
+    }
+  }
+
   fun startRealtimeTalk() {
     val current = mutableState.value
     val selectedSession = current.selectedSession ?: return

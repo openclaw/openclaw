@@ -7,6 +7,9 @@
     <string name="controls">Controls</string>
     <string name="talk">Talk</string>
     <string name="real_time_audio_failed">Watch audio failed</string>
+    <!-- The serialized native-locale refresh publishes these pending translations after merge. -->
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation">Microphone permission required</string>
+    <string name="open_settings" tools:ignore="MissingTranslation">Open Settings</string>
     <string name="dictate">Dictate</string>
     <string name="live">Live</string>
     <string name="thread">Thread</string>

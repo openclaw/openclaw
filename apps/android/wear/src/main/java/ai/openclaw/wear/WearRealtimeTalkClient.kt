@@ -27,6 +27,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -129,6 +130,8 @@ internal class WearRealtimeTalkClient(
             generation = attemptGeneration.incrementAndGet(),
             resources = checkNotNull(resources),
           )
+        // A completed startup callback is not authority to capture after cancellation.
+        currentCoroutineContext().ensureActive()
         activate(attempt)
         activatedAttempt = attempt
         resources = null
@@ -265,9 +268,11 @@ internal class WearRealtimeTalkClient(
             .build(),
         ).setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
         .build()
-    check(recorder.state == AudioRecord.STATE_INITIALIZED)
     audioRecord = recorder
+    check(recorder.state == AudioRecord.STATE_INITIALIZED)
     recorder.startRecording()
+    // Native start failure can return normally while the recorder remains stopped.
+    check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING)
     _isCapturing.value = true
     captureJob =
       scope.launch {
@@ -462,6 +467,7 @@ internal class WearRealtimeTalkClient(
     audioFocus.abandon()
     if (resumeCapture && attempt != null && isCurrent(attempt)) {
       runCatching { startCaptureLocked(attempt) }
+        .onFailure { handleChannelFailure(attempt) }
     }
   }
 
