@@ -1,4 +1,5 @@
-import type { ApplicationRouter, RouteId } from "../app-routes.ts";
+import type { Router } from "@openclaw/uirouter";
+import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 
@@ -11,7 +12,10 @@ export type SessionRouteRecoveryState = {
 };
 
 export function replaySessionRoute(
-  router: ApplicationRouter,
+  router: Pick<
+    Router<RouteId, ApplicationContext<RouteId>, unknown, unknown>,
+    "getState" | "navigate"
+  >,
   context: ApplicationContext<RouteId>,
   recovery: SessionRouteRecoveryState,
 ): void {
