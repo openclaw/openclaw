@@ -25,6 +25,13 @@ export function readRedactMatch(args: unknown[]) {
 
 export type RedactMatch = ReturnType<typeof readRedactMatch>;
 
+/**
+ * Programmatic synchronous rule; never serialized into logging.redactPatterns.
+ * Each call uses its current input and fresh local state. Yield nonempty exact
+ * matches in order without overlap, with UTF-16 offsets and that same input.
+ * groups uses "" for unmatched captures; the last nonempty capture selects the
+ * secret's last occurrence in match, or an empty array selects the whole match.
+ */
 export type RedactMatcher = {
   readonly source: string;
   readonly exec: (text: string) => Iterable<RedactMatch>;
