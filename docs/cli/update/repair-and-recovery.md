@@ -206,11 +206,12 @@ prove that a migration advanced. Output and heartbeats do not extend the phase
 deadline. These diagnostics do not establish that every descendant has stopped,
 and must not be used as rollback authorization.
 
-Shared CLI disposers have individual five-second deadlines. If the finalizer
-remains alive ten seconds after its terminal JSON, stderr and the ledger
-record active resource types and unsettled disposer names, then the process
-exits with its recorded outcome. A retained handle cannot withhold the
-supervisor's result indefinitely.
+Shared CLI disposers have individual five-second deadlines. Failure diagnostics
+and any interactive recovery finish before the ten-second exit grace starts.
+If the finalizer remains alive after that grace, stderr and the ledger record
+active resource types and unsettled disposer names, then the process exits with
+its recorded outcome. A retained handle cannot withhold the supervisor's result
+indefinitely.
 Both stall diagnostics also include `childProcesses`: up to eight descendant
 processes with `pid`, `parentPid`, and an executable name (`command`). Arguments,
 environment values, and executable paths are omitted. `childProcessesTruncated`
@@ -219,10 +220,8 @@ process list could not be read. A null `command` means that process's executable
 name was unavailable. Inspection runs only after a stall and adds at
 most one second to the exit bound. Phase-failure JSON includes the same fields.
 Preserve these diagnostics and the phase receipts when reporting a blocked child.
-Human repair can still wait for a recovery choice or repair agent; its exit grace
-starts after recovery finishes. Completion-cache refresh remains best effort
-when its child can be stopped within the phase budget. A phase that exceeds its
-overall deadline still fails finalization.
+Completion-cache refresh remains best effort when its child can be stopped within
+the phase budget. A phase that exceeds its overall deadline still fails finalization.
 
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not

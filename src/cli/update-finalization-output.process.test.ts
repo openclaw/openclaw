@@ -319,6 +319,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       // Parse the whole pipe: accepting a suffix would hide Clack's direct stdout writes.
       const output = JSON.parse(result.stdout);
       if (scenario.endsWith("error")) {
+        expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
         expect(result.stderr, failure).toContain(triageNotice);
         expect(result.stderr, failure).toContain('"promptPath":');
         expect(result.stderr, failure).toContain("triage-fixture-prompt.md");
