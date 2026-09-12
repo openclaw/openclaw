@@ -69,6 +69,7 @@ import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -969,7 +970,12 @@ describe("buildGatewayReloadPlan", () => {
       ["channels.slack.execApprovals.enabled", false],
       ["channels.slack.dangerouslyAllowNameMatching", false],
     ] as const)("plans %s without losing the owner boundary", async (path, dynamic) => {
-      const { slackSetupPlugin } = await import("../../extensions/slack/setup-plugin-api.js");
+      const { slackSetupPlugin } = await loadBundledPluginFacade<{
+        slackSetupPlugin: ChannelPlugin;
+      }>({
+        pluginId: "slack",
+        artifactBasename: "setup-plugin-api.ts",
+      });
       setActivePluginRegistry(
         createTestRegistry([{ pluginId: "slack", plugin: slackSetupPlugin, source: "test" }]),
       );
