@@ -23,6 +23,57 @@ type LineSetupInput = ChannelSetupInput & {
   secretFile?: string;
 };
 
+type LineChannelSection = Record<string, unknown> & {
+  accounts?: Record<string, Record<string, unknown>>;
+};
+
+const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
+
+// Default-account writes land at the channel root, but the credential resolver
+// (resolveLineAccount) reads a promoted accounts.default record ahead of the
+// root, so a rotation must retire the same fields from that record or the
+// stale account-scoped value keeps winning over the replacement. Kept
+// LINE-local: the shared setup writer intentionally clears only the layer it
+// writes, and other channels scope default accounts differently.
+function retirePromotedDefaultAccountFields(
+  cfg: OpenClawConfig,
+  clearFields: readonly string[],
+): OpenClawConfig {
+  // SAFETY: Channel sections are plain config objects; the accounts map and
+  // the resolved record are runtime-checked before any field is touched.
+  const section = cfg.channels?.line as LineChannelSection | undefined;
+  const accounts = section?.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return cfg;
+  }
+  // Mirror resolveAccountEntry (the resolver read path): the exact `default`
+  // record wins, then a trimmed-lowercase key match. Using normalizeAccountId
+  // here would also sanitize punctuation (e.g. `-default-` → `default`), which
+  // can select a record the resolver never reads and leave the active stale
+  // credential in place.
+  const accountKey = Object.hasOwn(accounts, DEFAULT_ACCOUNT_ID)
+    ? DEFAULT_ACCOUNT_ID
+    : Object.keys(accounts).find((key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID);
+  const record = accountKey ? accounts[accountKey] : undefined;
+  if (!accountKey || !record || typeof record !== "object") {
+    return cfg;
+  }
+  if (!clearFields.some((field) => field in record)) {
+    return cfg;
+  }
+  const nextRecord = { ...record };
+  for (const field of clearFields) {
+    delete nextRecord[field];
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      line: { ...section, accounts: { ...accounts, [accountKey]: nextRecord } },
+    },
+  };
+}
+
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -30,7 +81,7 @@ export function patchLineAccountConfig(params: {
   clearFields?: string[];
   enabled?: boolean;
 }): OpenClawConfig {
-  return patchScopedAccountConfig({
+  const next = patchScopedAccountConfig({
     cfg: params.cfg,
     channelKey: "line",
     accountId: params.accountId,
@@ -43,6 +94,17 @@ export function patchLineAccountConfig(params: {
     ensureChannelEnabled: Boolean(params.enabled),
     ensureAccountEnabled: false,
   });
+  // Promoted-record retirement is credential-only. patchLineAccountConfig also
+  // serves the DM-policy writer (clearFields: ["allowFrom"]); deleting account
+  // policy fields could invalidate a saved record (e.g. `dmPolicy: "open"`
+  // losing its allowlist), which the previous root-only clear preserved.
+  const promotedCredentialFields = params.clearFields?.filter((field) =>
+    accountCredentialKeys.includes(field),
+  );
+  return promotedCredentialFields?.length &&
+    normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID
+    ? retirePromotedDefaultAccountFields(next, promotedCredentialFields)
+    : next;
 }
 
 export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
@@ -50,8 +112,6 @@ export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolea
 }
 
 export { parseLineAllowFromId };
-
-const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
 
 export const lineSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove: accountCredentialKeys,
@@ -86,7 +146,11 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     // A credential resolves from the inline value first and only then from its
     // file, so writing one form has to retire the other. Leaving both behind
     // makes a rotation onto a file a silent no-op: the stale inline value keeps
-    // winning and setup still reports success.
+    // winning and setup still reports success. Both forms of the written family
+    // are retired (not only the complementary one) because a promoted
+    // accounts.default record can hold a stale same-form value that the
+    // resolver reads ahead of the channel root; patchLineAccountConfig clears
+    // that record and the patch re-adds the written form after the clear.
     const credentials = [
       {
         fileKey: "tokenFile",
@@ -106,10 +170,10 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     for (const credential of credentials) {
       if (credential.file) {
         patch[credential.fileKey] = credential.file;
-        retired.push(credential.inlineKey);
+        retired.push(credential.fileKey, credential.inlineKey);
       } else if (credential.inline) {
         patch[credential.inlineKey] = credential.inline;
-        retired.push(credential.fileKey);
+        retired.push(credential.inlineKey, credential.fileKey);
       }
     }
     return patchLineAccountConfig({
