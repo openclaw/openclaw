@@ -1,4 +1,8 @@
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -8,15 +12,16 @@ import type {
   SessionTranscriptWriteScope,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
-import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 
 // Append results are public SDK contracts. Keep commit-only cursor metadata
 // attached to their object lifetime without changing the returned message shape.
 const committedTranscriptMessageSequences = new WeakMap<object, number>();
+const TRANSCRIPT_CURSOR_BATCH_SIZE = 64;
 
 /** Reads the visible-message sequence captured from the final active branch. */
 export function readCommittedTranscriptMessageSequence(
@@ -41,7 +46,9 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
   const db = getNodeSqliteKysely<
     Pick<
       OpenClawAgentKyselyDatabase,
-      "session_transcript_active_events" | "session_transcript_index_state"
+      | "session_transcript_active_events"
+      | "session_transcript_index_state"
+      | "transcript_event_identities"
     >
   >(database.db);
   const projection = executeSqliteQueryTakeFirstSync(
@@ -54,23 +61,40 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
   if (projection?.needs_rebuild !== 0) {
     return;
   }
-  for (const message of appendedMessages) {
-    const identity = readTranscriptIdentityByEventId(database, sessionId, message.messageId);
-    if (!identity) {
-      continue;
-    }
-    const active = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_transcript_active_events")
-        .select("message_position")
-        .where("session_id", "=", sessionId)
-        .where("event_seq", "=", identity.seq),
+  for (let offset = 0; offset < appendedMessages.length; offset += TRANSCRIPT_CURSOR_BATCH_SIZE) {
+    const batch = appendedMessages.slice(offset, offset + TRANSCRIPT_CURSOR_BATCH_SIZE);
+    const rows = readHotSessionTranscriptSnapshot(
+      database,
+      sessionId,
+      "identity",
+      () =>
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("transcript_event_identities as identity")
+            .innerJoin("session_transcript_active_events as active", (join) =>
+              join
+                .onRef("active.session_id", "=", "identity.session_id")
+                .onRef("active.event_seq", "=", "identity.seq"),
+            )
+            .select(["identity.event_id", "active.message_position"])
+            .where("identity.session_id", "=", sessionId)
+            .where(
+              "identity.event_id",
+              "in",
+              batch.map((message) => message.messageId),
+            )
+            .where("active.message_position", "is not", null),
+        ).rows,
     );
-    if (active?.message_position !== null && active?.message_position !== undefined) {
-      // Raw event seq includes controls. Client cursors follow the final
-      // active-branch message position so abandoned rows cannot leak.
-      committedTranscriptMessageSequences.set(message, active.message_position + 1);
+    const positions = new Map(rows.map((row) => [row.event_id, row.message_position]));
+    for (const message of batch) {
+      const position = positions.get(message.messageId);
+      if (position !== null && position !== undefined) {
+        // Raw event seq includes controls. Client cursors follow the final
+        // active-branch message position so abandoned rows cannot leak.
+        committedTranscriptMessageSequences.set(message, position + 1);
+      }
     }
   }
 }
