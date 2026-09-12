@@ -358,6 +358,10 @@ openclaw browser trace start
 openclaw browser trace stop --out trace.zip
 ```
 
+`responsebody` writes the bounded response prefix to stdout and warns on stderr
+when it is truncated. `--json` includes the response metadata and `truncated`
+flag without a separate warning. Use `--max-chars` to select the prefix limit.
+
 ## Existing Chrome via MCP
 
 Use the built-in `user` profile, or create your own `existing-session` profile:

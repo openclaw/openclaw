@@ -281,7 +281,7 @@ struct ChatModelControlsMenuItems: View {
         if self.viewModel.showsThinkingPicker {
             self.thinkingOptions
         }
-        if self.viewModel.selectedModelSupportsFastMode {
+        if self.viewModel.showsFastModeControls {
             self.fastModeOptions
         }
         self.verbosityOptions
@@ -469,6 +469,7 @@ struct ChatModelControlsMenuItems: View {
                         .tint(OpenClawBrand.accentForeground)
                         .disabled(self.viewModel.isUpdatingSessionSettings)
                         .accessibilityIdentifier("chat-fast-mode-toggle")
+                        .disabled(!self.viewModel.selectedModelSupportsFastMode)
             }
             .frame(minHeight: ChatActionMenuMetric.rowHeight)
             .contentShape(Rectangle())
@@ -546,6 +547,7 @@ struct ChatModelControlsMenuItems: View {
                 providerID: ChatModelMenuPresentation.providerID(for: model),
                 selectionID: model.selectionID,
                 showsDefaultBadge: self.viewModel.isDefaultModel(model),
+                capabilityDescription: model.capabilityDescription,
                 unavailableDescription: self.viewModel.modelUnavailableDescription(model))
         }
     }
@@ -616,6 +618,7 @@ struct ChatModelControlsMenuItems: View {
         providerID: String?,
         selectionID: String,
         showsDefaultBadge: Bool = false,
+        capabilityDescription: String = "",
         unavailableDescription: String? = nil) -> some View
     {
         let isSelected = self.viewModel.isSelectedModel(selectionID)
@@ -630,6 +633,11 @@ struct ChatModelControlsMenuItems: View {
                     Text(title)
                         .font(OpenClawType.body)
                         .multilineTextAlignment(.leading)
+                    if !capabilityDescription.isEmpty {
+                        Text(capabilityDescription)
+                            .font(OpenClawType.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if let unavailableDescription {
                         Text(unavailableDescription)
                             .font(OpenClawType.caption)

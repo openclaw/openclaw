@@ -253,7 +253,7 @@ describe("chat pane native history pagination", () => {
     expect(pane.hasOlderMessages()).toBe(false);
   });
 
-  it("loads at the top through the canonical path and reveals the prepended window", async () => {
+  it("loads at the top through the canonical path without commanding a viewport jump", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: true,
@@ -262,7 +262,7 @@ describe("chat pane native history pagination", () => {
     }));
     const { pane, scrollToOffset, state } = createNativeShowEarlierPane(request);
 
-    await pane.showEarlierMessages();
+    await pane.loadOlderMessages();
 
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: state.sessionKey,
@@ -270,10 +270,9 @@ describe("chat pane native history pagination", () => {
       offset: 2,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
-    expect(scrollToOffset).toHaveBeenCalledWith(0);
-    expect(pane.transcriptScrollTop).toBe(0);
+    expect(scrollToOffset).not.toHaveBeenCalled();
     expect(pane.historyObserverArmed).toBe(false);
-    expect(pane.historyAutoLoadBlocked).toBe(true);
+    expect(pane.historyAutoLoadBlocked).toBe(false);
   });
 
   it("publishes prepended history to the shared session snapshot", async () => {
@@ -371,7 +370,7 @@ describe("chat pane native history pagination", () => {
     vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
     const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
 
-    await pane.showEarlierMessages();
+    await pane.loadOlderMessages();
 
     expect(request).toHaveBeenCalledWith(
       "sessions.catalog.read",
@@ -379,7 +378,7 @@ describe("chat pane native history pagination", () => {
     );
     expect(pane.catalogMessages).toHaveLength(1);
     expect(pane.catalogCursor).toBeUndefined();
-    expect(scrollToOffset).toHaveBeenCalledWith(0);
+    expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
   it("keeps the viewport and pagination retryable when the older load fails", async () => {
@@ -388,7 +387,7 @@ describe("chat pane native history pagination", () => {
     });
     const { pane, scrollToOffset, state, thread } = createNativeShowEarlierPane(request);
 
-    await pane.showEarlierMessages();
+    await pane.loadOlderMessages();
 
     expect(thread.scrollTop).toBe(0);
     expect(state.chatHistoryPagination).toMatchObject({ hasMore: true });
@@ -403,14 +402,14 @@ describe("chat pane native history pagination", () => {
     const { pane, thread } = createNativeShowEarlierPane(request);
     pane.transcriptScrollTop = 500;
 
-    await pane.showEarlierMessages();
+    await pane.loadOlderMessages();
     pane.handleTranscriptScroll({ currentTarget: thread, target: thread } as unknown as Event);
 
     expect(pane.historyAutoLoadBlocked).toBe(true);
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("joins an in-flight canonical load before revealing its earlier window", async () => {
+  it("joins an in-flight canonical load without commanding a viewport jump", async () => {
     const deferred = createDeferred<{
       messages: unknown[];
       hasMore: boolean;
@@ -420,7 +419,7 @@ describe("chat pane native history pagination", () => {
     const { pane, scrollToOffset } = createNativeShowEarlierPane(request);
 
     const automaticLoad = pane.loadOlderMessages();
-    const manualNavigation = pane.showEarlierMessages();
+    const manualNavigation = pane.loadOlderMessages();
     deferred.resolve({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -429,28 +428,18 @@ describe("chat pane native history pagination", () => {
     await Promise.all([automaticLoad, manualNavigation]);
 
     expect(request).toHaveBeenCalledOnce();
-    expect(scrollToOffset).toHaveBeenCalledOnce();
-    expect(scrollToOffset).toHaveBeenCalledWith(0);
+    expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("does not navigate a replacement session after an older load settles", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client });
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
-    appendChatThread(pane);
-    const loaded = createDeferred<boolean>();
-    const committed = createDeferred<boolean>();
-    vi.spyOn(pane, "loadOlderMessages").mockReturnValue(loaded.promise);
-    vi.spyOn(pane, "updateComplete", "get").mockReturnValue(committed.promise);
-    const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
-
-    const navigation = pane.showEarlierMessages();
-    loaded.resolve(true);
-    await Promise.resolve();
+  it("does not apply older history to a replacement session", async () => {
+    const older = createDeferred<ChatHistoryResult>();
+    const { pane, state, scrollToOffset } = createNativeShowEarlierPane(vi.fn(() => older.promise));
+    const loading = pane.loadOlderMessages();
     state.sessionKey = "agent:main:replacement";
-    committed.resolve(true);
-    await navigation;
-
+    state.chatMessages = [];
+    older.resolve({ messages: [nativeHistoryMessage(1)], hasMore: false, totalMessages: 1 });
+    await loading;
+    expect(state.chatMessages).toEqual([]);
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
@@ -949,6 +938,7 @@ describe("chat pane native history pagination", () => {
       2,
       "chat.history",
       expect.objectContaining({ sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024 }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(state.currentSessionId).toBe("session-new");
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7, 8]);

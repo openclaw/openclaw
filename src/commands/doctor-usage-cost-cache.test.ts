@@ -102,35 +102,52 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
   });
 
-  it("removes retired usage rows from every registered agent database", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
-    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
-    const databases = ["main", "worker"].map((agentId) =>
-      openOpenClawAgentDatabase({ agentId, env }),
-    );
-    for (const database of databases) {
-      const insert = database.db.prepare(
-        "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
-      );
-      insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
-      insert.run("session-cost-usage-rollup-v2", "current", "{}");
-      insert.run("session-cost-usage", "cache", "{}");
-      insert.run("session-cost-usage", "refresh-lock", "{}");
-      insert.run("other", "keep", "{}");
-    }
+  it.each([false, true])(
+    "continues retired-row cleanup after a rejected write (rejectFirst=%s)",
+    async (rejectFirst) => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
+      const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+      const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
+      const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
+      for (const database of databases) {
+        const insert = database.db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
+        );
+        insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
+        insert.run("session-cost-usage-rollup-v2", "current", "{}");
+        insert.run("session-cost-usage", "cache", "{}");
+        insert.run("session-cost-usage", "refresh-lock", "{}");
+        insert.run("other", "keep", "{}");
+      }
 
-    await maybeRepairLegacyRuntimeFiles(true, env);
+      if (rejectFirst) {
+        firstDatabase.db.exec(`
+        CREATE TEMP TRIGGER reject_usage_pruning BEFORE DELETE ON cache_entries
+        BEGIN SELECT RAISE(ABORT, 'pruning rejected'); END;
+      `);
+      }
+      await maybeRepairLegacyRuntimeFiles(true, env);
 
-    for (const database of databases) {
-      expect(
-        database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
-      ).toEqual([
-        { key: "keep", scope: "other" },
-        { key: "refresh-lock", scope: "session-cost-usage" },
-        { key: "current", scope: "session-cost-usage-rollup-v2" },
-      ]);
-    }
-  });
+      if (rejectFirst) {
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining("pruning rejected"),
+          "Doctor warnings",
+        );
+        expect(
+          firstDatabase.db.prepare("SELECT count(*) AS count FROM cache_entries").get(),
+        ).toEqual({ count: 5 });
+      }
+      for (const database of rejectFirst ? databases.slice(1) : databases) {
+        expect(
+          database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
+        ).toEqual([
+          { key: "keep", scope: "other" },
+          { key: "refresh-lock", scope: "session-cost-usage" },
+          { key: "current", scope: "session-cost-usage-rollup-v2" },
+        ]);
+      }
+    },
+  );
 
   it.each([
     [

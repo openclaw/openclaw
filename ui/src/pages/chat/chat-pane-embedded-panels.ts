@@ -31,6 +31,8 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  browserTabsInHeader: boolean;
+  terminalTabsInHeader: boolean;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
@@ -51,6 +53,7 @@ type SidebarPanelDefinitionParams = {
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  companionPresented: boolean;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionVisibilityChange: (visible: boolean) => void;
@@ -129,6 +132,7 @@ export function sidebarPanelDefinitions(
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
         embedded
+        .tabsInHeader=${params?.terminalTabsInHeader ?? false}
         .client=${state.connected ? state.client : null}
         .available=${state.terminalAvailable}
         .agentId=${params?.agentId ?? null}
@@ -148,6 +152,7 @@ export function sidebarPanelDefinitions(
           hello: state.hello,
         })}
         .presented=${params?.browserPresented ?? false}
+        .tabsInHeader=${params?.browserTabsInHeader ?? false}
         .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
         .sessionKey=${state.sessionKey}
         .preferredTab=${params?.preferredBrowserTab}
@@ -158,6 +163,7 @@ export function sidebarPanelDefinitions(
   const companion = params
     ? html`<openclaw-chat-session-rail
         embedded
+        .presented=${params.companionPresented}
         .sessionKey=${state?.sessionKey}
         .digest=${params.digest}
         .running=${Boolean(params.activeRunId)}
@@ -167,6 +173,7 @@ export function sidebarPanelDefinitions(
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
+        .sendShortcut=${state?.settings.chatSendShortcut ?? "enter"}
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onVisibilityChange=${params.onCompanionVisibilityChange}

@@ -58,7 +58,7 @@ describe("prepared reply dispatch runtime", () => {
       "CREATE TABLE observations (value INTEGER); INSERT INTO observations VALUES (42)",
     );
     const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources();
+    const resources = new PluginRegistryInspectionResources(async () => {});
     resources.attach(registry);
     let disposalCount = 0;
     resources.runRegistration("prepared-native", () => {
@@ -112,9 +112,7 @@ describe("prepared reply dispatch runtime", () => {
       expect(database.isOpen).toBe(true);
       expect(disposalCount).toBe(0);
       finish.resolve();
-      expect(await outcome).toEqual(
-        new Error("Prepared media capability provider source is retired"),
-      );
+      expect(await outcome).toEqual(new Error("Plugin inspection resources have been released"));
       expect(observedValue).toBe(42);
       expect(database.isOpen).toBe(false);
       expect(disposalCount).toBe(1);
@@ -183,7 +181,7 @@ describe("prepared reply dispatch runtime", () => {
     expect(lease.snapshot.pluginRegistry === selectedRegistry).toBe(true);
     expect(lease.snapshot.authModes.selected).toBe("api_key");
     expect(published.pluginGeneration.preparedStaticProviderCatalog?.providers).toBeUndefined();
-    lease.release();
+    await lease[Symbol.asyncDispose]();
     const publishedRefresh = createDeferred();
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       if (event.phase === "published") {
@@ -272,7 +270,7 @@ describe("prepared reply dispatch runtime", () => {
       const repeated = await acquireAgentRunPreparedModelRuntime(input(runtime), options);
       expect(repeated.snapshot === lease.snapshot).toBe(true);
       expect(repeated.pluginGeneration === lease.pluginGeneration).toBe(true);
-      repeated.release();
+      await repeated[Symbol.asyncDispose]();
       let active = true;
       await withPreparedModelRuntimePluginGenerationScope(
         lease.pluginGeneration,
@@ -281,7 +279,7 @@ describe("prepared reply dispatch runtime", () => {
             pluginGeneration: lease.pluginGeneration,
           });
           expect(nested.snapshot === lease.snapshot).toBe(true);
-          nested.release();
+          await nested[Symbol.asyncDispose]();
           const otherRuntime = [...registries.keys()].find((candidate) => candidate !== runtime)!;
           await expect(
             acquireAgentRunPreparedModelRuntime(input(otherRuntime), {
@@ -289,7 +287,7 @@ describe("prepared reply dispatch runtime", () => {
             }),
           ).rejects.toThrow("plugin generation was superseded");
           active = false;
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await expect(
             acquireAgentRunPreparedModelRuntime(input(runtime), {
               pluginGeneration: lease.pluginGeneration,
@@ -392,13 +390,13 @@ describe("prepared reply dispatch runtime", () => {
                 "provider fixture failed to load",
               );
             }
-            nested.release();
+            await nested[Symbol.asyncDispose]();
           },
           () => (active ? parent.snapshot : undefined),
         );
       } finally {
         active = false;
-        parent.release();
+        await parent[Symbol.asyncDispose]();
       }
     },
   );
@@ -575,7 +573,7 @@ describe("prepared reply dispatch runtime", () => {
     expect(getPluginRuntimeLoadContext(dynamicSelectedBefore)).toMatchObject({
       preferBuiltPluginArtifacts: true,
     });
-    dynamicLease.release();
+    await dynamicLease[Symbol.asyncDispose]();
     expect(dynamicPreparationRegistries.every(Boolean)).toBe(true);
     expect(catalogGenerationRegistries.every(Boolean)).toBe(true);
     expect(dynamicSelectedBefore).toBe(configuredSelectedBefore);
@@ -725,11 +723,11 @@ describe("prepared reply dispatch runtime", () => {
       const lease = await acquireAgentRunPreparedModelRuntime(input);
       expect(lease.snapshot).toMatchObject({ agentId: "default", agentDir: input.agentDir });
       expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-      lease.release();
+      await lease[Symbol.asyncDispose]();
     } finally {
       finishAuthRefreshGate.resolve();
       await Promise.allSettled([
-        admission?.then((lease) => lease.release()),
+        admission?.then((lease) => lease[Symbol.asyncDispose]()),
         loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
       ]);
     }

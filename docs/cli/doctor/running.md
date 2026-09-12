@@ -26,6 +26,17 @@ Use `openclaw doctor --json` when an operator or script wants the advisory Docto
 
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
 
+When ordinary `doctor` asks **Apply recommended config repairs now?**, it checks
+that the selected root config file still matches the source of that proposal.
+If its contents or selected path changed before the write, Doctor preserves the newer file,
+leaves the pending config fixes unwritten, and exits with an error. Rerun
+`openclaw doctor` to review an updated proposal.
+
+If saving succeeds but later processing fails, Doctor stops with an error, names
+the file that was written, and reports whether the write was rolled back. When it was not rolled
+back or recovery could not be confirmed, inspect that file and the active config
+before rerunning Doctor.
+
 If the shared state database uses a newer schema, Doctor refuses before offering
 an interactive update because update admission also needs that database. Run
 Doctor from the OpenClaw install that wrote the state, or another compatible
@@ -45,7 +56,9 @@ Explicit repair stops the matching managed Gateway and checks Gateway, state,
 and agent-database ownership before taking read-only schema snapshots. It
 excludes other processes during repair, verifies readiness,
 and restarts the same service once. It preserves the service definition and does
-not activate a service confirmed offline before maintenance. A loaded, enabled
+not activate a service confirmed offline before maintenance. On Linux, it also
+restores a previously running service if systemd unloads the stopped unit during
+repair; a changed service definition or manager still blocks restart. A loaded, enabled
 macOS job between respawns is not offline: Doctor stops it before repair and
 resumes it afterward. Run repair from a shell outside the Gateway process tree. For externally supervised or unmatched installations, stop
 and start the Gateway through its owning supervisor.

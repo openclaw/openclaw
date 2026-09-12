@@ -193,9 +193,12 @@ export function validateExtendedStableNpmReleaseRequest(request) {
   }
   const mainCalendarMonth = mainVersion.year * 12 + mainVersion.month;
   const releaseCalendarMonth = taggedVersion.year * 12 + taggedVersion.month;
-  if (mainCalendarMonth <= releaseCalendarMonth) {
+  // Keep one active trailing-month line; advancing main another month retires the older line.
+  if (mainCalendarMonth - releaseCalendarMonth !== 1) {
+    const expectedYear = mainVersion.month === 1 ? mainVersion.year - 1 : mainVersion.year;
+    const expectedMonth = mainVersion.month === 1 ? 12 : mainVersion.month - 1;
     throw new Error(
-      `Protected main must be in a later calendar month than ${taggedVersion.year}.${taggedVersion.month}; got ${request.mainPackageVersion}.`,
+      `Extended-stable publishes only the trailing completed month: protected main ${request.mainPackageVersion} allows ${expectedYear}.${expectedMonth}.PATCH, not ${releaseVersion}. Retire the older line or dispatch with BYPASS_EXTENDED_STABLE_GUARD for an explicitly approved exception.`,
     );
   }
   if (classifyReleaseTrain(mainVersion) !== "stable") {

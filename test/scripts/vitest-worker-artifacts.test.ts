@@ -24,6 +24,7 @@ import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import {
   createWorkerArtifactTest,
   preparationClient,
+  workerBorrowingProbe,
   workerProbe,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
@@ -791,7 +792,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         ["separate", "equals"].map((configForm) =>
           workerArtifacts.fixtureLifetime.run(async () => {
             const directory = workerArtifacts.fixtureDirectory();
-            const { config } = workerProbe(directory);
+            const { config } = workerBorrowingProbe(directory);
             const budgetReceipt = path.join(directory, "compiler-budget.json");
             const preload = writeFixture(
               directory,
@@ -1078,7 +1079,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
-      const { config } = workerProbe(directory);
+      const { config } = workerBorrowingProbe(directory);
       const reporter = writeFixture(
         directory,
         "tamper-reporter.mjs",

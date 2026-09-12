@@ -1,4 +1,4 @@
-// Gateway handlers for plugin inventory, metadata refresh and catalog search.
+// Gateway handlers for plugin inventory, runtime state and catalog search.
 import {
   ErrorCodes,
   errorShape,
@@ -7,14 +7,15 @@ import {
   validatePluginsCatalogCategoriesParams,
   validatePluginsCatalogGetParams,
   validatePluginsListParams,
-  validatePluginsRefreshParams,
   validatePluginsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  fetchAllOfficialClawHubPlugins,
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
   fetchClawHubPluginDetail,
+  fetchClawHubPluginOverview,
+  type ClawHubPluginCatalogEntry,
+  type ClawHubPluginCategory,
 } from "../../infra/clawhub-plugin-catalog.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -28,54 +29,54 @@ import {
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import {
-  inspectManagedPlugin,
-  listManagedPlugins,
-  refreshManagedPluginMetadata,
-} from "../../plugins/management-service.js";
+import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
+import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const pluginsHandlers: GatewayRequestHandlers = {
-  "plugins.refresh": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validatePluginsRefreshParams, "plugins.refresh", respond)) {
-      return;
-    }
-    try {
-      refreshManagedPluginMetadata({ config: context.getRuntimeConfig() });
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin inventory refresh failed: ${formatErrorMessage(error)}. Restart the Gateway to load updated plugins.`,
-          { details: { restartRequired: true } },
-        ),
-      );
-      return;
-    } finally {
-      context.notifyPluginMetadataChanged();
-    }
-    respond(true, { ok: true, restartRequired: true }, undefined);
-  },
   "plugins.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {
       return;
     }
     try {
-      const result = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const registry = getPluginRegistryForContext();
+      // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
+      const records = new Map(registry?.plugins.toReversed().map((record) => [record.id, record]));
+      const failures = new Map(
+        registry
+          ? listPluginServiceHealthFailures(registry).map((failure) => [failure.pluginId, failure])
+          : [],
+      );
       respond(
         true,
         {
-          ...result,
-          plugins: result.plugins.map((plugin) =>
-            plugin.clawhubPackage
-              ? Object.assign({}, plugin, {
-                  catalogId: encodePluginDiscoveryId(plugin.clawhubPackage),
-                })
-              : plugin,
-          ),
+          ...catalog,
+          generation: getPluginRegistryVersion(registry),
+          plugins: catalog.plugins.map((plugin) => {
+            const record = records.get(plugin.id);
+            const failure = failures.get(plugin.id);
+            const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
+            return Object.assign({}, plugin, {
+              ...(plugin.clawhubPackage
+                ? { catalogId: encodePluginDiscoveryId(plugin.clawhubPackage) }
+                : {}),
+              runtime: {
+                state:
+                  record?.status === "loaded"
+                    ? failure
+                      ? "service-failed"
+                      : "active"
+                    : record?.status === "disabled"
+                      ? "disabled"
+                      : "unloaded",
+                ...(error ? { error: error.slice(0, 2000) } : {}),
+              },
+            });
+          }),
         },
         undefined,
       );
@@ -185,21 +186,15 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const query = params.query?.trim();
       const intent = params.intent ?? "all";
       const includeBundledOnly = intent === "bundled" || (intent === "all" && Boolean(query));
-      let published: Awaited<ReturnType<typeof fetchAllOfficialClawHubPlugins>> = [];
-      let publicationError: string | undefined;
-      if (includeBundledOnly) {
-        // Bundled distributions are first-party, so any published match belongs to ClawHub's
-        // official catalog. Read every page before classifying an unmatched entry as bundled-only.
-        try {
-          published = await fetchAllOfficialClawHubPlugins();
-        } catch (error) {
-          publicationError = `ClawHub is unavailable: ${formatErrorMessage(error)}. Bundled publication status could not be verified.`;
-        }
-      }
-      const canIncludeBundledOnly = includeBundledOnly && !publicationError;
       try {
-        const remote =
-          intent === "bundled"
+        const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
+        const remote: {
+          items: ClawHubPluginCatalogEntry[];
+          categories?: ClawHubPluginCategory[];
+          nextCursor?: string;
+        } = overviewRequest
+          ? await fetchClawHubPluginOverview()
+          : intent === "bundled"
             ? { items: [] }
             : await fetchClawHubPluginCatalog({
                 query,
@@ -210,9 +205,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
               });
         const items = joinClawHubPluginCatalog({
           remote: remote.items,
-          published,
           local,
-          includeBundledOnly: canIncludeBundledOnly,
+          includeBundledOnly,
           intent,
           category: params.category,
           query: params.query,
@@ -223,8 +217,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           true,
           {
             items,
+            ...(overviewRequest ? { categories: remote.categories } : {}),
             ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
-            ...(publicationError ? { remoteError: publicationError } : {}),
           },
           undefined,
         );
@@ -234,27 +228,21 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           {
             items: joinClawHubPluginCatalog({
               remote: [],
-              published,
               local,
-              includeBundledOnly: canIncludeBundledOnly,
+              includeBundledOnly,
               intent,
               category: params.category,
               query: params.query,
               cursor: params.cursor,
             }),
             ...(params.cursor ? { nextCursor: params.cursor } : {}),
-            remoteError: [
-              publicationError,
-              `ClawHub is unavailable: ${formatErrorMessage(error)}.${
-                canIncludeBundledOnly
-                  ? " Bundled plugins remain available."
-                  : intent === "all"
-                    ? " Installed plugins remain available."
-                    : ""
-              }`,
-            ]
-              .filter(Boolean)
-              .join(" "),
+            remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
+              includeBundledOnly
+                ? " Bundled plugins remain available."
+                : intent === "all"
+                  ? " Installed plugins remain available."
+                  : ""
+            }`,
           },
           undefined,
         );

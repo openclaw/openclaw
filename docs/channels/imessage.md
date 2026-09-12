@@ -113,6 +113,9 @@ Every section heading from the previous single-page version keeps its anchor her
   <Card title="Pairing" icon="link" href="/channels/pairing">
     DM authentication and pairing flow.
   </Card>
+  <Card title="Reactions" icon="thumbs-up" href="/tools/reactions">
+    Emoji reaction semantics for the `message` tool.
+  </Card>
   <Card title="Groups" icon="users" href="/channels/groups">
     Group chat behavior and mention gating.
   </Card>

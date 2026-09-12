@@ -1,6 +1,7 @@
 // Openai tests cover openai chatgpt provider plugin behavior.
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
@@ -41,6 +42,11 @@ describe("OpenAI provider Codex transport hooks", () => {
       "openai-device-code",
       "openai-api-key",
     ]);
+    expect(
+      provider.auth
+        .filter((method) => method.kind === "oauth" || method.kind === "device_code")
+        .map((method) => method.starterModel),
+    ).toEqual([OPENAI_CODEX_DEFAULT_MODEL, OPENAI_CODEX_DEFAULT_MODEL]);
     expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
 
@@ -80,9 +86,9 @@ describe("OpenAI provider Codex transport hooks", () => {
         refresh: "refresh-token",
       },
     });
-    expect(result?.defaultModel).toBe("openai/gpt-5.6-sol");
+    expect(result?.defaultModel).toBe("openai/gpt-6-astra");
     expect(result?.configPatch?.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.6-sol": {},
+      "openai/gpt-6-astra": {},
     });
   });
 

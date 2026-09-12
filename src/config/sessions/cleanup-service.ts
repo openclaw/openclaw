@@ -2,7 +2,6 @@
 // Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
 
 import fs from "node:fs";
-import path from "node:path";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
@@ -17,7 +16,7 @@ import {
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
 } from "./disk-budget.js";
-import { resolveSessionStorePathCore } from "./paths.js";
+import { resolveSessionArtifactDirectory, resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
   inspectTranscriptEventsSync,
@@ -267,7 +266,7 @@ function addEntryArtifactPathsToSet(params: {
   storePath: string;
   keys: ReadonlySet<string>;
 }): void {
-  const sessionsDir = path.dirname(params.storePath);
+  const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   for (const key of params.keys) {
     const entry = params.store[key];
     if (!entry) {
@@ -458,6 +457,7 @@ export async function runSessionsCleanup(params: {
   cfg: OpenClawConfig;
   opts: SessionsCleanupOptions;
   targets?: SessionStoreTarget[];
+  reclamationMode?: "worker" | "in-process";
 }): Promise<SessionsCleanupRunResult> {
   const { cfg, opts } = params;
   const maintenance = resolveMaintenanceConfig();
@@ -572,6 +572,7 @@ export async function runSessionsCleanup(params: {
           storePath: target.storePath,
           mode,
           maintenance,
+          reclamationMode: params.reclamationMode,
         });
         const finalStore =
           (appliedDiskBudget?.removedEntries ?? 0) > 0

@@ -3,6 +3,7 @@
 import {
   execFileSync,
   spawnSync,
+  type ExecFileSyncOptionsWithBufferEncoding,
   type ExecFileSyncOptionsWithStringEncoding,
 } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -321,6 +322,19 @@ function commandFailureMessage(error: unknown): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function isUnsupportedAllowEscapeSequencesFlag(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = (error as Error & { stderr?: unknown }).stderr;
+  const text =
+    typeof stderr === "string" ? stderr : Buffer.isBuffer(stderr) ? stderr.toString("utf8") : "";
+  return text
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .some((line) => line.trim() === "unknown flag: --allow-escape-sequences");
 }
 
 function createTemporaryRef(ref: string, sha: string, dryRun: boolean) {
@@ -1167,19 +1181,31 @@ async function readDispatchWitness(request: DispatchRequest, observed: DispatchR
     "Dispatch witness metadata changed from its exact artifact tuple",
   );
   // Keep credentials and redirects owned by the selected CLI; ZIP bytes must not be decoded.
-  const archiveBytes = execPlainGh(
-    [
-      "api",
-      "--method",
-      "GET",
-      `${artifactEndpoint}/zip`,
-      "--hostname",
-      "github.com",
-      "-H",
-      GH_NO_CACHE_HEADER,
-    ],
-    { ...GH_READ_OPTIONS, encoding: null, maxBuffer: MAX_WITNESS_ARCHIVE_BYTES },
-  );
+  const archiveArgs = [
+    "api",
+    "--method",
+    "GET",
+    `${artifactEndpoint}/zip`,
+    "--hostname",
+    "github.com",
+    "-H",
+    GH_NO_CACHE_HEADER,
+  ];
+  const archiveOptions = {
+    ...GH_READ_OPTIONS,
+    encoding: null,
+    maxBuffer: MAX_WITNESS_ARCHIVE_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  } satisfies ExecFileSyncOptionsWithBufferEncoding;
+  let archiveBytes: Uint8Array<ArrayBuffer>;
+  try {
+    archiveBytes = execPlainGh([...archiveArgs, "--allow-escape-sequences"], archiveOptions);
+  } catch (error) {
+    if (!isUnsupportedAllowEscapeSequencesFlag(error)) {
+      throw error;
+    }
+    archiveBytes = execPlainGh(archiveArgs, archiveOptions);
+  }
   requireDispatch(
     archiveBytes.byteLength === metadata.size_in_bytes &&
       `sha256:${createHash("sha256").update(archiveBytes).digest("hex")}` === metadata.digest,
@@ -1824,50 +1850,73 @@ async function main() {
     record = next;
   };
   try {
-    if (record) {
-      retain({ ...record, refs: { ...record.refs, target: "uncertain" } });
-    }
-    createTemporaryRef(remoteTargetBranchRef, targetSha, args.dryRun);
-    targetRefCreated = true;
-    if (record) {
-      retain({ ...record, refs: { ...record.refs, target: "created", workflow: "uncertain" } });
-    }
-    createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
-    workflowRefCreated = true;
-    if (record) {
-      retain({ ...record, phase: "attempted", refs: { target: "created", workflow: "created" } });
-    }
-    const dispatchArgs = [
-      "api",
-      "--include",
-      "--method",
-      "POST",
-      `repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,
-      "--hostname",
-      "github.com",
-      "-f",
-      `ref=${branch}`,
-    ];
-    for (const [key, value] of Object.entries(selection.wireInputs)) {
-      dispatchArgs.push("-f", `inputs[${key}]=${value}`);
-    }
-
-    // Once dispatch starts, the refs may be needed for GitHub reruns even when
-    // the client loses the response. Cleanup resumes only after verified success.
-    dispatchAttempted = true;
+    let payloadDirectory: string | undefined;
     let dispatchOutput = "";
     let dispatchError: unknown;
     try {
-      if (args.dryRun) {
-        console.log(
-          `+ gh api --method POST repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches (input values omitted)`,
+      let payloadPath = "";
+      if (!args.dryRun) {
+        const payload = JSON.stringify({ ref: branch, inputs: selection.wireInputs });
+        requireDispatch(
+          Buffer.byteLength(payload) <= MAX_REQUEST_BYTES,
+          "Dispatch payload exceeds its byte limit",
         );
-      } else {
-        dispatchOutput = runGh(dispatchArgs, { stdio: ["ignore", "pipe", "pipe"] });
+        payloadDirectory = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-payload-"));
+        payloadPath = join(payloadDirectory, "dispatch.json");
+        writeFileSync(payloadPath, payload, { flag: "wx", mode: 0o600 });
       }
-    } catch (error) {
-      dispatchError = error;
-      dispatchOutput = error instanceof Error && "stdout" in error ? stringValue(error.stdout) : "";
+      if (record) {
+        retain({ ...record, refs: { ...record.refs, target: "uncertain" } });
+      }
+      createTemporaryRef(remoteTargetBranchRef, targetSha, args.dryRun);
+      targetRefCreated = true;
+      if (record) {
+        retain({ ...record, refs: { ...record.refs, target: "created", workflow: "uncertain" } });
+      }
+      createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
+      workflowRefCreated = true;
+      if (record) {
+        retain({ ...record, phase: "attempted", refs: { target: "created", workflow: "created" } });
+      }
+      const dispatchArgs = [
+        "api",
+        "--include",
+        "--method",
+        "POST",
+        `repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,
+        "--hostname",
+        "github.com",
+        "--input",
+        payloadPath,
+      ];
+
+      // Once dispatch starts, the refs may be needed for GitHub reruns even when
+      // the client loses the response. Cleanup resumes only after verified success.
+      dispatchAttempted = true;
+      try {
+        if (args.dryRun) {
+          console.log(
+            `+ gh api --method POST repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches (input values omitted)`,
+          );
+        } else {
+          dispatchOutput = runGh(dispatchArgs, { stdio: ["ignore", "pipe", "pipe"] });
+        }
+      } catch (error) {
+        dispatchError = error;
+        dispatchOutput =
+          error instanceof Error && "stdout" in error ? stringValue(error.stdout) : "";
+      }
+    } finally {
+      if (payloadDirectory) {
+        try {
+          rmSync(payloadDirectory, { recursive: true, force: true });
+        } catch {
+          // A local cleanup failure must not change the observed POST outcome.
+          console.warn(
+            `Could not remove dispatch payload directory: ${JSON.stringify(payloadDirectory)}`,
+          );
+        }
+      }
     }
     if (record) {
       let responseStatus = 0;

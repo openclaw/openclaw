@@ -94,7 +94,9 @@ export function createWorkerProviderOwnerLifecycle(
     }
     // Fence admission without erasing the attachment needed to stop a retained node worker.
     // A crash or failed stop leaves the exact scope available for teardown replay.
-    store.revokeEnvironmentCredential(record.environmentId);
+    // The fence flag aborts in-flight workspace transfers immediately, before the tunnel
+    // stop completes; revocations that are followed by a re-mint (rotation) never fence.
+    store.revokeEnvironmentCredential(record.environmentId, { fenceWorkspaceTransfers: true });
     // Only a dedicated node lease makes provider teardown proof of worker termination.
     // Shared or unknown host isolation still requires the exact worker's stop acknowledgement.
     await tunnels?.stop(
@@ -205,6 +207,29 @@ export function createWorkerProviderOwnerLifecycle(
     }
     await finishProvenDestroy(destroying);
     throw serviceError(failureCode, `${failureLabel}: ${detail}`);
+  };
+
+  const finishConfirmedProvisionCleanup = async (
+    record: WorkerEnvironmentRecord,
+    error: ReturnType<typeof WorkerProviderError.cleanupComplete>,
+  ): Promise<never> => {
+    const current = store.get(record.environmentId);
+    // Enrollment may bind a node while this same provisioning operation is awaiting cleanup.
+    if (
+      !current ||
+      current.provisionOperationId !== record.provisionOperationId ||
+      current.ownerEpoch !== record.ownerEpoch
+    ) {
+      throw serviceError("invalid_state", "Worker provisioning owner changed during cleanup");
+    }
+    const detail = boundedWorkerError(error.provisionError);
+    const destroying = store.adoptProvisionCleanupFailure({
+      environmentId: record.environmentId,
+      leaseId: error.leaseId,
+      lastError: detail,
+    });
+    await finishProvenDestroy(await stopOwner(destroying, "provider-destroyed"));
+    throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
   };
 
   const preserveIndeterminateProvisionCleanup = (
@@ -367,6 +392,7 @@ export function createWorkerProviderOwnerLifecycle(
     lifecycleLease,
     finishDestroy,
     failBootstrap,
+    finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
   };

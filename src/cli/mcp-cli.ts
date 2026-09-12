@@ -246,7 +246,8 @@ async function directoryExists(filePath: string): Promise<boolean> {
 async function isExecutable(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
-    return true;
+    // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
+    return (await fs.stat(filePath)).isFile();
   } catch {
     return false;
   }

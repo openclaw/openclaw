@@ -14,6 +14,7 @@ import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
+import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
@@ -900,7 +901,7 @@ describe("line outbound sendPayload", () => {
     ).rejects.toThrow(/require previewimageurl/i);
   });
 
-  it("declares message adapter durable text and media with receipt proofs", async () => {
+  it("declares message adapter durable text, media, and reply-to with proofs", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -939,6 +940,29 @@ describe("line outbound sendPayload", () => {
           });
           expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
         },
+        replyTo: async () => {
+          recordLineQuoteToken({
+            accountId: "primary",
+            chatId: "U123",
+            messageId: "m-answered",
+            quoteToken: "q-answered",
+          });
+
+          await linePlugin.message?.send?.text?.({
+            cfg,
+            to: "line:user:U123",
+            text: "answering you",
+            replyToId: "m-answered",
+            accountId: "primary",
+          });
+
+          expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "answering you", {
+            verbose: false,
+            accountId: "primary",
+            cfg,
+            quoteToken: "q-answered",
+          });
+        },
         messageSendingHooks: () => {
           expect(linePlugin.message?.send?.text).toBeTypeOf("function");
         },
@@ -947,6 +971,7 @@ describe("line outbound sendPayload", () => {
 
     expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "messageSendingHooks")?.status).toBe(
       "verified",
     );

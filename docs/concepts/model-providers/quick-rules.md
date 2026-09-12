@@ -38,7 +38,7 @@ title: "Quick rules"
     Plugin auto-enable follows the same boundary: an implicitly Codex-compatible effective route can enable the Codex plugin, while explicit provider/model `agentRuntime.id: "codex"` or legacy `codex/<model>` refs require it. An `openai/*` prefix by itself does not.
 
     Fresh OpenAI API-key and ChatGPT/Codex OAuth setup select the canonical
-    `openai/gpt-5.6-sol` ref. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6-astra` ref. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to Sol. Existing explicit primaries, including
     `openai/gpt-5.5`, are preserved when OpenAI auth is added or refreshed. GPT-5.5 remains available
     through either runtime as an explicit recovery choice for accounts without

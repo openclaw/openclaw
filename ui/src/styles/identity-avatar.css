@@ -1,0 +1,43 @@
+:where(.identity-avatar--agent) {
+  width: 100%;
+  height: 100%;
+}
+
+.identity-avatar--agent {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.identity-avatar--agent > .identity-avatar__image,
+.identity-avatar--agent > .identity-avatar__fallback {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.identity-avatar__fallback {
+  display: grid;
+  place-items: center;
+}
+
+.identity-avatar--agent:not(.is-fallback) > .identity-avatar__image + .identity-avatar__fallback,
+.identity-avatar--agent.is-fallback > .identity-avatar__image {
+  visibility: hidden;
+}
+
+.identity-avatar__text::before {
+  content: attr(data-avatar);
+}
+
+.identity-avatar--agent .identity-avatar__agent-face {
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-avatar > .identity-avatar--agent {
+  display: inline-grid;
+}

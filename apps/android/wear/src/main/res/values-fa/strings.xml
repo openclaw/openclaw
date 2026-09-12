@@ -79,6 +79,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اقدام پذیرفته نشد"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشکلی پیش آمد"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فهرست‌ها را تازه‌سازی کنید و دوباره تلاش کنید."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"اطلاعات برخی مدل‌ها بازخوانی نشد. مدل‌های فهرست‌شده همچنان در دسترس هستند."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"برای انتخاب مدل‌ها در این گفتگو، OpenClaw روی گوشی خود و Gateway را به‌روزرسانی کنید."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دوباره از طریق ساعت امتحان کنید."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"به‌روزرسانی لازم است"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw را هم در تلفن و هم در ساعت به‌روزرسانی کنید."</string>

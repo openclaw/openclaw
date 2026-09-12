@@ -28,6 +28,8 @@ export type SlackIngressTurnLifecycle = Omit<
   "onAdoptionFinalizing"
 > & {
   onSessionRouted?: (sessionKey: string) => Promise<void>;
+  /** A logical duplicate awaits its existing owner before session routing. */
+  onDispatchWaiting?: () => void;
 };
 
 type SlackIngressPayload = {
@@ -292,8 +294,35 @@ export function createSlackDurableIngress(
         releaseChannel?.();
         lifecycle.abortSignal.removeEventListener("abort", settleTurn);
       };
+      const retainChannelTurn = () => {
+        if (releaseChannel) {
+          return;
+        }
+        const channelTurn = createDeferred<void>();
+        const channelTurns = activeChannelTurns.get(laneKey) ?? new Set<Promise<void>>();
+        channelTurns.add(channelTurn.promise);
+        activeChannelTurns.set(laneKey, channelTurns);
+        releaseChannel = () => channelTurn.resolve();
+        void channelTurn.promise.then(() => {
+          channelTurns.delete(channelTurn.promise);
+          if (channelTurns.size === 0 && activeChannelTurns.get(laneKey) === channelTurns) {
+            activeChannelTurns.delete(laneKey);
+          }
+        });
+        lifecycle.abortSignal.addEventListener("abort", settleTurn, { once: true });
+      };
       const routedLifecycle: SlackIngressTurnLifecycle = {
         ...lifecycle,
+        onDispatchWaiting: () => {
+          lifecycle.abortSignal.throwIfAborted();
+          // Waiting for a twin's durable adoption must not occupy the channel
+          // lane. Retain the migration fence until this event settles, though.
+          retainChannelTurn();
+          adoptOnCompletion = true;
+          lifecycle.onDeferred();
+          lifecycle.onAdoptionFinalizing();
+          monitor.requestDrain();
+        },
         onSessionRouted: async (sessionKey) => {
           if (routedSession !== undefined) {
             if (routedSession !== sessionKey) {
@@ -310,24 +339,13 @@ export function createSlackDurableIngress(
             ? previousTurn.then(() => releasedCurrentTurn.promise)
             : releasedCurrentTurn.promise;
           activeSessionTurns.set(sessionKey, currentTurn);
-          const channelTurn = createDeferred<void>();
-          const channelTurns = activeChannelTurns.get(laneKey) ?? new Set<Promise<void>>();
-          channelTurns.add(channelTurn.promise);
-          activeChannelTurns.set(laneKey, channelTurns);
+          retainChannelTurn();
           void currentTurn.then(() => {
             if (activeSessionTurns.get(sessionKey) === currentTurn) {
               activeSessionTurns.delete(sessionKey);
             }
           });
-          void channelTurn.promise.then(() => {
-            channelTurns.delete(channelTurn.promise);
-            if (channelTurns.size === 0 && activeChannelTurns.get(laneKey) === channelTurns) {
-              activeChannelTurns.delete(laneKey);
-            }
-          });
           releaseSession = () => releasedCurrentTurn.resolve();
-          releaseChannel = () => channelTurn.resolve();
-          lifecycle.abortSignal.addEventListener("abort", settleTurn, { once: true });
           // Preserve shipped channel lanes until the prepared route proves its
           // session; channel-ID migration therefore still fences all traffic.
           lifecycle.onDeferred();

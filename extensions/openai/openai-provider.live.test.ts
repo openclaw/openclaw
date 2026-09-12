@@ -6,7 +6,7 @@ import { buildOpenAIProvider } from "./openai-provider.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const DEFAULT_LIVE_MODEL_IDS = [
-  "gpt-5.6",
+  "gpt-5.6-luna",
   "chat-latest",
   "gpt-5.5",
   "gpt-5.4-mini",

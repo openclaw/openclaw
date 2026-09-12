@@ -1,14 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createApplicationConfigCapability } from "./config.ts";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function bootstrapResponse(
   serverVersion: string,
@@ -136,7 +129,7 @@ describe("createApplicationConfigCapability", () => {
   );
 
   it("does not discard an in-flight bootstrap when an auth-only refresh skips", async () => {
-    const response = deferred<Response>();
+    const response = createDeferred<Response>();
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(() => response.promise),
@@ -152,7 +145,7 @@ describe("createApplicationConfigCapability", () => {
   });
 
   it("shares concurrent bootstrap loads with equivalent credentials", async () => {
-    const response = deferred<Response>();
+    const response = createDeferred<Response>();
     const fetchMock = vi.fn<typeof fetch>(() => response.promise);
     vi.stubGlobal("fetch", fetchMock);
     let token = "fixture-token";
@@ -172,7 +165,7 @@ describe("createApplicationConfigCapability", () => {
   });
 
   it("rejects an authenticated response after credentials are cleared by a skipped refresh", async () => {
-    const response = deferred<Response>();
+    const response = createDeferred<Response>();
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(() => response.promise),
@@ -195,7 +188,7 @@ describe("createApplicationConfigCapability", () => {
   it.each(["", "replacement-fixture-token"])(
     "rejects an authenticated response when live credentials change without another refresh: %s",
     async (nextToken) => {
-      const response = deferred<Response>();
+      const response = createDeferred<Response>();
       const fetchMock = vi.fn<typeof fetch>(() => response.promise);
       vi.stubGlobal("fetch", fetchMock);
       let token = "fixture-token";
@@ -217,8 +210,8 @@ describe("createApplicationConfigCapability", () => {
   it.each([false, true])(
     "keeps independent callers valid and publishes the newest successful response (aborted: %s)",
     async (aborted) => {
-      const firstResponse = deferred<Response>();
-      const secondResponse = deferred<Response>();
+      const firstResponse = createDeferred<Response>();
+      const secondResponse = createDeferred<Response>();
       vi.stubGlobal(
         "fetch",
         vi
@@ -245,8 +238,8 @@ describe("createApplicationConfigCapability", () => {
   );
 
   it("returns null for a bootstrap response superseded by different credentials", async () => {
-    const firstResponse = deferred<Response>();
-    const secondResponse = deferred<Response>();
+    const firstResponse = createDeferred<Response>();
+    const secondResponse = createDeferred<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockImplementationOnce(() => firstResponse.promise)

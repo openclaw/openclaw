@@ -17,11 +17,19 @@ import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
+  /** Source before the first write; later writes use cfgForPersistence. */
+  sourceConfigForWrite?: OpenClawConfig;
   pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;
+  /** Source of the ordinary confirmed proposal, consumed by its initial write. */
+  confirmedConfigSource?: { path: string; hash: string };
   /** Repair panels held back until the atomic config write commits. */
   pendingChangePanels?: readonly string[];
+  /** Billing changes reported once after the model migration is durable. */
+  modelBillingRouteWarnings?: readonly string[];
+  /** Successful retirement pass awaiting the config-write/no-change boundary. */
+  modelRetirementRepairRan?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -55,7 +63,7 @@ export type DoctorHealthFlowContext = {
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
-  configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership";
+  configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership" | "config-conflict";
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;

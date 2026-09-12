@@ -33,9 +33,10 @@ import {
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { isPostCoreConvergencePass } from "./doctor/shared/update-phase.js";
+import { isPostCoreConvergencePass, isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 interface DoctorLintCliOptions {
   readonly json?: boolean;
@@ -260,6 +261,11 @@ async function executeDoctorLint(
   };
   const result = await runDoctorLintChecks(ctx, runOpts);
   const visible = result.findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
+  const warnings = isUpdateDoctorLintPass(stateView.sourceEnv)
+    ? result.findings.filter(
+        (finding) => finding.severity === "warning" && !healthFindingMeetsSeverity(finding, sevMin),
+      )
+    : [];
   const exitCode = exitCodeFromFindings(result.findings, sevMin);
   return {
     exitCode,
@@ -272,6 +278,7 @@ async function executeDoctorLint(
           checksRun: result.checksRun,
           checksSkipped: result.checksSkipped,
           findings: visible,
+          warnings,
         });
         return;
       }
@@ -321,14 +328,14 @@ async function withReadOnlyPluginStateSnapshot<T>(
   } catch (error) {
     throw new DoctorLintStateSnapshotError(error);
   }
+  const privateStateDir = path.join(privateRoot, "openclaw-state");
+  const privateDatabasePath = resolveOpenClawStateSqlitePath({
+    ...sourceEnv,
+    OPENCLAW_STATE_DIR: privateStateDir,
+  });
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   let runStarted = false;
   try {
-    const privateStateDir = path.join(privateRoot, "openclaw-state");
-    const privateDatabasePath = resolveOpenClawStateSqlitePath({
-      ...sourceEnv,
-      OPENCLAW_STATE_DIR: privateStateDir,
-    });
     fs.mkdirSync(path.dirname(privateDatabasePath), { recursive: true, mode: 0o700 });
     if (prepared) {
       for (const suffix of ["", "-journal", "-shm", "-wal"]) {
@@ -358,10 +365,15 @@ async function withReadOnlyPluginStateSnapshot<T>(
   } catch (error) {
     outcome = { ok: false, error };
   }
-  if (!cleanup()) {
-    throw new DoctorLintStateSnapshotError(
-      new Error("Temporary doctor lint state snapshot cleanup did not complete."),
-    );
+  try {
+    // Inspectors can cache private writers. Retire only this snapshot's handle
+    // before deleting its files; a failed retirement must retain those files.
+    closeOpenClawStateDatabaseByPath(privateDatabasePath);
+    if (!cleanup()) {
+      throw new Error("Temporary doctor lint state snapshot cleanup did not complete.");
+    }
+  } catch (error) {
+    throw new DoctorLintStateSnapshotError(error);
   }
   if (!outcome.ok) {
     throw runStarted ? outcome.error : new DoctorLintStateSnapshotError(outcome.error);
@@ -469,6 +481,7 @@ function writeJsonResult(result: {
   checksRun: number;
   checksSkipped: number;
   findings: readonly HealthFinding[];
+  warnings?: readonly HealthFinding[];
 }): void {
   process.stdout.write(
     JSON.stringify({
@@ -476,6 +489,8 @@ function writeJsonResult(result: {
       checksRun: result.checksRun,
       checksSkipped: result.checksSkipped,
       findings: result.findings.map(toJsonFinding),
+      // Shipped updater gates require findings to be empty on success.
+      ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
     }) + "\n",
   );
 }

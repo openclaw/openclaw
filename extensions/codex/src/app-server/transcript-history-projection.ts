@@ -4,6 +4,7 @@ import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readCodexAsyncQuestions } from "./async-questions.js";
 import { auditNativeToolName, itemName, itemStatus } from "./event-projector-items.js";
 import type { CodexThread, CodexTurn, JsonValue } from "./protocol.js";
 import type { CodexHistoryItemEntry } from "./thread-history-page.js";
@@ -158,6 +159,7 @@ function projectCodexThreadHistory(params: {
       const phase =
         item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
       const asyncDelivery = item.delivery === "async";
+      const questions = asyncDelivery ? readCodexAsyncQuestions(item.questions) : undefined;
       const message =
         role === "assistant"
           ? attachCodexMirrorIdentity(
@@ -181,7 +183,9 @@ function projectCodexThreadHistory(params: {
                   ? { errorMessage: turn.error.message }
                   : {}),
                 ...(phase ? { phase } : {}),
-                ...(asyncDelivery && itemId ? { openclawAsyncDelivery: { itemId } } : {}),
+                ...(asyncDelivery && itemId
+                  ? { openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) } }
+                  : {}),
                 timestamp,
               } satisfies AssistantMessage,
               identity,

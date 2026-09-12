@@ -1,6 +1,6 @@
 {
   "id": "xai",
-  "categories": ["models", "voice", "media"],
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
@@ -29,6 +29,10 @@
     {
       "endpointClass": "xai-native",
       "hosts": ["api.x.ai"]
+    },
+    {
+      "endpointClass": "custom",
+      "baseUrls": ["https://cli-chat-proxy.grok.com/v1"]
     }
   ],
   "providerRequest": {
@@ -181,6 +185,8 @@
       "personalAccount": true,
       "choiceId": "xai-oauth",
       "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {},
       "choiceLabel": "xAI OAuth",
       "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
       "groupId": "xai",

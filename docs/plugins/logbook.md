@@ -58,7 +58,7 @@ Configure an explicit vision model for deterministic startup:
       logbook: {
         enabled: true,
         config: {
-          visionModel: "codex/gpt-5.6-sol",
+          visionModel: "codex/gpt-6-astra",
         },
       },
     },
@@ -107,6 +107,12 @@ Day boundaries and timeline clocks use the Gateway's local timezone, not the
 browser's timezone. Frames and the SQLite timeline database live under
 `<state-dir>/logbook/`.
 
+Startup completes storage recovery and pruning before capture begins. Shutdown
+stops new work and waits for admitted database and model operations before closing
+storage. SQLite opening, queries, transactions, maintenance, and closing run in
+host-owned workers. Frame reads and pruning share admission, so previews and
+analysis finish reading their files before retention can remove them.
+
 ## Model and data flow
 
 Logbook uses two separate model routes:
@@ -140,7 +146,7 @@ text.
           nodeId: "my-mac",
           screenIndex: 0,
           maxWidth: 1440,
-          visionModel: "codex/gpt-5.6-sol",
+          visionModel: "codex/gpt-6-astra",
           retentionDays: 14,
         },
       },

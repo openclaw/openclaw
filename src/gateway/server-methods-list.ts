@@ -84,6 +84,7 @@ export const GATEWAY_EVENTS = [
   "device.pair.setup.deliveryUncertain",
   "users.prefs.changed",
   "skills.changed",
+  "plugins.changed",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",

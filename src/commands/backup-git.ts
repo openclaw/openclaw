@@ -147,7 +147,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     });
     // A completed local backup remains successful even when requested remote replication fails;
     // pushFailed records that durable degradation without discarding the recoverable local commit.
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "git",
       archivePath: repositoryPath,
       status: "ok",
@@ -167,7 +167,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     }
     return result;
   } catch (error) {
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "git",
       archivePath: repositoryPath,
       status: "failed",

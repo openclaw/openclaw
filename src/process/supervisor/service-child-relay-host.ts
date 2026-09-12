@@ -162,6 +162,7 @@ export async function createServiceChildRelayAdapter(
     useWindowsJobAnchor ? undefined : params.secretInput,
   );
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
+  const lineageFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
 
   if (params.abortSignal?.aborted) {
@@ -182,7 +183,13 @@ export async function createServiceChildRelayAdapter(
 
   // SAFETY: a defined controlFd was reserved as a pipe in this exact spawn stdio array.
   const control = controlFd === undefined ? null : (child.stdio[controlFd] as Duplex | null);
-  if (!child.connected || (!useWindowsJobAnchor && (!control || !child.stdout || !child.stderr))) {
+  // Its reader stays outside the killed process group, including escaped writers.
+  // SAFETY: lineageFd was reserved as a pipe in this exact spawn stdio array.
+  const lineage = lineageFd === undefined ? null : (child.stdio[lineageFd] as Readable | null);
+  if (
+    !child.connected ||
+    (!useWindowsJobAnchor && (!control || !lineage || !child.stdout || !child.stderr))
+  ) {
     child.kill("SIGKILL");
     const error = new Error(
       "service child cleanup identity lost: lifecycle channels were not created",
@@ -219,6 +226,7 @@ export async function createServiceChildRelayAdapter(
   let childDisconnected = false;
   let childExited = false;
   const relayExit = createDeferredCore();
+  const lineageEnd = createDeferredCore();
   let requestedSignal: "SIGTERM" | "SIGKILL" | undefined;
   let waitError: Error | undefined;
   const startup = createDeferredCore();
@@ -269,6 +277,7 @@ export async function createServiceChildRelayAdapter(
     }
     settleWait();
     extinctionCompletion.reject(waitError);
+    lineage?.destroy();
   };
 
   const sendChildMessage = (
@@ -307,6 +316,29 @@ export async function createServiceChildRelayAdapter(
     });
   };
 
+  lineage?.once("end", () => {
+    lineageEnd.resolve();
+    if (state !== "starting" && state !== "active") {
+      return;
+    }
+    void sendControlMessage({
+      type: "lineage-closed",
+      generation,
+      sequence: ++outboundSequence,
+    }).catch((error: unknown) => {
+      if (state === "starting" || state === "active") {
+        loseIdentity(toErrorObject(error, "lineage notification failed").message);
+      }
+    });
+  });
+  lineage?.once("error", (error) => loseIdentity("lineage observation failed", { cause: error }));
+  lineage?.once("close", () => {
+    if (!lineage.readableEnded) {
+      loseIdentity("lineage reader closed before EOF");
+    }
+  });
+  lineage?.resume();
+
   const onConstructionAbort = () => {
     child.kill("SIGKILL");
     // The anchor may still be cleaning its group after relay loss. Keep that
@@ -342,8 +374,8 @@ export async function createServiceChildRelayAdapter(
       loseIdentity(missingReceiptError);
       return;
     }
-    // Only kernel group disappearance certifies closure. The anchor's census is
-    // advisory: hidden or concurrently forked members can be absent from ps.
+    // Closure requires lineage EOF outside the group as well as kernel group
+    // disappearance; an escaped writer survives the anchor's group-wide KILL.
     const deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
     if (!childExited) {
       // Control EOF can precede the relay reaping its anchor. Darwin reports
@@ -366,6 +398,26 @@ export async function createServiceChildRelayAdapter(
       if (state !== "closing") {
         return;
       }
+    }
+    if (!lineage?.readableEnded) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        loseIdentity("command lineage remained open after its anchor closed");
+        return;
+      }
+      try {
+        await withTimeout(
+          Promise.race([lineageEnd.promise, extinctionCompletion.promise]),
+          remainingMs,
+          { message: "command lineage remained open after its anchor closed" },
+        );
+      } catch {
+        loseIdentity("command lineage remained open after its anchor closed");
+        return;
+      }
+    }
+    if (state !== "closing") {
+      return;
     }
     for (;;) {
       try {
@@ -580,6 +632,7 @@ export async function createServiceChildRelayAdapter(
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
     controlFd,
+    lineageFd,
     ...(control ? { acknowledgeClosing: true as const } : {}),
     windowsShellCommand: params.windowsShellCommand,
   };

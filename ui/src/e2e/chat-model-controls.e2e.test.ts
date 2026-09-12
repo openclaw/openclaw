@@ -7,7 +7,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
-  it.each(["chat", "new"])("keeps a large model catalog usable in %s", async (route) => {
+  it.each(["chat", "new"])("keeps a large pending model catalog usable in /%s", async (route) => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = Array.from({ length: 1_000 }, (_, index) => ({
         id: `model-${index}`,
@@ -18,6 +18,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         agentModel: "example/model-0",
         models,
+        methodResponses: { "models.list": { models, pendingProviders: ["example"] } },
         sessionInfo: { model: "model-0", modelProvider: "example" },
       });
       await page.goto(`${suite.server.baseUrl}${route}`);
@@ -38,9 +39,17 @@ suite.define(() => {
       expect(await textarea.inputValue()).toBe("catalog proof");
       const after: typeof before = await cdp.send("Performance.getMetrics");
       const elapsedMs = performance.now() - started;
-      const metric = (name: string) => {
-        const earlier = before.metrics.find((entry) => entry.name === name)?.value ?? 0;
-        const later = after.metrics.find((entry) => entry.name === name)?.value ?? 0;
+      const metric = (name: string, beforeMetrics = before, afterMetrics = after) => {
+        const earlier = beforeMetrics.metrics.find((entry) => entry.name === name)?.value;
+        const later = afterMetrics.metrics.find((entry) => entry.name === name)?.value;
+        if (
+          typeof earlier !== "number" ||
+          !Number.isFinite(earlier) ||
+          typeof later !== "number" ||
+          !Number.isFinite(later)
+        ) {
+          throw new Error(`Missing or invalid CDP metric: ${name}`);
+        }
         return (later - earlier) * 1_000;
       };
       const timings = {
@@ -52,15 +61,57 @@ suite.define(() => {
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
       await trigger.click();
-      await picker.locator("[data-chat-model-search]").fill("Model 0999");
+      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(1);
+      expect(await picker.locator("[data-chat-model-catalog-state]").textContent()).toContain(
+        "example: checking models…",
+      );
+      const search = picker.locator("[data-chat-model-search]");
+      await search.click();
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
+      const searchBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const searchStarted = performance.now();
+      await search.pressSequentially("Model 0999");
+      expect(await search.inputValue()).toBe("Model 0999");
+      const searchAfter: typeof before = await cdp.send("Performance.getMetrics");
+      const searchTimings = {
+        route,
+        models: models.length,
+        elapsedMs: performance.now() - searchStarted,
+        scriptMs: metric("ScriptDuration", searchBefore, searchAfter),
+        taskMs: metric("TaskDuration", searchBefore, searchAfter),
+      };
+      console.log(JSON.stringify({ proof: "model-catalog-search-typing", ...searchTimings }));
       const result = picker.locator('[data-chat-model-option="example/model-999"]');
       await expect.poll(() => result.isVisible()).toBe(true);
       expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+      expect(await result.isEnabled()).toBe(true);
+      for (const request of await gateway.getRequests("models.list")) {
+        expect(request.params).not.toHaveProperty("refresh", true);
+      }
       const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactRoot) {
-        const dir = createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot);
-        await writeFile(`${dir}/timings.json`, `${JSON.stringify(timings, null, 2)}\n`);
-        await page.screenshot({ path: `${dir}/filtered-catalog.png`, animations: "disabled" });
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot)
+        : undefined;
+      if (artifactDir) {
+        await writeFile(`${artifactDir}/timings.json`, `${JSON.stringify(timings, null, 2)}\n`);
+        await writeFile(
+          `${artifactDir}/search-timings.json`,
+          `${JSON.stringify(searchTimings, null, 2)}\n`,
+        );
+        await page.screenshot({
+          path: `${artifactDir}/filtered-catalog.png`,
+          animations: "disabled",
+        });
+      }
+      await gateway.setMethodResponse("models.list", { models });
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await expect.poll(() => picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      expect(await picker.getAttribute("open")).not.toBeNull();
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/published-catalog.png`,
+          animations: "disabled",
+        });
       }
       const selectionBefore: typeof before = await cdp.send("Performance.getMetrics");
       const selectionStarted = performance.now();
@@ -71,11 +122,7 @@ suite.define(() => {
         route,
         models: models.length,
         elapsedMs: performance.now() - selectionStarted,
-        taskMs:
-          (selectionAfter.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
-            1_000 -
-          (selectionBefore.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
-            1_000,
+        taskMs: metric("TaskDuration", selectionBefore, selectionAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-selection", ...selectionTimings }));
       await cdp.detach();
@@ -87,7 +134,7 @@ suite.define(() => {
     });
   });
 
-  it("shows and changes this chat's account without changing the default for new chats", async () => {
+  it.each(["pointer", "keyboard"])("changes only this chat's account (%s)", async (input) => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("chat-model-accounts", artifactRoot)
@@ -144,6 +191,31 @@ suite.define(() => {
           deferredMethods: ["sessions.patch"],
           methodResponses: {
             "sessions.list": sessionList,
+            "models.authStatus": {
+              ts: 1,
+              providers: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: personal.authProfileId,
+                      type: "oauth",
+                      status: "ok",
+                      email: "personal@example.com",
+                    },
+                    {
+                      profileId: work.authProfileId,
+                      type: "oauth",
+                      status: "ok",
+                      email: "work@example.com",
+                    },
+                  ],
+                  usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
+                },
+              ],
+            },
             "models.list": {
               commands: [],
               models,
@@ -156,7 +228,8 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              accounts: [personal],
+              // Reopening retries an empty inventory; a populated one stays cached.
+              accounts: input === "keyboard" ? [] : [personal],
               nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
@@ -167,12 +240,23 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         await model.click();
-        const account = composer.locator(".chat-model-account");
-        const picker = account.locator("wa-dropdown");
-        const trigger = picker.locator("[data-chat-account-trigger]");
+        const heading = composer.locator('[data-chat-model-provider="openai"]');
+        await expect
+          .poll(() => heading.textContent())
+          .toContain("Subscription · personal@example.com");
+        const account = composer.locator("[data-chat-account-selection]");
+        const picker = account;
+        const trigger = picker.locator("[data-chat-account-group-toggle]");
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         for (const width of [320, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
+          expect(await heading.getAttribute("title")).toBe("Subscription · personal@example.com");
+          expect(
+            await heading.locator(".chat-controls__auth-meta svg").evaluate((icon) => ({
+              width: getComputedStyle(icon).width,
+              height: getComputedStyle(icon).height,
+            })),
+          ).toEqual({ width: "13px", height: "13px" });
           await expect
             .poll(async () => {
               const box = await account.boundingBox();
@@ -187,53 +271,163 @@ suite.define(() => {
           }
         }
         await trigger.click();
-        const more = picker.getByRole("menuitem", {
-          name: "Load more saved accounts",
-          exact: true,
-        });
+        const more = picker.locator('[data-chat-account-option="more"]');
         await expect.poll(() => more.isVisible()).toBe(true);
-        await page.keyboard.press("Escape");
+        expect(
+          await picker.locator('[data-chat-account-option="current"]').textContent(),
+        ).toContain("personal@example.com");
+        await trigger.click();
         await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
-        await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+        const refreshRequests = await gateway.getRequests("users.listModelAccounts");
+        if (input === "keyboard") {
+          await gateway.deferNext("users.listModelAccounts", {});
+        }
         await trigger.press("Enter");
         await expect.poll(() => more.isVisible()).toBe(true);
-        await expect
-          .poll(() =>
-            picker
-              .locator('[data-chat-account-option="current"]')
-              .evaluate((element) => element === document.activeElement),
-          )
-          .toBe(true);
+        const pendingMoreTarget = await more.elementHandle();
+        expect(pendingMoreTarget).not.toBeNull();
+        if (input === "keyboard") {
+          const refresh = await gateway.waitForRequest("users.listModelAccounts", {
+            after: refreshRequests.length,
+          });
+          expect(refresh.params).toEqual({});
+          const loading = picker.locator('[data-chat-account-option="loading"]');
+          await expect.poll(() => loading.isVisible()).toBe(true);
+          expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+          await pendingMoreTarget!.focus();
+          await gateway.resolveDeferred("users.listModelAccounts", {
+            profileId: "test-person",
+            accounts: [personal],
+            nextCursor: "accounts-page-2",
+            links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+          });
+          await expect.poll(() => loading.isVisible()).toBe(false);
+          await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+          await expect
+            .poll(() =>
+              pendingMoreTarget!.evaluate((element) => element === document.activeElement),
+            )
+            .toBe(true);
+        } else {
+          expect(await gateway.getRequests("users.listModelAccounts")).toEqual(refreshRequests);
+        }
+        expect(
+          await picker
+            .locator('[data-chat-account-option="current"]')
+            .getAttribute("aria-selected"),
+        ).toBe("true");
         const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
         await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
-        await more.click();
+        const beforePaginationUrl = page.url();
+        if (input === "keyboard") {
+          await page.keyboard.press("Enter");
+        } else {
+          await pendingMoreTarget!.click();
+        }
+        await expect
+          .poll(async () => {
+            const requests = await gateway.getRequests("users.listModelAccounts");
+            return requests.length > inventoryRequests.length || page.url() !== beforePaginationUrl;
+          })
+          .toBe(true);
+        expect(page.url()).toBe(beforePaginationUrl);
         const nextPage = await gateway.waitForRequest("users.listModelAccounts", {
           after: inventoryRequests.length,
         });
         expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
+        const loading = picker.locator('[data-chat-account-option="loading"]');
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+        if (input === "keyboard") {
+          await page.keyboard.press("Enter");
+        } else {
+          const bounds = await pendingMoreTarget!.boundingBox();
+          expect(bounds).not.toBeNull();
+          await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+        }
+        expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+          inventoryRequests.length + 1,
+        );
+        expect(page.url()).toBe(beforePaginationUrl);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",
           accounts: [work],
+          nextCursor: "accounts-page-3",
           links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
         });
-        const workOption = picker.getByRole("menuitemradio", { name: work.label, exact: true });
+        await expect.poll(() => loading.isVisible()).toBe(false);
+        await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+        const pageRequests = await gateway.getRequests("users.listModelAccounts");
+        await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-3" });
+        const beforeLastPageUrl = page.url();
+        if (input === "keyboard") {
+          expect(await pendingMoreTarget!.evaluate((row) => row === document.activeElement)).toBe(
+            true,
+          );
+          await page.keyboard.press("Enter");
+        } else {
+          await pendingMoreTarget!.click();
+        }
+        await expect
+          .poll(async () => {
+            const requests = await gateway.getRequests("users.listModelAccounts");
+            return requests.length > pageRequests.length || page.url() !== beforeLastPageUrl;
+          })
+          .toBe(true);
+        expect(page.url()).toBe(beforeLastPageUrl);
+        const lastPage = await gateway.waitForRequest("users.listModelAccounts", {
+          after: pageRequests.length,
+        });
+        expect(lastPage.params).toEqual({ cursor: "accounts-page-3" });
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+        if (input === "keyboard") {
+          await page.keyboard.press("Enter");
+        } else {
+          const bounds = await pendingMoreTarget!.boundingBox();
+          expect(bounds).not.toBeNull();
+          await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+        }
+        expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+          pageRequests.length + 1,
+        );
+        expect(page.url()).toBe(beforeLastPageUrl);
+        const manage = picker.locator('[data-chat-account-option="manage"]');
+        if (input === "keyboard") {
+          await manage.focus();
+        }
+        await gateway.resolveDeferred("users.listModelAccounts", {
+          profileId: "test-person",
+          accounts: [],
+          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        });
+        await expect.poll(() => loading.isVisible()).toBe(false);
+        await expect.poll(() => more.isVisible()).toBe(false);
+        if (input === "keyboard") {
+          expect(await manage.evaluate((button) => button === document.activeElement)).toBe(true);
+        }
+        const workOption = picker.locator(
+          `[data-chat-account-option="account:${work.authProfileId}"]`,
+        );
         await expect.poll(() => workOption.isVisible()).toBe(true);
+        expect(await workOption.textContent()).toContain("work@example.com");
         if (artifactDir) {
           await page.screenshot({
             animations: "disabled",
             path: `${artifactDir}/chat-account-page-2.png`,
           });
         }
-        await page.keyboard.press("Home");
-        await page.keyboard.press("ArrowDown");
-        await expect
-          .poll(() => workOption.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        await page.keyboard.press("Enter");
+        await trigger.click();
+        const search = composer.locator("[data-chat-model-search]");
+        await search.fill("account");
+        await expect.poll(() => workOption.isVisible()).toBe(true);
+        await search.fill(work.label);
+        await search.press("ArrowDown");
+        await expect.poll(() => workOption.getAttribute("data-chat-model-highlighted")).toBe("");
+        await search.press("Enter");
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toEqual({
           key: sessionKey,
@@ -259,6 +453,7 @@ suite.define(() => {
           reason: "patch",
         });
         await expect.poll(() => trigger.textContent()).toContain(work.label);
+        await expect.poll(() => heading.textContent()).toContain("Subscription · work@example.com");
         expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
         expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
         if (artifactDir) {

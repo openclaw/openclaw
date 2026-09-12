@@ -32,7 +32,7 @@ import {
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { startGatewayServer } from "./server.js";
+import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
@@ -45,6 +45,7 @@ export async function connectGatewayClient(params: {
   url: string;
   token?: string;
   deviceToken?: string;
+  origin?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
@@ -90,6 +91,7 @@ export async function connectGatewayClient(params: {
       url: params.url,
       token: params.token,
       deviceToken: params.deviceToken,
+      origin: params.origin,
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
@@ -274,9 +276,13 @@ export async function startGatewayWithClient(params: {
   cfg: unknown;
   configPath: string;
   token: string;
+  clientName?: GatewayClientName;
+  mode?: GatewayClientMode;
+  origin?: string;
   clientDisplayName?: string;
   scopes?: string[];
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+  hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
 }) {
   const gatewayStartupEnv = captureEnv([
     ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
@@ -295,11 +301,15 @@ export async function startGatewayWithClient(params: {
       bind: "loopback",
       auth: { mode: "token", token: params.token },
       controlUiEnabled: false,
+      hotReloadRecovery: params.hotReloadRecovery,
     });
     server = startedServer;
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       token: params.token,
+      clientName: params.clientName,
+      mode: params.mode,
+      origin: params.origin,
       clientDisplayName: params.clientDisplayName,
       scopes: params.scopes,
       onEvent: params.onEvent,

@@ -46,6 +46,7 @@ import {
   resolveAssistantResultText,
   resolveAssistantTextCompletion,
   resolveAssistantTextInput,
+  resolveAssistantTextStreamDelta,
   type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -255,8 +256,7 @@ export const testing = {
 };
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
-  res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
+  res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
 type ResolvedResponsesLimits = {
@@ -858,7 +858,7 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = "";
+  let streamedAssistantText = assistantText;
   let pendingAssistantText: AssistantTextSnapshot | undefined;
   let finalResultText: string | undefined;
   let finalToolCalls: PendingToolCall[] | undefined;
@@ -898,14 +898,14 @@ export async function handleOpenResponsesHttpRequest(
         assistantText,
         pending: pendingAssistantText,
         resultText: finalResultText,
-        streamedText: streamedAssistantText,
+        streamedText: streamedAssistantText.text,
         fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
       });
-      if (!finalText.startsWith(streamedAssistantText)) {
+      if (!finalText.startsWith(streamedAssistantText.text)) {
         finalizeUnrepresentableAssistantReplacement();
         return;
       }
-      const delta = finalText.slice(streamedAssistantText.length);
+      const delta = finalText.slice(streamedAssistantText.text.length);
       if (delta) {
         writeSseEvent(res, {
           type: "response.output_text.delta",
@@ -915,7 +915,6 @@ export async function handleOpenResponsesHttpRequest(
           delta,
         });
       }
-      streamedAssistantText = finalText;
       closed = true;
       unsubscribe();
 
@@ -1093,31 +1092,33 @@ export async function handleOpenResponsesHttpRequest(
           !input.replaceable &&
           input.replace &&
           input.text !== undefined &&
-          pendingAssistantText.text.startsWith(streamedAssistantText)
+          pendingAssistantText.text.startsWith(streamedAssistantText.text)
         ) {
           unrepresentableAssistantReplacement = false;
         }
         return;
       }
 
-      assistantText = mergeAssistantText(assistantText, input, "append-only");
+      const previous = assistantText;
+      const merged = mergeAssistantText(previous, input, "append-only");
+      assistantText = merged;
       // Unconfirmed tool-choice prose may still be corrected before it is sent.
       if (toolChoiceConstraint) {
         return;
       }
       // Keep physical wire progress separate from a corrected item snapshot.
-      if (!assistantText.text.startsWith(streamedAssistantText)) {
+      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
+      if (content === undefined) {
         unrepresentableAssistantReplacement = true;
         return;
       }
       if (input.replace && input.text !== undefined) {
         unrepresentableAssistantReplacement = false;
       }
-      const content = assistantText.text.slice(streamedAssistantText.length);
+      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }
-      streamedAssistantText = assistantText.text;
       writeSseEvent(res, {
         type: "response.output_text.delta",
         item_id: outputItemId,

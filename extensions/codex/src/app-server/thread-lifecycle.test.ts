@@ -65,6 +65,43 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
 const PROGRESS_CARD_SYSTEM_PROMPT =
   "During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.";
 
+describe("Codex usage attribution", () => {
+  it("labels new OpenClaw threads without rewriting resumed thread attribution", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, { appServer, cwd: "/repo", dynamicTools: [] });
+    const resume = buildThreadResumeParams(params, { appServer, threadId: "thread-1" });
+
+    expect(start.threadSource).toBe("openclaw");
+    expect(resume).not.toHaveProperty("threadSource");
+  });
+
+  it.each(["user", "cron", "heartbeat", "manual", "memory", "overflow"] as const)(
+    "preserves the %s run trigger on each new turn",
+    (trigger) => {
+      const params = { ...createAttemptParams({ provider: "openai" }), trigger };
+      const request = buildTurnStartParams(params, {
+        appServer: createAppServerOptions() as never,
+        threadId: "existing-thread",
+        cwd: "/repo",
+      });
+
+      expect(request.turnTrigger).toBe(trigger);
+    },
+  );
+
+  it("does not guess a human trigger when the caller supplied none", () => {
+    const params = { ...createAttemptParams({ provider: "openai" }), trigger: undefined };
+    const request = buildTurnStartParams(params, {
+      appServer: createAppServerOptions() as never,
+      threadId: "existing-thread",
+      cwd: "/repo",
+    });
+
+    expect(request).not.toHaveProperty("turnTrigger");
+  });
+});
+
 describe("Codex incognito thread persistence", () => {
   it("marks only incognito-shaped harness sessions ephemeral", () => {
     const appServer = createAppServerOptions() as never;
@@ -1165,6 +1202,34 @@ function disabledMcpServerStatus(name: string) {
     resourceTemplates: [],
     authStatus: "unsupported",
   };
+}
+
+function createSupervisedCommitRequest(params: {
+  sourceThreadId: string;
+  probeThreadId: string;
+  finalThreadId: string;
+}) {
+  return vi.fn(async (method: string, _requestParams?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/read") {
+      return { thread: sourceThread({ threadId: params.sourceThreadId }) };
+    }
+    if (method === "thread/fork") {
+      return nativeThreadResult(params.probeThreadId, "native-effective", "native-provider");
+    }
+    if (method === "thread/start") {
+      return nativeThreadResult(params.finalThreadId, "native-effective", "native-provider");
+    }
+    if (method === "thread/archive" || method === "thread/unsubscribe") {
+      return {};
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
 }
 
 function sourceThread(params: {
@@ -5693,27 +5758,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     const abandonClient = vi.fn(async () => undefined);
 
     await expect(
@@ -5759,27 +5804,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
       mutate: vi.fn(async (storeIdentity, mutation) => {
@@ -5825,27 +5850,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
       read: vi.fn((storeIdentity) => {
@@ -5898,27 +5903,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     let commitFailed = false;
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
@@ -5975,27 +5960,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     let commitFailed = false;
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,

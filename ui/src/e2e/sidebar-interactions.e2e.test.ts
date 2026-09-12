@@ -52,7 +52,24 @@ suite.define(() => {
                 archive: false,
                 startTerminal: true,
               },
-              hosts: [],
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway Mac",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "cli-thread",
+                      name: "CLI plan",
+                      status: "stored",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+              ],
             },
           ],
         },
@@ -468,7 +485,7 @@ suite.define(() => {
         )
         .toBe(true);
       await expect
-        .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
+        .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
       const gridLayout = await menu.evaluate((dropdown) => {

@@ -571,8 +571,6 @@ ${run}`;
         ),
         rebases: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "rebase"),
         pushes: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "push"),
-        go: report.commands.filter(({ tool }) => tool === "go"),
-        crabbox: report.commands.filter(({ tool }) => tool === "crabbox"),
         checkouts: report.commands.filter(
           ({ tool, args }) => tool === "git" && args[0] === "checkout",
         ),

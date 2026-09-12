@@ -70,11 +70,15 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     pane.applyGatewaySnapshot(snapshot);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "agent:main:current",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "agent:main:current",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
         { role: "assistant", content: [{ type: "text", text: "Recovered transcript" }] },
@@ -108,11 +112,16 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     pane.applyGatewaySnapshot(snapshot);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenNthCalledWith(2, "chat.startup", {
-      sessionKey: state.sessionKey,
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "chat.startup",
+      {
+        sessionKey: state.sessionKey,
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
         { role: "assistant", content: [{ type: "text", text: "Recovered after reconnect" }] },

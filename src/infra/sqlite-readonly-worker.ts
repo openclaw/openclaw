@@ -11,10 +11,12 @@ import {
   SQLITE_READONLY_CHILD_ARG,
 } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import type { SqliteSchemaHeader } from "./sqlite-schema-header.js";
 
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const SQLITE_INSPECTION_TIMEOUT_MS = 30_000;
 const SQLITE_INSPECTION_TIMEOUT_MAX_MS = 30 * 60_000;
+export const SQLITE_INSPECTION_BYTES_PER_SECOND = 32 * 1024 * 1024;
 const log = createSubsystemLogger("state/sqlite");
 
 export function resolveSqliteInspectionBudget(
@@ -26,7 +28,8 @@ export function resolveSqliteInspectionBudget(
   // 32 MiB/s is a conservative cold-cache floor on cloud block storage; the
   // fixed 30 seconds covers child startup and shutdown.
   const timeoutMs = Math.min(
-    SQLITE_INSPECTION_TIMEOUT_MS + Math.ceil(Number(sizeBytes ?? 0) / (32 * 1024 * 1024)) * 1000,
+    SQLITE_INSPECTION_TIMEOUT_MS +
+      Math.ceil(Number(sizeBytes ?? 0) / SQLITE_INSPECTION_BYTES_PER_SECOND) * 1000,
     SQLITE_INSPECTION_TIMEOUT_MAX_MS,
   );
   const size =
@@ -65,7 +68,11 @@ export function sqliteInspectionTimeoutError(
   );
 }
 
-type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; message: string };
+type SqliteReadOnlyWorkerMode = "sync" | "async" | "schema-header";
+type SqliteReadOnlyWorkerResult =
+  | { ok: true; location: string }
+  | { ok: true; header: SqliteSchemaHeader }
+  | { ok: false; message: string };
 type SqliteReadOnlyWorkerOutput = { failure?: string; stderr: string; stdout: string };
 
 function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {
@@ -74,6 +81,18 @@ function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWo
   }
   if (Object.keys(value).length !== 2 || !("ok" in value)) {
     return false;
+  }
+  if (value.ok === true && "header" in value) {
+    const header = value.header;
+    return (
+      header !== null &&
+      typeof header === "object" &&
+      "userVersion" in header &&
+      typeof header.userVersion === "number" &&
+      Number.isInteger(header.userVersion) &&
+      Object.keys(header).every((key) => key === "userVersion" || key === "writerAppVersion") &&
+      (!("writerAppVersion" in header) || typeof header.writerAppVersion === "string")
+    );
   }
   return (
     (value.ok === true && "location" in value && typeof value.location === "string") ||
@@ -108,7 +127,22 @@ function parseSqliteReadOnlyWorkerResult(
   return message;
 }
 
-function readSqliteReadOnlyWorkerLocation(params: SqliteReadOnlyWorkerOutput): string {
+function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "schema-header",
+): SqliteSchemaHeader;
+function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "sync" | "async",
+): string;
+function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: SqliteReadOnlyWorkerMode,
+): string | SqliteSchemaHeader;
+function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: SqliteReadOnlyWorkerMode,
+): string | SqliteSchemaHeader {
   let result: SqliteReadOnlyWorkerResult;
   try {
     result = parseSqliteReadOnlyWorkerResult(params.stdout, params.stderr);
@@ -124,10 +158,23 @@ function readSqliteReadOnlyWorkerLocation(params: SqliteReadOnlyWorkerOutput): s
       params.stderr,
     );
   }
-  return result.location;
+  if (mode === "schema-header" && "header" in result) {
+    return result.header;
+  }
+  if (mode !== "schema-header" && "location" in result) {
+    return result.location;
+  }
+  throw createSqliteReadOnlyWorkerError(
+    "returned a result for a different operation",
+    params.stderr,
+  );
 }
 
-function sqliteReadOnlyWorkerArgv(pathname: string, mode: "sync" | "async", stagingRoot?: string) {
+function sqliteReadOnlyWorkerArgv(
+  pathname: string,
+  mode: SqliteReadOnlyWorkerMode,
+  stagingRoot?: string,
+) {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
   return [
     ...resolveRuntimeWorkerArgv(workerUrl),
@@ -140,9 +187,17 @@ function sqliteReadOnlyWorkerArgv(pathname: string, mode: "sync" | "async", stag
 
 export function runSqliteReadOnlyWorker(
   pathname: string,
+  options: { mode: "schema-header"; stagingRoot?: string; signal?: AbortSignal },
+): Promise<SqliteSchemaHeader>;
+export function runSqliteReadOnlyWorker(
+  pathname: string,
   options: { mode: "sync" | "async"; stagingRoot?: string; signal?: AbortSignal },
-): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
+): Promise<string>;
+export function runSqliteReadOnlyWorker(
+  pathname: string,
+  options: { mode: SqliteReadOnlyWorkerMode; stagingRoot?: string; signal?: AbortSignal },
+): Promise<string | SqliteSchemaHeader> {
+  return new Promise<string | SqliteSchemaHeader>((resolve, reject) => {
     const { timeoutMs, size } = readSqliteSnapshotBudget(pathname);
     let output: SqliteReadOnlyWorkerOutput = { stderr: "", stdout: "" };
     const child = execFile(
@@ -180,7 +235,7 @@ export function runSqliteReadOnlyWorker(
       options.signal?.removeEventListener("abort", abort);
       try {
         options.signal?.throwIfAborted();
-        resolve(readSqliteReadOnlyWorkerLocation(output));
+        resolve(readSqliteReadOnlyWorkerValue(output, options.mode));
       } catch (workerError) {
         reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
       }
@@ -206,9 +261,12 @@ export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: strin
     : result.status === 0
       ? undefined
       : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
-  return readSqliteReadOnlyWorkerLocation({
-    failure,
-    stderr: result.stderr,
-    stdout: result.stdout,
-  });
+  return readSqliteReadOnlyWorkerValue(
+    {
+      failure,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    },
+    "sync",
+  );
 }

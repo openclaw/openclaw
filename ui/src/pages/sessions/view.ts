@@ -14,6 +14,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import "../../styles/sessions.css";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -60,7 +61,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
-import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
 type TranscriptSearchState =
@@ -72,10 +73,12 @@ type TranscriptSearchState =
       results: SessionsSearchHit[];
       indexing: boolean;
       truncated: boolean;
+      archivedTranscriptsExcluded: number;
     };
 
 export type SessionsProps = {
   loading: boolean;
+  refreshing: boolean;
   result: SessionsListResult | null;
   error: string | null;
   activeMinutes: string;
@@ -479,6 +482,15 @@ function renderTranscriptSearch(props: SessionsProps, rows: GatewaySessionRow[])
                   </button>
                 </div>
               `
+            : nothing
+        }
+        ${
+          state.status === "results" && state.archivedTranscriptsExcluded > 0
+            ? html`<div class="sessions-transcript-search__notice">
+                ${t("sessionsView.transcriptSearchArchivedExcluded", {
+                  count: String(state.archivedTranscriptsExcluded),
+                })}
+              </div>`
             : nothing
         }
         ${
@@ -1019,8 +1031,8 @@ export function renderSessions(props: SessionsProps) {
           `
         : nothing
     }
-    <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-      ${props.loading ? t("common.loading") : t("common.refresh")}
+    <button class="btn" ?disabled=${props.refreshing} @click=${props.onRefresh}>
+      ${props.refreshing ? t("common.loading") : t("common.refresh")}
     </button>
   `;
   const children = [
@@ -1549,6 +1561,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     : nothing
                 }
               </span>
+              ${row.kind === "global" && !row.agentId ? nothing : renderAgentRowChip(parseAgentSessionKey(row.key)?.agentId ?? row.agentId)}
               ${
                 showDisplayName
                   ? html`<span class="muted session-key-display-name">${displayName}</span>`

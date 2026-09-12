@@ -1,3 +1,7 @@
+import {
+  PREPARED_THINKING_POLICY,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 
@@ -33,7 +37,9 @@ function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry
   );
 }
 
-function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogEntry {
+function clearRouteBoundCatalogMetadata(
+  entry: ModelCatalogEntry & ThinkingCatalogPolicyCarrier,
+): ModelCatalogEntry {
   const {
     contextWindow: _contextWindow,
     contextWindows: _contextWindows,
@@ -41,6 +47,8 @@ function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogE
     contextTokens: _contextTokens,
     reasoning: _reasoning,
     configuredReasoning: _configuredReasoning,
+    thinkingPolicyProvider: _thinkingPolicyProvider,
+    [PREPARED_THINKING_POLICY]: _thinkingPolicy,
     thinkingLevelMap: _thinkingLevelMap,
     input: _input,
     params: _params,
@@ -56,6 +64,8 @@ export function overlayCatalogMetadata(
   overlay: ModelCatalogEntry,
   options?: {
     preserveBaseCompat?: boolean;
+    /** Keep the donor transport for subsequent route projection. */
+    preserveBaseRoute?: boolean;
   },
 ): ModelCatalogEntry {
   // Catalog rows with one logical provider/id may describe different physical
@@ -92,12 +102,13 @@ export function overlayCatalogMetadata(
               }
             : {}),
         };
+  const applyRoute = !options?.preserveBaseRoute;
   return {
     ...selectionNeutralBase,
     ...contextWindowSelection,
     ...(routeChanged ? { name: overlay.name } : {}),
-    ...(overlay.api !== undefined ? { api: overlay.api } : {}),
-    ...(overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
+    ...(applyRoute && overlay.api !== undefined ? { api: overlay.api } : {}),
+    ...(applyRoute && overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),

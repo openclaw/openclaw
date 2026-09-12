@@ -728,13 +728,6 @@ describe("plugins cli install", () => {
         active = false;
         return snapshot;
       });
-      replaceConfigFileMock.mockImplementation(async (input) => {
-        const params = input as Parameters<
-          typeof import("../config/config.js").replaceConfigFile
-        >[0];
-        params.writeOptions?.assertConfigPathForWrite?.();
-        await configWriteMock(params.nextConfig);
-      });
       const officialPlanSpy =
         source === "official primary ClawHub"
           ? vi

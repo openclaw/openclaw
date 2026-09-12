@@ -1,6 +1,10 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
+import {
+  sidebarSessionAttentionPriority,
+  type SidebarRecentSession,
+  type SidebarSessionAttention,
+} from "./app-sidebar-session-types.ts";
 import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
@@ -61,11 +65,7 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionState(session: SidebarRecentSession) {
-  if (session.hasActiveRun) {
-    const queued = session.hasActiveRun && session.status === "queued";
-    return renderSessionGlyph({ content: nothing, running: true, queued });
-  }
+export function renderSessionIdleState(session: SidebarRecentSession) {
   if (!session.isChild) {
     return session.unread
       ? html`<span
@@ -98,4 +98,85 @@ export function renderSessionState(session: SidebarRecentSession) {
         >${statusBadge.icon}</span
       >`
     : nothing;
+}
+
+/** Keep each attention fact accessible once when its text moves out of the row. */
+function renderCompactSessionAttention(attention: SidebarSessionAttention) {
+  if (attention.kind === "none") {
+    return nothing;
+  }
+  if (attention.kind === "question") {
+    return renderSessionAttentionIcon(attention, true);
+  }
+  const label = sessionAttentionSubtitle(attention);
+  return html`<openclaw-tooltip .content=${label}
+    ><span role="img" aria-label=${label}
+      >${renderSessionAttentionIcon(attention)}</span
+    ></openclaw-tooltip
+  >`;
+}
+
+/** Share compact indicators between rows and collapsed groups; attention outranks activity. */
+export function renderTeamSessionSlots(
+  rows: readonly SidebarRecentSession[],
+  includeChildren: boolean,
+  childCount: number,
+  groupConflicts = 0,
+) {
+  const attention = rows
+    .flatMap((row) => [
+      row.ownAttention ?? row.attention,
+      ...(includeChildren ? (row.childAttention ?? []) : []),
+    ])
+    .toSorted((a, b) => sidebarSessionAttentionPriority(b) - sidebarSessionAttentionPriority(a))[0];
+  const active = rows.reduce(
+    (n, row) => n + Number(row.hasActiveRun) + (includeChildren ? row.runningChildCount : 0),
+    0,
+  );
+  const queued = rows.reduce(
+    (n, row) =>
+      n +
+      Number(row.hasActiveRun && row.status === "queued") +
+      (includeChildren ? (row.queuedChildCount ?? 0) : 0),
+    0,
+  );
+  const unread = rows.reduce(
+    (n, row) => n + Number(row.unread) + (includeChildren ? (row.unreadChildCount ?? 0) : 0),
+    0,
+  );
+  const failed = rows.some(
+    (row) =>
+      row.status === "failed" ||
+      row.status === "timeout" ||
+      (includeChildren && row.failedChildCount > 0),
+  );
+  const state =
+    attention && attention.kind !== "none"
+      ? renderCompactSessionAttention(attention)
+      : failed
+        ? html`<span
+            class="sidebar-child-session__status--failed"
+            role="img"
+            aria-label=${t("sessionsView.statusFailed")}
+            >${icons.alertTriangle}</span
+          >`
+        : groupConflicts
+          ? html`<span
+              role="img"
+              aria-label=${t("sessionsView.cloudWorkerDescendantConflicts", { count: String(groupConflicts) })}
+              >${icons.globe}</span
+            >`
+          : active
+            ? renderSessionGlyph({ content: nothing, running: true, queued: active === queued })
+            : rows.length === 1 && rows[0]?.isChild
+              ? renderSessionIdleState(rows[0])
+              : nothing;
+  if ((!includeChildren || childCount === 0) && unread === 0 && state === nothing) {
+    return nothing;
+  }
+  return html`<span class="sidebar-session-team-state">
+    ${includeChildren && childCount > 0 ? html`<span class="sidebar-child-session-toggle__count" role="img" aria-label=${`${t("sessionsView.childSessions")}: ${childCount}`}>${childCount}</span>` : nothing}
+    ${unread > 0 ? html`<span class=${unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"} role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread > 1 ? unread : nothing}</span>` : nothing}
+    ${state === nothing ? nothing : html`<span class="sidebar-session-team-state__status">${state}</span>`}
+  </span>`;
 }

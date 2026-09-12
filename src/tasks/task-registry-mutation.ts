@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { isTerminalTaskFlow } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
@@ -36,7 +35,11 @@ import {
   tryPersistTaskDeliveryStateUpsert,
   tryPersistTaskUpsert,
 } from "./task-registry-state.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskDeliveryState,
+  type TaskRecord,
+} from "./task-registry.types.js";
 import { resolveTaskCleanupAfter } from "./task-retention.js";
 
 function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
@@ -229,51 +232,6 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     task: cloneTaskRecordForObserver(next),
     previous: cloneTaskRecordForObserver(current),
   }));
-  return cloneTaskRecord(next);
-}
-
-/** Publishes a record already committed by a cross-owner shared-state transaction. */
-export function publishTaskRecordAfterAtomicStore(
-  record: TaskRecord,
-  options?: { syncTaskFlow?: boolean; deferredObserverEvents?: Array<() => void> },
-): TaskRecord {
-  const next = normalizeTaskTimestamps(cloneTaskRecord(record));
-  const current = tasks.get(next.taskId);
-  const becomesTerminal =
-    current !== undefined &&
-    !isTerminalTaskStatus(current.status) &&
-    isTerminalTaskStatus(next.status);
-  if (becomesTerminal) {
-    flushTaskActivity(next.taskId);
-  }
-  if (current) {
-    deleteOwnerKeyIndex(next.taskId, current);
-    deleteParentFlowIdIndex(next.taskId, current);
-    deleteRelatedSessionKeyIndex(next.taskId, current);
-  }
-  tasks.set(next.taskId, next);
-  bumpTaskRegistryRevision();
-  if (becomesTerminal) {
-    clearTaskActivity(next.taskId);
-  }
-  addOwnerKeyIndex(next.taskId, next);
-  addParentFlowIdIndex(next.taskId, next);
-  addRelatedSessionKeyIndex(next.taskId, next);
-  rebuildRunIdIndex();
-  if (options?.syncTaskFlow !== false) {
-    syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
-  }
-  const emit = () =>
-    emitTaskRegistryObserverEvent(() => ({
-      kind: "upserted",
-      task: cloneTaskRecordForObserver(next),
-      ...(current ? { previous: cloneTaskRecordForObserver(current) } : {}),
-    }));
-  if (options?.deferredObserverEvents) {
-    options.deferredObserverEvents.push(emit);
-  } else {
-    emit();
-  }
   return cloneTaskRecord(next);
 }
 

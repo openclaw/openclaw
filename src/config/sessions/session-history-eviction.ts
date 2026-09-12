@@ -1,4 +1,8 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   collectActiveSessionWorkAdmissions,
@@ -19,7 +23,10 @@ import {
 } from "./disk-budget.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import type {
+  SqliteSessionArchivePruningDiagnostics,
+  SqliteSessionReclamationDiagnostics,
+} from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   collectSessionStateIdsForEntry,
@@ -61,6 +68,7 @@ type SessionHistoryDiskBudgetParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   mode: ResolvedSessionMaintenanceConfig["mode"];
+  reclamationMode?: "worker" | "in-process";
   storePath: string;
   maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes"> &
     Partial<Pick<ResolvedSessionMaintenanceConfig, "preserveRecentMs">>;
@@ -206,7 +214,7 @@ function collectCandidateAdditionalProtection(params: {
 
 /** Session ids owned by in-flight work admissions, without live-reference protection. */
 export function collectAdmissionProtectedSessionIds(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   storePath: string;
 }): Set<string> {
   const protectedSessionIds = new Set<string>();
@@ -225,14 +233,41 @@ export function collectAdmissionProtectedSessionIds(params: {
     [...admissionIdentities].map((identity) => normalizeStoreSessionKey(identity)),
   );
   const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
+  const admittedKeyBytes: string[] = [];
+  // Normalize lightweight keys before reading payloads; unrelated saved prompts can be large.
+  for (const row of iterateSqliteQuerySync(
     params.database.db,
-    db.selectFrom("session_nodes").select(["entry_json", "current_session_id", "session_key"]),
-  ).rows;
-  for (const row of rows) {
-    if (!normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
-      continue;
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", db.fn<string>("hex", ["session_key"]).as("key_bytes")]),
+  )) {
+    if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
+      admittedKeyBytes.push(row.key_bytes);
     }
+  }
+  const rows = admittedKeyBytes.length
+    ? iterateSqliteQuerySync(
+        params.database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["entry_json", "current_session_id"])
+          // Keep stored keys inside SQLite: Node TEXT rebinding can change raw UTF-16 keys.
+          // The key-only subquery scans the existing index before fetching matched payloads.
+          .where(
+            "session_key",
+            "in",
+            db
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where(
+                db.fn<string>("hex", ["session_key"]),
+                "in",
+                sqliteStringSet(admittedKeyBytes),
+              ),
+          ),
+      )
+    : [];
+  for (const row of rows) {
     protectedSessionIds.add(row.current_session_id);
     const entry = parseSessionEntryJson(row);
     if (entry) {
@@ -244,10 +279,10 @@ export function collectAdmissionProtectedSessionIds(params: {
   // Key-scoped admissions must survive rollover: an in-flight run admitted by
   // key may still write to a generation the entry no longer references, so
   // every generation of an admitted key stays off-limits.
-  const generationRows = executeSqliteQuerySync(
+  const generationRows = iterateSqliteQuerySync(
     params.database.db,
     db.selectFrom("session_windows").select(["session_id", "session_key"]),
-  ).rows;
+  );
   for (const row of generationRows) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
       protectedSessionIds.add(row.session_id);
@@ -492,23 +527,32 @@ async function enforceSessionHistoryMaintenanceSerialized(
   });
   const databaseOptions = toDatabaseOptions(resolved);
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(resolved);
-  let { usage, removedFiles } = await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () =>
-      pruneAllSessionTranscriptArchivesToHighWater({
-        archiveDirectory,
-        databaseOptions,
-        highWaterBytes,
-        storePath: params.storePath,
-      }),
-    "session.history.archive-prune",
-  );
+  const pruneArchives = (trigger: SqliteSessionArchivePruningDiagnostics["trigger"]) => {
+    const archivePruning: SqliteSessionArchivePruningDiagnostics = { trigger };
+    return runExclusiveSqliteSessionWrite(
+      resolved,
+      async () =>
+        pruneAllSessionTranscriptArchivesToHighWater({
+          archiveDirectory,
+          databaseOptions,
+          diagnostics: archivePruning,
+          highWaterBytes,
+          storePath: params.storePath,
+        }),
+      "session.history.archive-prune",
+      { archivePruning },
+    );
+  };
+  let { usage, removedFiles } = await pruneArchives("initial");
   let removedEntries = 0;
-  const candidates = readHistoricalSessionIds({
-    databaseOptions,
-    preserveRecentMs: params.maintenance.preserveRecentMs,
-    storePath: params.storePath,
-  });
+  const candidates =
+    usage.totalBytes > highWaterBytes
+      ? readHistoricalSessionIds({
+          databaseOptions,
+          preserveRecentMs: params.maintenance.preserveRecentMs,
+          storePath: params.storePath,
+        })
+      : [];
 
   for (const sessionId of candidates) {
     if (usage.totalBytes <= highWaterBytes) {
@@ -584,7 +628,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
           }
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
-            forceInProcess: false,
+            forceInProcess: params.reclamationMode === "in-process",
             plan: reclamationPlan,
           });
           if (reclaimed.kind !== reclamationPlan.kind) {
@@ -624,17 +668,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
       // destroyed at most once, and pruning an extracted copy beats evicting
       // additional searchable history. No prune runs between an archive write
       // and its row-deletion commit, so a sole copy is never mid-flight here.
-      const repruned = await runExclusiveSqliteSessionWrite(
-        resolved,
-        async () =>
-          pruneAllSessionTranscriptArchivesToHighWater({
-            archiveDirectory,
-            databaseOptions,
-            highWaterBytes,
-            storePath: params.storePath,
-          }),
-        "session.history.archive-prune",
-      );
+      const repruned = await pruneArchives("after-eviction");
       removedFiles += repruned.removedFiles;
       usage = repruned.usage;
     }
@@ -643,17 +677,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
   if (usage.totalBytes > highWaterBytes) {
     // Candidates are exhausted but archives may remain; finish the pass at the
     // target instead of returning over budget with removable artifacts.
-    const finalPrune = await runExclusiveSqliteSessionWrite(
-      resolved,
-      async () =>
-        pruneAllSessionTranscriptArchivesToHighWater({
-          archiveDirectory,
-          databaseOptions,
-          highWaterBytes,
-          storePath: params.storePath,
-        }),
-      "session.history.archive-prune",
-    );
+    const finalPrune = await pruneArchives("final");
     removedFiles += finalPrune.removedFiles;
     usage = finalPrune.usage;
   }

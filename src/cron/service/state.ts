@@ -418,6 +418,7 @@ export type CronRunResult =
   | { ok: true; ran: false; reason: "already-running" }
   | { ok: true; ran: false; reason: "invalid-spec" }
   | { ok: true; ran: false; reason: "stopped" }
+  | { ok: true; ran: false; reason: "ownerless" }
   | { ok: false };
 
 /** Remove result that distinguishes missing jobs from failed removal. */

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client, User } from "../internal/discord.js";
 
 const mocks = vi.hoisted(() => ({
@@ -31,10 +31,15 @@ function discordUser(id: string, avatar: string | null): User {
 }
 
 const emptyClient = { fetchGuild: vi.fn() } as unknown as Client;
+const DISCORD_API_URL_ENV = "DISCORD_API_URL";
 
 beforeEach(() => {
   mocks.saveRemoteMedia.mockReset();
   mocks.logDebug.mockReset();
+});
+
+afterEach(() => {
+  delete process.env[DISCORD_API_URL_ENV];
 });
 
 describe("createDiscordAvatarResolver", () => {
@@ -120,6 +125,28 @@ describe("createDiscordAvatarResolver", () => {
       ).toBe("/media/inbound/guild-icon.png"),
     );
     expect(fetchGuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back to the public CDN when an API override is configured", async () => {
+    const guildLookup = deferred<{ icon: string }>();
+    const client = { fetchGuild: vi.fn(() => guildLookup.promise) } as unknown as Client;
+    process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
+    const resolver = createDiscordAvatarResolver();
+
+    resolver.resolve({
+      client,
+      conversationId: "channel-1",
+      author: discordUser("user-1", "sender-hash"),
+      guildId: "guild-1",
+    });
+    guildLookup.resolve({ icon: "guild-hash" });
+
+    await vi.waitFor(() =>
+      expect(mocks.logDebug).toHaveBeenCalledWith(
+        expect.stringContaining("outside the configured REST origin"),
+      ),
+    );
+    expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
   });
 
   it("swallows download failures and retries on the next message", async () => {

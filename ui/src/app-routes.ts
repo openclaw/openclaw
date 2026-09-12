@@ -8,34 +8,23 @@ import type {
   RouterHistory,
 } from "@openclaw/uirouter";
 import {
-  activityPersonFromPath,
   agentRouteFromPath,
   canonicalPluginTabLocation,
-  INTERNAL_ACTIVITY_PATH_PARAM,
-  INTERNAL_AGENT_PATH_PARAM,
-  INTERNAL_MEMORY_PATH_PARAM,
-  INTERNAL_PLUGIN_PATH_PARAM,
-  INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
-  INTERNAL_PLUGINS_PATH_PARAM,
-  INTERNAL_SESSION_PATH_PARAM,
-  INTERNAL_WORKBOARD_PATH_PARAM,
-  isLegacyPluginsDiscoveryPath,
-  memoryTabFromPath,
+  dynamicRouteFromPath,
+  isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
-  pluginCatalogIdFromPath,
-  pluginSettingsIdFromPath,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
-  sessionRouteNamespaceFromPath,
   setPluginTabSlugs,
-  workboardBoardIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
+import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
+import { page as agentsHomePage } from "./pages/agents-home/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
@@ -70,6 +59,7 @@ import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as tasksPage } from "./pages/tasks/route.ts";
+import { page as terminalPage } from "./pages/terminal/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
@@ -96,11 +86,13 @@ const APP_ROUTE_TREE = [
   ...chatPages,
   custodianPage,
   newSessionPage,
+  terminalPage,
   activityPage,
   meetingsPage,
   dashboardsPage,
   appsPage,
   portalsPage,
+  agentsHomePage,
   agentsPage,
   approvalsPage,
   channelsPage,
@@ -177,40 +169,6 @@ export function createApplicationRouter(): ApplicationRouter {
       ),
     routeIdFromPath,
   };
-}
-
-type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
-
-function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
-  if (pluginTabSlugFromPath(pathname, basePath)) {
-    return ["plugin", INTERNAL_PLUGIN_PATH_PARAM, pathname];
-  }
-  if (activityPersonFromPath(pathname, basePath)) {
-    return ["activity", INTERNAL_ACTIVITY_PATH_PARAM, pathname];
-  }
-  const agentRoute = agentRouteFromPath(pathname, basePath);
-  if (agentRoute) {
-    return ["agents", INTERNAL_AGENT_PATH_PARAM, pathname];
-  }
-  const boardId = workboardBoardIdFromPath(pathname, basePath);
-  if (boardId) {
-    return ["workboard", INTERNAL_WORKBOARD_PATH_PARAM, pathname];
-  }
-  const memoryTab = memoryTabFromPath(pathname, basePath);
-  if (memoryTab && memoryTab !== "overview") {
-    return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
-  }
-  if (isLegacyPluginsDiscoveryPath(pathname, basePath)) {
-    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
-  }
-  if (pluginCatalogIdFromPath(pathname, basePath)) {
-    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
-  }
-  if (pluginSettingsIdFromPath(pathname, basePath)) {
-    return ["plugin-settings", INTERNAL_PLUGIN_SETTINGS_PATH_PARAM, pathname];
-  }
-  const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
-  return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
 }
 
 function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {
@@ -295,8 +253,75 @@ export async function startApplicationRouter(
     replace: (next) => history.replace(next),
     listen: (listener) => {
       let listening = true;
+      let recoveryQueued = false;
+      let interrupted:
+        | { controller: AbortController; scope: ReturnType<typeof gatewayPresentationScope> }
+        | undefined;
+      const currentTarget = () => {
+        const state = router.getState();
+        return state.pendingMatches[0] ?? state.matches[0];
+      };
+      const recoverSessionRoute = () => {
+        const target = currentTarget();
+        if (!target || !isSessionRouteId(target.routeId)) {
+          interrupted = undefined;
+          return;
+        }
+        const scope = gatewayPresentationScope(context.gateway);
+        if (interrupted?.controller !== target.abortController) {
+          interrupted = undefined;
+        }
+        if (interrupted && interrupted.scope !== scope) {
+          return;
+        }
+        if (context.gateway.snapshot.phase !== "connected") {
+          if (target.status === "pending" || target.isFetching === "loader") {
+            interrupted = { controller: target.abortController, scope };
+          }
+          return;
+        }
+        if (target.status === "success" && !target.isFetching) {
+          interrupted = undefined;
+        }
+        if (!interrupted || recoveryQueued || target.status !== "error") {
+          return;
+        }
+        recoveryQueued = true;
+        // Other subscribers may navigate synchronously; recover only their final intent.
+        queueMicrotask(() => {
+          recoveryQueued = false;
+          const latest = currentTarget();
+          if (
+            !listening ||
+            !interrupted ||
+            latest?.abortController !== interrupted.controller ||
+            gatewayPresentationScope(context.gateway) !== interrupted.scope ||
+            context.gateway.snapshot.phase !== "connected" ||
+            latest.status !== "error"
+          ) {
+            return;
+          }
+          interrupted = undefined;
+          // The loader publishes its error before retiring its run. Abort it so
+          // same-match revalidation cannot join the already failed promise.
+          latest.abortController.abort();
+          if (currentTarget()?.abortController !== latest.abortController) {
+            return;
+          }
+          void router
+            .navigate(
+              latest.routeId,
+              context,
+              { history: "none", revalidate: true },
+              latest.location,
+            )
+            .catch(() => undefined);
+        });
+      };
+      const stopSessionRecovery = router.subscribe(recoverSessionRoute);
       let lastHello = context.gateway.snapshot.hello;
       const stopGateway = context.gateway.subscribe((snapshot) => {
+        recoverSessionRoute();
         if (lastHello === snapshot.hello) {
           return;
         }
@@ -351,6 +376,8 @@ export async function startApplicationRouter(
       });
       return () => {
         listening = false;
+        interrupted = undefined;
+        stopSessionRecovery();
         stopGateway();
         stopHistory();
       };

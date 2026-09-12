@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 /**
  * Runs `/btw` side questions against the active conversation without resuming
@@ -28,12 +27,7 @@ import type {
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import {
-  AsyncWorkScope,
-  captureAsyncWorkTracker,
-  getAsyncWorkSignal,
-} from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
@@ -49,12 +43,12 @@ import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resol
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import type { AgentHarnessPreparedModelProvider } from "./harness/selection-decision.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "./harness/selection.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,
@@ -535,6 +529,7 @@ async function resolveRuntimeModel(params: {
     cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
+    agentId: params.agentId,
     harnessRuntime: params.harnessId,
     agentDir,
     sessionEntry: params.sessionEntry,
@@ -565,6 +560,7 @@ async function resolveRuntimeModel(params: {
     modelApi: model.api,
     modelBaseUrl: model.baseUrl,
     config: cfg,
+    agentId: params.agentId,
     env: process.env,
     workspaceDir,
     authProfileStore: authProfileStoreSelection.store,
@@ -723,32 +719,14 @@ async function withBtwPreparedRuntime(
   input: Parameters<typeof acquirePublishedPreparedModelRuntime>[0],
   run: (snapshot: PreparedModelRuntimeSnapshot) => Promise<ReplyPayload | undefined>,
 ): Promise<ReplyPayload | undefined> {
-  const result = createDeferredCore<ReplyPayload | undefined>();
-  const trackOwner = captureAsyncWorkTracker();
-  const parentSignal = getAsyncWorkSignal();
-  void trackOwner(async () => {
+  return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
-    const work = new AsyncWorkScope();
-    const runInScope = work.run(() =>
-      withPluginRuntimeGenerationScope(lease.snapshot, () => AsyncLocalStorage.snapshot()),
-    );
-    const closeWork = () => runInScope(() => work.beginClose(parentSignal?.reason));
-    parentSignal?.addEventListener("abort", closeWork, { once: true });
-    if (parentSignal?.aborted) {
-      closeWork();
-    }
-    try {
-      result.resolve(await runInScope(() => work.track(() => run(lease.snapshot))));
-    } catch (error) {
-      result.reject(error);
-    } finally {
-      await work.runWhenIdle(() => undefined);
-      await runInScope(() => work.drain());
-      parentSignal?.removeEventListener("abort", closeWork);
-      lease.release();
-    }
-  }).catch((error: unknown) => result.reject(error));
-  return await result.promise;
+    onAcquired({ release: () => lease[Symbol.asyncDispose]() });
+    return withPluginRuntimeGenerationScope(lease.snapshot, () => {
+      captureWorkContext();
+      return run(lease.snapshot);
+    });
+  });
 }
 
 /** Answers a side question using sanitized session context and no tool execution. */
@@ -976,6 +954,7 @@ export async function runBtwSideQuestion(
             modelApi: runtime.model.api,
             modelBaseUrl: runtime.model.baseUrl,
             config: params.cfg,
+            agentId: sessionAgentId,
             env: process.env,
             workspaceDir,
             authProfileStore: authProfileStoreSelection.store,

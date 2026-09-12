@@ -1,9 +1,13 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry, PluginListResult } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { ModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
+import type { ModelSetupPageState } from "../model-setup/state.ts";
+import { PluginsPageIcons } from "./plugins-page-icons.ts";
 import {
   createClient,
   createContext,
@@ -12,6 +16,7 @@ import {
   createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
+  deferred,
   mountPage,
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
@@ -97,7 +102,7 @@ describe("PluginsPage icon routing", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
   });
 
-  it("prefers installed package icons over legacy art in unified catalog cards", async () => {
+  it("renders installed package icons or a placeholder when unavailable in unified catalog cards", async () => {
     const createObjectURL = vi.fn(() => "blob:package-icon");
     vi.stubGlobal(
       "URL",
@@ -213,9 +218,10 @@ describe("PluginsPage icon routing", () => {
         page.querySelector('[data-plugin-id="ch_brave"] img.plugins-icon')?.getAttribute("src"),
       ).toBe("blob:package-icon"),
     );
-    expect(page.querySelector('[data-plugin-id="ch_discord"] img')?.getAttribute("src")).toBe(
-      "/plugin-art/discord.webp",
-    );
+    expect(page.querySelector('[data-plugin-id="ch_discord"] img')).toBeNull();
+    expect(
+      page.querySelector('[data-plugin-id="ch_discord"] .plugin-catalog-card__art svg'),
+    ).not.toBeNull();
   });
 
   it("fetches package icons for installed settings rows", async () => {
@@ -304,5 +310,241 @@ describe("PluginsPage icon routing", () => {
     expect(
       page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
     ).toContain("UI");
+  });
+});
+
+describe("Model Setup icon lifecycle through the shared proxy", () => {
+  const iconUrl = "https://cdn.example.com/lifecycle.png";
+  let loader: ModelSetupIconLoader | undefined;
+  let installedIcons: PluginsPageIcons | undefined;
+
+  afterEach(() => {
+    loader?.reset();
+    loader = undefined;
+    installedIcons?.reset();
+    installedIcons = undefined;
+    resetPluginsPageTestState();
+  });
+
+  function setupIcons() {
+    const { client } = createClient(async () => createResult());
+    const gateway = createGateway(client);
+    gateway.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const context = createContext(gateway.gateway);
+    const ready: Extract<ModelSetupPageState, { phase: "ready" }> = {
+      phase: "ready",
+      result: {
+        candidates: [],
+        manualProviders: [],
+        workspace: "/tmp/icon-fixture",
+        setupComplete: false,
+        recommendedInstalls: [
+          {
+            id: "fixture",
+            label: "Fixture",
+            hint: "Fixture",
+            website: "https://example.com",
+            icon: iconUrl,
+          },
+        ],
+      },
+    };
+    let pageState: ModelSetupPageState = ready;
+    const published = vi.fn<(urls: Record<string, string>) => void>();
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    let sequence = 0;
+    const revoke = vi.fn();
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => `blob:icon-${++sequence}`);
+        static override revokeObjectURL = revoke;
+      },
+    );
+    const currentLoader = new ModelSetupIconLoader(
+      () => context,
+      () => pageState,
+      published,
+    );
+    loader = currentLoader;
+    return {
+      loader: currentLoader,
+      fetchMock,
+      published,
+      revoke,
+      gateway,
+      context,
+      eligible: (present: boolean) => {
+        pageState = present
+          ? ready
+          : {
+              phase: "ready",
+              result: { ...ready.result, recommendedInstalls: [] },
+            };
+      },
+    };
+  }
+
+  function iconResponse() {
+    return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+  }
+
+  it.each(["key", "connection"] as const)(
+    "rejects a settled icon after its %s becomes unavailable before reconciliation",
+    async (scope) => {
+      const fixture = setupIcons();
+      const response = deferred<Response>();
+      fixture.fetchMock.mockReturnValueOnce(response.promise);
+      fixture.loader.reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledOnce();
+      if (scope === "key") {
+        fixture.eligible(false);
+      } else {
+        fixture.gateway.emit(null, false);
+      }
+      response.resolve(iconResponse());
+      await waitForFast(() =>
+        expect(
+          fixture.revoke.mock.calls.length + fixture.published.mock.calls.length,
+        ).toBeGreaterThan(0),
+      );
+      expect(fixture.revoke).toHaveBeenCalledWith("blob:icon-1");
+      expect(fixture.published).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a replacement icon when an older same-key request settles last", async () => {
+    const fixture = setupIcons();
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fixture.fetchMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    fixture.loader.reconcile();
+    fixture.loader.reset();
+    fixture.loader.reconcile();
+    expect(fixture.fetchMock).toHaveBeenCalledTimes(2);
+    expect(fixture.fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    second.resolve(iconResponse());
+    await waitForFast(() =>
+      expect(fixture.published).toHaveBeenLastCalledWith({
+        [iconUrl]: "blob:icon-1",
+      }),
+    );
+    first.resolve(iconResponse());
+    await waitForFast(() =>
+      expect(fixture.revoke.mock.calls.length + fixture.published.mock.calls.length).toBe(3),
+    );
+    expect(fixture.revoke).toHaveBeenCalledWith("blob:icon-2");
+    expect(fixture.published.mock.calls).toEqual([[{}], [{ [iconUrl]: "blob:icon-1" }]]);
+  });
+
+  it.each([
+    { family: "catalog", message: "catalog icon fetch timed out" },
+    { family: "plugin", message: "plugin icon fetch timed out" },
+  ] as const)(
+    "$family times out at ten seconds and retries a missed key only after removal and re-add",
+    async ({ family, message }) => {
+      vi.useFakeTimers();
+      const fixture = setupIcons();
+      const key = family === "plugin" ? "fixture-plugin" : iconUrl;
+      const pluginIcons =
+        family === "plugin"
+          ? new PluginsPageIcons({
+              getContext: () => fixture.context,
+              isConnected: () => fixture.gateway.gateway.snapshot.phase === "connected",
+              onInstalledUrlsChange: fixture.published,
+              onCatalogUrlsChange: vi.fn(),
+            })
+          : undefined;
+      installedIcons = pluginIcons;
+      const iconView = document.createDocumentFragment();
+      const iconTile = document.createElement("span");
+      iconTile.dataset.pluginIconId = key;
+      iconView.append(iconTile);
+      let present = true;
+      const reconcile = () => {
+        if (!pluginIcons) {
+          fixture.loader.reconcile();
+          return;
+        }
+        const result = createResult(present ? [createPlugin({ id: key, hasIcon: true })] : []);
+        pluginIcons.reconcileInstalled(result);
+        pluginIcons.syncInstalled(result, iconView);
+      };
+      const eligible = (value: boolean) => {
+        present = value;
+        fixture.eligible(value);
+      };
+      fixture.fetchMock
+        .mockImplementationOnce(
+          (_input, init) =>
+            new Promise<Response>((_resolve, reject) => {
+              const signal = init?.signal;
+              if (!signal) {
+                throw new Error("Expected the icon request abort signal");
+              }
+              signal.addEventListener(
+                "abort",
+                () => reject(new Error("fixture fetch aborted", { cause: signal.reason })),
+                { once: true },
+              );
+            }),
+        )
+        .mockResolvedValueOnce(iconResponse());
+      reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledOnce();
+      const signal = fixture.fetchMock.mock.calls[0]?.[1]?.signal;
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toBeInstanceOf(DOMException);
+      expect(signal?.reason).toMatchObject({
+        name: "TimeoutError",
+        message,
+      });
+      reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledOnce();
+      eligible(false);
+      reconcile();
+      eligible(true);
+      reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledTimes(2);
+      await waitForFast(() =>
+        expect(fixture.published).toHaveBeenLastCalledWith({
+          [key]: "blob:icon-1",
+        }),
+      );
+    },
+  );
+
+  it("revokes before invalidation publication and publishes both empty resets", async () => {
+    const fixture = setupIcons();
+    fixture.fetchMock.mockResolvedValueOnce(iconResponse());
+    fixture.loader.reconcile();
+    await waitForFast(() => expect(fixture.published).toHaveBeenCalledOnce());
+    fixture.loader.invalidate(iconUrl);
+    expect(fixture.revoke).toHaveBeenCalledWith("blob:icon-1");
+    expect(fixture.revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        fixture.published.mock.invocationCallOrder[1],
+        "invalidation publication order",
+      ),
+    );
+    fixture.loader.reconcile();
+    expect(fixture.fetchMock).toHaveBeenCalledOnce();
+    fixture.loader.reset();
+    fixture.loader.reset();
+    expect(fixture.published.mock.calls).toEqual([
+      [{ [iconUrl]: "blob:icon-1" }],
+      [{}],
+      [{}],
+      [{}],
+    ]);
   });
 });

@@ -20,7 +20,6 @@ const { readCodexCliCredentialsCachedMock, resolveProviderIdForAuthMock } = vi.h
 vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
 }));
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: resolveProviderIdForAuthMock,
@@ -165,7 +164,7 @@ describe("buildAuthHealthSummary", () => {
     );
   });
 
-  it("uses external CLI bootstrap before marking empty OAuth profiles missing", () => {
+  it("does not replace missing OpenClaw auth with a native Codex login", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     mockFreshCodexCliCredentials();
     const store = {
@@ -183,17 +182,15 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     });
 
-    expect(profileStatuses(summary)["openai:default"]).toBe("ok");
-    expect(profileReasonCodes(summary)["openai:default"]).toBeUndefined();
+    expect(profileStatuses(summary)["openai:default"]).toBe("missing");
+    expect(profileReasonCodes(summary)["openai:default"]).toBe("missing_credential");
     const provider = summary.providers.find((entry) => entry.provider === "openai");
-    expect(provider?.status).toBe("ok");
-    expect(provider?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
-    );
+    expect(provider?.status).toBe("missing");
+    expect(provider?.expiresAt).toBeUndefined();
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
-  it("passes no-prompt policy to external CLI bootstrap during health checks", () => {
+  it("does not open Codex credentials during prompt-free health checks", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     mockFreshCodexCliCredentials();
     const store = {
@@ -212,10 +209,8 @@ describe("buildAuthHealthSummary", () => {
       allowKeychainPrompt: false,
     });
 
-    expect(profileStatuses(summary)["openai:default"]).toBe("ok");
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
-    );
+    expect(profileStatuses(summary)["openai:default"]).toBe("missing");
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
   it("uses ordered usable profiles for provider health while keeping stale inventory visible", () => {

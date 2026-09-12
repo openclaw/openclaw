@@ -13,7 +13,7 @@ This section holds one reference page for each OpenClaw plugin. Each page states
 the package, the install route, and the surface the plugin adds.
 
 This page is a pointer, not the index. The browsable list of all
-152 generated plugin reference pages lives in
+153 generated plugin reference pages lives in
 [Plugin inventory](/plugins/plugin-inventory), sorted by distribution, package,
 and description.
 

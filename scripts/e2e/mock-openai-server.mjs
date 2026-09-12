@@ -496,13 +496,26 @@ function preambleThenToolCallEvents(preamble, name, args) {
   ];
 }
 
-/** Two-turn draft scenario: preamble + shell call, then a final answer. */
+function hasCurrentTurnToolOutput(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") {
+      return false;
+    }
+    if (message?.role === "tool" || message?.type === "function_call_output") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Draft scenario: preamble + shell call, then a final answer for each user turn. */
 function progressDraftEvents(body, bodyText) {
   const allText = collectText(body).join("\n");
   if (!allText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
     return null;
   }
-  if (!collectFunctionCallOutputText(body)) {
+  if (!hasCurrentTurnToolOutput(Array.isArray(body.input) ? body.input : [])) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
@@ -924,7 +937,7 @@ const server = http.createServer((req, res) => {
       // commentary, which channels render as the draft status headline.
       if (!responseControl && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
-        const toolTurnDone = messages.some((message) => message?.role === "tool");
+        const toolTurnDone = hasCurrentTurnToolOutput(messages);
         if (!toolTurnDone) {
           writeChatCompletionPreambleToolCall(
             res,

@@ -91,6 +91,75 @@ describe("test runtime prerequisites", () => {
       "runtime",
     ],
     ["infra config", ["test/vitest/vitest.infra.config.ts"], "runtime"],
+    ["native SDK generation", ["src/plugins/plugin-module-generation.sdk.test.ts"], "runtime"],
+    ["config startup SDK", ["src/config/config-startup-corpus.test.ts"], "runtime"],
+    ["state startup SDK", ["src/config/state-startup-corpus.test.ts"], "runtime"],
+    ["runtime config project", ["test/vitest/vitest.runtime-config.config.ts"], "runtime"],
+    [
+      "context engine sandbox SDK",
+      ["src/agents/runtime-plugins.context-engine.integration.test.ts"],
+      "runtime",
+    ],
+    ["native direct loader SDK", ["src/plugins/loader.test.ts"], "runtime"],
+    ["native setup registry SDK", ["src/plugins/setup-registry.migrations.test.ts"], "runtime"],
+    ["native source checkout SDK", ["src/plugins/source-checkout-runtime.test.ts"], "runtime"],
+    ["native provider contract SDK", ["extensions/deepinfra/provider.contract.test.ts"], "runtime"],
+    ["native catalog auth SDK", ["test/openai-model-discovery-auth-order.test.ts"], "runtime"],
+    ["models.list native catalog", ["test/plugins/codex-model-catalog.gateway.test.ts"], "runtime"],
+    ["native package setup SDK", ["test/plugin-npm-runtime-build.test.ts"], "runtime"],
+    ["native Linux node SDK", ["src/node-host/linux-node-plugin.integration.test.ts"], "runtime"],
+    [
+      "native catalog worker SDK",
+      ["src/agents/prepared-model-catalog-worker.integration.test.ts"],
+      "runtime",
+    ],
+    [
+      "native Google Meet SDK",
+      ["extensions/google-meet/src/transports/chrome-startup.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel directory config SDK",
+      ["src/channels/plugins/contracts/directory.registry-backed-shard-b.contract.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel directory session SDK",
+      ["src/channels/plugins/contracts/directory.registry-backed-shard-d.contract.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel surfaces session SDK",
+      ["src/channels/plugins/contracts/surfaces-only.registry-backed-shard-d.contract.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel shape SDK",
+      ["src/channels/plugins/contracts/plugin-shape.contract.test.ts"],
+      "private-qa",
+    ],
+    [
+      "native SDK companion lifecycle",
+      ["src/plugin-sdk/channel-entry-contract.lifecycle.test.ts"],
+      "runtime",
+    ],
+    [
+      "native completion transport SDK",
+      ["src/agents/simple-completion-runtime.plugin-scope.test.ts"],
+      "runtime",
+    ],
+    ["agent core config", ["test/vitest/vitest.agents-core.config.ts"], "runtime"],
+    ["agent umbrella config", ["test/vitest/vitest.agents.config.ts"], "runtime"],
+    ["ordinary completion unit", ["src/agents/simple-completion-runtime.test.ts"], undefined],
+    [
+      "direct completion fixture without SDK imports",
+      ["src/plugins/runtime/runtime-llm.prepared-owner.test.ts"],
+      undefined,
+    ],
+    ["native inspection fixture", ["src/plugins/status.runtime-inspection.test.ts"], undefined],
+    ["source module generation", ["src/plugins/plugin-module-generation.test.ts"], undefined],
+    ["native module interop", ["src/plugins/plugin-module-generation.interop.test.ts"], undefined],
+    ["plugins config", ["test/vitest/vitest.plugins.config.ts"], "runtime"],
     ["ordinary update unit test", ["src/infra/update-candidate-canary.test.ts"], undefined],
     ["CLI directory", ["src/cli"], "runtime"],
     ["CLI config", ["test/vitest/vitest.cli.config.ts"], undefined],
@@ -169,6 +238,44 @@ describe("test runtime prerequisites", () => {
   });
 
   it.each([
+    ["bundled", ["src/plugins/loader.test.ts"], undefined],
+    ["unit-fast", ["src/plugins/*.test.ts"], undefined],
+    ["contracts-channel-config", ["src/channels/plugins/contracts/**"], undefined],
+    ["contracts-channel-session", ["src/channels/plugins/contracts/**"], undefined],
+    ["contracts-channel-registry", ["src/channels/plugins/contracts/**"], undefined],
+    ["unit", ["src/node-host/**"], undefined],
+    ["unit-src", ["src/node-host/**"], undefined],
+    ["extensions", ["deepinfra/**"], "runtime"],
+    ["extensions", ["deepinfra/**", "google-meet/**"], undefined],
+    ["tooling", ["test/**"], undefined],
+    ["plugins", ["plugin-module-generation.sdk.test.ts"], undefined],
+    ["runtime-config", ["config/config-startup-corpus.test.ts"], "runtime"],
+    ["runtime-config", ["config/state-startup-corpus.test.ts"], "runtime"],
+    [
+      "runtime-config",
+      ["config/config-startup-corpus.test.ts", "config/state-startup-corpus.test.ts"],
+      undefined,
+    ],
+    ["agents-core", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
+    ["agents", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
+    [
+      "agents-core",
+      [
+        "simple-completion-runtime.plugin-scope.test.ts",
+        "prepared-model-catalog-worker.integration.test.ts",
+        "runtime-plugins.context-engine.integration.test.ts",
+      ],
+      undefined,
+    ],
+    [
+      "agents",
+      [
+        "simple-completion-runtime.plugin-scope.test.ts",
+        "prepared-model-catalog-worker.integration.test.ts",
+        "runtime-plugins.context-engine.integration.test.ts",
+      ],
+      undefined,
+    ],
     ["gateway-core", ["gateway-*.test.ts"], undefined],
     ["gateway-server", ["server-sidecar-retention.test.ts"], "runtime"],
     ["gateway-server", ["server.config-patch.test.ts"], "runtime"],
@@ -460,7 +567,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
-    "src/system-agent/setup-inference-persist.ts",
+    "src/system-agent/setup-inference-turn.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ])(
     "routes setup inference transcript ownership changes through both regressions for %s",
@@ -1103,10 +1210,7 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTargets: [
-        "test/scripts/install-trufflehog.test.ts",
-        "test/scripts/setup-node-env-bun.test.ts",
-      ],
+      exactTargets: ["test/scripts/setup-node-env-bun.test.ts"],
     },
   ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(
@@ -1221,6 +1325,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/release-publish-draft.test.ts",
         "test/scripts/release-tooling-bootstrap.test.ts",
         "test/scripts/validate-release-publish-approval.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
@@ -1282,7 +1387,6 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps PR automation workflow edits on workflow guard tests", () => {
     for (const workflowPath of [
       ".github/workflows/auto-response.yml",
-      ".github/workflows/clawsweeper-dispatch.yml",
       ".github/workflows/labeler.yml",
       ".github/workflows/real-behavior-proof.yml",
       ".github/workflows/stale.yml",
@@ -1298,6 +1402,10 @@ describe("scripts/test-projects changed-target routing", () => {
           : ["test/scripts/ci-workflow-guards.test.ts"],
       );
     }
+    expectChangedTargets(
+      [".github/workflows/clawsweeper-dispatch.yml"],
+      ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/clawsweeper-dispatch.test.ts"],
+    );
   });
 
   it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
@@ -1318,7 +1426,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/changed-lanes.test.ts",
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/pr-prepare-gates.test.ts",
           "test/scripts/testbox-base.test.ts",
@@ -1330,7 +1437,6 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/testbox-base.test.ts",
         ],
@@ -1338,7 +1444,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         [
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
@@ -2417,7 +2522,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/system-agent/system-agent.test.ts",
       "src/system-agent/operations.test.ts",
       "src/system-agent/overview.test.ts",
-      "src/system-agent/setup-inference.test.ts",
       "src/system-agent/audit.test.ts",
       "src/system-agent/rescue-policy.test.ts",
       "src/system-agent/rescue-message.test.ts",

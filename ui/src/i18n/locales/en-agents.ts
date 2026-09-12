@@ -2,6 +2,11 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
+  newConversation: "New conversation",
+  allAgents: "All agents",
+  showAllAgents: "Show all agents",
+  showOneAgent: "Show one agent",
+  workspaceMenuLabel: "Workspace menu",
   switchAgent: "Switch agent",
   working: "Working…",
   ready: "Ready to chat",

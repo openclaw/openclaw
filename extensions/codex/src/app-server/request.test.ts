@@ -683,4 +683,20 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(request).toHaveBeenNthCalledWith(2, "account/read", {}, expectDeadlineOptions());
     expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 300, forceKillDelayMs: 200 });
   });
+
+  it("guards isolated usage startup before login when request authority is revoked", async () => {
+    const login = vi.fn();
+    const assertCurrent = () => {
+      throw new Error("Account removed");
+    };
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(async (options) => {
+      options.assertCurrent?.();
+      login();
+      throw new Error("unguarded login");
+    });
+    await expect(readCodexAppServerUsage({ timeoutMs: 1_000, assertCurrent })).rejects.toThrow(
+      "Account removed",
+    );
+    expect(login).not.toHaveBeenCalled();
+  });
 });

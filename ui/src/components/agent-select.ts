@@ -2,15 +2,15 @@ import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { type PropertyValues, html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 export type AgentSelectOption = {
@@ -34,32 +34,20 @@ export function renderAgentSelectAvatar(
     imageUrl === undefined && option.agent
       ? resolveAgentAvatarUrl(option.agent, identity)
       : (imageUrl ?? null);
-  if (resolvedImageUrl) {
-    return keyed(
-      resolvedImageUrl,
-      html`<img
-        class="agent-select__avatar"
-        src=${resolvedImageUrl}
-        alt=""
-        loading="lazy"
-        @error=${onImageError}
-      />`,
-    );
-  }
-  if (option.icon) {
+  if (option.icon && !resolvedImageUrl) {
     return html`<span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true"
       >${option.icon}</span
     >`;
   }
-  const text = option.agent ? resolveAgentTextAvatar(option.agent, identity) : null;
-  const fallback = deriveAvatarInitial(option.label) || "?";
-  return html`
-    <span
-      class="agent-select__avatar agent-select__avatar--text"
-      data-avatar=${text ?? fallback}
-      aria-hidden="true"
-    ></span>
-  `;
+  return renderAgentIdentityAvatar(
+    {
+      id: option.agent?.id ?? option.value,
+      avatar: resolvedImageUrl,
+      textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
+    },
+    "agent-select__avatar",
+    onImageError,
+  );
 }
 
 export function renderAgentSelectCopy(option: AgentSelectOption) {

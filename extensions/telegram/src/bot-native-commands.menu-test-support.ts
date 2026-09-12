@@ -33,7 +33,9 @@ const skillCommandMocks = vi.hoisted(() => ({
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
+  deliverReplies: vi.fn<typeof import("./bot/delivery.replies.js").deliverReplies>(async () => ({
+    delivered: true,
+  })),
   editMessageTelegram: vi.fn(async () => ({ ok: true as const, messageId: "999", chatId: "100" })),
   emitTelegramMessageSentHooks: vi.fn(),
 }));
@@ -93,7 +95,7 @@ export function createCommandBot(params: CreateCommandBotParams = {}): CreateCom
 export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
-): RegisterTelegramNativeCommandsParams {
+): RegisterTelegramNativeCommandsParams & { telegramDeps: TelegramNativeCommandDeps } {
   const telegramDeps: TelegramNativeCommandDeps = {
     getRuntimeConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["getRuntimeConfig"],
     readChannelAllowFromStore: vi.fn(
@@ -119,13 +121,15 @@ export function createNativeCommandTestParams(
     editMessageTelegram,
     sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
   };
-  return createBaseNativeCommandTestParams({
-    cfg,
-    runtime: params.runtime ?? ({} as RuntimeEnv),
-    nativeSkillsEnabled: true,
-    telegramDeps,
-    ...params,
-  });
+  return {
+    ...createBaseNativeCommandTestParams({
+      cfg,
+      runtime: params.runtime ?? ({} as RuntimeEnv),
+      nativeSkillsEnabled: true,
+      ...params,
+    }),
+    telegramDeps: params.telegramDeps ?? telegramDeps,
+  };
 }
 
 export function createPrivateCommandContext(

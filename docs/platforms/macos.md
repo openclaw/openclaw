@@ -13,6 +13,10 @@ and Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Dashboard → Settings → This Mac → App**.
 
+Use the green window button to enter native full screen. The Dashboard's sidebar
+and chat controls remain available at the top of the window. Leaving full screen
+restores the normal titlebar and window controls.
+
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
 Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
@@ -98,6 +102,13 @@ A **Debug** tab appears while the developer toggle in **This Mac → Developer**
 is enabled. **About OpenClaw** opens the standard macOS About panel with the app
 version, build information, and credits.
 
+If the app-managed local Gateway is missing, outdated, or broken, the Connection
+tab offers **Install Gateway**, **Update Gateway**, or **Repair Gateway**. The
+action opens the existing setup prompt, shows installation progress, and checks
+the Gateway afterward. You can retry here after cancelling an earlier prompt.
+For an incompatible Gateway newer than the app, **Set Up Gateway** lets you review
+the setup choice. Independently managed Gateways retain their own update workflow.
+
 App-local settings (permissions, Quick Chat, voice, updates) live in
 Dashboard → Settings → This Mac and require a Gateway release that includes those pages.
 The Connection tab's **Open Dashboard Settings** button opens that Dashboard.
@@ -170,6 +181,13 @@ personal sign-in route continue to use the shared owner profile.
 Open windows for saved Gateway profiles follow sign-in route changes after a
 reconnect. An unchanged route keeps the current dashboard and its navigation.
 
+The account card at the bottom-left of the dashboard shows your name and the
+current Gateway, including its health and primary status. While disconnected,
+it shows **Reconnecting…**. Open the card's **Gateway** section to switch Gateways,
+Command-click or Control-click a Gateway to open it in another window, or choose
+**Gateway settings…**. **Set as primary…** appears when the current Gateway can
+be promoted. These controls are available even with only one saved Gateway.
+
 Opening the embedded dashboard at its default Chat landing restores the last
 page you visited, such as **Usage**, for that Gateway origin. Explicit session
 links and navigation requests take precedence over the remembered page, and
@@ -181,6 +199,8 @@ Use the tab strip to select or close a page, the URL bar to navigate, and the ba
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
+Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. A tab's page temporarily hides only when the menu overlaps its Browser pane, or while a modal dialog or the command palette is open, and returns when the obstruction clears.
+
 Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 
 Right-click an external link in the dashboard to choose **Open in Browser Panel**, **Open in Default Browser**, or **Copy Link**. Modified clicks still open the default browser. New-window links inside a Mac tab open another Mac tab; pointer-activated downloads hand off to the default browser. Responses WebKit cannot display hand off only for pointer-activated main-frame navigation; other non-displayable responses are cancelled silently. Regular browser-hosted Control UI pages keep their normal link and context-menu behavior unless you enable the Browser panel link preference.
@@ -188,6 +208,8 @@ Right-click an external link in the dashboard to choose **Open in Browser Panel*
 ## Import browser logins
 
 The first time a Mac tab opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Dashboard → Settings → This Mac → Browser** can re-open the native import flow while a local Gateway and eligible profile are available. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+
+Switching away from Local mode hides the import banner and discards pending status or banner results. An import already sent to the local Gateway may still finish there; switching modes does not undo copied cookies. Returning to Local mode lets you request a fresh offer from **Settings → This Mac → Browser**.
 
 ## Sync cookies to a remote computer
 

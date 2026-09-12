@@ -95,7 +95,7 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
@@ -290,6 +290,13 @@ openclaw sessions cleanup --json
   for active work to finish, or explicitly delete sessions you no longer want
   to retain.
 
+Optional cold transcript extraction has its own background worker and
+**Run now** action in
+[Settings → Agent Defaults → Session](/gateway/config-agents/sessions#cold-storage).
+It uses `session.maintenance.coldStorage.afterDays` and preserves inactive
+transcripts in authoritative compressed files. The cleanup command's
+reset/deletion archive retention does not delete those cold files.
+
 Flags:
 
 | Flag                 | Description                                                                                                                                                                                                                                                                                                |
@@ -301,13 +308,19 @@ Flags:
 | `--active-key <key>` | Protect a specific active key from automatic maintenance. It still counts toward `maxEntries`. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                         |
 | `--agent <id>`       | Run cleanup for one configured agent store.                                                                                                                                                                                                                                                                |
 | `--all-agents`       | Run cleanup for all configured agent stores.                                                                                                                                                                                                                                                               |
-| `--store <path>`     | Run against a specific legacy store selector path.                                                                                                                                                                                                                                                         |
+| `--store <path>`     | Run locally against a specific SQLite database or legacy store selector path.                                                                                                                                                                                                                              |
 | `--json`             | Print a JSON summary. With `--all-agents`, output includes one summary per store.                                                                                                                                                                                                                          |
 
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
-traffic. Use `--store <path>` for explicit offline repair of a legacy store
-selector.
+traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
+legacy store selector.
+
+When the selected store's parent directory is named `agent`, transcript artifacts
+live in the sibling `sessions` directory. This also applies to custom paths:
+`/backup/agent/sessions.json` selects `/backup/agent/openclaw-agent.sqlite`, whose
+archives live in `/backup/sessions`. Cleanup measures and prunes that same artifact
+directory whether you select the legacy path or the SQLite file.
 
 Offline cleanup loads trusted, permitted harness plugins so their session-owned
 resources are reclaimed with the deleted rows, even if the agent now uses a
@@ -353,6 +366,59 @@ check filesystem permissions and retry after resolving the deletion failure.
   ]
 }
 ```
+
+### Test cleanup on a copy
+
+Use a separate state directory to measure cleanup before changing a live
+installation. Create a WAL-aware SQLite backup or a coordinated stopped-state
+copy; copying only a live database's main `.sqlite` file can omit committed WAL
+data. Preserve the agent ID, directory layout, and relevant session artifacts
+when preparing the copy. Use ordinary copied files, not symlinks or hard links
+to live state.
+
+Prepare `openclaw.json` inside the copy with the maintenance settings you want
+to test and the copied agent's configuration. Keep its paths and plugin
+configuration isolated from the live installation. The following example
+selects the copied `main` agent database explicitly; adjust the directory and
+agent ID to match your copy:
+
+```bash
+(
+  export OPENCLAW_STATE_DIR="$HOME/openclaw-state-copy"
+  export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  copied_db="$OPENCLAW_STATE_DIR/agents/main/agent/openclaw-agent.sqlite"
+
+  openclaw sessions cleanup --store "$copied_db" --dry-run --json
+)
+```
+
+Review the preview, then apply cleanup and compact the copied database:
+
+```bash
+(
+  export OPENCLAW_STATE_DIR="$HOME/openclaw-state-copy"
+  export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  copied_db="$OPENCLAW_STATE_DIR/agents/main/agent/openclaw-agent.sqlite"
+
+  openclaw sessions cleanup --store "$copied_db" --enforce --json
+  openclaw doctor --session-sqlite compact --session-sqlite-agent main --session-sqlite-store "$copied_db" --json
+)
+```
+
+Explicit `--store` cleanup stays local. Doctor requires its target inside `OPENCLAW_STATE_DIR`
+and no Gateway using that state directory; the live Gateway can continue using
+its separate original state. Set `--session-sqlite-agent` to the copied database's
+owner; an explicit Doctor store selector otherwise defaults to `main`.
+
+`archive-age`, `archive-dashboard`, and `archive-cap` change session metadata
+while retaining transcript rows. Disk-budget cleanup can replace eligible
+history with compressed archives, whose canonical payload remains in SQLite.
+Doctor's `compact` step then reclaims free database pages with `VACUUM` and
+reports before/after database and WAL sizes. It does not choose more history
+to delete. Compare physical sizes and retained history, not only session counts;
+protected data can keep usage above the configured budget. See
+[store maintenance and retention](/reference/session-management-compaction/maintenance)
+for the archive ownership and protection rules.
 
 ## Compact a session
 

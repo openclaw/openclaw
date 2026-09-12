@@ -162,7 +162,7 @@ describe("Feishu bot menu handler", () => {
   });
 
   it("reopens replay for explicit retryable fallback failures", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as RuntimeEnv;
+    const runtime = createRuntimeSpies() as RuntimeEnv;
     const onBotMenu = await registerHandlers({ runtime });
     sendCardFeishuMock
       .mockImplementationOnce(async () => {

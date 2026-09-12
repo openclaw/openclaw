@@ -37,29 +37,33 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex supervision actions", () => {
-  it("advertises creation from startup config before the live snapshot is available", () => {
-    const startupConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": {} },
+  it.each(["openai/gpt-6-astra", "openai/gpt-5.6-sol"])(
+    "advertises creation for %s from startup config before the live snapshot is available",
+    (model) => {
+      const startupConfig = {
+        agents: {
+          defaults: {
+            model: { primary: model },
+            models: { [model]: {} },
+            modelPolicy: { allow: [model] },
+          },
         },
-      },
-    } satisfies OpenClawConfig;
-    const { runtime } = createRuntime();
-    const { api, getProvider } = createGatewayApi(runtime, startupConfig);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createEligibleControl(),
-      getRuntimeConfig: () => undefined,
-    });
+      } satisfies OpenClawConfig;
+      const { runtime } = createRuntime();
+      const { api, getProvider } = createGatewayApi(runtime, startupConfig);
+      registerCodexSessionCatalog({
+        api,
+        bindingStore: createCodexTestBindingStore(),
+        control: createEligibleControl(),
+        getRuntimeConfig: () => undefined,
+      });
 
-    expect(getProvider()?.resolveCreateSession?.({ agentId: "main" })).toEqual({
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
-    });
-  });
+      expect(getProvider()?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+        model,
+        agentRuntime: "codex",
+      });
+    },
+  );
 
   it("marks paired-node rows continuable only with complete permitted capabilities", async () => {
     const sourceByNode = new Map([

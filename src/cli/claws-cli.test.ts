@@ -197,37 +197,10 @@ describe("claws cli", () => {
       summary: { claws: 0, partial: 0, missingAgents: 0, driftedFiles: 0, packageRefs: 0 },
     });
     mocks.buildClawRemovePlan.mockReset();
-    mocks.buildClawRemovePlan.mockResolvedValue({
-      schemaVersion: "openclaw.clawRemovePlan.v1",
-      dryRun: true,
-      mutationAllowed: false,
-      planIntegrity: "sha256:remove-plan",
-      target: "demo-agent",
-      agentId: "demo-agent",
-      actions: [
-        {
-          kind: "agent",
-          id: "demo-agent",
-          action: "remove",
-          target: 'agents.entries["demo-agent"]',
-          blocked: false,
-        },
-      ],
-      blockers: [],
-    });
+    const removal = cliTestHelpers.createClawRemoveFixtures();
+    mocks.buildClawRemovePlan.mockResolvedValue(removal.plan);
     mocks.applyClawRemovePlan.mockReset();
-    mocks.applyClawRemovePlan.mockResolvedValue({
-      schemaVersion: "openclaw.clawRemoveResult.v1",
-      dryRun: false,
-      status: "complete",
-      agentId: "demo-agent",
-      agentRemoved: true,
-      workspaceFiles: [],
-      packages: [],
-      mcpServers: [],
-      cronJobs: [],
-      packageRefsReleased: 1,
-    });
+    mocks.applyClawRemovePlan.mockResolvedValue(removal.result);
     mocks.buildClawUpdatePlan.mockReset();
     mocks.buildClawUpdatePlan.mockResolvedValue({
       schemaVersion: "openclaw.clawUpdatePlan.v1",
@@ -1001,7 +974,23 @@ describe("claws cli", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("applies remove only after explicit consent", async () => {
+  it.each(
+    [true, false].flatMap((json) => ["complete", "partial"].map((status) => ({ json, status }))),
+  )("reports consented removal outcomes (json=$json, status=$status)", async ({ json, status }) => {
+    const warnings = ["Plugin cleanup is still finishing."];
+    const pluginRuntime = { operationId: "runtime-final", generation: 3, pluginIds: ["audit"] };
+    const error = {
+      code: "package_cleanup_failed",
+      message: "Plugin activation failed. Gateway generation 3: replacement applied.",
+    };
+    mocks.applyClawRemovePlan.mockResolvedValue({
+      ...cliTestHelpers.createClawRemoveFixtures().result,
+      pluginRuntime,
+      warnings,
+      status,
+      agentRemoved: status === "complete",
+      ...(status === "partial" ? { error } : {}),
+    });
     await runCli([
       "claws",
       "remove",
@@ -1009,7 +998,7 @@ describe("claws cli", () => {
       "--yes",
       "--plan-integrity",
       "sha256:remove-plan",
-      "--json",
+      ...(json ? ["--json"] : []),
     ]);
 
     expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
@@ -1019,11 +1008,26 @@ describe("claws cli", () => {
         referencedCleanup: { mode: "retain" },
       }),
     );
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawRemoveResult.v1",
-      status: "complete",
-      agentId: "demo-agent",
-    });
+    if (json) {
+      expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+        schemaVersion: "openclaw.clawRemoveResult.v1",
+        status,
+        agentId: "demo-agent",
+        pluginRuntime,
+        warnings,
+        ...(status === "partial" ? { error } : {}),
+      });
+    } else {
+      expect(mocks.logs.filter((line) => line === `Warning: ${warnings[0]}`)).toHaveLength(1);
+      expect(mocks.logs).toContain("Plugin runtime changed in Gateway generation 3.");
+      if (status === "partial") {
+        expect(mocks.errors).toContain(error.message);
+        expect(mocks.logs).not.toContain("Removed agent: demo-agent");
+      }
+    }
+    if (status === "partial") {
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    }
   });
 
   it("requires the exact dry-run identity with remove consent", async () => {

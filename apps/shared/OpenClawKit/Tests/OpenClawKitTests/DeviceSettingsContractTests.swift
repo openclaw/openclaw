@@ -3,6 +3,31 @@ import OpenClawKit
 import Testing
 
 struct DeviceSettingsContractTests {
+    @Test(arguments: [true, false])
+    func `unattended desktop hosting uses the existing boolean edit contract`(_ enabled: Bool) {
+        #expect(DeviceSettingsRequest(body: [
+            "type": "set", "key": "capabilities.unattendedDesktopEnabled", "value": enabled,
+        ]) == .set(.unattendedDesktopEnabled, .boolean(enabled)))
+        #expect(DeviceSettingsRequest(body: [
+            "type": "set", "key": "capabilities.unattendedDesktopEnabled", "value": enabled ? 1 : 0,
+        ]) == nil)
+    }
+
+    @Test(arguments: ["locked", "unlocked", "unknown"])
+    func `desktop availability is operational state separate from capabilities`(_ state: String) throws {
+        let availability = try #require(DeviceSettingsSnapshot.DesktopAvailability.State(rawValue: state))
+        let snapshot = DeviceSettingsSnapshot(
+            device: .init(appVersion: "1", appBuild: "2"),
+            capabilities: .init(unattendedDesktopEnabled: false),
+            desktopAvailability: .init(state: availability),
+            permissions: .init(entries: [], location: .init(mode: .off, precise: false)),
+            voice: .init(supported: false, wakeEnabled: false))
+        let encoded = try JSONEncoder().encode(snapshot)
+        let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(actual["desktopAvailability"] as? [String: String] == ["state": state])
+        #expect(actual["capabilities"] as? [String: Bool] == ["unattendedDesktopEnabled": false])
+    }
+
     @Test func `Chrome extension setup accepts only the exact action payload`() {
         #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
         #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)

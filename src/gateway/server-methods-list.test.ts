@@ -151,6 +151,19 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
+  it("advertises plugin reload with admin mutation policy and generation invalidation", () => {
+    expect(GATEWAY_EVENTS).toContain("plugins.changed");
+    expect(listGatewayMethods()).toContain("plugins.reload");
+    expect(coreGatewayHandlers["plugins.reload"]).toBeTypeOf("function");
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    for (const name of ["plugins.reload", "plugins.refresh"]) {
+      expect(descriptors.find((descriptor) => descriptor.name === name)).toMatchObject({
+        scope: "operator.admin",
+        controlPlaneWrite: true,
+      });
+    }
+  });
+
   it("advertises node plugin tool catalog updates", () => {
     expect(listGatewayMethods()).toContain("node.pluginTools.update");
   });
@@ -185,6 +198,13 @@ describe("listGatewayMethods", () => {
       ...pluginDiscoveryMethods,
       "tasks.history",
       "environments.prepare",
+      "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
+      "sessions.storage.status",
+      "sessions.storage.run",
+      "plugins.reload",
+      "claws.packages.remove",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -210,6 +230,13 @@ describe("listGatewayMethods", () => {
       ...pluginDiscoveryMethods,
       "tasks.history",
       "environments.prepare",
+      "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
+      "sessions.storage.status",
+      "sessions.storage.run",
+      "plugins.reload",
+      "claws.packages.remove",
     ]);
   });
 
@@ -362,6 +389,13 @@ describe("listGatewayMethods", () => {
       ...pluginDiscoveryMethods,
       "tasks.history",
       "environments.prepare",
+      "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
+      "sessions.storage.status",
+      "sessions.storage.run",
+      "plugins.reload",
+      "claws.packages.remove",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -413,6 +447,16 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("plugins.catalog.get")).toBe(
       methods.indexOf("plugins.catalog.categories") + 1,
     );
+  });
+
+  it("advertises API-key saving as an administrator control-plane write", () => {
+    expect(listGatewayMethods()).toContain("models.authSetApiKey");
+    expect(coreGatewayHandlers["models.authSetApiKey"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "models.authSetApiKey",
+      ),
+    ).toMatchObject({ scope: "operator.admin", controlPlaneWrite: true });
   });
 
   it("advertises the versioned Talk session RPCs", () => {

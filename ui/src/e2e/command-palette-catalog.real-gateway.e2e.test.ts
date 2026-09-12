@@ -15,6 +15,7 @@ import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
+const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const models = (id: string) => [
   { id: "anchor", name: "Anchor" },
   { id, name: id },
@@ -107,7 +108,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("acquires on the first Settings picker open and Retry, while completed reopens read publication", async () => {
+  it("opens Settings pickers from publication and acquires only on Refresh or Retry", async () => {
     const frames: unknown[] = [];
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
@@ -187,11 +188,14 @@ suite.define(() => {
           const pickers = settings.locator(".model-providers__defaults openclaw-select-picker");
           const primary = pickers.first();
           const trigger = primary.locator(".picker-select__trigger");
-          const capture = async (name: string) =>
-            fs.writeFile(
-              path.join(suite.artifactDir, name),
-              await takeControlUiViewportScreenshot(page, settings, [primary]),
-            );
+          const capture = async (name: string) => {
+            if (captureEnabled) {
+              await fs.writeFile(
+                path.join(suite.artifactDir, name),
+                await takeControlUiViewportScreenshot(page, settings, [primary]),
+              );
+            }
+          };
           await trigger.waitFor({ state: "visible" });
           await expect.poll(() => pickerValue(primary)).toBe("fixture/anchor");
           await expect
@@ -208,57 +212,90 @@ suite.define(() => {
           expect(acquisitions()).toBe(initialAcquisitions);
           stages.push({ stage: "initial", acquisitions: acquisitions() });
 
-          const catalogRequest = async (refresh: boolean, action: () => Promise<void>) => {
-            const before = requests.length;
+          const catalogRefresh = async (action: () => Promise<void>) => {
+            // Publication can add passive reads; this action owns the explicit acquisition.
+            const refreshRequests = () => requests.filter(({ params }) => params.refresh === true);
+            const before = refreshRequests().length;
             await action();
-            await expect.poll(() => requests.length).toBe(before + 1);
-            const request = requests.at(-1)!;
+            await expect.poll(() => refreshRequests().length).toBe(before + 1);
+            const request = refreshRequests().at(-1)!;
             await expect.poll(() => replies.has(request.id)).toBe(true);
             expect(request.params).toEqual({
               view: "configured",
               agentId: "main",
-              ...(refresh ? { refresh: true } : {}),
+              includeDefaultModels: true,
+              refresh: true,
             });
             expect(replies.get(request.id)?.ok).toBe(true);
+            return requireRecord(replies.get(request.id)?.payload);
           };
-          const open = async (refresh: boolean) => {
+          const open = async () => {
+            await expect.poll(() => requests.every(({ id }) => replies.has(id))).toBe(true);
+            const requestsBeforeOpen = requests.length;
+            const acquisitionsBeforeOpen = acquisitions();
             if ((await trigger.getAttribute("aria-expanded")) === "true") {
               await trigger.click();
             }
-            await catalogRequest(refresh, () => trigger.click());
+            await trigger.click();
+            await primary.getByRole("listbox").waitFor({ state: "visible" });
+            expect(requests).toHaveLength(requestsBeforeOpen);
+            expect(acquisitions()).toBe(acquisitionsBeforeOpen);
           };
-          await open(true);
+          await open();
           await primary
             .locator('[role="option"][data-value="ollama/refresh-fixture:latest"]')
             .waitFor({ state: "visible" });
-          expect(acquisitions()).toBe(initialAcquisitions + 1);
+          expect(acquisitions()).toBe(initialAcquisitions);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "first-open", acquisitions: acquisitions() });
           await capture("settings-first-open.png");
 
-          await trigger.click();
           providerModel = "published-fixture:latest";
+          const publicationStart = requests.length;
           expect((await publish()).providerOutcomes).toContainEqual({
             provider: "ollama",
             status: "ready",
           });
-          expect(acquisitions()).toBe(initialAcquisitions + 2);
-          await open(false);
+          expect(acquisitions()).toBe(initialAcquisitions + 1);
+          await expect
+            .poll(() =>
+              requests
+                .slice(publicationStart)
+                .filter(({ params }) => params.refresh === undefined)
+                .map(({ id }) => replies.get(id)?.payload),
+            )
+            .toContainEqual(
+              expect.objectContaining({
+                models: expect.arrayContaining([
+                  expect.objectContaining({
+                    provider: "ollama",
+                    id: "published-fixture:latest",
+                  }),
+                ]),
+              }),
+            );
           await primary
             .locator('[role="option"][data-value="ollama/published-fixture:latest"]')
             .waitFor({ state: "visible" });
-          expect(acquisitions()).toBe(initialAcquisitions + 2);
+          expect(
+            await primary
+              .locator('[role="option"][data-value="ollama/refresh-fixture:latest"]')
+              .count(),
+          ).toBe(0);
+          await open();
+          expect(acquisitions()).toBe(initialAcquisitions + 1);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "published-reopen", acquisitions: acquisitions() });
           await capture("settings-published-reopen.png");
 
           await trigger.click();
-          await catalogRequest(true, () =>
+          await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
-          expect(acquisitions()).toBe(initialAcquisitions + 3);
-          await open(true);
-          expect(acquisitions()).toBe(initialAcquisitions + 4);
+          expect(acquisitions()).toBe(initialAcquisitions + 2);
+          await open();
+          expect(acquisitions()).toBe(initialAcquisitions + 2);
+          expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "core-replacement-open", acquisitions: acquisitions() });
 
           // A new page starts its own request lifetime and keeps the published rows on failure.
@@ -267,29 +304,38 @@ suite.define(() => {
           await trigger.waitFor({ state: "visible" });
           await expect.poll(() => pickerValue(primary)).toBe("fixture/anchor");
           providerMode = "failed";
-          await open(true);
+          const failed = await catalogRefresh(() =>
+            settings.getByRole("button", { name: "Refresh", exact: true }).click(),
+          );
           const retry = settings
             .locator(".model-providers__catalog-progress")
             .getByRole("button", { name: "Retry", exact: true });
           await retry.waitFor({ state: "visible" });
           expect(await settings.textContent()).not.toContain("Open Models to try again.");
-          expect(acquisitions()).toBe(initialAcquisitions + 5);
+          expect(acquisitions()).toBe(initialAcquisitions + 3);
+          await open();
           await primary
             .locator('[role="option"][data-value="ollama/published-fixture:latest"]')
             .waitFor({ state: "visible" });
-          expect(requireRecord(replies.get(requests.at(-1)!.id)?.payload).refreshFailed).toBe(true);
-          stages.push({ stage: "failed-first-open", acquisitions: acquisitions() });
+          expect(failed.refreshFailed).toBe(true);
+          expect(failed.providerOutcomes).toContainEqual({
+            provider: "ollama",
+            status: "unavailable",
+          });
+          expect(await pickerValue(primary)).toBe("fixture/anchor");
+          stages.push({ stage: "failed-refresh", acquisitions: acquisitions() });
+          await retry.scrollIntoViewIfNeeded();
           await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
           providerModel = "recovered-fixture:latest";
-          await catalogRequest(true, () => retry.click());
+          await catalogRefresh(() => retry.click());
           await retry.waitFor({ state: "hidden" });
-          await open(false);
+          await open();
           await primary
             .locator('[role="option"][data-value="ollama/recovered-fixture:latest"]')
             .waitFor({ state: "visible" });
-          expect(acquisitions()).toBe(initialAcquisitions + 6);
+          expect(acquisitions()).toBe(initialAcquisitions + 4);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "retry", acquisitions: acquisitions() });
           await capture("settings-retry.png");
@@ -364,7 +410,7 @@ suite.define(() => {
         );
         expect(JSON.stringify(failed)).not.toContain("private upstream error body");
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
-        await page.keyboard.press("Control+K");
+        await page.keyboard.press("ControlOrMeta+K");
         await page.locator(".cmd-palette__input").fill("refresh-fixture");
         const model = page.getByRole("option", {
           name: "refresh-fixture:latest ollama",
@@ -376,7 +422,9 @@ suite.define(() => {
           .locator(".cmd-palette")
           .getByText(warning, { exact: true })
           .waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-failed.png") });
+        if (captureEnabled) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-failed.png") });
+        }
 
         providerMode = "empty";
         expect((await refresh()).providerOutcomes).toContainEqual({
@@ -389,7 +437,9 @@ suite.define(() => {
           .locator(".cmd-palette")
           .getByText(warning, { exact: true })
           .waitFor({ state: "hidden" });
-        await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-empty.png") });
+        if (captureEnabled) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-empty.png") });
+        }
         console.log(
           "catalog-refresh-consumer-proof",
           JSON.stringify({
@@ -483,7 +533,7 @@ suite.define(() => {
           });
           await page.goto(browserUrl);
           await waitForControlUiGatewayReady(page);
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           const input = page.locator(".cmd-palette__input");
           await input.fill("palette-");
           const retiring = page.getByRole("option", {
@@ -495,11 +545,15 @@ suite.define(() => {
             exact: true,
           });
           await retiring.waitFor({ state: "visible" });
-          await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
+          }
           await publish("palette-published");
           await expect.poll(() => published.count()).toBe(1);
           expect(await retiring.count()).toBe(0);
-          await page.screenshot({ path: path.join(suite.artifactDir, "published.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "published.png") });
+          }
 
           rejectCatalogReplies = true;
           await publish("palette-held");
@@ -508,7 +562,9 @@ suite.define(() => {
             .filter({ hasText: "Model search unavailable" });
           await status.waitFor({ state: "visible" });
           expect(await published.count()).toBe(1);
-          await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
+          }
           rejectCatalogReplies = false;
           await input.fill("palette-held");
           const recovered = page.getByRole("option", { name: "palette-held fixture", exact: true });
@@ -516,8 +572,14 @@ suite.define(() => {
           await status.waitFor({ state: "hidden" });
           await input.press("Enter");
           await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-          await page.screenshot({ path: path.join(suite.artifactDir, "recovered.png") });
+          // History changes before the new view commits; capture must not supply that wait.
+          const settings = page.locator("openclaw-model-providers-page");
+          await settings.waitFor({ state: "visible" });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "recovered.png") });
+          }
           await page.goBack();
+          await settings.waitFor({ state: "hidden" });
           rejectCatalogReplies = true;
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
@@ -526,7 +588,7 @@ suite.define(() => {
             .click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
           const requestsBeforeOpen = catalogParams.length;
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           await input.fill("palette");
           await status.waitFor({ state: "visible" });
           expect(catalogParams.length).toBeGreaterThan(requestsBeforeOpen);
@@ -535,9 +597,11 @@ suite.define(() => {
             agentId: "reviewer",
           });
           expect(await recovered.count()).toBe(0);
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "selected-agent-failure.png"),
-          });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "selected-agent-failure.png"),
+            });
+          }
           rejectCatalogReplies = false;
           await input.fill("palette-held");
           await recovered.waitFor({ state: "visible" });

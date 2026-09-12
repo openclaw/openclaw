@@ -3628,6 +3628,33 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
+  it("does not retarget an approval refresh when its connection changes during pairing verification", async () => {
+    let resolveCurrent!: (state: { identity: string; generation: string }) => void;
+    const currentPairingState = new Promise<{ identity: string; generation: string }>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    const registry = createNodeRegistry({
+      resolveCurrentPairingState: async () => await currentPairingState,
+    });
+    const previousFrames: string[] = [];
+    const replacementFrames: string[] = [];
+    const pairing = { pairingIdentity: "identity-a", pairingGeneration: "generation-a" };
+    registerNodeSession(registry, makeClient("conn-1", "node-1", previousFrames), pairing);
+    const send = registry.sendEventForPairingIdentity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      pairingIdentity: "identity-a",
+      event: "node.pair.resolved",
+      payload: { nodeId: "node-1", decision: "approved", requestId: "approval-1", ts: 1 },
+    });
+    registerNodeSession(registry, makeClient("conn-2", "node-1", replacementFrames), pairing);
+    resolveCurrent({ identity: "identity-a", generation: "generation-a" });
+
+    await expect(send).resolves.toBe(false);
+    expect(previousFrames).toEqual([]);
+    expect(replacementFrames).toEqual([]);
+  });
+
   it("rejects raw event sends when the node socket buffer is saturated", () => {
     resetDiagnosticEventsForTest();
     const diagnosticEvents: unknown[] = [];

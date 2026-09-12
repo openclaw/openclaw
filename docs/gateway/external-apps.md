@@ -37,7 +37,7 @@ for results, cancel work, or inspect Gateway resources.
 | [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
 | [Embedding guide](/gateway/embedding)                         | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
 | [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [Gateway protocol RPC methods](/gateway/protocol/rpc-methods) | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
 | [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
 | [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
@@ -45,7 +45,7 @@ for results, cancel work, or inspect Gateway resources.
 
 1. Run or discover a Gateway.
 2. Connect over the [Gateway protocol](/gateway/protocol).
-3. Call documented RPC methods from [Gateway RPC reference](/reference/rpc).
+3. Call documented RPC methods from [Gateway protocol RPC methods](/gateway/protocol/rpc-methods).
 4. Pin the OpenClaw version you test against.
 5. Recheck the RPC reference when upgrading OpenClaw.
 
@@ -243,7 +243,10 @@ With `drain: true`, the same suspension owner instead keeps admission closed
 and cron scheduling paused until existing work settles. Already-owned cron
 completion and reconciliation continue.
 
-Both draining and ready leases last two minutes. Repeat `prepare` before
+Both draining and ready leases share a two-minute budget starting before work
+inspection. Preparation that exhausts that budget resumes scheduling and fails
+instead of returning an expired lease. Clock rollback does not extend the budget.
+Repeat `prepare` before
 `expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
 the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
 existing lease. Use `status` for routine polling and reserve `prepare` for
@@ -318,7 +321,7 @@ plugins loaded by OpenClaw.
 - [Building a Gateway client](/gateway/clients)
 - [Embedding OpenClaw](/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
-- [Gateway RPC reference](/reference/rpc)
+- [Gateway protocol RPC methods](/gateway/protocol/rpc-methods)
 - [CLI agent command](/cli/agent)
 - [CLI message command](/cli/message)
 - [Agent loop](/concepts/agent-loop)

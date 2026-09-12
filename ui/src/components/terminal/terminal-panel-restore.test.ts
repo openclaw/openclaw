@@ -14,6 +14,7 @@ import {
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import { TerminalIntentQueue } from "./terminal-pending-actions.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", () => ({
@@ -84,16 +85,20 @@ function createGateway(sessionIds = ["session-a", "session-b"]) {
   };
 }
 
-function mountPanel(client: TerminalGatewayClient) {
+function mountPanel(
+  client: TerminalGatewayClient,
+  options: { page?: boolean; open?: boolean } = {},
+) {
   const panel = document.createElement(PANEL_TAG) as OpenClawTerminalPanel;
   panel.client = client;
   panel.available = true;
+  panel.page = panel.fullscreen = panel.embedded = options.page === true;
   const sessions = (panel as unknown as { terminalSessions: TerminalPanelSessionController })
     .terminalSessions;
   const mountedPanel = { panel, sessions };
   mounted.push(mountedPanel);
   document.body.append(panel);
-  if (!panel.terminalPanelOpen) {
+  if (!panel.terminalPanelOpen && options.open !== false) {
     panel.toggle();
   }
   return mountedPanel;
@@ -237,6 +242,188 @@ describe("terminal persisted restore", () => {
       });
       expect(sessions.tabs.map((tab) => tab.gatewaySessionId)).toEqual([remaining]);
       expect(savedIds()).toEqual([remaining]);
+    },
+  );
+
+  it.each(
+    (["resolve", "reject"] as const).flatMap((outcome) =>
+      (["dock", "page"] as const).flatMap((surface) => [
+        { outcome, surface, keepSibling: false },
+        { outcome, surface, keepSibling: true },
+      ]),
+    ),
+  )(
+    "finishes the cancelled restore on $surface after $outcome (keep sibling: $keepSibling)",
+    async ({ outcome, surface, keepSibling }) => {
+      const queueCalls = vi.spyOn(TerminalIntentQueue.prototype, "queue");
+      const page = surface === "page";
+      const storageKey = page ? `${STORAGE_KEY}:page:null` : STORAGE_KEY;
+      const sessionIds = keepSibling ? ["session-a", "session-b"] : ["session-a"];
+      sessionStorage.setItem(storageKey, JSON.stringify(sessionIds));
+      const gateway = createGateway(sessionIds);
+      const { panel } = mountPanel(gateway.client, { page });
+      const first = await waitForAttach(gateway, 0);
+      panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+      await panel.updateComplete;
+      expect(panel.terminalPanelOpen).toBe(page || keepSibling);
+      expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "[]")).toEqual(
+        keepSibling ? ["session-b"] : [],
+      );
+      if (outcome === "resolve") {
+        first.resolve(attachResult(first.sessionId));
+      } else {
+        first.reject(new Error("closed restore request failed"));
+      }
+      if (keepSibling) {
+        const second = await waitForAttach(gateway, 1);
+        second.resolve(attachResult(second.sessionId));
+      }
+      await Promise.all(queueCalls.mock.results.map((result) => result.value));
+      await waitForFast(() =>
+        expect(
+          panel.terminalPanelOpen
+            ? panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled
+            : false,
+        ).toBe(false),
+      );
+      expect(panel.terminalPanelOpen).toBe(page || keepSibling);
+      expect(gateway.requests.filter((request) => request.method === "terminal.open")).toEqual([]);
+      expect(gateway.attaches.map((request) => request.sessionId)).toEqual(sessionIds);
+      expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(keepSibling ? 1 : 0);
+      expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+      expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "[]")).toEqual(
+        keepSibling ? ["session-b"] : [],
+      );
+      expect(gateway.requests.filter((request) => request.method === "terminal.close")).toEqual(
+        outcome === "resolve"
+          ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
+          : [],
+      );
+    },
+  );
+
+  it.each(
+    (["reconnect", "remount"] as const).flatMap((transition) =>
+      (["resolve", "reject"] as const).map((outcome) => ({ transition, outcome })),
+    ),
+  )(
+    "does not replace the cancelled dock restore across $transition before $outcome",
+    async ({ transition, outcome }) => {
+      const queueCalls = vi.spyOn(TerminalIntentQueue.prototype, "queue");
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-a"]));
+      const gateway = createGateway(["session-a"]);
+      let current = mountPanel(gateway.client);
+      const first = await waitForAttach(gateway, 0);
+      current.panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+      await current.panel.updateComplete;
+      expect(savedIds()).toEqual([]);
+      if (transition === "remount") {
+        current.panel.remove();
+        current = mountPanel(gateway.client, { open: false });
+      } else {
+        current.panel.client = null;
+        current.panel.available = false;
+        await current.panel.updateComplete;
+        current.panel.client = gateway.client;
+        current.panel.available = true;
+      }
+      await current.panel.updateComplete;
+      if (outcome === "resolve") {
+        first.resolve(attachResult(first.sessionId));
+      } else {
+        first.reject(new Error("cancelled old restore failed"));
+      }
+      await Promise.all(queueCalls.mock.results.map((result) => result.value));
+      await waitForFast(() =>
+        expect(
+          current.panel.terminalPanelOpen
+            ? current.panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled
+            : false,
+        ).toBe(false),
+      );
+      expect(current.panel.terminalPanelOpen).toBe(false);
+      expect(current.panel.renderRoot.querySelector(".tp-error")).toBeNull();
+      expect(gateway.requests.filter(({ method }) => method === "terminal.open")).toEqual([]);
+      expect(gateway.requests.filter(({ method }) => method === "terminal.close")).toEqual(
+        outcome === "resolve"
+          ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
+          : [],
+      );
+    },
+  );
+
+  it("opens a persisted catalog request after its restored tab is cancelled", async () => {
+    const catalog = { catalogId: "catalog-a", hostId: "host-a", threadId: "thread-a" };
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-a"]));
+    sessionStorage.setItem(
+      "openclaw.terminal.actions.v1",
+      JSON.stringify([{ kind: "catalog", agentId: "agent-a", catalog }]),
+    );
+    const gateway = createGateway(["session-a"]);
+    const { panel } = mountPanel(gateway.client);
+    const first = await waitForAttach(gateway, 0);
+    panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+    first.resolve(attachResult(first.sessionId));
+    await waitForFast(() =>
+      expect(gateway.requests.filter(({ method }) => method === "terminal.open")).toHaveLength(1),
+    );
+    gateway.emit({
+      event: "terminal.data",
+      payload: { sessionId: "replacement", seq: 5, data: "ready" },
+    });
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(
+        false,
+      ),
+    );
+    expect(gateway.requests).toContainEqual({
+      method: "terminal.open",
+      params: { agentId: "agent-a", catalog, cols: 100, rows: 30 },
+    });
+    expect(panel.terminalPanelOpen).toBe(true);
+    expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+    expect(savedIds()).toEqual(["replacement"]);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps a queued attach visible after a cancelled restore and follower %s",
+    async (outcome) => {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-a"]));
+      const gateway = createGateway();
+      const { panel } = mountPanel(gateway.client);
+      const first = await waitForAttach(gateway, 0);
+      window.dispatchEvent(
+        new CustomEvent("openclaw:terminal-toggle", {
+          detail: { open: true, terminalSessionId: "session-b" },
+        }),
+      );
+      panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+      first.resolve(attachResult(first.sessionId));
+      const follower = await waitForAttach(gateway, 1);
+      if (outcome === "resolve") {
+        follower.resolve(attachResult(follower.sessionId));
+      } else {
+        follower.reject(new Error("queued attach failed"));
+      }
+      await waitForFast(() =>
+        expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(
+          false,
+        ),
+      );
+      expect(panel.terminalPanelOpen).toBe(true);
+      expect(gateway.attaches.map((request) => request.sessionId)).toEqual([
+        "session-a",
+        "session-b",
+      ]);
+      expect(gateway.requests.filter((request) => request.method === "terminal.open")).toEqual([]);
+      expect(savedIds()).toEqual(outcome === "resolve" ? ["session-b"] : []);
+      if (outcome === "resolve") {
+        expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+      } else {
+        expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+          "queued attach failed",
+        );
+      }
     },
   );
 

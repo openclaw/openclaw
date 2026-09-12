@@ -252,7 +252,7 @@ describe("startPluginServices", () => {
     await generationB.stop();
   });
 
-  it("drains producer diagnostics before exporters stop and propagates exporter failures", async () => {
+  it("drains producer diagnostics before exporters stop and reports callback failures", async () => {
     const order: string[] = [];
     const producerError = new Error("producer stop failed");
     const exporterError = new Error("exporter stop failed");
@@ -318,13 +318,13 @@ describe("startPluginServices", () => {
       config: createServiceConfig(),
     });
 
-    await expect(handle.stop()).rejects.toBe(exporterError);
+    await expect(handle.stop()).resolves.toEqual({ errors: [producerError, exporterError] });
     await waitForDiagnosticEventsDrained();
 
     expect(order).toEqual(["producer", "event", "otel", "prometheus"]);
     expect(mockedLogger.warn.mock.calls).toEqual([
-      ["plugin service stop failed (producer): Error: producer stop failed"],
-      ["plugin service stop failed (diagnostics-otel): Error: exporter stop failed"],
+      ["plugin service stop failed (producer): producer stop failed"],
+      ["plugin service stop failed (diagnostics-otel): exporter stop failed"],
     ]);
   });
 
@@ -638,7 +638,7 @@ describe("startPluginServices", () => {
       ],
     });
 
-    await expect(handle.stop()).resolves.toBeUndefined();
+    await expect(handle.stop()).resolves.toEqual({ errors: [secondError, firstError] });
 
     expect(mockedLogger.error.mock.calls).toEqual([
       [
@@ -647,8 +647,8 @@ describe("startPluginServices", () => {
     ]);
     expect(requireLoggerErrorMessage()).not.toContain("\n");
     expect(mockedLogger.warn.mock.calls).toEqual([
-      ["plugin service stop failed (service-stop-second): Error: second stop failed"],
-      ["plugin service stop failed (service-stop-first): Error: first stop failed"],
+      ["plugin service stop failed (service-stop-second): second stop failed"],
+      ["plugin service stop failed (service-stop-first): first stop failed"],
     ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopFirst).toHaveBeenCalledOnce();
@@ -677,7 +677,7 @@ describe("startPluginServices", () => {
     expect(rollback).toHaveBeenCalledOnce();
     expect(siblingStart).toHaveBeenCalledOnce();
     expect(mockedLogger.warn).toHaveBeenCalledWith(
-      "plugin service stop failed (failed-service): Error: rollback failed",
+      "plugin service stop failed (failed-service): rollback failed",
     );
 
     await handle.stop();
@@ -714,7 +714,7 @@ describe("startPluginServices", () => {
     expect(mockedLogger.error.mock.calls).toEqual([
       ["diagnostics-otel: SDK startup rollback cleanup failed: Error: SDK rollback failed"],
       [
-        "plugin service failed (diagnostics-otel, plugin=diagnostics-otel, root=/plugins/test-plugin): diagnostics-otel startup failed and rollback cleanup failed",
+        "plugin service failed (diagnostics-otel, plugin=diagnostics-otel, root=/plugins/test-plugin): diagnostics-otel startup failed and rollback cleanup failed | SDK startup failed | SDK rollback failed",
       ],
     ]);
   });

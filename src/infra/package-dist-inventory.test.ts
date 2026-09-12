@@ -25,9 +25,11 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual([
         "dist/current-BR6xv1a1.js",
+        "dist/postinstall-content-inventory.json",
       ]);
 
       await fs.rm(currentFile);
@@ -38,6 +40,7 @@ describe("package dist inventory", () => {
       );
 
       await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/postinstall-content-inventory.json",
         "dist/stale-CJUAgRQR.js",
       ]);
     });
@@ -51,10 +54,15 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventoryForPublish(packageRoot)).resolves.toEqual([
         "dist/current.js",
+        "dist/postinstall-content-inventory.json",
       ]);
-      await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual(["dist/current.js"]);
+      await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/current.js",
+        "dist/postinstall-content-inventory.json",
+      ]);
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toEqual([
         "dist/current.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(
         fs.readFile(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
@@ -150,6 +158,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([
         "dist/plugin-sdk/provider-entry.d.ts",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });
@@ -223,6 +232,7 @@ describe("package dist inventory", () => {
 
           await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
             "dist/plugin-sdk/runtime.js",
+            "dist/postinstall-content-inventory.json",
           ]);
         },
       );
@@ -256,7 +266,10 @@ describe("package dist inventory", () => {
       await fs.writeFile(rootDependencyPackage, "{}", "utf8");
       await fs.writeFile(pluginDependencyPackage, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual(["dist/index.js"]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/index.js",
+        "dist/postinstall-content-inventory.json",
+      ]);
     });
   });
 
@@ -298,6 +311,7 @@ describe("package dist inventory", () => {
 
         await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
           "dist/extensions/demo/runtime-api.js",
+          "dist/postinstall-content-inventory.json",
         ]);
       },
     );
@@ -370,6 +384,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/bundled-chat/index.js",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });
@@ -398,6 +413,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/core-chat/index.js",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });

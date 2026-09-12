@@ -4,14 +4,79 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
-import type { GatewayServiceEnv } from "./service-types.js";
+import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
-type Scope = { active: boolean; pending: Set<Promise<unknown>> };
+type Scope = {
+  active: boolean;
+  pending: Set<Promise<unknown>>;
+  systemdRead?: { key: string; binding: Promise<SystemdServiceReadBinding | undefined> };
+};
 const scopes = new AsyncLocalStorage<Map<string, Scope>>();
+
+/** A read borrows the existing lifetime; it never creates mutation custody. */
+export async function withSystemdServiceReadBinding<T>(
+  env: GatewayServiceEnv,
+  create: () => Promise<SystemdServiceReadBinding | undefined>,
+  read: (binding: SystemdServiceReadBinding | undefined) => Promise<T>,
+  deadline?: number,
+): Promise<T> {
+  const expired = () => new Error("Original systemd read admission deadline expired.");
+  if (deadline !== undefined && performance.now() >= deadline) {
+    throw expired();
+  }
+  const scope = scopes.getStore()?.get(resolveGatewayServiceOperationLockPath(env));
+  const key = JSON.stringify([
+    env.HOME,
+    env.OPENCLAW_PROFILE,
+    env.OPENCLAW_SYSTEMD_UNIT,
+    env.OPENCLAW_STATE_DIR,
+    env.XDG_RUNTIME_DIR,
+    env.DBUS_SESSION_BUS_ADDRESS,
+  ]);
+  if (scope) {
+    if (!scope.active || (scope.systemdRead && scope.systemdRead.key !== key)) {
+      throw new Error("Original systemd read scope is closed or selects a different manager.");
+    }
+    scope.systemdRead ??= { key, binding: create() };
+    const retained = scope.systemdRead.binding;
+    const work = Promise.resolve().then(async () => {
+      const binding = await awaitWithinDeadline(
+        () => retained,
+        deadline,
+        () => performance.now(),
+      );
+      if (binding === ABSOLUTE_DEADLINE_EXPIRED) {
+        throw expired();
+      }
+      if (!scope.active) {
+        throw new Error("Original systemd read scope has closed.");
+      }
+      binding?.verify();
+      return await read(binding);
+    });
+    scope.pending.add(work);
+    try {
+      return await work;
+    } finally {
+      scope.pending.delete(work);
+    }
+  }
+  const binding = await create();
+  try {
+    if (deadline !== undefined && performance.now() >= deadline) {
+      throw expired();
+    }
+    return await read(binding);
+  } finally {
+    await binding?.close();
+  }
+}
 
 /** Serialize native effects and original-file capture using the shipped file-lock
  * owner. This lock does not attest a stopped gateway or replace native identity
@@ -21,6 +86,7 @@ export async function withGatewayServiceOperationLock<T>(
   env: GatewayServiceEnv,
   operation: (assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
+  assertGatewayServiceUpdateCurrent();
   const file = resolveGatewayServiceOperationLockPath(env);
   const assertResourceUnborrowed = (targetPath: string) =>
     createManagedHandoffLeaseStore().assertSourceUnborrowed(targetPath);
@@ -28,6 +94,7 @@ export async function withGatewayServiceOperationLock<T>(
   const inherited = scopes.getStore();
   const parent = inherited?.get(file);
   const assertScope = (scope: Scope) => {
+    assertGatewayServiceUpdateCurrent();
     if (!scope.active) {
       throw new Error("Native service operation ownership has closed.");
     }
@@ -90,6 +157,12 @@ export async function withGatewayServiceOperationLock<T>(
         }
         // Close admission atomically with the final empty-pending observation.
         scope.active = false;
+        try {
+          const binding = await scope.systemdRead?.binding;
+          await binding?.close();
+        } catch (error) {
+          failures.push(error);
+        }
         if (failures.length) {
           throw new AggregateError(
             outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,

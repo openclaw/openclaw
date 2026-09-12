@@ -19,6 +19,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
@@ -75,6 +76,7 @@ type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
+  readonly querySelector: HTMLElement["querySelector"];
   readonly activeRouteId?: NavigationRouteId;
   readonly basePath: string;
   readonly canPairDevice: boolean;
@@ -90,6 +92,7 @@ interface SidebarMenusControllerHost
   readonly onRetryConnect?: () => void;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
+  sidebarAgentsMode: "chip" | "roster";
   readonly pinnedAgentIds: readonly string[];
   readonly preferencesBrowserOnly: boolean;
   readonly selectedSessionKeys: ReadonlySet<string>;
@@ -202,6 +205,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
+      openTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
       beginMutation: () => host.sessionData.beginSessionMutation(),
       isMutationCurrent: (scope) => host.sessionData.isSessionMutationScopeCurrent(scope),
       archive: (scope, params) => scope.client.request("sessions.catalog.archive", params),

@@ -2,10 +2,18 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
+import { createFixedWindowBudget } from "../../infra/fixed-window-rate-limit.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { normalizeGitPathForFilesystem, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -16,6 +24,7 @@ import {
 } from "../../media/staged-inputs.js";
 import { createCommandError } from "../../process/command-error.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import { resolveWorktreeBase } from "./base-ref.js";
@@ -33,6 +42,7 @@ import {
   worktreePathExists,
   requireGit,
   requireGitBuffer,
+  resolveGitRepositoryPaths,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
@@ -130,6 +140,73 @@ export function classifyWorktreeRemovalError(error: unknown): WorktreeRemovalFai
 export class WorktreeRepositoryError extends Error {}
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
 const log = createSubsystemLogger("agents/worktrees");
+
+function startRemovalTiming() {
+  try {
+    if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("info")) {
+      return undefined;
+    }
+    const startedAt = performance.now();
+    const trace = getActiveDiagnosticTraceContext();
+    let enteredAt: number | undefined;
+    let bodyFinishedAt: number | undefined;
+    return {
+      enter() {
+        enteredAt = performance.now();
+      },
+      finishBody() {
+        bodyFinishedAt = performance.now();
+      },
+      finish(outcome: "returned" | "threw") {
+        try {
+          const endedAt = performance.now();
+          const durationMs = endedAt - startedAt;
+          if (durationMs < 1_000 || !areDiagnosticsEnabledForProcess() || !log.isEnabled("info")) {
+            return;
+          }
+          const state = resolveGlobalSingleton(
+            Symbol.for("openclaw.worktreeRemovalDiagnostics"),
+            () => ({
+              budget: createFixedWindowBudget({
+                maxRequests: 60,
+                windowMs: 60_000,
+                now: () => performance.now(),
+              }),
+              omitted: 0,
+            }),
+          );
+          if (!state.budget.consume().allowed) {
+            state.omitted = Math.min(Number.MAX_SAFE_INTEGER, state.omitted + 1);
+            return;
+          }
+          runWithDiagnosticTraceContext(trace, () =>
+            log.info("slow managed worktree removal", {
+              pid: process.pid,
+              threadId,
+              isMainThread,
+              durationMs: Math.round(durationMs),
+              admissionMs: Math.round((enteredAt ?? endedAt) - startedAt),
+              ...(enteredAt !== undefined && bodyFinishedAt !== undefined
+                ? {
+                    bodyMs: Math.round(bodyFinishedAt - enteredAt),
+                    finalizeMs: Math.round(endedAt - bodyFinishedAt),
+                  }
+                : {}),
+              callbackEntered: enteredAt !== undefined,
+              outcome,
+              omittedObservations: state.omitted,
+            }),
+          );
+          state.omitted = 0;
+        } catch {
+          // Diagnostics must preserve removal's result and original cleanup error.
+        }
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 type ServiceOptions = {
   env?: NodeJS.ProcessEnv;
@@ -250,10 +327,10 @@ type ResolvedRepository = {
   fingerprint: string;
 };
 
-async function resolveRepositoryFromRealPath(
+async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<ResolvedRepository> {
+): Promise<string> {
   const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
   if (rootResult.code !== 0) {
     if (insideGitCheckout(requested)) {
@@ -270,14 +347,15 @@ async function resolveRepositoryFromRealPath(
       `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
     );
   }
-  const commonRaw = normalizeGitPathForFilesystem(
-    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]),
-  );
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
-  const primary = (await listGitWorktrees(sourceRoot))[0]?.path ?? sourceRoot;
-  const canonicalRoot = await fs.realpath(primary);
+  return sourceRoot;
+}
+
+async function resolveRepositoryFromRealPath(
+  requested: string,
+  requestedLabel: string,
+): Promise<ResolvedRepository> {
+  const sourceRoot = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
+  const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
   const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
   const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
   const fingerprint = createHash("sha256")
@@ -1157,22 +1235,27 @@ export class ManagedWorktreeService {
     repoRoot: string,
     options: { includeRepositoryStatus?: boolean } = {},
   ): Promise<ManagedWorktreeBranchesResult> {
-    let repository: ResolvedRepository;
-    if (options.includeRepositoryStatus) {
-      try {
-        const requested = await fs.realpath(repoRoot);
+    let sourceRoot: string;
+    try {
+      const requested = await fs.realpath(repoRoot).catch(() => {
+        throw new Error(`repository does not exist: ${repoRoot}`);
+      });
+      if (options.includeRepositoryStatus) {
         if (!(await fs.stat(requested)).isDirectory()) {
           return { branches: [], repositoryStatus: "unavailable" };
         }
         if (!insideGitCheckout(requested)) {
           return { branches: [], repositoryStatus: "not_git" };
         }
-        repository = await resolveRepositoryFromRealPath(requested, repoRoot);
-      } catch {
+      }
+      // Ref discovery needs this checkout's HEAD, not allocation identity or a
+      // full inventory of sibling worktrees rooted at the primary checkout.
+      sourceRoot = await resolveCheckoutRootFromRealPath(requested, repoRoot);
+    } catch (error) {
+      if (options.includeRepositoryStatus) {
         return { branches: [], repositoryStatus: "unavailable" };
       }
-    } else {
-      repository = await resolveRepository(repoRoot);
+      throw error;
     }
     // Keep canonical refs for identity and Git's strict short names for selection.
     // A branch named like a tag may need heads/ or remotes/ to remain unambiguous.
@@ -1181,7 +1264,7 @@ export class ManagedWorktreeService {
     for (const prefix of ["refs/remotes/", "refs/heads/"]) {
       try {
         for (const entry of await listRepositoryBranchRefs(
-          repository.repoRoot,
+          sourceRoot,
           prefix,
           BRANCH_SUGGESTIONS_PER_KIND,
         )) {
@@ -1193,13 +1276,13 @@ export class ManagedWorktreeService {
         branchesUnavailable = true;
       }
     }
-    const remoteHead = await runGit(repository.repoRoot, [
+    const remoteHead = await runGit(sourceRoot, [
       "symbolic-ref",
       "--quiet",
       "refs/remotes/origin/HEAD",
     ]);
     const defaultRef = remoteHead.code === 0 ? remoteHead.stdout.trim() : undefined;
-    const head = await runGit(repository.repoRoot, ["symbolic-ref", "--quiet", "HEAD"]);
+    const head = await runGit(sourceRoot, ["symbolic-ref", "--quiet", "HEAD"]);
     const headRef = head.code === 0 ? head.stdout.trim() : undefined;
     const resolveBranch = async (ref: string | undefined) => {
       if (!ref) {
@@ -1211,7 +1294,7 @@ export class ManagedWorktreeService {
       }
       try {
         // Patterns can match descendants; only the exact priority ref is eligible.
-        return (await listRepositoryBranchRefs(repository.repoRoot, ref, 1)).find(
+        return (await listRepositoryBranchRefs(sourceRoot, ref, 1)).find(
           (entry) => entry.ref === ref,
         );
       } catch {
@@ -1270,10 +1353,22 @@ export class ManagedWorktreeService {
   }
 
   async remove(params: RemoveWorktreeParams): Promise<RemoveManagedWorktreeResult> {
-    return await this.withAllocationLease(
-      params,
-      async (guard) => await this.removeWithAllocation({ ...params, ...guard }),
-    );
+    const timing = startRemovalTiming();
+    let outcome: "returned" | "threw" = "threw";
+    try {
+      const result = await this.withAllocationLease(params, async (guard) => {
+        timing?.enter();
+        try {
+          return await this.removeWithAllocation({ ...params, ...guard });
+        } finally {
+          timing?.finishBody();
+        }
+      });
+      outcome = "returned";
+      return result;
+    } finally {
+      timing?.finish(outcome);
+    }
   }
 
   private async removeWithAllocation(

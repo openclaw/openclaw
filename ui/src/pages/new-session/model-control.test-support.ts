@@ -2,6 +2,7 @@ import { render } from "lit";
 import { vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 export function contextWith(
@@ -15,6 +16,7 @@ export function contextWith(
   const navigate = vi.fn();
   const listeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const emitCatalogChanged = () => {
+    invalidateChatMetadataStore(context.gateway.snapshot.client!);
     for (const listener of listeners) {
       listener({ type: "event", event: "chat.metadata.changed", payload: {} });
     }

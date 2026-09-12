@@ -6,6 +6,7 @@ import type { AgentIdentityResult } from "../api/types.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -160,7 +161,8 @@ function focusActiveAgentMenuItem(dropdown: HTMLElement) {
   const items = sidebarMenuItems(dropdown);
   const target =
     items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch--active")) ??
-    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch"));
+    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch")) ??
+    items[0];
   if (!target) {
     return;
   }
@@ -185,6 +187,8 @@ type SidebarAgentMenuParams = {
   resolveAvatarUrl: (url: string) => string | null;
   avatarErrorHandler: (url: string) => () => void;
   openMode: "hover" | "click";
+  rosterMode: boolean;
+  onToggleRoster: () => void;
   agentUnreadCount: (agentId: string) => number;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
@@ -307,10 +311,23 @@ function renderIdentityMenuHelpSubmenu() {
   `;
 }
 
+function renderSidebarHelpMenu() {
+  return html`
+    <wa-dropdown-item
+      class="sidebar-customize-menu__item sidebar-identity-menu__help"
+      value="command:help"
+    >
+      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.circleQuestionMark}</span>
+      <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
+      ${renderIdentityMenuHelpSubmenu()}
+    </wa-dropdown-item>
+  `;
+}
+
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const position = params.position;
   const { activeId, activeName, agents } = params;
-  const rows = sidebarAgentMenuRows(params);
+  const menuLabel = t(params.rosterMode ? "agentChip.workspaceMenuLabel" : "agentChip.menuLabel");
   return html`
     <wa-dropdown
       class="sidebar-customize-menu sidebar-agent-menu"
@@ -318,7 +335,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       .open=${true}
       placement="bottom-start"
       .distance=${0}
-      aria-label=${t("agentChip.menuLabel")}
+      aria-label=${menuLabel}
       @pointerenter=${params.onPointerEnter}
       @pointerleave=${params.onPointerLeave}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
@@ -334,11 +351,24 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           return;
         }
         params.onClose(false);
+        if (value.startsWith(LINK_VALUE_PREFIX)) {
+          openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
+          return;
+        }
         if (value.startsWith(AGENT_VALUE_PREFIX)) {
           params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
           return;
         }
         switch (value) {
+          case `${COMMAND_VALUE_PREFIX}sidebar-agents`:
+            params.onToggleRoster();
+            break;
+          case `${COMMAND_VALUE_PREFIX}all-agents`:
+            params.onNavigate("agents-home");
+            break;
+          case `${COMMAND_VALUE_PREFIX}new-agent`:
+            params.onNavigate("custodian", { search: "?intent=new-agent" });
+            break;
           case `${COMMAND_VALUE_PREFIX}capabilities`:
             params.onAskCapabilities(activeId);
             break;
@@ -346,9 +376,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             params.onNavigate("agents", {
               pathname: pathForAgentPanel(activeId, null, params.basePath),
             });
-            break;
-          case `${COMMAND_VALUE_PREFIX}new-agent`:
-            params.onNavigate("custodian", { search: "?intent=new-agent" });
             break;
         }
       }}
@@ -390,39 +417,124 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         type="button"
         tabindex="-1"
         aria-hidden="true"
-        aria-label=${t("agentChip.menuLabel")}
+        aria-label=${menuLabel}
         style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
       ></button>
       ${
-        agents.length > 1
+        !params.rosterMode && agents.length > 1
           ? html`
               <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
               <div class="sidebar-agent-menu__agent-grid">
-                ${rows.map((entry) => renderAgentRow(entry, params))}
+                ${sidebarAgentMenuRows(params).map((entry) => renderAgentRow(entry, params))}
               </div>
+              <div class="sidebar-customize-menu__separator" role="separator"></div>
             `
           : nothing
       }
-      <div class="sidebar-customize-menu__separator" role="separator"></div>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-        <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
-      </wa-dropdown-item>
       <wa-dropdown-item
         class="sidebar-customize-menu__item"
-        value="command:capabilities"
-        ?disabled=${!params.connected}
+        value="command:sidebar-agents"
+        type=${params.rosterMode ? "normal" : "checkbox"}
       >
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-        <span class="sidebar-customize-menu__text">
-          ${t("agentChip.whatCanAgentDo", { name: activeName })}
-        </span>
+        ${t(params.rosterMode ? "agentChip.showOneAgent" : "agentChip.showAllAgents")}
       </wa-dropdown-item>
+      ${
+        !params.rosterMode
+          ? html`
+              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:all-agents">
+                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
+                <span class="sidebar-customize-menu__text">${t("agentChip.allAgents")}</span>
+              </wa-dropdown-item>
+              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
+                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+                <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
+              </wa-dropdown-item>
+              <wa-dropdown-item
+                class="sidebar-customize-menu__item"
+                value="command:capabilities"
+                ?disabled=${!params.connected}
+              >
+                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
+                <span class="sidebar-customize-menu__text">
+                  ${t("agentChip.whatCanAgentDo", { name: activeName })}
+                </span>
+              </wa-dropdown-item>
+            `
+          : nothing
+      }
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
         <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
       </wa-dropdown-item>
+      ${params.rosterMode ? renderSidebarHelpMenu() : nothing}
     </wa-dropdown>
+  `;
+}
+
+function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
+  const capability = nativeGatewaysCapability();
+  if (!capability) {
+    return nothing;
+  }
+  const snapshot = capability.snapshot;
+  const current = snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId);
+  return html`
+    <div class="sidebar-customize-menu__title">${t("nav.gateway.sectionLabel")}</div>
+    ${snapshot?.gateways.map((gateway, index) => {
+      const selected = gateway.id === snapshot.currentId;
+      const healthLabel = {
+        ok: t("nav.gateway.connected"),
+        error: t("nav.gateway.unreachable"),
+        unknown: t("nav.gateway.unknown"),
+      }[gateway.health];
+      const openWindow = (event: MouseEvent) => {
+        if (event.metaKey || event.ctrlKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          capability.openWindow(gateway.id);
+          onClose(false);
+        }
+      };
+      return html`<wa-dropdown-item
+        class="sidebar-customize-menu__item"
+        value=${`gateway:${encodeURIComponent(gateway.id)}`}
+        role="menuitemradio"
+        aria-checked=${String(selected)}
+        ${ref((element) => syncDropdownItemRadio(element, selected))}
+        @click=${openWindow}
+        @contextmenu=${openWindow}
+      >
+        <span
+          slot="icon"
+          class="sidebar-gateway-health"
+          data-health=${gateway.health}
+          role="img"
+          aria-label=${healthLabel}
+        ></span>
+        <span class="sidebar-customize-menu__text">${gateway.name}</span>
+        <span slot="details" class="sidebar-gateway-details">
+          ${gateway.isPrimary ? html`<span class="sidebar-gateway-primary">${t("nav.gateway.primaryTag")}</span>` : nothing}
+          ${index < 9 ? html`<kbd class="session-menu__shortcut" aria-hidden="true">⌘${index + 1}</kbd>` : nothing}
+          ${selected ? html`<span class="sidebar-gateway-check" aria-hidden="true">${icons.check}</span>` : nothing}
+        </span>
+      </wa-dropdown-item>`;
+    })}
+    ${
+      current?.canPromote
+        ? html`<wa-dropdown-item
+            class="sidebar-customize-menu__item"
+            value="command:gateway-set-primary"
+          >
+            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.star}</span>
+            <span class="sidebar-customize-menu__text">${t("nav.gateway.setPrimary")}</span>
+          </wa-dropdown-item>`
+        : nothing
+    }
+    <wa-dropdown-item class="sidebar-customize-menu__item" value="command:gateway-settings">
+      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.server}</span>
+      <span class="sidebar-customize-menu__text">${t("nav.gateway.openSettings")}</span>
+    </wa-dropdown-item>
+    <div class="sidebar-customize-menu__separator" role="separator"></div>
   `;
 }
 
@@ -460,11 +572,31 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           return;
         }
         params.onClose(false);
+        const capability = nativeGatewaysCapability();
+        if (value.startsWith("gateway:")) {
+          const id = decodeURIComponent(value.slice("gateway:".length));
+          if (id !== capability?.snapshot?.currentId) {
+            capability?.select(id);
+          }
+          return;
+        }
         if (value.startsWith(LINK_VALUE_PREFIX)) {
           openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
           return;
         }
         switch (value) {
+          case `${COMMAND_VALUE_PREFIX}gateway-set-primary`: {
+            const current = capability?.snapshot?.gateways.find(
+              (gateway) => gateway.id === capability.snapshot?.currentId,
+            );
+            if (current?.canPromote) {
+              capability?.setPrimary(current.id);
+            }
+            break;
+          }
+          case `${COMMAND_VALUE_PREFIX}gateway-settings`:
+            capability?.openSettings();
+            break;
           case `${COMMAND_VALUE_PREFIX}profile`:
             params.onNavigate("profile", { hash: "#settings-profile-identity" });
             break;
@@ -522,6 +654,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         </span>
       </wa-dropdown-item>
       <div class="sidebar-customize-menu__separator" role="separator"></div>
+      ${renderIdentityGateways(params.onClose)}
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
         <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
@@ -555,16 +688,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         >
       </wa-dropdown-item>
       <div class="sidebar-customize-menu__separator" role="separator"></div>
-      <wa-dropdown-item
-        class="sidebar-customize-menu__item sidebar-identity-menu__help"
-        value="command:help"
-      >
-        <span slot="icon" class="nav-item__icon" aria-hidden="true"
-          >${icons.circleQuestionMark}</span
-        >
-        <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
-        ${renderIdentityMenuHelpSubmenu()}
-      </wa-dropdown-item>
+      ${renderSidebarHelpMenu()}
       ${
         params.offline
           ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>

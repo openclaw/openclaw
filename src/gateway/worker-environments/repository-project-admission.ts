@@ -17,6 +17,8 @@ import {
   discardResponse,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
+  GitHubGraphQLUnavailableError,
+  readGitHubGraphQLResponse,
   readGitHubJsonResponse,
 } from "../control-ui-github-api.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
@@ -29,6 +31,21 @@ const GitObject = /^[a-f0-9]{40}$/u;
 // Commit lookup requests one changed file; trees are nonrecursive and inspect
 // only the root and .openclaw directory. Oversized/truncated metadata is not absence.
 const METADATA_MAX_BYTES = 1024 * 1024;
+// Bind object resolution to the immutable repository, never its reusable name.
+const PINNED_REPOSITORY_QUERY = `query PinnedRepository($repositoryId: ID!, $commit: GitObjectID!) {
+  node(id: $repositoryId) {
+    __typename
+    ... on Repository {
+      node_id: id
+      clone_url: url
+      private: isPrivate
+      object(oid: $commit) {
+        __typename
+        ... on Commit { sha: oid tree { sha: oid } }
+      }
+    }
+  }
+}`;
 type AdmissionRequest = {
   namespace: string;
   getConfig: () => OpenClawConfig;
@@ -58,7 +75,7 @@ function sourceChanged(): never {
   );
 }
 
-/** Admit public source before capacity selection; verified private source keeps cold preparation. */
+/** Admit source before capacity selection; credentials remain with this Gateway owner. */
 export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequest) {
   const expected = params.expected && readRepositoryWorkerProjectSnapshot(params.expected);
   const request = expected
@@ -130,21 +147,26 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     readIdentity: typeof identity,
     assertOwner: () => void,
     signal?: AbortSignal,
+    graphql?: { query: string; variables: Record<string, string> },
   ): Promise<unknown> => {
     assertOwner();
     const response = await fetchGitHubApi(
-      endpoint + suffix,
+      graphql ? `${GITHUB_API_ORIGIN}/graphql` : endpoint + suffix,
       fetch,
       readIdentity.token,
       async () => sourceChanged(),
       readIdentity,
       undefined,
       signal,
+      graphql,
     );
     let value: unknown;
     try {
       assertOwner();
-      value = await readGitHubJsonResponse(response, METADATA_MAX_BYTES);
+      value =
+        graphql && readIdentity.token
+          ? await readGitHubGraphQLResponse(response, fetch, readIdentity.token, METADATA_MAX_BYTES)
+          : await readGitHubJsonResponse(response, METADATA_MAX_BYTES);
     } finally {
       await discardResponse(response);
     }
@@ -152,12 +174,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertOwner();
     return value;
   };
-  const readRepository = async (
-    readIdentity: typeof identity,
-    assertOwner: () => void,
-    signal?: AbortSignal,
-  ) => {
-    const value = await read("", readIdentity, assertOwner, signal);
+  const repositoryMetadata = (value: unknown, readIdentity: typeof identity) => {
     if (
       !isRecord(value) ||
       typeof value.node_id !== "string" ||
@@ -165,7 +182,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       typeof value.clone_url !== "string" ||
       parseProjectGitUrl(value.clone_url)?.url !== url ||
       typeof value.private !== "boolean" ||
-      (readIdentity.selection.source === "anonymous" && value.private)
+      (value.private && (readIdentity.selection.source === "anonymous" || !readIdentity.token))
     ) {
       sourceChanged();
     }
@@ -175,16 +192,61 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       private: value.private,
     };
   };
-  const metadata = await readRepository(identity, assertAdmission, params.signal);
-  if (metadata.private) {
-    // Only new private requests retain the supported cold repository flow. An
-    // existing public preparation cannot become access to newly private contents.
-    if (expected) {
+  const readRepository = async (
+    readIdentity: typeof identity,
+    assertOwner: () => void,
+    signal?: AbortSignal,
+  ) => repositoryMetadata(await read("", readIdentity, assertOwner, signal), readIdentity);
+  const readPinnedRepository = async (
+    repositoryId: string,
+    baseCommit: string,
+    readIdentity: typeof identity,
+    assertOwner: () => void,
+    signal?: AbortSignal,
+  ) => {
+    if (!readIdentity.token) {
+      return undefined;
+    }
+    let value: unknown;
+    try {
+      value = await read("", readIdentity, assertOwner, signal, {
+        query: PINNED_REPOSITORY_QUERY,
+        variables: { repositoryId, commit: baseCommit },
+      });
+    } catch (error) {
+      // Native classic tokens can read public REST metadata without the
+      // public_repo scope required by GraphQL. Preserve the full REST fence.
+      if (!(error instanceof GitHubGraphQLUnavailableError)) {
+        throw error;
+      }
+      await readIdentity.revalidate();
+      assertOwner();
+      return undefined;
+    }
+    const node = isRecord(value) && isRecord(value.data) ? value.data.node : undefined;
+    if (!isRecord(node) || node.__typename !== "Repository" || node.node_id !== repositoryId) {
       sourceChanged();
     }
-    assertAdmission();
-    return undefined;
-  }
+    const metadata = repositoryMetadata(node, readIdentity);
+    const commit = node.object;
+    // Missing objects return null without GraphQL errors, including absent SHAs.
+    if (!isRecord(commit) || commit.__typename !== "Commit" || objectSha(commit) !== baseCommit) {
+      sourceChanged();
+    }
+    objectSha(commit.tree);
+    return { metadata, commit };
+  };
+  const pinnedRepository = expected
+    ? await readPinnedRepository(
+        expected.source.repositoryId,
+        expected.baseCommit,
+        identity,
+        assertAdmission,
+        params.signal,
+      )
+    : undefined;
+  const metadata =
+    pinnedRepository?.metadata ?? (await readRepository(identity, assertAdmission, params.signal));
   const repositoryId = metadata.repositoryId;
   if (expected && repositoryId !== expected.source.repositoryId) {
     sourceChanged();
@@ -202,12 +264,14 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     throw new Error("GitHub repository has no valid source reference; select a branch or commit.");
   }
   const pinned = request.baseCommit ?? (GitObject.test(requestedRef) ? requestedRef : undefined);
-  const commit = await read(
-    pinned ? `/git/commits/${pinned}` : `/commits/${encodeURIComponent(requestedRef)}?per_page=1`,
-    identity,
-    assertAdmission,
-    params.signal,
-  );
+  const commit =
+    pinnedRepository?.commit ??
+    (await read(
+      pinned ? `/git/commits/${pinned}` : `/commits/${encodeURIComponent(requestedRef)}?per_page=1`,
+      identity,
+      assertAdmission,
+      params.signal,
+    ));
   const baseCommit = objectSha(commit);
   if (pinned && baseCommit !== pinned) {
     sourceChanged();
@@ -215,7 +279,14 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   const source = { kind: "repository" as const, url, repositoryId, owner };
   const project = readRepositoryWorkerProjectSnapshot({
     key: createHash("sha256")
-      .update(stableStringify([params.namespace, source]))
+      // Preserve public cache keys, but never reinterpret them as private content.
+      .update(
+        stableStringify(
+          metadata.private
+            ? ["private-repository", params.namespace, source]
+            : [params.namespace, source],
+        ),
+      )
       .digest("hex"),
     baseCommit,
     source,
@@ -277,7 +348,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   // A name can be deleted and recreated while immutable objects are being read.
   // Confirm the repository instance again before advertising reusable capacity.
   const confirmed = await readRepository(identity, assertAdmission, params.signal);
-  if (confirmed.private || confirmed.repositoryId !== repositoryId) {
+  if (confirmed.private !== metadata.private || confirmed.repositoryId !== repositoryId) {
     sourceChanged();
   }
   assertAdmission();
@@ -292,16 +363,29 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     if (!isDeepStrictEqual(current.selection, owner.identity)) {
       sourceChanged();
     }
-    const before = await readRepository(current, assertSource, signal);
-    if (before.private || before.repositoryId !== repositoryId) {
+    const currentPinnedRepository = await readPinnedRepository(
+      repositoryId,
+      baseCommit,
+      current,
+      assertSource,
+      signal,
+    );
+    const before =
+      currentPinnedRepository?.metadata ?? (await readRepository(current, assertSource, signal));
+    if (before.private !== metadata.private || before.repositoryId !== repositoryId) {
       sourceChanged();
     }
-    const observed = await read(`/git/commits/${baseCommit}`, current, assertSource, signal);
-    if (objectSha(observed) !== baseCommit) {
+    const observed =
+      currentPinnedRepository?.commit ??
+      (await read(`/git/commits/${baseCommit}`, current, assertSource, signal));
+    if (
+      objectSha(observed) !== baseCommit ||
+      (currentPinnedRepository && objectSha(currentPinnedRepository.commit.tree) !== tree)
+    ) {
       sourceChanged();
     }
     const after = await readRepository(current, assertSource, signal);
-    if (after.private || after.repositoryId !== repositoryId) {
+    if (after.private !== metadata.private || after.repositoryId !== repositoryId) {
       sourceChanged();
     }
     assertSource();
@@ -312,5 +396,36 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     setupRecipe,
     assertCurrent,
     revalidate,
+    ...(metadata.private
+      ? {
+          prepareGitPack: async (input: { temporaryRoot: string; signal: AbortSignal }) => {
+            assertAdmission();
+            await revalidate(input.signal);
+            const readIdentity = identity;
+            const assertFetchCurrent = () => {
+              input.signal.throwIfAborted();
+              assertAdmission();
+              readIdentity.assertSelected();
+            };
+            const token = readIdentity.token;
+            if (!token) {
+              throw new GitHubIdentityError("unavailable");
+            }
+            const { prepareRepositoryWorkerGitPack } = await import("./repository-git-pack.js");
+            assertFetchCurrent();
+            const pack = await prepareRepositoryWorkerGitPack({
+              ...input,
+              url,
+              baseCommit,
+              token,
+              assertCurrent: assertFetchCurrent,
+            });
+            assertFetchCurrent();
+            await revalidate(input.signal);
+            assertAdmission();
+            return pack;
+          },
+        }
+      : {}),
   };
 }

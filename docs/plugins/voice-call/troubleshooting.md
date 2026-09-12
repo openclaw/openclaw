@@ -14,10 +14,19 @@ Fixes for setup, webhook exposure, credentials, signature verification, Google M
 
 ### Call placement fails to save its initial record
 
-Voice Call saves the initial record before reserving a concurrency slot or
-contacting the carrier. If that write fails, the placement reports the storage
-error without dialing. Restore access to the state directory, then retry; the
-failed placement does not consume `maxConcurrentCalls` capacity.
+Voice Call reserves pending capacity while saving the initial record, then publishes
+the active call and contacts the carrier only after the write succeeds. If the write
+fails, placement reports the storage error without dialing and releases the reservation.
+Restore access to the state directory, then retry; a failed placement does not consume
+`maxConcurrentCalls` capacity.
+
+Webhook acknowledgments and transcript-driven replies wait for call-record persistence.
+Token-bound realtime streams wait for pending call updates before matching the carrier ID.
+Failed event writes remain retryable, and shutdown drains admitted call work after
+closing webhook and stream producers.
+
+If another realtime stream becomes active during admission, a failure to create
+the new bridge leaves that active call connected.
 
 ### Setup fails webhook exposure
 

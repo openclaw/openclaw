@@ -66,6 +66,7 @@ export function createSuppressedChannelDeliveryResult(params: {
 const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
 
 type ChannelPartialDeliveryEnvelope = {
+  cause?: unknown;
   code: typeof CHANNEL_PARTIAL_DELIVERY_ERROR_CODE;
   deliveryResult: ChannelDeliveryOutcome & { visibleReplySent: true };
 };

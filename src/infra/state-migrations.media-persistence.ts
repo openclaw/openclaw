@@ -18,7 +18,10 @@ import {
 } from "../media/media-facts.js";
 import { AGENT_MEDIA_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { assertOpenClawAgentSchemaContains } from "../state/openclaw-agent-db-schema-helpers.js";
 import {
   ensureOpenClawAgentDatabaseSchema,
@@ -48,6 +51,7 @@ import {
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import {
   listTranscriptArchives,
   resolveAgentDatabaseMigrationTargets,
@@ -560,8 +564,9 @@ export async function migrateLegacyMediaPersistence(
   const changes: string[] = [];
   const warnings: string[] = [];
   let recoverableWarningCount = 0;
+  const refusedAgentDatabasePaths: string[] = [];
   try {
-    await withAgentDatabaseMaintenanceLease({ env }, async () => {
+    await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
       const discovery = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
@@ -569,12 +574,31 @@ export async function migrateLegacyMediaPersistence(
         warnings,
       });
       recoverableWarningCount = discovery.recoverableWarningCount;
+      const recoveries = recoverMisplacedAgentDatabaseCopies({
+        targets: discovery.targets,
+        maintenance,
+      });
       const seenPaths = new Set<string>();
       const archiveDirectories = new Set<string>();
       const canonicalArchivePaths = new Set<string>();
       const refusedArchiveDirectories = new Set<string>();
       for (const entry of discovery.targets) {
         const pathname = entry.path;
+        const recovery = recoveries.get(pathname);
+        if (recovery) {
+          maintenance.assertOwned();
+          warnings.push(recovery.warning);
+          if (recovery.recovered) {
+            unregisterOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
+            recoverableWarningCount += 1;
+          } else {
+            refusedAgentDatabasePaths.push(pathname);
+            refusedArchiveDirectories.add(
+              resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
+            );
+          }
+          continue;
+        }
         archiveDirectories.add(
           resolveSqliteTranscriptArchiveDirectory({
             agentId: entry.agentId,
@@ -594,10 +618,10 @@ export async function migrateLegacyMediaPersistence(
               : undefined,
             pathname,
           });
+          maintenance.assertOwned();
+          // A prior attempt may have committed the schema before publishing its registration.
+          registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
           const schemaAdvanced = result.finalVersion > result.initialVersion;
-          if (entry.source !== "registry" || schemaAdvanced) {
-            registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
-          }
           if (schemaAdvanced) {
             changes.push(
               `Upgraded agent database schema in ${pathname}: v${result.initialVersion} -> v${result.finalVersion}.`,
@@ -666,6 +690,9 @@ export async function migrateLegacyMediaPersistence(
     warnings,
     ...(warnings.length > 0 && warnings.length === recoverableWarningCount
       ? { warningDisposition: "recoverable" as const }
-      : {}),
+      : warnings.length === recoverableWarningCount + refusedAgentDatabasePaths.length &&
+          refusedAgentDatabasePaths.length > 0
+        ? { refusedAgentDatabasePaths }
+        : {}),
   };
 }

@@ -22,6 +22,8 @@ export type DiagnosticSessionActivitySnapshot = {
   activeModelCallRequestTimeoutMs?: number;
   /** Absolute quiet deadline validated against the exact executing backend owner. */
   activeBackendLivenessDeadlineAtMs?: number;
+  /** Absolute provider retry deadline validated against the live logical run. */
+  activeRetryWaitDeadlineAtMs?: number;
 };
 
 type SnapshotTool = {
@@ -111,17 +113,26 @@ export function resolveRunStaleThresholdMs(
     | "lastProgressAgeMs"
     | "activeModelCallRequestTimeoutMs"
     | "activeBackendLivenessDeadlineAtMs"
+    | "activeRetryWaitDeadlineAtMs"
   >,
   evidenceAgeMs = activity.lastProgressAgeMs ?? 0,
   minimumMs = RUN_STALE_TAKEOVER_MS,
 ): number {
+  const retryWaitThresholdMs =
+    activity.activeRetryWaitDeadlineAtMs === undefined
+      ? 0
+      : evidenceAgeMs + activity.activeRetryWaitDeadlineAtMs - Date.now();
   if (activity.activeToolDeadlineAtMs !== undefined) {
     // Use the same age the caller compares: subtracting it leaves only the
     // absolute deadline, even when reply activity and tool progress differ.
-    return Math.max(0, evidenceAgeMs + activity.activeToolDeadlineAtMs - Date.now());
+    return Math.max(
+      0,
+      evidenceAgeMs + activity.activeToolDeadlineAtMs - Date.now(),
+      retryWaitThresholdMs,
+    );
   }
   if (activity.activeWorkKind === "tool_call") {
-    return Math.max(minimumMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
+    return Math.max(minimumMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS, retryWaitThresholdMs);
   }
   // The backend starts its quiet allowance at execution, not session admission.
   // Translate its absolute deadline into the same evidence age the caller compares.
@@ -129,5 +140,10 @@ export function resolveRunStaleThresholdMs(
     activity.activeBackendLivenessDeadlineAtMs === undefined
       ? 0
       : evidenceAgeMs + activity.activeBackendLivenessDeadlineAtMs - Date.now();
-  return Math.max(minimumMs, activity.activeModelCallRequestTimeoutMs ?? 0, backendThresholdMs);
+  return Math.max(
+    minimumMs,
+    activity.activeModelCallRequestTimeoutMs ?? 0,
+    backendThresholdMs,
+    retryWaitThresholdMs,
+  );
 }

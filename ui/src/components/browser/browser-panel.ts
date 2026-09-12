@@ -15,6 +15,10 @@ import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
+import {
+  PANEL_HOSTED_TABS_CHANGE_EVENT,
+  type PanelHostedTabsElement,
+} from "../panel-hosted-tabs.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -25,12 +29,16 @@ import {
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
 import { renderBrowserPanelChrome, type BrowserPanelDock } from "./browser-panel-render.ts";
+import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
 import { browserTabKey, readBrowserTabTarget, type BrowserTabSelection } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 /** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
-class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelControllerHost {
+class OpenClawBrowserPanel
+  extends OpenClawLitElement
+  implements BrowserPanelControllerHost, PanelHostedTabsElement
+{
   /** Gateway client used for browser.request RPCs; null until connected. */
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
@@ -45,6 +53,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ attribute: false }) authToken: string | null = null;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
+  /** The hosting side-panel header presents this panel's tabs. */
+  @property({ type: Boolean }) tabsInHeader = false;
   /** This embedded instance is the active pane's visible Browser presenter. */
   @property({ type: Boolean }) presented = false;
   /** Whether presentation owns initial work instead of a pending explicit toggle. */
@@ -55,6 +65,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
 
   private activeSessionKey = "";
   private consumedPreferredRevision?: string;
+  private lastHostedTabsChangeKey?: string;
   private readonly browserPanelController = new BrowserPanelController(this);
   private readonly dockLayout = new DockLayoutController(this, {
     layout: browserPanelLayout,
@@ -165,6 +176,33 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         this.viewportResizeObserver.observe(viewportElement);
       }
     }
+    const controller = this.browserPanelController;
+    const hostedTabsChangeKey = JSON.stringify([
+      controller.activeTargetId,
+      controller.tabs.map((tab) => [tab.id, tab.kind, tab.title, tab.url, tab.favicon]),
+    ]);
+    if (hostedTabsChangeKey !== this.lastHostedTabsChangeKey) {
+      this.lastHostedTabsChangeKey = hostedTabsChangeKey;
+      this.dispatchEvent(
+        new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true, composed: true }),
+      );
+    }
+  }
+
+  get hostedTabs() {
+    return browserPanelHostedTabs(this.browserPanelController.tabs);
+  }
+
+  get activeHostedTabId(): string | null {
+    return this.browserPanelController.activeTargetId;
+  }
+
+  selectHostedTab(id: string): void {
+    void this.browserPanelController.selectTab(id);
+  }
+
+  closeHostedTab(id: string): Promise<void> {
+    return this.browserPanelController.closeTab(id);
   }
 
   private synchronizeBrowserContext(): boolean {
@@ -176,6 +214,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.browserPanelController.resetBrowserState();
     }
     if (clientChanged || sessionChanged) {
+      this.browserPanelController.native.cancelPendingActivation();
+      this.browserPanelController.native.cancelCapture();
       this.consumedPreferredRevision = undefined;
     }
     return clientChanged || sessionChanged;
@@ -313,6 +353,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       () => this.closePanel(),
       this.dockLayout.renderResizer("bp", t("browser.resize")),
       this.embedded,
+      this.tabsInHeader,
     );
   }
 }

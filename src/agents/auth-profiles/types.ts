@@ -66,8 +66,22 @@ export type OAuthCredential = OAuthCredentials & {
   displayName?: string;
 };
 
+export type SavedSetupCredential = {
+  apiKeyHeader?: true;
+  agentRuntimeId?: string;
+  replacement: boolean;
+  modelRef: string;
+  /** Setup validates the connection config when retrying, outside auth hot paths. */
+  configJson: string;
+  authChoice?: string;
+  pluginId?: string;
+};
+
 /** Credential variants supported by auth profiles. */
-export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
+export type AuthProfileCredential = (ApiKeyCredential | TokenCredential | OAuthCredential) & {
+  /** Replacement credentials stay unavailable until their verified connection is activated. */
+  setup?: SavedSetupCredential;
+};
 
 /** Closed reasons that drive cooldown, disable, and failure counters. */
 export type AuthProfileFailureReason =

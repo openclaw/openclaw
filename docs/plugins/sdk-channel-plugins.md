@@ -32,7 +32,9 @@ shared `message` tool. Your plugin owns:
   targets
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
-generic `:thread:` bookkeeping, and dispatch.
+generic `:thread:` bookkeeping, and dispatch. For configured agent group
+threads, core also owns participant selection, follow-up rounds, and turn
+budgets. Keep those policies out of channel adapters.
 
 Core also owns model-picker product actions. A channel that renders a
 `ModelPickerAction` declares its `ModelPickerCapabilityProfile`, then encodes
@@ -516,8 +518,8 @@ Write colocated tests in `src/channel.test.ts`:
 ## Advanced topics
 
 <CardGroup cols={2}>
-  <Card title="Threading options" icon="git-branch" href="/plugins/sdk-entrypoints#registration-mode">
-    Fixed, account-scoped, or custom reply modes
+  <Card title="Threading options" icon="git-branch" href="/plugins/sdk-channel-plugins#what-createchatchannelplugin-does-for-you">
+    `threading.topLevelReplyToMode`: fixed, account-scoped, or custom reply modes
   </Card>
   <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
     describeMessageTool and action discovery

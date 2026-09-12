@@ -156,7 +156,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   // Own the session before plugin-bound handlers or message hooks can perform
   // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
   const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
-  if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
+  if (
+    !state.activeRunSafeCommandTurn &&
+    admissionTicket &&
+    !(await admissionTicket.wait(params.replyOptions?.abortSignal))
+  ) {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
   const preDispatchAcquisition = await state.ensureDispatchReplyOperation(

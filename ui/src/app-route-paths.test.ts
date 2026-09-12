@@ -10,13 +10,14 @@ import {
   APP_ROUTE_IDS,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   inferBasePathFromPathname,
-  isLegacyPluginsDiscoveryPath,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
   pathForPluginSettings,
   pathForRoute,
   pathForWorkboardBoard,
+  pathForTerminalSession,
+  terminalSessionIdFromPath,
   pluginSettingsIdFromPath,
   restoreBridgedRouteLocation,
   routeIdFromPath,
@@ -42,6 +43,17 @@ const AGENT_PANEL_CASES = [
 ] as const satisfies readonly AgentsPanel[];
 
 const DYNAMIC_STARTUP_CASES = [
+  {
+    label: "terminal session",
+    routeId: "terminal",
+    location: { pathname: "/terminal/pty-123", search: "", hash: "" },
+  },
+  {
+    label: "mounted terminal session",
+    routeId: "terminal",
+    basePath: "/ui",
+    location: { pathname: "/ui/terminal/pty-123", search: "", hash: "" },
+  },
   {
     label: "person Activity",
     routeId: "activity",
@@ -303,6 +315,13 @@ describe("Dynamic route startup bridge", () => {
   it("registers the Portals workspace path", () => {
     expect(pathForRoute("portals")).toBe("/portals");
     expect(routeIdFromPath("/portals")).toBe("portals");
+  });
+
+  it("keeps the mounted Agents roster separate from agent settings", () => {
+    expect(routeIdFromPath("/ui/agents", "/ui")).toBe("agents-home");
+    expect(inferBasePathFromPathname("/ui/agents")).toBe("/ui");
+    expect(agentRouteFromPath("/ui/agents", "/ui")).toBeNull();
+    expect(routeIdFromPath("/ui/settings/agents", "/ui")).toBe("agents");
   });
 
   it("matches mixed-case deep links exactly like the uirouter path key", () => {
@@ -696,16 +715,16 @@ describe("Memory tab route paths", () => {
 });
 
 describe("legacy Plugins discovery route", () => {
-  it("parses the retired discovery path only for inbound compatibility", () => {
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover")).toBe(true);
-    expect(isLegacyPluginsDiscoveryPath("/ui/settings/plugins/discover", "/ui")).toBe(true);
+  it("routes retired discovery links through the application router", () => {
+    const router = createApplicationRouter();
+    expect(router.routeIdFromPath("/settings/plugins/discover")).toBe("plugins");
+    expect(router.routeIdFromPath("/ui/settings/plugins/discover", "/ui")).toBe("plugins");
   });
 
-  it("keeps settings detail paths out of the legacy discovery matcher", () => {
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/unknown")).toBe(false);
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover/extra")).toBe(false);
-    expect(routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
-    expect(routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
+  it("keeps settings detail paths distinct from discovery in the application router", () => {
+    const router = createApplicationRouter();
+    expect(router.routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
+    expect(router.routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
   });
 });
 
@@ -733,5 +752,29 @@ describe("Plugin Settings route paths", () => {
     expect(pluginSettingsIdFromPath(reservedIdPath)).toBe("discover");
     expect(routeIdFromPath(reservedIdPath)).toBe("plugin-settings");
     expect(pluginSettingsIdFromPath("/settings/plugins/calendar/extra")).toBeNull();
+  });
+});
+
+describe("terminal route paths", () => {
+  it.each(["", "/openclaw"])("resolves terminal paths under %s", (basePath) => {
+    expect(routeIdFromPath(`${basePath}/terminal`, basePath)).toBe("terminal");
+    const path = pathForTerminalSession("pty:one ?#%", basePath);
+    expect(path).toBe(`${basePath}/terminal/pty%3Aone%20%3F%23%25`);
+    expect(terminalSessionIdFromPath(path, basePath)).toBe("pty:one ?#%");
+    expect(routeIdFromPath(path, basePath)).toBe("terminal");
+    expect(inferBasePathFromPathname(path)).toBe(basePath);
+  });
+
+  it.each(["/terminal/a/b", "/terminal/%ZZ", "/terminal/%20"])(
+    "rejects invalid terminal identity %s",
+    (path) => {
+      expect(terminalSessionIdFromPath(path)).toBeNull();
+      expect(routeIdFromPath(path)).toBeNull();
+    },
+  );
+
+  it("does not consume a different mount's terminal identity", () => {
+    expect(terminalSessionIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
+    expect(routeIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
   });
 });

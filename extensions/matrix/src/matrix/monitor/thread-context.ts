@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
+import { setBoundedMap } from "./bounded-cache.js";
 import { summarizeMatrixMessageContextEvent } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
@@ -58,13 +59,7 @@ export function createMatrixThreadContextResolver(params: {
   const cache = new Map<string, MatrixThreadContext>();
 
   const remember = (key: string, value: MatrixThreadContext): MatrixThreadContext => {
-    cache.set(key, value);
-    if (cache.size > MAX_TRACKED_THREAD_STARTERS) {
-      const oldest = cache.keys().next().value;
-      if (typeof oldest === "string") {
-        cache.delete(oldest);
-      }
-    }
+    setBoundedMap(cache, key, value, MAX_TRACKED_THREAD_STARTERS);
     return value;
   };
 

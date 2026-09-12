@@ -236,6 +236,7 @@ function resolveReplyToolAuthorityInputFingerprint(
     scheduledToolPolicy: execution.scheduledToolPolicy,
     runtimePluginToolGrant: execution.runtimePluginToolGrant,
   });
+  // Steering keeps the active run's approval destination; browser identity is not a tool grant.
   return createHash("sha256")
     .update(
       stableStringify({
@@ -257,7 +258,6 @@ function resolveReplyToolAuthorityInputFingerprint(
         elevatedLevel: execution.elevatedLevel,
         bashElevated: execution.bashElevated,
         traceAuthorized: execution.traceAuthorized === true,
-        approvalReviewerDeviceId: execution.approvalReviewerDeviceId,
         authProfileId: execution.authProfileId,
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
         toolBindings: execution.toolBindings,

@@ -133,11 +133,6 @@ struct ControlChannelCompatibilityAlerts {
 final class ControlChannel {
     static let shared = ControlChannel()
 
-    enum Mode {
-        case local
-        case remote(target: String, identity: String)
-    }
-
     enum ConnectionState: Equatable {
         case disconnected
         case connecting
@@ -272,31 +267,7 @@ final class ControlChannel {
     }
 
     func configure() async {
-        self.logger.info("control channel configure mode=local")
         await self.refreshEndpoint(reason: "configure")
-    }
-
-    func configure(mode: Mode = .local) async throws {
-        switch mode {
-        case .local:
-            await self.configure()
-        case let .remote(target, identity):
-            let generation = self.synchronizeRouteGeneration()
-            do {
-                _ = (target, identity)
-                let idSet = !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                self.logger.info(
-                    "control channel configure mode=remote " +
-                        "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
-                self.setStateThrottled(.connecting)
-                _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
-                await self.refreshEndpoint(reason: "configure", generation: generation)
-            } catch {
-                guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
-                self.setStateThrottled(.degraded(error.localizedDescription), generation: generation)
-                throw error
-            }
-        }
     }
 
     func endpointDidChange(_ state: GatewayEndpointState) {
@@ -485,7 +456,9 @@ final class ControlChannel {
 
         let mode = ConnectionModeResolver.resolve(root: configRoot).mode
         let transport = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
-        let localPort = GatewayEnvironment.gatewayPort()
+        let localPort = mode == .remote
+            ? RemotePortTunnel.localPort(root: configRoot)
+            : GatewayEnvironment.gatewayPort()
         let directURL = mode == .remote && transport.transport == .direct ? transport.directURL : nil
         let endpoint = if let url = directURL, let host = url.host,
                           let port = GatewayRemoteConfig.defaultPort(for: url)
@@ -614,7 +587,7 @@ final class ControlChannel {
                     "mode=\(String(describing: mode), privacy: .public) " +
                     "reason=\(reasonText, privacy: .public)")
             if mode == .local {
-                GatewayProcessManager.shared.setActive(true)
+                GatewayProcessManager.shared.setActive(true, source: .recovery)
             }
             if mode == .remote {
                 do {

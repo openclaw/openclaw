@@ -22,7 +22,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -4016,10 +4016,10 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("does not handle /plugins paths when basePath is empty", async () => {
+  it("does not handle plugin HTTP descendants when basePath is empty", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        for (const pluginPath of ["/plugins", "/plugins/diffs/view/abc/def"]) {
+        for (const pluginPath of ["/plugins/webhook", "/plugins/diffs/view/abc/def"]) {
           const { handled } = await runControlUiRequest({
             url: pluginPath,
             method: "GET",

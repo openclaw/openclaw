@@ -46,13 +46,12 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
       },
       { slug: "tools", label: "Tools", description: "Tools", icon: "wrench", order: 1 },
     ],
-    categoriesError: null,
     featured: [plugin("featured")],
     featuredLoading: false,
-    featuredError: null,
     trending: [plugin("trending")],
     trendingLoading: false,
-    trendingError: null,
+    loadingMore: false,
+    loadMoreError: null,
     intent: "all",
     category: null,
     query: "",
@@ -65,9 +64,8 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     onQueryChange: vi.fn(),
     onOpenEntry: vi.fn(),
     onInstall: vi.fn(),
+    onLoadMore: vi.fn(),
     onRetry: vi.fn(),
-    onRetryGrouped: vi.fn(),
-    onRetryCategories: vi.fn(),
     ...overrides,
   };
 }
@@ -123,14 +121,31 @@ describe("renderPluginCatalogResults", () => {
     expect(container.querySelector(".plugin-catalog-pagination")).toBeNull();
   });
 
+  it("offers bounded continuation only when the expanded result has another page", () => {
+    const onLoadMore = vi.fn();
+    const container = mount(
+      baseProps({
+        category: "tools",
+        result: { items: [plugin("tool")], nextCursor: "catalog-page-2" },
+        onLoadMore,
+      }),
+    );
+
+    const loadMore = container.querySelector<HTMLButtonElement>(".plugin-catalog-load-more button");
+    expect(loadMore?.textContent?.trim()).toBe("Load more");
+    loadMore?.click();
+    expect(onLoadMore).toHaveBeenCalledOnce();
+  });
+
   it("keeps a partial ClawHub failure retryable", () => {
-    const onRetryGrouped = vi.fn();
+    const onRetry = vi.fn();
     const container = mount(
       baseProps({
         remoteError: "ClawHub is unavailable; local plugins remain available.",
-        featuredError: "ClawHub is unavailable; local plugins remain available.",
-        trendingError: "ClawHub is unavailable; local plugins remain available.",
-        onRetryGrouped,
+        result: { items: [] },
+        featured: [],
+        trending: [],
+        onRetry,
       }),
     );
 
@@ -138,8 +153,9 @@ describe("renderPluginCatalogResults", () => {
     expect(warnings).toHaveLength(1);
     const warning = warnings.item(0);
     expect(warning?.textContent).toContain("ClawHub is unavailable");
+    expect(container.querySelector(".plugin-catalog-results__empty")).toBeNull();
     warning?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onRetryGrouped).toHaveBeenCalledOnce();
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 
   it.each<{
@@ -153,12 +169,12 @@ describe("renderPluginCatalogResults", () => {
     expected: string | undefined;
   }>([
     {
-      name: "uninstalled first-party artwork",
+      name: "uninstalled first-party placeholder",
       packageName: "@openclaw/whatsapp",
       pluginId: undefined,
       pluginIconUrls: {},
       iconUrls: {},
-      expected: "/plugin-art/whatsapp.webp",
+      expected: undefined,
     },
     {
       name: "third-party identity without first-party artwork",
@@ -187,13 +203,13 @@ describe("renderPluginCatalogResults", () => {
       expected: "blob:package-icon",
     },
     {
-      name: "trusted bundled artwork before catalog imagery",
+      name: "published package icon before installation",
       packageName: "@openclaw/whatsapp",
       pluginId: undefined,
       imageUrl: "https://example.com/icon.png",
       pluginIconUrls: {},
       iconUrls: { "https://example.com/icon.png": "blob:catalog-icon" },
-      expected: "/plugin-art/whatsapp.webp",
+      expected: "blob:catalog-icon",
     },
   ])(
     "renders $name",
@@ -228,6 +244,40 @@ describe("renderPluginCatalogResults", () => {
     },
   );
 
+  it("shows the generic placeholder when a package icon cannot decode, then accepts a new icon", async () => {
+    const entry = plugin("slack", {
+      catalog: {
+        name: "Slack",
+        categories: ["channels"],
+        official: true,
+        imageUrl: "https://example.com/icon.png",
+      },
+    });
+    const props = baseProps({
+      query: "slack",
+      result: { items: [entry] },
+      iconUrls: { "https://example.com/icon.png": "blob:broken" },
+    });
+    const container = mount(props);
+    container.querySelector(".plugin-catalog-card__art img")!.dispatchEvent(new Event("error"));
+    await vi.waitFor(() =>
+      expect(container.querySelector(".plugin-catalog-card__art img")).toBeNull(),
+    );
+    expect(container.querySelector(".plugin-catalog-card__art svg")).not.toBeNull();
+    render(renderPluginCatalogResults(props), container);
+    expect(container.querySelector(".plugin-catalog-card__art img")).toBeNull();
+    render(
+      renderPluginCatalogResults({
+        ...props,
+        iconUrls: { "https://example.com/icon.png": "blob:repaired" },
+      }),
+      container,
+    );
+    expect(container.querySelector(".plugin-catalog-card__art img")?.getAttribute("src")).toBe(
+      "blob:repaired",
+    );
+  });
+
   it("caps grouped sections at two desktop rows and opens the selected category", () => {
     const onCategoryChange = vi.fn();
     const container = mount(
@@ -244,11 +294,10 @@ describe("renderPluginCatalogResults", () => {
     expect(onCategoryChange).toHaveBeenCalledWith("tools");
   });
 
-  it("preserves every catalog result under Uncategorized when category metadata is unavailable", () => {
+  it("preserves every catalog result under Uncategorized without category metadata", () => {
     const container = mount(
       baseProps({
         categories: [],
-        categoriesError: "Category metadata unavailable",
         result: {
           items: Array.from({ length: 10 }, (_, index) => plugin(`catalog-result-${index}`)),
         },

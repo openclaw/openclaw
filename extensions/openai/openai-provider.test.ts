@@ -291,7 +291,7 @@ describe("buildOpenAIProvider", () => {
       groupLabel: "OpenAI",
       groupHint: "ChatGPT/Codex sign-in or API key",
     });
-    expect(apiKey?.starterModel).toBe("openai/gpt-5.6-sol");
+    expect(apiKey?.starterModel).toBe("openai/gpt-6-astra");
   });
 
   it("preserves existing model selection during non-interactive API key setup", async () => {

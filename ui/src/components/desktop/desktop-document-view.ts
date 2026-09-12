@@ -5,7 +5,11 @@ import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
-import { renderDesktopPanelContent } from "./desktop-panel-view.ts";
+import {
+  renderDesktopPanelContent,
+  renderDesktopSizing,
+  type DesktopSizingOptions,
+} from "./desktop-panel-view.ts";
 
 registerDesktopEnglish();
 
@@ -25,17 +29,16 @@ const KEYBOARD_GLYPH = strokeIcon(svg`
 type DesktopDocumentViewOptions = {
   state: DesktopPanelState;
   controlling: boolean;
-  scaleViewport: boolean;
+  sizing: DesktopSizingOptions;
   notice: TemplateResult | typeof nothing;
   picker: TemplateResult;
   credentials: TemplateResult;
   recovery: TemplateResult;
   keyboardInputValue: string;
   onControlToggle: () => void;
-  onKeyboardFocus: () => void;
+  onKeyboardFocus: (event: MouseEvent) => void;
   onKeyboardEvent: (event: KeyboardEvent) => void;
   onKeyboardInput: (event: InputEvent) => void;
-  onScaleToggle: () => void;
   onClose: () => void;
 };
 
@@ -87,18 +90,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
           <span class="desktop-touch-action__icon" aria-hidden="true">${KEYBOARD_GLYPH}</span>
           <span class="desktop-touch-action__label">${t("desktop.keyboard")}</span>
         </button>
-        <button
-          class="desktop-touch-action"
-          type="button"
-          aria-label=${t(options.scaleViewport ? "desktop.actualSize" : "desktop.fitScreen")}
-          aria-pressed=${options.scaleViewport ? "true" : "false"}
-          @click=${options.onScaleToggle}
-        >
-          <span class="desktop-touch-action__icon" aria-hidden="true">
-            ${options.scaleViewport ? icons.minimize : icons.maximize}
-          </span>
-          <span class="desktop-touch-action__label">${t("desktop.fit")}</span>
-        </button>
+        ${renderDesktopSizing(options.sizing)}
         <button
           class="desktop-touch-action"
           type="button"

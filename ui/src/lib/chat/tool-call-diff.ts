@@ -177,7 +177,7 @@ function compactLineDiff(
 
 /**
  * Compute a line diff between two snippets (no file line numbers available).
- * Standard LCS table; inputs are bounded so the quadratic cost stays small.
+ * Bounded LCS comparison retains deletion-first alignment for equal-length paths.
  *
  * `compactUnchanged` collapses unchanged runs to three lines of context.
  */
@@ -196,59 +196,36 @@ export function computeLineDiff(
   const comparisonTruncated = inputTruncated && !inputsEqual;
   const oldLines = allOldLines.slice(0, MAX_DIFF_INPUT_LINES);
   const newLines = allNewLines.slice(0, MAX_DIFF_INPUT_LINES);
-  const n = oldLines.length;
-  const m = newLines.length;
-  // lcs[i][j] = LCS length of oldLines[i..] vs newLines[j..]
-  const lcs: number[][] = Array.from({ length: n + 1 }, () =>
-    Array.from({ length: m + 1 }, () => 0),
-  );
-  for (let i = n - 1; i >= 0; i--) {
-    const row = lcs[i];
-    const nextRow = lcs[i + 1];
-    if (!row || !nextRow) {
-      continue;
-    }
-    for (let j = m - 1; j >= 0; j--) {
-      row[j] =
+  const stride = newLines.length + 1;
+  // The extra row/column are zero sentinels; bounded LCS lengths fit in Uint16.
+  const lcs = new Uint16Array((oldLines.length + 1) * stride);
+  for (let i = oldLines.length - 1; i >= 0; i--) {
+    for (let j = newLines.length - 1; j >= 0; j--) {
+      const offset = i * stride + j;
+      lcs[offset] =
         oldLines[i] === newLines[j]
-          ? (nextRow[j + 1] ?? 0) + 1
-          : Math.max(nextRow[j] ?? 0, row[j + 1] ?? 0);
+          ? (lcs[offset + stride + 1] ?? 0) + 1
+          : Math.max(lcs[offset + stride] ?? 0, lcs[offset + 1] ?? 0);
     }
   }
   const lines: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
+  for (let i = 0, j = 0; i < oldLines.length || j < newLines.length;) {
     const oldLine = oldLines[i];
     const newLine = newLines[j];
-    if (oldLine === undefined || newLine === undefined) {
-      break;
-    }
-    if (oldLine === newLine) {
+    if (oldLine !== undefined && oldLine === newLine) {
       lines.push({ kind: "ctx", text: oldLine });
       i++;
       j++;
-    } else if ((lcs[i + 1]?.[j] ?? 0) >= (lcs[i]?.[j + 1] ?? 0)) {
+    } else if (
+      oldLine !== undefined &&
+      (newLine === undefined || (lcs[(i + 1) * stride + j] ?? 0) >= (lcs[i * stride + j + 1] ?? 0))
+    ) {
       lines.push({ kind: "del", text: oldLine });
       i++;
-    } else {
+    } else if (newLine !== undefined) {
       lines.push({ kind: "add", text: newLine });
       j++;
     }
-  }
-  while (i < n) {
-    const line = oldLines[i];
-    if (line !== undefined) {
-      lines.push({ kind: "del", text: line });
-    }
-    i++;
-  }
-  while (j < m) {
-    const line = newLines[j];
-    if (line !== undefined) {
-      lines.push({ kind: "add", text: line });
-    }
-    j++;
   }
   const preview = compactLineDiff(lines, comparisonTruncated, options?.compactUnchanged === true);
   return comparisonTruncated

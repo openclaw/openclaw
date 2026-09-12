@@ -58,6 +58,63 @@ async function createLinkedPackageSwapFixture(base: string, relative = false) {
 }
 
 describe("retained npm package integrity", () => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(process.platform === "darwin" ? [0o700, 0o755] : [0o777])(
+    "preserves distinct launcher targets and permissions through rollback (mode %i)",
+    async (mode) => {
+      await withTestDir({ prefix: "openclaw-rollback-launcher-target-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const oldTarget = "../lib/node_modules/openclaw/old-launcher.mjs";
+        const candidateTarget = "../lib/node_modules/openclaw/new-launcher.mjs";
+        const stagedLauncher = path.join(params.stage.layout.binDir, "openclaw");
+        for (const { root, shim, filename, contents, linkMode } of [
+          {
+            root: packageRoot,
+            shim: launcher,
+            filename: "old-launcher.mjs",
+            contents: "old launcher\n",
+            linkMode: mode,
+          },
+          {
+            root: params.stage.packageRoot,
+            shim: stagedLauncher,
+            filename: "new-launcher.mjs",
+            contents: "candidate launcher\n",
+            linkMode: mode === 0o700 ? 0o755 : 0o700,
+          },
+        ]) {
+          await fs.writeFile(path.join(root, filename), contents);
+          await fs.chmod(path.join(root, filename), 0o751);
+          await fs.unlink(shim);
+          await fs.symlink(`../lib/node_modules/openclaw/${filename}`, shim);
+          if (process.platform === "darwin") {
+            await fs.lchmod(shim, linkMode);
+          }
+        }
+        const original = await fs.lstat(launcher);
+        const candidate = await fs.lstat(stagedLauncher);
+        const transaction = await retain(params);
+        expect(await fs.readlink(launcher)).toBe(candidateTarget);
+        expect((await fs.lstat(launcher)).mode).toBe(candidate.mode);
+        expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+        expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
+
+        expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
+        expect(await fs.readlink(launcher)).toBe(oldTarget);
+        const restored = await fs.lstat(launcher);
+        expect([restored.mode, restored.uid, restored.gid]).toEqual([
+          original.mode,
+          original.uid,
+          original.gid,
+        ]);
+        expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+        expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "keeps a staged relative npm link on its canonical checkout through activation and rollback",
     async () => {
@@ -436,11 +493,16 @@ describe("retained npm package integrity", () => {
     await withTestDir({ prefix: "openclaw-rollback-linked-launcher-" }, async (base) => {
       const { params, launcher } = await createPackageSwapFixture(base);
       const alias = `${launcher}.alias`;
+      await fs.chmod(launcher, 0o751);
       await fs.link(launcher, alias);
       const transaction = await retain(params);
       expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
       await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
       await expect(fs.readFile(alias, "utf8")).resolves.toBe("old launcher\n");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
+        expect((await fs.stat(alias)).mode & 0o777).toBe(0o751);
+      }
     });
   });
 

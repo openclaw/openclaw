@@ -1,7 +1,7 @@
 import type { RegisterNativeHookRelayParams } from "../agents/harness/native-hook-relay-types.js";
 // Private retained native-hook relay capability for bundled runtime owners.
 import {
-  registerRetainedNativeHookRelay,
+  registerOwnedNativeHookRelay,
   type NativeHookRelayRetention,
 } from "../agents/harness/native-hook-relay.js";
 
@@ -10,13 +10,11 @@ export {
   type NativeHookRelayCommandPlan,
 } from "../agents/harness/native-hook-relay-plan.js";
 
-export type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
-  retention: NativeHookRelayRetention;
+export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams & {
+  retention?: NativeHookRelayRetention;
 };
 
-/** Registers a bundled-only relay that may retain host policy for direct children. */
-export function registerRetainedNativeHookRelayForBundledRuntime(
-  params: RetainedNativeHookRelayParams,
-) {
-  return registerRetainedNativeHookRelay(params);
+/** Bundled owners join publication and cleanup while preserving optional direct-child retention. */
+export function registerNativeHookRelayForBundledRuntime(params: OwnedNativeHookRelayParams) {
+  return registerOwnedNativeHookRelay(params);
 }

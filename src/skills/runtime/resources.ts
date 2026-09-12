@@ -229,6 +229,7 @@ export async function materializeSkillResources(
         name: skill.name,
         displayName: skill.displayName,
         description: skill.description,
+        contentHash: bundle.revision,
         filePath,
         baseDir,
         source: "openclaw-resources",

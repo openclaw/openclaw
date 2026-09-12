@@ -1,14 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
-  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
 } from "../state/openclaw-state-db.js";
@@ -20,12 +21,12 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
   pluginStateEntriesInKeyRange,
 } from "./plugin-state-store.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 
 let testState: OpenClawTestState | undefined;
 beforeAll(async () => {
@@ -317,4 +318,47 @@ describe("plugin state open errors", () => {
       }
     }
   });
+});
+
+describe("plugin state JSON input", () => {
+  it.each([
+    ["class instance", "new (class Entry { value = 1; })()"],
+    ["custom prototype", "Object.create({ inherited: true })"],
+    ["null prototype", "Object.create(null)"],
+    [
+      "forged root constructor",
+      "Object.create(Object.create(null, { constructor: { value: Object } }))",
+    ],
+    [
+      "constructor accessor",
+      "Object.create(Object.create(null, { constructor: { get() { onAccess(); return Object; } } }))",
+    ],
+    ["accessor", "({ get value() { onAccess(); return 1; } })"],
+    ["symbol key", "({ [Symbol('hidden')]: 1 })"],
+    ["non-enumerable key", "Object.defineProperty({}, 'hidden', { value: 1 })"],
+  ])(
+    "rejects nested VM realm %s without replacing keyed state or invoking getters",
+    async (_shape, expression) => {
+      await withOpenClawTestState({ label: "plugin-state-json-input" }, async () => {
+        try {
+          const store = createPluginStateKeyedStore("discord", {
+            namespace: "realm-shapes",
+            maxEntries: 1,
+          });
+          await store.register("retained", "original");
+          const onAccess = vi.fn();
+          const value: unknown = runInNewContext(`({ nested: [${expression}] })`, { onAccess });
+
+          await expect(store.register("retained", value)).rejects.toMatchObject({
+            code: "PLUGIN_STATE_INVALID_INPUT",
+            operation: "register",
+          });
+          expect(onAccess).not.toHaveBeenCalled();
+          await expect(store.lookup("retained")).resolves.toBe("original");
+        } finally {
+          resetPluginStateStoreForTests();
+        }
+      });
+    },
+  );
 });

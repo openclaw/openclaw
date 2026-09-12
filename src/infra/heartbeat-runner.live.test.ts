@@ -21,7 +21,7 @@ import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.j
 const enabled = isLiveTestEnabled() && process.env.OPENCLAW_LIVE_SESSION_EVENT_WAKE === "1";
 const describeLive = enabled ? describe : describe.skip;
 const TURN_TIMEOUT_MS = 180_000;
-const MODEL = "openai/gpt-5.6-sol";
+const MODEL = "openai/gpt-5.6-luna";
 
 async function readMessages(sessionKey: string): Promise<unknown[]> {
   const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
@@ -71,7 +71,7 @@ describeLive("session event wake through a live Gateway", () => {
       instance.state.applyEnv();
       await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
       await fs.rm(path.join(workspace, "BOOTSTRAP.md"), { force: true });
-      mergeWorkspaceSetupState(workspace, { setupCompletedAt: new Date().toISOString() });
+      await mergeWorkspaceSetupState(workspace, { setupCompletedAt: new Date().toISOString() });
       await fs.writeFile(
         path.join(workspace, "AGENTS.md"),
         "Follow exact reply instructions. This workspace contains only synthetic live-test data.\n",

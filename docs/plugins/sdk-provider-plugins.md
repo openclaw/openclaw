@@ -53,6 +53,70 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Handle model access after sign-in
+
+Existing consumers of `runModelsAuthLoginFlow` from
+`openclaw/plugin-sdk/provider-auth-login-flow-runtime` must handle a selection
+after credentials are saved. When effective restrictions can hide the provider's
+models, the existing `prompter.select` receives these options:
+
+| Value  | Label                        | Effect                                                      |
+| ------ | ---------------------------- | ----------------------------------------------------------- |
+| `all`  | `Show all <Provider> models` | Adds that provider's wildcard to the existing policy owner. |
+| `keep` | `Keep current restrictions`  | Leaves restrictions unchanged.                              |
+
+Render the supplied message and options, and return the selected option's value.
+Do not assume that every `select` call chooses a provider or auth method. Neither
+choice activates a new default model. No choice is requested when restrictions
+are absent or already allow the whole provider.
+
+Canceling or rejecting this post-save selection does not undo saved credentials.
+The flow throws `ProviderAuthConfigApplyError`, which extends
+`ProviderCredentialsSavedError`; report that credentials were saved instead of
+treating it as a failed credential exchange. Cancellation at the selection leaves
+restrictions unchanged. A later application failure can leave the policy saved
+but not active in the running Gateway. Keep credential persistence and model
+visibility outcomes distinct.
+
+### Defer the choice to a later reply
+
+For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
+receives a `PreparedProviderModelAccess` request and replaces the post-save
+`select` call; it does not apply the choice. Retain the prepared request until
+login finishes. Use `createProviderLoginFlowRegistry` and
+`reserveProviderLoginFlow` to reserve only the credential exchange.
+
+After login finishes, call `offerProviderLoginModelAccess` with `flows`, `flowKey`,
+`prepared`, and `terminalMessage`. Deliver its structured reply. Always release
+the login in `finally` with `releaseProviderLoginFlow({ flows, flowKey, record })`.
+The pending model-access question has its own lifetime and remains answerable
+after that release; it does not block another login.
+
+Pass the later command to `answerProviderLoginModelAccess` with `flows`, `flowKey`,
+`agentId`, `command`, `runtime`, `readConfig`, and `assertCurrent`; `signal` is
+optional. `readConfig` must return the host's current config. The owner validates
+the answer, applies the choice, and consumes that question. Expired or conflicting
+choices receive a fresh question based on current restrictions.
+Use `cancelProviderLoginFlow({ flows, flowKey })` to cancel either pending phase.
+Do not reconstruct a wildcard write from button text or reuse a prepared request
+for a new login.
+
+### Keep hosted writes authorized
+
+Hosted callers supply `signal` and `assertCurrent` to check the current login,
+sender authority, and selected provider/method before effects and after awaited
+work. An abort signal or matching login identifier alone is not current
+authorization. `beforePersistentEffect` remains the credential-persistence
+preparation callback. Browser authorization ends after the credential phase;
+the later model choice uses the current conversation or wizard authority.
+
+For a deferred choice, pass the answering command's current authority check as
+`answerProviderLoginModelAccess.assertCurrent`. Use its config argument when
+supplied: it is the policy writer's current config. Otherwise read the host's
+current config. The original login callback does not authorize a later command.
+Let the shared owner report the visibility outcome:
+a saved policy is not proof that the running Gateway applied it.
+
 ## Walkthrough
 
 <Steps>

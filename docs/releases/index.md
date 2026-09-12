@@ -1,16 +1,15 @@
 ---
 title: "Release notes"
-summary: "Curated OpenClaw release notes for people who want the product story, not the changelog."
+summary: "OpenClaw release notes, complete Markdown changelogs, and contribution records."
 description: "Browse polished OpenClaw release notes with highlights, reader-facing context, source links, and contributor credits."
 ---
 
-These pages are the reader-facing release notes for OpenClaw. Each one is
-curated from the changelog and keeps the main story, practical impact, source
-links, and contributor credit together, so you do not have to scan the
-changelog first.
+These pages explain what changed in OpenClaw, how it affects your work, and
+who contributed, with links to the source changes.
 
 ## Releases
 
+- [v2026.9.4](/releases/2026.9.4) - Plugin and skill discovery, visible skill learning, cloud-worker controls, GPT Image 2.5, and terminal questions.
 - [v2026.9.3](/releases/2026.9.3) - Clean update recovery, faster session reconnects, live browser automation, revocable chat links, searchable meeting transcripts, and repository-backed cloud work. Also includes persistent Workshop skills, native Mac tabs, and provider account controls.
 - [v2026.9.2](/releases/2026.9.2) - Reliability and recovery improvements, OpenAI GPT-6 Astra and Meta Muse Spark 1.3 support, and flexible task workspaces.
 - [v2026.9.1](/releases/2026.9.1) - Mermaid diagrams across chat surfaces, a fuller Android experience, safer update recovery, and lower overhead for long conversations and large installations.
@@ -25,8 +24,12 @@ v2026.8.1.
 
 ## Changelog
 
-Use these release notes when you want the product story. Use the changelog when
-you need compact maintainer accounting:
+The changelog index links to a complete Markdown file for each release, with
+Raw links for files too large for GitHub's preview. Releases synchronized with
+these docs contain the same notes in flat Markdown. Earlier releases retain
+their original changelogs. Complete contribution records remain available
+separately where recorded.
 
 - [GitHub releases](https://github.com/openclaw/openclaw/releases)
-- [CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
+- [Changelog index](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
+- [Contribution records](https://github.com/openclaw/openclaw/tree/main/CHANGELOG/records)

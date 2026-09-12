@@ -366,7 +366,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           };
           return remoteExec
             ? await executeRemoteExecTurn({ ...executionParams, runLocal, assertRunCurrent })
-            : await executeWorkerTurn(executionParams);
+            : await executeWorkerTurn({
+                ...executionParams,
+                assertRunCurrent: assertAdmissionCurrent,
+              });
         } catch (error) {
           if (error instanceof StaleWorkerBuildError) {
             const canRecoverBuild =

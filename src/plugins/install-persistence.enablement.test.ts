@@ -329,18 +329,13 @@ describe("persistPluginInstall enablement", () => {
     } as OpenClawConfig;
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
-        recordPluginManifestInstallOwner(
-          {
-            id: "needs-config",
-            manifestPath: "/tmp/needs-config/openclaw.plugin.json",
-            configSchema: {
-              type: "object",
-              required: ["token"],
-              properties: { token: { type: "string" } },
-            },
+        createManifestRecord("needs-config", {
+          configSchema: {
+            type: "object",
+            required: ["token"],
+            properties: { token: { type: "string" } },
           },
-          "needs-config",
-        ),
+        }),
       ],
       diagnostics: [],
     });
@@ -437,18 +432,13 @@ describe("persistPluginInstall enablement", () => {
     } as OpenClawConfig;
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
-        recordPluginManifestInstallOwner(
-          {
-            id: "needs-config",
-            manifestPath: "/tmp/needs-config/openclaw.plugin.json",
-            configSchema: {
-              type: "object",
-              required: ["token"],
-              properties: { token: { type: "string" } },
-            },
+        createManifestRecord("needs-config", {
+          configSchema: {
+            type: "object",
+            required: ["token"],
+            properties: { token: { type: "string" } },
           },
-          "needs-config",
-        ),
+        }),
       ],
       diagnostics: [],
     });

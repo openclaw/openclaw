@@ -117,7 +117,6 @@ describe("plugin discovery identity and local join", () => {
         diagnostics: [],
         mutationAllowed: true,
       },
-      published: [],
       includeBundledOnly: true,
     });
 
@@ -151,7 +150,6 @@ describe("plugin discovery identity and local join", () => {
       remote: [],
       local,
       includeBundledOnly: true,
-      published: [remote],
       intent: "bundled",
       category: "web",
     });
@@ -177,7 +175,7 @@ describe("plugin discovery identity and local join", () => {
     });
   });
 
-  it("uses the complete publication set so a later ClawHub page cannot become a bundled result", () => {
+  it("uses the local catalog counterpart to exclude published bundled plugins", () => {
     const expedia = {
       ...remote,
       packageName: "@expediagroup/expedia-openclaw",
@@ -189,8 +187,9 @@ describe("plugin discovery identity and local join", () => {
         {
           id: "expedia-travel",
           packageName: expedia.packageName,
+          clawhubPackage: expedia.packageName,
           name: "Expedia Travel",
-          origin: "official",
+          origin: "bundled",
           installed: false,
           enabled: false,
           state: "not-installed" as const,
@@ -211,7 +210,6 @@ describe("plugin discovery identity and local join", () => {
 
     const items = joinClawHubPluginCatalog({
       remote: [],
-      published: [expedia],
       local,
       includeBundledOnly: true,
       intent: "bundled",
@@ -223,7 +221,6 @@ describe("plugin discovery identity and local join", () => {
   it("does not repeat local-only entries on remote cursor pages", () => {
     const items = joinClawHubPluginCatalog({
       remote: [remote],
-      published: [],
       local: {
         plugins: [
           {
@@ -249,7 +246,6 @@ describe("plugin discovery identity and local join", () => {
   it("keeps unmatched installed entries in All search and deduplicates remote matches", () => {
     const items = joinClawHubPluginCatalog({
       remote: [remote],
-      published: [],
       local: {
         plugins: [
           {
@@ -301,7 +297,6 @@ describe("plugin discovery identity and local join", () => {
   it("keeps installed packages when ClawHub publication exists but the search page omits them", () => {
     const items = joinClawHubPluginCatalog({
       remote: [],
-      published: [remote],
       local: {
         plugins: [
           {
@@ -388,7 +383,6 @@ describe("plugin discovery identity and local join", () => {
     };
     const common = {
       remote: [remote],
-      published: [remote],
       local,
       includeBundledOnly: true,
     } as const;

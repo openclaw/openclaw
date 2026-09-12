@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
@@ -15,6 +14,11 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
+import {
+  renderSessionFilterSummary,
+  renderSidebarSessionFilter,
+} from "./app-sidebar-session-filter-summary.ts";
 import {
   renderChildSessionLoadError,
   renderRecentSession,
@@ -41,11 +45,13 @@ type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
 };
 
 type SidebarSessionListHost = SessionListHost & {
+  readonly sidebarAgentsMode: "chip" | "roster";
+  readonly sessionInvolvingMeFilterActive: boolean;
   loadMoreSidebarSessions(): Promise<void>;
 };
 
 type SessionCatalogRenderSnapshot = {
-  catalogs: readonly SessionCatalog[];
+  catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -54,7 +60,6 @@ type SessionCatalogRenderSnapshot = {
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
-  ownerId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
 };
@@ -64,7 +69,7 @@ type PersonHeaders = {
   selfProfileId?: string;
 };
 
-function renderSessionSection(params: {
+export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
   personHeaders: PersonHeaders | undefined;
@@ -117,6 +122,11 @@ function renderSessionSection(params: {
           : group
             ? "category"
             : "threads";
+  const personFilterActive =
+    host.sessionOwnerFilterActive && host.sessionOwnerFilterId === personOwner?.id;
+  const personFilterLabel = personFilterActive
+    ? t("chat.sidebar.showEveryone")
+    : t("chat.sidebar.showOnlyPerson", { name: label });
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -130,9 +140,9 @@ function renderSessionSection(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  // Person/project sections are derived, not stored: dropping a session on
+  // Person/project/agent sections are derived, not stored: dropping a session on
   // them cannot persist anything, so they take no drags at all.
-  const derivedSection = Boolean(personOwner || section.project);
+  const derivedSection = Boolean(personOwner || section.project || section.id.startsWith("agent:"));
   const sectionDropEnabled = groupWriteAccess.allowed && !derivedSection;
   const sectionClass = [
     "sidebar-recent-sessions__group",
@@ -284,6 +294,27 @@ function renderSessionSection(params: {
                       >
                         ${chevron}${ownerAvatar}${labelText}${headerStatus}
                       </button>`
+                }
+                ${
+                  personOwner &&
+                  host.sessionOwnershipVisible &&
+                  host.sessionOwnerOptions.some((owner) => owner.id === personOwner.id)
+                    ? html`<button
+                        type="button"
+                        class="sidebar-session-group-actions sidebar-session-person-filter ${
+                          personFilterActive ? "sidebar-session-sort--filtered" : ""
+                        }"
+                        aria-pressed=${personFilterActive}
+                        title=${personFilterLabel}
+                        aria-label=${personFilterLabel}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          host.setSessionOwnerFilter(personFilterActive ? null : personOwner.id);
+                        }}
+                      >
+                        ${icons.listFilter}
+                      </button>`
+                    : nothing
                 }
                 ${
                   group || section.id === "ungrouped"
@@ -443,7 +474,7 @@ function renderSessionPagination(params: {
 function renderSessionCatalog(params: {
   host: SessionListHost;
   snapshot: SessionCatalogRenderSnapshot;
-  catalog: SessionCatalog;
+  catalog: SidebarSessionCatalog;
   renderer: SessionCatalogGroupsRenderer;
 }) {
   const { host, snapshot, catalog, renderer } = params;
@@ -465,7 +496,6 @@ function renderSessionCatalog(params: {
       visibleSessionLimits: host.sessionData.visibleSessionLimits,
       projectGrouping: snapshot.projectGrouping,
       liveRows: snapshot.liveRows,
-      ownerId: snapshot.ownerId,
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,
@@ -497,7 +527,7 @@ function renderSessionCatalog(params: {
       onNavigate: host.onNavigate,
       catalogOpenTarget: snapshot.catalogOpenTarget,
       terminalAvailable: snapshot.terminalAvailable,
-      onOpenTerminal: openCatalogSessionInTerminal,
+      onOpenTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
       onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
       onCatalogMenuTriggerRendered: (key, element) => host.retargetCatalogMenuTrigger(key, element),
       isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),
@@ -560,14 +590,17 @@ function renderSessionListBody(params: {
           }
           return renderSessionSection({ host, section, personHeaders });
         }
-        // Empty Other remains useful only as a collaborator or drag destination.
+        // An owner filter hides empty Other regardless of paging or drag state.
+        // Without it, preserve the collaborator and drag destination behavior.
         if (
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
-          !params.nativeSessionsHaveMore &&
-          !host.sessionOwnershipVisible &&
-          host.sessionsStatusFilter === "active" &&
-          host.sessionOrganizer.draggingSessionKey === null
+          (host.sessionOwnerFilterActive ||
+            host.sessionInvolvingMeFilterActive ||
+            (!params.nativeSessionsHaveMore &&
+              !host.sessionOwnershipVisible &&
+              host.sessionsStatusFilter === "active" &&
+              host.sessionOrganizer.draggingSessionKey === null))
         ) {
           return nothing;
         }
@@ -579,29 +612,20 @@ function renderSessionListBody(params: {
 
 function renderSessionListToolbar(host: SidebarSessionListHost) {
   const newSessionAccess = host.readNewSessionAccess();
-  const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
+  const filtered =
+    host.sessionOwnerFilterActive ||
+    host.sessionInvolvingMeFilterActive ||
+    host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
       <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
-      <button
-        type="button"
-        class="sidebar-session-toolbar__button sidebar-session-sort ${
-          filtered ? "sidebar-session-sort--filtered" : ""
-        }"
-        title=${t("chat.sidebar.sortSessions")}
-        aria-label=${t("chat.sidebar.sortSessions")}
-        aria-haspopup="menu"
-        aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
-        @click=${(event: MouseEvent) =>
-          host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
-      >
-        ${icons.listFilter}
-      </button>
+      ${filtered ? renderSessionFilterSummary(host) : nothing}
+      ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
       ${renderNewSessionLink({
         basePath: host.basePath,
         agentId: host.expandedAgentId(),
         className: "sidebar-session-toolbar__button sidebar-new-session",
-        label: t("chat.runControls.newSession"),
+        label: t("agentChip.newConversation"),
         disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
         onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
       })}
@@ -618,6 +642,31 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  return renderSessionListFrame(
+    host,
+    html`
+      <div class="sidebar-recent-sessions">
+        ${renderSessionListBody({
+          host,
+          sections: params.sections,
+          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
+          catalogs: params.catalogs,
+          catalogRenderer: params.catalogRenderer,
+        })}
+        ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore)}
+        ${
+          host.sessionsStatusFilter === "archived" && params.empty
+            ? html`<span class="sidebar-session-empty-hint"
+                >${t("sessionsView.noArchivedSessions")}</span
+              >`
+            : nothing
+        }
+      </div>
+    `,
+  );
+}
+
+export function renderSessionListFrame(host: SidebarSessionListHost, body: unknown) {
   const hiddenMainSessionKey = host.mainSessionRow()?.key;
   return html`
     <section
@@ -628,7 +677,7 @@ export function renderSessionList(params: {
       @dragleave=${(event: DragEvent) => host.handleSessionListDragLeave(event)}
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
-      ${renderSessionListToolbar(host)}
+      ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
       ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${
         host.sessionData.sessionMutationError
@@ -653,23 +702,7 @@ export function renderSessionList(params: {
             `
           : nothing
       }
-      <div class="sidebar-recent-sessions">
-        ${renderSessionListBody({
-          host,
-          sections: params.sections,
-          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-          catalogs: params.catalogs,
-          catalogRenderer: params.catalogRenderer,
-        })}
-        ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore)}
-        ${
-          host.sessionsStatusFilter === "archived" && params.empty
-            ? html`<span class="sidebar-session-empty-hint"
-                >${t("sessionsView.noArchivedSessions")}</span
-              >`
-            : nothing
-        }
-      </div>
+      ${body}
     </section>
   `;
 }

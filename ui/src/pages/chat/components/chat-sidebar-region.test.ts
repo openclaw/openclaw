@@ -269,6 +269,9 @@ describe("chat sidebar region", () => {
         themeMode: "dark",
         agentId: "main",
         browserPresented: false,
+        browserTabsInHeader: true,
+        terminalTabsInHeader: true,
+        companionPresented: false,
         browserRefreshOnPresentation: false,
         desktopPresented: false,
         desktopRefreshOnPresentation: false,
@@ -441,7 +444,7 @@ describe("chat sidebar region", () => {
     };
     await region.updateComplete;
     const event = new CustomEvent("openclaw:terminal-toggle", {
-      detail: { catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" } },
+      detail: { terminalSessionId: "terminal-1", agentOwned: true },
     });
 
     expect(region.deliverPanelEvent("terminal", event)).toBe(true);
@@ -471,33 +474,41 @@ describe("chat sidebar region", () => {
     expect(root(region).querySelector("wa-dropdown-item[disabled]")).toBeNull();
   });
 
-  it("keeps Browser available in the plus menu to start another browser tab", async () => {
-    const handleToggleRequest = vi.fn();
-    const region = await createRegion(openSlot({ columns: [] }, "browser"));
-    region.panelTemplates = {
-      browser: html`<div .handleToggleRequest=${handleToggleRequest}>Browser panel</div>`,
-    };
-    region.availableSlots = [...region.availableSlots, "browser"];
-    await region.updateComplete;
-    const browserItem = Array.from(
-      root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
-    ).find((item) => Reflect.get(item, "value") === "browser");
+  it.each([
+    { slot: "browser", eventType: "openclaw:browser-toggle", detail: { open: true, newTab: true } },
+    {
+      slot: "terminal",
+      eventType: "openclaw:terminal-toggle",
+      detail: { open: true, newSession: true },
+    },
+  ] as const)(
+    "keeps $slot available in the plus menu to create another hosted tab",
+    async ({ slot, eventType, detail }) => {
+      const handleToggleRequest = vi.fn();
+      const region = await createRegion(openSlot({ columns: [] }, slot));
+      region.panelTemplates = {
+        [slot]: html`<div .handleToggleRequest=${handleToggleRequest}>Panel content</div>`,
+      };
+      region.availableSlots = [slot];
+      await region.updateComplete;
+      const menuItem = Array.from(
+        root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
+      ).find((item) => Reflect.get(item, "value") === slot);
 
-    expect(browserItem).toBeDefined();
-    root(region)
-      .querySelector(".side-panel-type-menu")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "browser" } },
-        }),
+      expect(menuItem).toBeDefined();
+      root(region)
+        .querySelector(".side-panel-type-menu")
+        ?.dispatchEvent(
+          new CustomEvent("wa-select", { bubbles: true, detail: { item: { value: slot } } }),
+        );
+
+      expect(region.callbacks?.openSlot).toHaveBeenCalledWith(slot);
+      expect(region.callbacks?.openSlot).toHaveBeenCalledBefore(handleToggleRequest);
+      expect(handleToggleRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ type: eventType, detail }),
       );
-
-    expect(region.callbacks?.openSlot).toHaveBeenCalledWith("browser");
-    expect(handleToggleRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ detail: { open: true, newTab: true } }),
-    );
-  });
+    },
+  );
 
   it("opens into a type selector instead of restoring a previous tab", async () => {
     const region = await createRegion(setSidebarOpen({ columns: [], expanded: false }, true));

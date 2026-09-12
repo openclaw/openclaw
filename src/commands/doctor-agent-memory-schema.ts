@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -90,6 +91,9 @@ function needsAgentMemorySchemaMaintenance(env: NodeJS.ProcessEnv): boolean {
       env,
       includeIncompatibleSchemaVersions: true,
     }).some((entry) => {
+      if (readAgentDatabaseAdmissionRefusal(entry.agentId, { env })) {
+        return false;
+      }
       const state = inspectAgentMemoryRecallMetadataMigration(entry.path);
       return Boolean(state && (state.columns.length > 0 || state.hasProvenanceTrigger));
     });
@@ -124,6 +128,9 @@ async function repairDoctorAgentMemorySchemas(
   }
 
   for (const entry of registered) {
+    if (readAgentDatabaseAdmissionRefusal(entry.agentId, { env })) {
+      continue;
+    }
     // A lost lease must stop the pass before a later target can close a new owner's handle.
     maintenance.assertOwned();
     try {

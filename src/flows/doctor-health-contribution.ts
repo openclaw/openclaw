@@ -97,6 +97,7 @@ async function runStructuredDoctorHealthContribution(params: {
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
   const dryRun = !params.ctx.prompter.shouldRepair;
+  const configBeforeRepair = JSON.stringify(params.ctx.cfg);
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -120,8 +121,15 @@ async function runStructuredDoctorHealthContribution(params: {
   for (const warning of result.warnings) {
     params.ctx.runtime.error(warning);
   }
-  for (const change of result.changes) {
-    params.ctx.runtime.log(change);
+  if (configBeforeRepair !== JSON.stringify(result.config)) {
+    params.ctx.configResult.pendingChangePanels = [
+      ...(params.ctx.configResult.pendingChangePanels ?? []),
+      ...result.changes,
+    ];
+  } else {
+    for (const change of result.changes) {
+      params.ctx.runtime.log(change);
+    }
   }
 }
 

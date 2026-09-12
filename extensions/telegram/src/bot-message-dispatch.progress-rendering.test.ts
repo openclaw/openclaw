@@ -146,7 +146,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     },
   );
 
-  it("renders failed progress-card attention without raw arguments", async () => {
+  it("renders opt-in failed progress-card diagnostics without raw arguments", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
@@ -163,7 +163,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: false } } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];

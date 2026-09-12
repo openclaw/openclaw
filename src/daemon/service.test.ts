@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { getUpdateRun } from "../infra/update-run-ledger.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -31,10 +34,6 @@ beforeEach(() => {
   probePortUsage.mockReset();
   probePortUsage.mockRejectedValue(new Error("unexpected port probe"));
 });
-
-function setPlatform(value: NodeJS.Platform) {
-  mockProcessPlatform(value);
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -89,14 +88,14 @@ describe("resolveGatewayService", () => {
     { platform: "linux" as const, label: "systemd user", loadedText: "enabled" },
     { platform: "win32" as const, label: "Scheduled Task", loadedText: "registered" },
   ])("returns the registered adapter for $platform", ({ platform, label, loadedText }) => {
-    setPlatform(platform);
+    mockProcessPlatform(platform);
     const service = resolveGatewayService();
     expect(service.label).toBe(label);
     expect(service.loadedText).toBe(loadedText);
   });
 
   it("returns a read-only unsupported-platform adapter", async () => {
-    setPlatform("aix");
+    mockProcessPlatform("aix");
     const service = resolveGatewayService();
 
     await expect(service.readCommand(process.env)).resolves.toBeNull();
@@ -154,7 +153,7 @@ describe("resolveGatewayService", () => {
   });
 
   it("guards every native service mutation when an external supervisor owns lifecycle", async () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     const service = resolveGatewayService();
     const env = { OPENCLAW_SUPERVISOR_MODE: "external" };
     const installArgs = {
@@ -248,7 +247,7 @@ describe("readGatewayServiceState", () => {
       ];
       const snapshot = captureEnv(keys);
       try {
-        setPlatform("linux");
+        mockProcessPlatform("linux");
         for (const key of keys) {
           delete process.env[key];
         }
@@ -335,6 +334,14 @@ describe("readGatewayServiceState", () => {
           }
           return;
         }
+        if (condition === "absent") {
+          const run = await admitUpdateCommandRun({
+            opts: { restart: shouldRestart },
+            root: home,
+          });
+          expect(run.env.HOME).toBe(home);
+          expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
+        }
         const result = await maybeStopManagedServiceBeforeMutableUpdate({
           root: home,
           updateInstallKind,
@@ -363,6 +370,7 @@ describe("readGatewayServiceState", () => {
           expect(probePortUsage).not.toHaveBeenCalled();
         }
       } finally {
+        closeOpenClawStateDatabaseForTest();
         snapshot.restore();
         await fs.rm(home, { recursive: true, force: true });
       }
@@ -501,7 +509,10 @@ describe("readGatewayServiceState", () => {
 
     const state = await readGatewayServiceState(service, { timeoutMs: 100 });
 
-    expect(readCommand).toHaveBeenCalledWith(process.env, { timeoutMs: 100 });
+    expect(readCommand).toHaveBeenCalledWith(process.env, {
+      timeoutMs: 100,
+      onInspectionFailure: expect.any(Function),
+    });
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
       status: "unknown",

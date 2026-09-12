@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -32,11 +32,26 @@ function committedSourceFixture(files: Record<string, string | null>) {
     writeFileSync(path.join(root, relative), content);
   }
   const git = (...args: string[]) =>
-    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    // Corruption controls own loose objects; automatic packing would move the target first.
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
+        ...args,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ).trim();
   git("init", "-q");
   git("config", "user.email", "test@example.invalid");
   git("config", "user.name", "Test");
@@ -64,6 +79,8 @@ describe("frozen selected consumer ownership", () => {
     const bin = path.join(source.root, "bin");
     const dockerLog = path.join(source.root, "docker.log");
     const packagePath = path.join(source.root, "fixture.tgz");
+    const profilePath = path.join(source.root, "fixture.profile");
+    writeFileSync(profilePath, "OPENAI_API_KEY=synthetic-test-key\n");
     mkdirSync(bin);
     writeFileSync(packagePath, "package bytes are not consumed before the Docker boundary\n");
     writeFileSync(
@@ -80,6 +97,8 @@ describe("frozen selected consumer ownership", () => {
         PATH: `${bin}:${process.env.PATH}`,
         TMPDIR: source.root,
         FIXTURE_DOCKER_LOG: dockerLog,
+        OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE: profilePath,
+        OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE: "unsupported",
         OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
         OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
         OPENCLAW_SKIP_DOCKER_BUILD: "1",
@@ -166,6 +185,71 @@ describe("frozen selected consumer ownership", () => {
       `OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE=${authorized ? "interactive" : "required"}`,
     );
   });
+
+  it.each(
+    ["session-runtime-context", "openai-chat-tools"].flatMap((consumer) =>
+      [false, true].flatMap((supported) =>
+        [false, true].map((authorized) => ({
+          consumer,
+          supported,
+          authorized,
+        })),
+      ),
+    ),
+  )(
+    "derives $consumer cold mode (supported=$supported, authorized=$authorized)",
+    ({ consumer, supported, authorized }) => {
+      const source = committedSourceFixture({
+        "package.json": '{"type":"module","version":"2026.9.4"}',
+        [runtimePath]:
+          "fragments?: RuntimeContextFragment[];\nconst fragments = params.fragments?.filter",
+        "src/config/zod-schema.session.ts":
+          "export const SessionSchema = z.object({ maintenance: z.object({ pruneAfter: PositiveDurationSchema.optional() }) });",
+        "src/config/zod-schema.session-config.ts": supported ? "coldStorage: z.object({})" : null,
+      });
+      const { result, args } = runConsumer(source, consumer, { authorized, dockerStatus: 0 });
+      expect(result.status, result.stderr).toBe(0);
+      const mode = authorized && !supported ? "unsupported" : "required";
+      expect(args).toContain(`OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE=${mode}`);
+      if (consumer === "openai-chat-tools") {
+        const configPath = path.join(source.root, "config.json");
+        const configResult = spawnSync(
+          process.execPath,
+          ["scripts/e2e/lib/openai-chat-tools/write-config.mjs"],
+          {
+            cwd: repoRoot,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: source.root,
+              OPENCLAW_TEST_WORKSPACE_DIR: path.join(source.root, "workspace"),
+              OPENCLAW_OPENAI_CHAT_TOOLS_MODEL: "openai/gpt-5.4-mini",
+              OPENCLAW_GATEWAY_TOKEN: "synthetic-gateway-token",
+              OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE: mode,
+            },
+          },
+        );
+        expect(configResult.status, configResult.stderr).toBe(0);
+        const config = JSON.parse(readFileSync(configPath, "utf8"));
+        expect(config.session).toEqual(
+          mode === "required"
+            ? {
+                maintenance: {
+                  mode: "warn",
+                  pruneAfter: "3650d",
+                  archiveDashboardAfter: false,
+                  maxDiskBytes: false,
+                  coldStorage: { enabled: true, afterDays: 30 },
+                },
+              }
+            : undefined,
+        );
+        expect(config.gateway.http.endpoints.chatCompletions.enabled).toBe(true);
+        expect(config.tools).toEqual({ allow: ["get_weather"] });
+      }
+    },
+  );
 
   it.each(typedFiles)("rejects an unreadable typed companion %s before Docker", (relative) => {
     const source = committedSourceFixture({
@@ -267,6 +351,29 @@ describe("frozen committed source errors", () => {
     return objectPath;
   }
 
+  it("preserves real read-failure injection under inherited automatic Git maintenance", () => {
+    const config = { "gc.auto": "1", "gc.autoDetach": "false", "maintenance.strategy": "gc" };
+    vi.stubEnv("GIT_CONFIG_COUNT", String(Object.keys(config).length));
+    for (const [index, [key, value]] of Object.entries(config).entries()) {
+      vi.stubEnv(`GIT_CONFIG_KEY_${index}`, key);
+      vi.stubEnv(`GIT_CONFIG_VALUE_${index}`, value);
+    }
+    try {
+      const source = committedSourceFixture({
+        [metadata]: "unavailable source bytes",
+        // Git samples directory 17/ for its loose-object auto-GC threshold.
+        "gc-sample-a": "gc sample 376\n",
+        "gc-sample-b": "gc sample 568\n",
+        "gc-sample-c": "gc sample 675\n",
+      });
+      removeObject(source, `${source.sha}:${metadata}`);
+      const reader = createFrozenTargetSource(source.root, source.sha);
+      expect(() => reader.readText(metadata)).toThrow("unable to read selected source");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
     const committedText = "selected committed text\n";
     const source = committedSourceFixture({ [metadata]: committedText });
@@ -276,6 +383,7 @@ describe("frozen committed source errors", () => {
     expect(reader.readText("scripts/absent.ts")).toBeNull();
 
     removeObject(source, `${source.sha}:${metadata}`);
+    expect(() => reader.readText(metadata)).toThrow();
     const freshReader = createFrozenTargetSource(source.root, source.sha);
     expect(() => freshReader.readText(metadata)).toThrow();
   });
@@ -359,6 +467,8 @@ describe("frozen committed source errors", () => {
     ["onboard_contract", "src/config/zod-schema.ts"],
     ["typed_onboarding_contract", "src/commands/onboard-hooks.ts"],
     ["mcp_code_mode_contract", "src/agents/memory-search.ts"],
+    ["session_cold_storage_contract", "src/config/zod-schema.session-config.ts"],
+    ["session_cold_storage_contract", "src/config/zod-schema.session.ts"],
     ["runtime_context_contract", "src/state/openclaw-agent-db-session-migrations.ts"],
     ["runtime_context_contract", "src/commands/doctor-session-transcripts.ts"],
     ["runtime_context_contract", "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"],

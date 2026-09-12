@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,21 +18,6 @@ import {
 } from "./models-list-result.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestContext } from "./types.js";
-
-type PrepareHarnessCatalog =
-  (typeof import("./models-list-harness-catalog.js"))["prepareModelsListHarnessCatalog"];
-
-const mocks = vi.hoisted(() => ({
-  prepareHarnessCatalog: vi.fn<PrepareHarnessCatalog>(async (params) => ({
-    snapshot: params.snapshot,
-    defaultModel: undefined,
-    catalog: params.snapshot.entries,
-  })),
-}));
-
-vi.mock("./models-list-harness-catalog.js", () => ({
-  prepareModelsListHarnessCatalog: mocks.prepareHarnessCatalog,
-}));
 
 function catalogEntry(id: string): ModelCatalogEntry {
   return { id, name: id, provider: "custom", api: "openai-responses" };
@@ -59,10 +44,6 @@ function preparedMetadataSnapshot() {
 }
 
 describe("models.list plugin metadata handoff", () => {
-  beforeEach(() => {
-    mocks.prepareHarnessCatalog.mockClear();
-  });
-
   it("reuses one Gateway-owned metadata snapshot across startup projection and browse", async () => {
     await withOpenClawTestState(
       {
@@ -110,10 +91,12 @@ describe("models.list plugin metadata handoff", () => {
           preloadedOnly: true,
           catalogProjector: projector,
         });
-        prepared.read();
-        expect(mocks.prepareHarnessCatalog).toHaveBeenCalledWith(
-          expect.objectContaining({ allowHarnessDiscovery: false }),
-        );
+        expect(
+          prepared
+            .read()
+            .models.map((entry) => entry.id)
+            .toSorted(),
+        ).toEqual(["another", "modern"]);
         expect(prepared.isCurrent()).toBe(true);
         currentConfig = { ...cfg };
         expect(prepared.isCurrent()).toBe(false);
@@ -149,40 +132,6 @@ describe("models.list plugin metadata handoff", () => {
     });
 
     expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-    expect(mocks.prepareHarnessCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ allowHarnessDiscovery: false }),
-    );
-  });
-
-  it("does not discover a harness catalog for an ordinary configured picker read", async () => {
-    const cfg = { agents: { defaults: { model: "custom/modern" } } } as OpenClawConfig;
-    const snapshot: ModelCatalogSnapshot = {
-      entries: [catalogEntry("modern")],
-      routeVariants: [],
-    };
-    const projector = createGatewayAgentModelCatalogProjector({
-      cfg,
-      agentId: "main",
-      snapshot,
-      metadataSnapshot: preparedMetadataSnapshot(),
-      preparedAuthStore: { version: 1, profiles: {} },
-    });
-    const context = {
-      getRuntimeConfig: () => cfg,
-      loadGatewayModelCatalogSnapshot: vi.fn(),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
-
-    await buildModelsListResult({
-      source: { kind: "gateway", context },
-      params: { view: "configured" },
-      preloadedCatalog: { agentId: "main", config: cfg, snapshot },
-      catalogProjector: projector,
-    });
-
-    expect(mocks.prepareHarnessCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ allowHarnessDiscovery: false, agentId: "main", snapshot }),
-    );
   });
 
   it.each([
@@ -197,12 +146,6 @@ describe("models.list plugin metadata handoff", () => {
       expectedAvailable: false,
     },
   ])("$name", async ({ supersedeDuringDiscovery, expectedAvailable }) => {
-    const actualHarnessCatalog = await vi.importActual<
-      typeof import("./models-list-harness-catalog.js")
-    >("./models-list-harness-catalog.js");
-    mocks.prepareHarnessCatalog.mockImplementationOnce(
-      actualHarnessCatalog.prepareModelsListHarnessCatalog,
-    );
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -256,7 +199,11 @@ describe("models.list plugin metadata handoff", () => {
         unrelatedActiveRegistry.agentHarnesses.push({
           pluginId: runtimeId,
           source: "test",
-          harness: { ...harness, loadModelCatalog: loadActiveCatalog },
+          harness: {
+            ...harness,
+            loadModelCatalog: loadActiveCatalog,
+            readModelCatalogReadiness: () => undefined,
+          },
         });
         const previousRegistry = captureActivePluginRegistrySnapshot();
         setActivePluginRegistry(unrelatedActiveRegistry);
@@ -278,7 +225,10 @@ describe("models.list plugin metadata handoff", () => {
           };
           const loadGatewayModelCatalogSnapshot = vi.fn(async () => preparedSnapshot);
           registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-            loadDeferred: async () => preparedSnapshot,
+            loadDeferred: async () => {
+              await loadPreparedCatalog();
+              return preparedSnapshot;
+            },
             readPrepared: async () => preparedSnapshot,
           });
           const respond = vi.fn();
@@ -311,7 +261,6 @@ describe("models.list plugin metadata handoff", () => {
           } else {
             await request;
           }
-          expect(preparedRegistry).not.toBe(unrelatedActiveRegistry);
           expect(loadPreparedCatalog).toHaveBeenCalledOnce();
           expect(loadActiveCatalog).not.toHaveBeenCalled();
           if (!supersedeDuringDiscovery) {

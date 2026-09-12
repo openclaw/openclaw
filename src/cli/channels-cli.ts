@@ -90,21 +90,19 @@ function addChannelSetupOption(
   option: ChannelSetupCliOption,
   seenFlags: Set<string>,
 ): void {
-  const optionSwitches = getChannelSetupOptionSwitches(option.flags);
+  const prepared = command.createOption(option.flags, option.description);
+  const optionSwitches = getChannelSetupOptionSwitches(prepared);
   if (optionSwitches.some((flag) => seenFlags.has(flag))) {
     return;
   }
   optionSwitches.forEach((flag) => seenFlags.add(flag));
-  if (option.defaultValue !== undefined) {
-    command.option(option.flags, option.description, option.defaultValue);
-  } else {
-    command.option(option.flags, option.description);
-  }
+  command.addOption(prepared.makeOptionMandatory(false).default(option.defaultValue));
   if (option.negatedFlags) {
-    const negatedSwitches = getChannelSetupOptionSwitches(option.negatedFlags);
+    const negated = command.createOption(option.negatedFlags, option.description);
+    const negatedSwitches = getChannelSetupOptionSwitches(negated);
     if (!negatedSwitches.some((flag) => seenFlags.has(flag))) {
       negatedSwitches.forEach((flag) => seenFlags.add(flag));
-      command.option(option.negatedFlags, option.description);
+      command.addOption(negated.makeOptionMandatory(false).default(undefined));
     }
   }
 }
@@ -135,9 +133,7 @@ async function addChannelSetupOptions(
       ? "modern"
       : "legacy"
     : "none";
-  const seenFlags = new Set(
-    command.options.flatMap((option) => getChannelSetupOptionSwitches(option.flags)),
-  );
+  const seenFlags = new Set(command.options.flatMap(getChannelSetupOptionSwitches));
   for (const option of options) {
     addChannelSetupOption(command, option, seenFlags);
   }
@@ -195,7 +191,7 @@ export async function registerChannelsCli(
 
   channels
     .command("status")
-    .description("Show gateway channel status (use status --deep for local)")
+    .description("Show channel status (use openclaw status --deep for a full connection check)")
     .option("--channel <name>", `Only show one channel (${formatCliChannelOptions(["all"])})`)
     .option("--probe", "Probe channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms", "10000")

@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
-import { createEmptyPluginMetadataSnapshot } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { createPdfToolInfraStub, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
@@ -19,7 +18,7 @@ vi.mock("../provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
-const { createPdfModelRegistry, stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
+const { stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
 
 describe("PDF tool prepared-runtime cancellation", () => {
   afterEach(() => {
@@ -27,26 +26,19 @@ describe("PDF tool prepared-runtime cancellation", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects before deferred acquisition resolves, then releases the late lease", async () => {
+  it("forwards cancellation to runtime acquisition before provider work starts", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic" });
       const cfg = {
         agents: { defaults: { pdfModel: { primary: "anthropic/claude-opus-4-6" } } },
       } as OpenClawConfig;
-      const modelRegistry = createPdfModelRegistry(() => ({
-        provider: "anthropic",
-        api: "anthropic-messages",
-        maxTokens: 8192,
-        input: ["text", "document"],
-      }));
-      const release = vi.fn();
-      let finishAcquisition!: (
-        value: Awaited<ReturnType<typeof preparedModelRuntime.acquireAgentRunPreparedModelRuntime>>,
-      ) => void;
       vi.mocked(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            finishAcquisition = resolve;
+        (_input, { abortSignal } = {}) =>
+          new Promise((_resolve, reject) => {
+            // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- The controller below supplies the exact cancellation Error.
+            abortSignal?.addEventListener("abort", () => reject(abortSignal.reason), {
+              once: true,
+            });
           }),
       );
       const tool = (await import("./pdf-tool.js")).createPdfTool({ config: cfg, agentDir });
@@ -59,30 +51,15 @@ describe("PDF tool prepared-runtime cancellation", () => {
         { prompt: "summarize", pdf: "/tmp/a.pdf" },
         controller.signal,
       );
-
       await vi.waitFor(() =>
         expect(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce(),
       );
+      expect(
+        vi.mocked(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).mock.calls[0]?.[1],
+      ).toEqual({ abortSignal: controller.signal });
       const assertion = expect(execution).rejects.toThrow("PDF runtime cancelled");
       controller.abort(new Error("PDF runtime cancelled"));
       await assertion;
-      expect(release).not.toHaveBeenCalled();
-
-      finishAcquisition({
-        snapshot: {
-          agentDir,
-          config: cfg,
-          // Cancellation releases this late lease before its stores can be used.
-          createStores: () => ({ authStorage: {}, modelRegistry }),
-        } as never,
-        pluginGeneration: {
-          configuredCatalogEntries: [],
-          inlineProviderModels: [],
-          pluginMetadataSnapshot: createEmptyPluginMetadataSnapshot(),
-        },
-        release,
-      });
-      await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
       expect(completeMock).not.toHaveBeenCalled();
     });
   });

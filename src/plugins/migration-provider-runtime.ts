@@ -1,4 +1,3 @@
-// Runtime bridge for plugin-provided migration hooks.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -12,8 +11,7 @@ import {
   resolveMigrationProviderPublicArtifacts,
   type MigrationProviderArtifactPlugin,
 } from "./migration-provider-public-artifacts.js";
-import type { PluginRegistry } from "./registry-types.js";
-import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
 type MigrationProviderPluginResolution = {
@@ -21,28 +19,6 @@ type MigrationProviderPluginResolution = {
   bundledCompatPluginIds: string[];
   publicPlugins: MigrationProviderArtifactPlugin[];
 };
-
-function bindMigrationProviderToRegistry(
-  provider: MigrationProviderPlugin,
-  registry: PluginRegistry,
-): MigrationProviderPlugin {
-  return {
-    ...provider,
-    ...(provider.detect
-      ? {
-          detect: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.detect!(ctx)),
-        }
-      : {}),
-    ...(provider.prepareApply
-      ? {
-          prepareApply: (ctx) =>
-            withPluginRuntimeRegistryScope(registry, () => provider.prepareApply!(ctx)),
-        }
-      : {}),
-    plan: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.plan(ctx)),
-    apply: (ctx, plan) => withPluginRuntimeRegistryScope(registry, () => provider.apply(ctx, plan)),
-  };
-}
 
 function resolveMigrationProviderPluginResolution(params: {
   cfg?: OpenClawConfig;
@@ -164,12 +140,13 @@ export async function withPluginMigrationProviders<T>(
     ...(compatConfig === undefined ? {} : { config: compatConfig }),
     onlyPluginIds: resolution.pluginIds,
   });
+  const providers = mergeMigrationProviders(
+    activeProviders,
+    acquisition.registry.migrationProviders,
+  ).map((provider) => getPluginValueInstance(provider)?.wrap(provider) ?? provider);
   let result: T;
   try {
-    const providers = acquisition.registry.migrationProviders.map(({ provider }) => ({
-      provider: bindMigrationProviderToRegistry(provider, acquisition.registry),
-    }));
-    result = await run(mergeMigrationProviders(activeProviders, providers));
+    result = await run(providers);
   } catch (error) {
     const failures = [error];
     try {

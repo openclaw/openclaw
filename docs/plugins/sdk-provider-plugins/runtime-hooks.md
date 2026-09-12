@@ -13,6 +13,39 @@ behavior. Part of the [Building provider plugins](/plugins/sdk-provider-plugins)
 guide; start with [Provider hook
 families](/plugins/sdk-provider-plugins/hook-families) for the shared builders.
 
+## Model route policy
+
+The lightweight `provider-policy-api` artifact resolves model routes through
+`resolveModelRoutes`. Its context and result types are exported by
+`openclaw/plugin-sdk/provider-model-types`.
+
+`ProviderResolveModelRoutesContext.routeIntent` carries prepared, secret-free
+consumer intent: an optional `runtimeId`, an optional `authRequirement`
+(`"subscription"` or `"api-key"`), and `source` (`"explicit"` or `"inherited"`).
+The host projects existing model/provider policy and inherited agent defaults;
+plugins must not reload config or credentials to reconstruct it. This fact does
+not grant credential access or change which runtimes can execute a route.
+
+A `ProviderModelRouteResolution` with `kind: "routes"` can set
+`preferredAuthRequirement`. Core applies that preference only when both
+authentication classes have eligible profiles and selection is automatic.
+Preparation and availability apply the same precedence: required consumer or
+provider profile bindings select the account; configured provider authentication
+constrains automatic selection to that billing route; explicit auth order ranks
+the remaining eligible profiles. Inherited `routeIntent` and
+`preferredAuthRequirement` only break ties after those choices. An environment
+credential supplies fallback material without clearing configured authentication;
+its mode is inferred only when no mode is configured. A preference does not create
+a credential or make an unavailable or cooldown-blocked profile eligible.
+Single-class selection keeps its existing behavior.
+
+Candidate order remains separate from credential precedence, and
+`runtimePolicy.compatibleIds` continues to describe execution compatibility.
+For example, OpenAI keeps both routes available for supported models using a
+legacy official Completions adapter, prefers subscription authentication when
+both kinds are eligible, and honors explicit API route intent. These are
+additive fields on the existing contract; they add no hook or user setting.
+
 ## Hook examples
 
 <Tabs>

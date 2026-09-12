@@ -279,27 +279,40 @@ describe("plugin metadata snapshot", () => {
     },
   );
 
-  it("promotes one scoped lifecycle graph and reuses it across runtime resolutions", () => {
+  it.each([
+    { scope: "full", pluginIds: undefined },
+    { scope: "narrowed", pluginIds: ["demo"] },
+    { scope: "empty", pluginIds: [] },
+  ])("completes a $scope planning view and retains its lifecycle graph", ({ pluginIds }) => {
     const config = {};
     const workspaceDir = "/workspace";
     const index = makeIndex();
+    index.plugins = [...index.plugins, ...makeIndex("other").plugins];
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const manifestRegistry = makeManifestRegistry();
+    manifestRegistry.plugins.push(...makeManifestRegistry("other").plugins);
     mockRegistrySnapshot(index);
-    const scoped = loadPluginMetadataSnapshot({
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index, workspaceDir });
+    const planning = loadPluginMetadataSnapshot({
       config,
       env: {},
       index,
-      pluginIds: ["demo"],
+      pluginIds,
       workspaceDir,
     });
 
     const complete = completePluginMetadataSnapshot({
-      snapshot: scoped,
+      snapshot: planning,
       config,
       env: {},
       workspaceDir,
     });
     expect(complete?.pluginIds).toBeUndefined();
+    expect(complete?.plugins.map((plugin) => plugin.id)).toEqual(["demo", "other"]);
+    expect(complete?.owners).toBe(unscoped.owners);
+    expect(complete?.normalizePluginId).toBe(unscoped.normalizePluginId);
+    expect(complete?.bundledManifestRegistry).toBeDefined();
     setCurrentPluginMetadataSnapshot(complete, { config, env: {}, workspaceDir });
     loadPluginRegistrySnapshotWithMetadata.mockClear();
     loadPluginManifestRegistryForInstalledIndex.mockClear();
@@ -397,6 +410,38 @@ describe("plugin metadata snapshot", () => {
     expect(() => sharedSet.delete(injectedSetValue)).toThrow(
       "Plugin metadata snapshots are immutable",
     );
+  });
+
+  it("refreezes retained collections across module instances", async () => {
+    const sharedMap = new Map([["initial", { nested: { value: "initial" } }]]);
+    const sharedSet = new Set([{ nested: { value: "initial" } }]);
+    const first = restorePluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "retained",
+            configSchema: { type: "object", properties: { sharedMap, sharedSet } },
+          },
+        ],
+      }),
+    );
+    const mapValue = { nested: { value: "injected-map" } };
+    const setValue = { nested: { value: "injected-set" } };
+    Map.prototype.set.call(sharedMap, "injected", mapValue);
+    Set.prototype.add.call(sharedSet, setValue);
+
+    vi.resetModules();
+    const reloaded = await import("./plugin-metadata-snapshot.js");
+    expect(reloaded.restorePluginMetadataSnapshot).not.toBe(restorePluginMetadataSnapshot);
+    expect(reloaded.finalizePluginMetadataSnapshot(first)).toBe(first);
+    expect(Object.isFrozen(mapValue.nested)).toBe(true);
+    expect(Object.isFrozen(setValue.nested)).toBe(true);
+    expect(() => sharedMap.clear()).toThrow("Plugin metadata snapshots are immutable");
+    expect(() => sharedMap.set("blocked", mapValue)).toThrow(
+      "Plugin metadata snapshots are immutable",
+    );
+    expect(() => sharedSet.add(setValue)).toThrow("Plugin metadata snapshots are immutable");
+    expect(() => sharedSet.delete(setValue)).toThrow("Plugin metadata snapshots are immutable");
   });
 
   it("rewalks enumerable accessor graphs when their closure-backed values change", () => {

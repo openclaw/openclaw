@@ -16,6 +16,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import {
   loadAgentRunnerRuntime,
@@ -65,7 +66,7 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
 }));
 
 // Harness selection and built-in execution are owned by their focused suites. These tests keep
-// the real visible-reply policy resolver while supplying its default OpenClaw harness leaf.
+// the real visible-reply policy resolver while supplying its default delivery metadata.
 const preparedReplyMockState = vi.hoisted(() => ({
   unexpectedCalls: [] as string[],
 }));
@@ -120,7 +121,7 @@ vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
   resolveSubagentCapabilityStore: vi.fn().mockReturnValue(undefined),
 }));
 
-const selectAgentHarnessMock = vi.hoisted(() =>
+const resolveAgentHarnessDeliveryDefaultsMock = vi.hoisted(() =>
   vi.fn(
     (params: {
       provider: string;
@@ -136,14 +137,14 @@ const selectAgentHarnessMock = vi.hoisted(() =>
         params.agentHarnessId ||
         params.agentHarnessRuntimeOverride
       ) {
-        preparedReplyMockState.unexpectedCalls.push("selectAgentHarness");
+        preparedReplyMockState.unexpectedCalls.push("resolveAgentHarnessDeliveryDefaults");
       }
-      return { id: "openclaw", deliveryDefaults: {} };
+      return {};
     },
   ),
 );
-vi.mock("../../agents/harness/selection.js", () => ({
-  selectAgentHarness: selectAgentHarnessMock,
+vi.mock("../../agents/harness/selection-decision.js", () => ({
+  resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
 }));
 
 vi.mock("../../agents/model-selection.js", () => ({
@@ -2435,6 +2436,72 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(getActiveReplyRunCount()).toBe(activeBefore);
   });
+
+  it.each([false, true])(
+    "validates the configured heartbeat profile before dispatch (fast: %s)",
+    async (fast) => {
+      const { resolveSessionAuthSelection } =
+        await import("../../agents/auth-profiles/session-override.js");
+      vi.mocked(shouldUseReplyFastTestRuntime).mockReturnValueOnce(fast);
+      const sessionEntry: SessionEntry = {
+        sessionId: "heartbeat-profile-session",
+        updatedAt: 1,
+        authProfileOverride: "openai:subscription",
+        authProfileOverrideSource: "auto",
+      };
+      vi.mocked(resolveSessionAuthSelection).mockImplementationOnce(
+        async ({ configuredProfileId, sessionEntry: selectedSession }) => {
+          if (!configuredProfileId) {
+            return undefined;
+          }
+          if (selectedSession) {
+            selectedSession.authProfileOverride = configuredProfileId;
+          }
+          return { profileId: configuredProfileId, source: "user", routeRequirement: "api-key" };
+        },
+      );
+      const params = {
+        ...baseParams({
+          provider: "openai",
+          model: "gpt-5.5",
+          opts: { isHeartbeat: true },
+          sessionEntry,
+          sessionStore: { "session-key": sessionEntry },
+        }),
+        configuredProfileId: "openai:metered",
+      };
+      await runPreparedReply(params);
+      expect(resolveSessionAuthSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          configuredProfileId: "openai:metered",
+        }),
+      );
+      expect(requireRunReplyAgentCall().followupRun.run).toMatchObject({
+        authProfileId: "openai:metered",
+        authProfileIdSource: "user",
+      });
+      expect(sessionEntry.authProfileOverride).toBe("openai:subscription");
+    },
+  );
+
+  it("does not bypass heartbeat profile rejection on the fast reply path", async () => {
+    const { resolveSessionAuthSelection } =
+      await import("../../agents/auth-profiles/session-override.js");
+    vi.mocked(shouldUseReplyFastTestRuntime).mockReturnValueOnce(true);
+    vi.mocked(resolveSessionAuthSelection).mockRejectedValueOnce(
+      new Error("Auth profile is not configured for openai."),
+    );
+    const params = {
+      ...baseParams({ provider: "openai", model: "gpt-5.5", opts: { isHeartbeat: true } }),
+      configuredProfileId: "anthropic:other",
+    };
+    await expect(runPreparedReply(params)).rejects.toThrow(
+      "Auth profile is not configured for openai.",
+    );
+    expect(runReplyAgent).not.toHaveBeenCalled();
+  });
   it("waits for the previous active run to clear before registering a new reply operation", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
@@ -3144,6 +3211,9 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthSelection)).toHaveBeenCalledTimes(1);
+    expect(resolveSessionAuthSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "default" }),
+    );
   });
 
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
@@ -4282,7 +4352,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("resolves origin-less sessions as internal for synthetic stable facts", async () => {
     vi.mocked(buildDirectChatContext).mockReturnValue("direct-context");
-    selectAgentHarnessMock.mockClear();
+    resolveAgentHarnessDeliveryDefaultsMock.mockClear();
     // An entry with no persisted delivery origin has only ever been driven
     // internally; its wake source must not leak into the
     // stable context as a non-internal surface or the fact diverges from
@@ -4315,7 +4385,7 @@ describe("runPreparedReply media-only handling", () => {
     const run = requireRunReplyAgentCall(0).followupRun.run;
     expect(run.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
     expect(
-      selectAgentHarnessMock.mock.calls.map(([params]) => ({
+      resolveAgentHarnessDeliveryDefaultsMock.mock.calls.map(([params]) => ({
         provider: params.provider,
         modelId: params.modelId,
       })),

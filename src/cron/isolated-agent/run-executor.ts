@@ -5,8 +5,13 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { resolveGroupToolPolicyOutcome } from "../../agents/agent-tools.policy.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../../agents/cli-execution-auth.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
@@ -333,6 +338,19 @@ function createCronPromptExecutor(
   const { sourceDelivery } = params;
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
+  if (scheduledToolPolicy?.mode === "account") {
+    const policyOutcome = resolveGroupToolPolicyOutcome({
+      config: params.cfgWithAgentDefaults,
+      sessionKey: scheduledToolPolicy.ownerSessionKey,
+      messageProvider: messageChannel,
+      accountId: scheduledToolPolicy.ownerAccountId,
+      requireConfiguredAccount: true,
+      senderPolicyMode: "never",
+    });
+    if (policyOutcome.kind === "account-unavailable") {
+      throw new Error(policyOutcome.message);
+    }
+  }
   // Cron prompts may intentionally have nothing to report; both runners must agree on silence.
   const allowEmptyAssistantReplyAsSilent = true;
   const finalizePromptForResolvedTools = ({
@@ -629,6 +647,26 @@ function createCronPromptExecutor(
           sessionEntry: params.cronSession.sessionEntry,
         });
         if (cliExecution) {
+          const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
+            provider: executionProvider,
+            config: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
+          });
+          const authProfileId = allowCliAuthProfileForwarding
+            ? resolveCliExecutionAuthProfileId({
+                cliExecutionProvider: executionProvider,
+                authProfileProvider: providerOverride,
+                config: params.cfgWithAgentDefaults,
+                agentDir: params.agentDir,
+                selected: params.liveSelection.authProfileId
+                  ? {
+                      authProfileId: params.liveSelection.authProfileId,
+                      authProfileIdSource:
+                        params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
+                    }
+                  : undefined,
+              })
+            : undefined;
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
@@ -674,6 +712,7 @@ function createCronPromptExecutor(
                 ),
                 provider: executionProvider,
                 model: modelOverride,
+                authProfileId,
                 thinkLevel: candidateThinkLevel,
                 timeoutMs: params.timeoutMs,
                 runId,
@@ -788,6 +827,7 @@ function createCronPromptExecutor(
           provider: providerOverride,
           model: modelOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
+          requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId

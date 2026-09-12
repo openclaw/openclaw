@@ -63,6 +63,26 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:agent-database-admission",
+      label: "Agent database admission",
+      healthChecks: {
+        description: "Agent databases with mismatched ownership are isolated until repaired.",
+        async detect(ctx) {
+          const { evaluateAgentDatabaseAdmissions } =
+            await import("../state/agent-database-admission.js");
+          const refusals = await evaluateAgentDatabaseAdmissions(ctx.cfg, { env: ctx.env });
+          return refusals.map((refusal) => ({
+            checkId: "core/doctor/agent-database-admission",
+            severity: "warning" as const,
+            target: refusal.agentId,
+            requirement: refusal.code,
+            message: `Agent ${refusal.agentId} is degraded. ${refusal.reason}`,
+            fixHint: refusal.repairHint,
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:node-runtime",
       label: "Node runtime",
       healthCheckIds: ["core/doctor/node-runtime"],

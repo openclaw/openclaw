@@ -430,6 +430,27 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw connect --service --session-host"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw node restart"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw update"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",

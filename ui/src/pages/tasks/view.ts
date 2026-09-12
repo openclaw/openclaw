@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import "../../styles/tasks.css";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -99,11 +100,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             })}</span
           >
           <span>${taskRuntimeLabel(task)}</span>
-          ${
-            task.agentId
-              ? html`<span>${t("tasksPage.agent", { agent: task.agentId })}</span>`
-              : nothing
-          }
+          ${task.agentId ? renderAgentRowChip(task.agentId) : nothing}
         </div>
         ${detail ? html`<div class="settings-row__desc">${detail}</div>` : nothing}
         ${

@@ -2,6 +2,9 @@ import { html, nothing, type TemplateResult } from "lit";
 import { renderHubTabs, type HubTabOption } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+
+registerPluginManagementEnglish();
 
 export function renderPluginDetailShell<T extends string>(props: {
   id: string;
@@ -15,6 +18,7 @@ export function renderPluginDetailShell<T extends string>(props: {
   sidebar?: TemplateResult;
   tabs: ReadonlyArray<HubTabOption<T>>;
   activeTab: T;
+  requestedTab?: T;
   onTabChange: (tab: T) => void;
   panel: TemplateResult;
 }): TemplateResult {
@@ -61,6 +65,7 @@ export function renderPluginDetailShell<T extends string>(props: {
     ${renderHubTabs({
       id: props.id,
       active: props.activeTab,
+      requestedActive: props.requestedTab,
       tabs: props.tabs,
       ariaLabel: t("pluginsPage.detailSections"),
       panelId,

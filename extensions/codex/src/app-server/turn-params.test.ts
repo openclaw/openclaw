@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("buildTurnStartParams model thinking defaults", () => {
   it.each([
-    { thinking: undefined, thinkingDefault: undefined, expected: "low" },
+    { thinking: undefined, thinkingDefault: undefined, expected: "medium" },
     { thinking: undefined, thinkingDefault: "high" as const, expected: "high" },
     { thinking: "medium", thinkingDefault: "high" as const, expected: "medium" },
   ])("sends $expected for Astra with configured effort $thinking/$thinkingDefault", (testCase) => {

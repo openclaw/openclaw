@@ -40,6 +40,7 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
 
 vi.mock("../commands/doctor-auth.js", () => ({
   noteAuthProfileHealth: vi.fn(async () => undefined),
+  noteCopilotAmbientToken: vi.fn(),
   noteLegacyCodexProviderOverride: vi.fn(() => undefined),
   noteSharedAuthStoreStatus: vi.fn(() => undefined),
 }));

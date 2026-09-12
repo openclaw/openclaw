@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.9.3",
+  "version": "2026.9.4",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",
@@ -113,12 +113,12 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.120.0",
-    "@google/genai": "2.19.0",
+    "@anthropic-ai/sdk": "0.123.0",
+    "@google/genai": "2.21.0",
     "@mistralai/mistralai": "2.6.4",
-    "openai": "7.8.0",
+    "openai": "7.10.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.18"
+    "typebox": "1.3.26"
   },
   "devDependencies": {
     "@openclaw/model-catalog-core": "workspace:*",

@@ -39,9 +39,10 @@ trap 'rm -rf "$npm_pack_dir" "$npm_registry_dir"' EXIT
 future_package="$npm_pack_dir/openclaw-future.tgz"
 node scripts/e2e/lib/update-first-hop-package-fixtures.mjs   future-tarball "$candidate_package" "$future_package"   >/tmp/openclaw-corrupt-plugin-update-method.json
 cat /tmp/openclaw-corrupt-plugin-update-method.json
+future_version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).targetVersion' /tmp/openclaw-corrupt-plugin-update-method.json)"
 pack_fixture_plugin "$npm_pack_dir" /tmp/demo-corrupt-plugin.tgz demo-corrupt-plugin 0.0.1 demo.corrupt "Demo Corrupt Plugin"
 (
-  # Restore the candidate registry to prove unavailable-target refusal first.
+  # Keep the fixture registry scoped to installation so the first update cannot recover the plugin.
   # The parent retains the pack directory needed for post-core result evidence.
   trap - EXIT
   start_npm_fixture_registry "@openclaw/demo-corrupt-plugin" "0.0.1" /tmp/demo-corrupt-plugin.tgz "$npm_registry_dir"
@@ -77,15 +78,29 @@ if [ -f "$plugin_dir/package.json" ]; then
 fi
 
 capture_corrupt_state() {
-  node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$plugin_dir" <<'NODE'
+  node --input-type=module - "$OPENCLAW_CONFIG_PATH" <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
 import { readPluginInstallRecords } from "./scripts/e2e/lib/plugin-index-sqlite.mjs";
-const [configPath, pluginDir] = process.argv.slice(2);
+const [configPath] = process.argv.slice(2);
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const record = readPluginInstallRecords()["demo-corrupt-plugin"];
+if (!record?.installPath) {
+  throw new Error("missing installed path for the corrupt-plugin fixture");
+}
+const pluginDir = record.installPath;
+const model = config.agents?.defaults?.model;
+const packageJsonPath = path.join(pluginDir, "package.json");
 process.stdout.write(JSON.stringify({
-  config: fs.readFileSync(configPath, "utf8"),
-  records: readPluginInstallRecords(),
-  packageJsonExists: fs.existsSync(path.join(pluginDir, "package.json")),
+  choices: {
+    enabled: config.plugins?.entries?.["demo-corrupt-plugin"]?.enabled !== false,
+    codexEnabled: config.plugins?.entries?.codex?.enabled,
+    model: typeof model === "string" ? model : model?.primary,
+  },
+  record,
+  packageJson: fs.existsSync(packageJsonPath)
+    ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
+    : null,
   entry: fs.readFileSync(path.join(pluginDir, "index.js"), "utf8"),
   manifest: fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf8"),
 }));
@@ -105,22 +120,31 @@ run_corrupt_update() {
     >"$output_prefix.json" 2>"$output_prefix.err"
 }
 
-echo "Checking unavailable corrupt-plugin target preserves the installation..."
-state_before_refusal="$(capture_corrupt_state)"
+echo "Updating core while the corrupt plugin target is unavailable..."
+state_before_update="$(capture_corrupt_state)"
 if run_corrupt_update /tmp/openclaw-corrupt-plugin-unavailable; then
-  echo "Expected the unavailable plugin target to refuse the core update." >&2
-  exit 1
+  update_status=0
+else
+  update_status=$?
+fi
+if [ "$update_status" -ne 0 ]; then
+  echo "Unavailable plugin target blocked the core update." >&2
+  openclaw_e2e_print_log /tmp/openclaw-corrupt-plugin-unavailable.err >&2
+  openclaw_e2e_print_log /tmp/openclaw-corrupt-plugin-unavailable.json >&2
+  exit "$update_status"
 fi
 node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-unavailable /tmp/openclaw-corrupt-plugin-unavailable.json demo-corrupt-plugin
-if [ "$(capture_corrupt_state)" != "$state_before_refusal" ]; then
-  echo "Unavailable plugin admission changed config, install records, or corrupt payload." >&2
+if [ "$(capture_corrupt_state)" != "$state_before_update" ]; then
+  echo "Unavailable plugin update changed its install record, retained payload, or user choices." >&2
   exit 1
 fi
-source_version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceVersion' /tmp/openclaw-corrupt-plugin-update-method.json)"
-node scripts/e2e/lib/release-scenarios/assertions.mjs assert-package-version "$package_root" "$source_version" unavailable-plugin-refusal
+node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-package-version "$package_root" "$future_version" unavailable-plugin-tolerance
 
-# The recovery case has a real registry package to reinstall; admission must not be bypassed.
+# Reinstall the same explicit core artifact after the plugin registry becomes available.
+# The plugin must recover even though the installed core version is already current.
 mkdir "$npm_registry_dir/recovery"
+export OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org/
 start_npm_fixture_registry "@openclaw/demo-corrupt-plugin" "0.0.1" /tmp/demo-corrupt-plugin.tgz "$npm_registry_dir/recovery"
 echo "Updating OpenClaw with a recoverable corrupt plugin present..."
 if run_corrupt_update /tmp/openclaw-update-corrupt-plugin; then
@@ -134,8 +158,23 @@ if [ "$update_status" -ne 0 ]; then
   openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.json >&2
   exit "$update_status"
 fi
-future_version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).targetVersion' /tmp/openclaw-corrupt-plugin-update-method.json)"
-node scripts/e2e/lib/release-scenarios/assertions.mjs   assert-package-version "$package_root" "$future_version" same-schema-update
+node scripts/e2e/lib/release-scenarios/assertions.mjs   assert-package-version "$package_root" "$future_version" same-version-plugin-repair
+
+node --input-type=module - "$state_before_update" "$(capture_corrupt_state)" <<'NODE'
+import assert from "node:assert/strict";
+const [before, after] = process.argv.slice(2).map((value) => JSON.parse(value));
+assert.deepEqual(after.choices, before.choices, "plugin repair changed user choices");
+assert.equal(after.record?.source, before.record.source, "plugin repair changed the recorded source");
+assert.equal(after.record?.spec, before.record.spec, "plugin repair changed the recorded selector");
+assert.equal(
+  after.packageJson?.name,
+  "@openclaw/demo-corrupt-plugin",
+  "plugin package.json was not restored",
+);
+assert.equal(after.packageJson?.version, "0.0.1", "plugin repair installed an unexpected version");
+assert.equal(after.entry, before.entry, "plugin repair changed the expected entry payload");
+assert.equal(after.manifest, before.manifest, "plugin repair changed the expected manifest payload");
+NODE
 
 if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/openclaw-update-corrupt-plugin.json demo-corrupt-plugin; then
   echo "corrupt update JSON payload:" >&2

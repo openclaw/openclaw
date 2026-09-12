@@ -1,3 +1,4 @@
+import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 // Typed Control UI wrapper over the `browser.request` gateway method.
 //
 // The gateway method speaks an HTTP-shaped envelope ({method, path, body})
@@ -10,8 +11,11 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
 import type { BrowserRoute } from "./browser-target.ts";
+
+registerBrowserEnglish();
 
 export type BrowserRequestClient = Pick<GatewayBrowserClient, "request">;
 
@@ -30,6 +34,8 @@ export type BrowserPanelTab = {
   targetId: string;
   title: string;
   url: string;
+  /** Page-declared icon supplied by the native Mac tab. */
+  favicon?: string;
   urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
 };
 
@@ -78,22 +84,26 @@ export function bindBrowserRequestClient(
   current: () => boolean = () => true,
 ): BrowserRequestClient {
   return {
-    async request<T>(method: string, params?: unknown): Promise<T> {
+    async request<T>(
+      method: string,
+      params?: unknown,
+      options?: GatewayClientRequestOptions,
+    ): Promise<T> {
       if (!current()) {
         throw new DOMException("Browser request scope ended", "AbortError");
       }
       const envelope = asRecord(params);
-      return await client.request<T>(
-        method,
-        route
-          ? {
-              ...envelope,
-              target: route.target,
-              ...(route.target === "node" ? { node: route.node } : {}),
-              query: { ...asRecord(envelope?.query), profile: route.profile },
-            }
-          : params,
-      );
+      const routedParams = route
+        ? {
+            ...envelope,
+            target: route.target,
+            ...(route.target === "node" ? { node: route.node } : {}),
+            query: { ...asRecord(envelope?.query), profile: route.profile },
+          }
+        : params;
+      return options
+        ? await client.request<T>(method, routedParams, options)
+        : await client.request<T>(method, routedParams);
     },
   };
 }
@@ -156,6 +166,34 @@ export async function closeBrowserTab(client: BrowserRequestClient, targetId: st
     method: "DELETE",
     path: `/tabs/${encodeURIComponent(targetId)}`,
   });
+}
+
+/** The owning Browser saves its current document; only managed bytes reach the dashboard. */
+export async function downloadBrowserDocument(
+  client: BrowserRequestClient,
+  targetId: string,
+  expectedUrl: string,
+  signal: AbortSignal,
+): Promise<{ path: string; filename: string }> {
+  const result = asRecord(
+    await client.request(
+      BROWSER_REQUEST_METHOD,
+      {
+        method: "POST",
+        path: "/download",
+        body: { targetId, currentDocument: true, expectedUrl, timeoutMs: 120_000 },
+        timeoutMs: 150_000,
+      },
+      { signal, timeoutMs: 150_000 },
+    ),
+  );
+  const download = asRecord(result?.download);
+  const path = stringOrEmpty(download?.path);
+  const filename = stringOrEmpty(download?.suggestedFilename);
+  if (!path || !filename) {
+    throw new Error(t("browser.errors.downloadEmpty"));
+  }
+  return { path, filename };
 }
 
 export async function navigateBrowser(

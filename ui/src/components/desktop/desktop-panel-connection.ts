@@ -1,5 +1,5 @@
 import type { DesktopObserveResult, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
-import type { DesktopConnectionHandle } from "./desktop-client.ts";
+import type { DesktopConnectionHandle, DesktopSizingMode } from "./desktop-client.ts";
 
 export type DesktopAppId = WorkerDesktopAppId;
 export type DesktopCredentials = { username?: string; password?: string };
@@ -43,6 +43,12 @@ export class DesktopConnectionHandoff {
 
   attach(handle: DesktopConnectionHandle): void {
     this.current = handle;
+  }
+
+  setSizingMode(mode: DesktopSizingMode): void {
+    // Preparation hides the input handle, but sizing still belongs to the
+    // current viewer. Never update the retained, retired controller.
+    this.current?.setSizingMode(mode);
   }
 
   markConnected(): void {

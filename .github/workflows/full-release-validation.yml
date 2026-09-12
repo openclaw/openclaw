@@ -272,11 +272,17 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
+
+      - name: Setup admission Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Resolve trusted workflow identity
         id: tooling_identity
@@ -330,6 +336,8 @@ jobs:
           {
             printf 'live_suite_filter=%s\n' "$RELEASE_FILTER_LIVE_SUITE_FILTER"
             printf 'cross_os_suite_filter=%s\n' "$RELEASE_FILTER_CROSS_OS_SUITE_FILTER"
+            printf 'repo_live_suite_filter=%s\n' "$RELEASE_FILTER_REPO_LIVE_SUITE_FILTER"
+            printf 'qa_filter_seen=%s\n' "$RELEASE_FILTER_QA_FILTER_SEEN"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build canonical release candidate request
@@ -526,6 +534,90 @@ jobs:
           const scope = policy === 'npm-beta-v1' ? 'npm-beta' : policy === 'npm-stable-v1' ? 'npm-stable' : 'full';
           appendFileSync(env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\ncoverage_policy=${policy ?? ''}\nci_release_scope=${scope}\nskip_package_telegram_e2e=${beta ? 'true' : env.SKIP_PACKAGE_TELEGRAM_E2E}\n`);
           NODE
+
+      - name: Plan frozen source admission
+        id: frozen_selection
+        env:
+          ADMISSION_WORKFLOW: parent
+          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/target
+          ADMISSION_SELECTED_SHA: ${{ steps.resolve.outputs.sha }}
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/workflow
+          ADMISSION_TOOLING_SHA: ${{ github.sha }}
+          ADMISSION_WORKFLOW_REF: ${{ github.workflow_ref }}
+          ADMISSION_REPO_LIVE_SUITE_FILTER: ${{ steps.filters.outputs.repo_live_suite_filter }}
+          ADMISSION_QA_FILTER_SEEN: ${{ steps.filters.outputs.qa_filter_seen }}
+          ADMISSION_COVERAGE_POLICY: ${{ steps.release_inputs.outputs.coverage_policy }}
+          ADMISSION_CANDIDATE_REQUEST_DIGEST: ${{ steps.candidate_request.outputs.request_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --workflow-request > "$RUNNER_TEMP/frozen-admission-request.json"
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
+          printf 'parser_required=%s\n' "$(jq -er '.parserRequired | tostring' "$RUNNER_TEMP/frozen-admission-selection.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Setup trusted admission package manager
+        if: steps.frozen_selection.outputs.parser_required == 'true'
+        uses: ./workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: workflow/package.json
+          lockfile-path: workflow/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: off
+
+      - name: Provision trusted admission parser
+        if: steps.frozen_selection.outputs.parser_required == 'true'
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Acquire selected contract objects
+        env:
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/target
+          ADMISSION_SELECTED_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(jq -r '.sourceHistory' "$RUNNER_TEMP/frozen-admission-selection.json")" == true ]]; then
+            if [[ "$(git -C "$ADMISSION_SELECTED_ROOT" rev-parse --is-shallow-repository)" == true ]]; then
+              git -C "$ADMISSION_SELECTED_ROOT" fetch --unshallow --filter=blob:none --no-tags origin "$ADMISSION_SELECTED_SHA"
+            fi
+            git -C "$ADMISSION_SELECTED_ROOT" fetch --filter=blob:none --no-tags origin '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
+          fi
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const paths = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/frozen-admission-selection.json`, 'utf8')).sourcePaths;
+          const git = (...args) => execFileSync('git', ['-C', process.env.ADMISSION_SELECTED_ROOT, ...args], { timeout: 120000, maxBuffer: 64 * 1024 * 1024 });
+          if (!paths.length) process.exit(0);
+          const objects = git('ls-tree', '-r', '--format=%(objectname)', process.env.ADMISSION_SELECTED_SHA, '--', ...paths).toString().trim().split('\n').filter(Boolean);
+          if (objects.length > 4096) throw new Error('selected contract closure exceeds limit');
+          let bytes = 0;
+          for (const oid of new Set(objects)) {
+            const size = Number(git('cat-file', '-s', oid).toString());
+            if (size > 16 * 1024 * 1024 || (bytes += size) > 64 * 1024 * 1024) throw new Error('selected contract bytes exceed limit');
+            git('cat-file', 'blob', oid);
+          }
+          NODE
+
+      - name: Admit frozen source contracts
+        id: frozen_admission
+        env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/workflow
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" LANG=C.UTF-8 \
+            node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
+            "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission.json"
+          printf 'digest=%s\n' "$(jq -er '.digest' "$RUNNER_TEMP/frozen-admission.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload frozen admission diagnostic
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: frozen-source-admission-parent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/frozen-admission.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Summarize target
         env:
@@ -736,6 +828,7 @@ jobs:
               provider: $provider,
               mode: $mode,
               targetContextRef: $targetContextRef,
+              targetVersion: $targetVersion,
               liveSuiteFilter: $liveSuiteFilter,
               crossOsSuiteFilter: $crossOsSuiteFilter,
               releasePackageSpec: $releasePackageSpec,
@@ -747,7 +840,7 @@ jobs:
               skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
               pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-            } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy, targetVersion: $targetVersion} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)')"
+            } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end)')"
           trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
           trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
           trusted_workflow_full_ref="$(jq -er '.fullRef | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
@@ -2203,6 +2296,7 @@ jobs:
                     provider: $provider,
                     mode: $mode,
                     targetContextRef: $targetContextRef,
+                    targetVersion: $targetVersion,
                     liveSuiteFilter: $liveSuiteFilter,
                     crossOsSuiteFilter: $crossOsSuiteFilter,
                     releasePackageSpec: $releasePackageSpec,
@@ -2214,7 +2308,7 @@ jobs:
                     skipPackageTelegramE2e: $skipPackageTelegramE2e,
                     allowUnreleasedChangelog: $allowUnreleasedChangelog,
                     pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-                  } + (if $plan.coveragePolicy then {coveragePolicy: $plan.coveragePolicy, targetVersion: $plan.targetVersion} else {} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)),
+                  } + (if $plan.coveragePolicy then {coveragePolicy: $plan.coveragePolicy} else {} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end)),
                   controls: {
                     stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
                     performanceBlocking: ($releaseProfile != "beta"),

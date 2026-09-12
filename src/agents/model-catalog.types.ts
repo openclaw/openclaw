@@ -59,6 +59,8 @@ export type ModelCatalogSnapshot = {
   providerOutcomes?: readonly ProviderCatalogOutcome[];
   /** The current acquisition failed while this published inventory remained available. */
   refreshFailed?: boolean;
+  /** Provider discovery is in progress; existing rows remain usable. */
+  pendingProviders?: readonly string[];
   /** Static provider-hook rows captured alongside the full lifecycle generation. */
   staticEntries?: ModelCatalogEntry[];
   /**

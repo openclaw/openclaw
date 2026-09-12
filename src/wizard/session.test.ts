@@ -2,7 +2,7 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { DEVICE_CODE_PHISHING_WARNING } from "./prompts.js";
+import { DEVICE_CODE_PHISHING_WARNING, type WizardPrompter } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 function noteRunner() {
@@ -174,6 +174,73 @@ describe("WizardSession", () => {
     await session.answer(first.step.id, "http://localhost/callback?code=done");
     expect((await session.next()).status).toBe("done");
   });
+
+  test.each(["done", "cancelled"] as const)(
+    "keeps a browser waiting link through progress until %s without an answer",
+    async (status) => {
+      const callback = createDeferredCore();
+      const ready = createDeferredCore<WizardPrompter>();
+      const destination = "https://provider.example/oauth?state=state-1";
+      const session = new WizardSession(async (prompter) => {
+        await prompter.openUrl?.(destination);
+        ready.resolve(prompter);
+        await callback.promise;
+      });
+      const next = session.next();
+      const delivered = vi.fn();
+      void next.then(delivered);
+
+      try {
+        await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
+        const first = await next;
+        expect(first).toMatchObject({
+          done: false,
+          status: "running",
+          step: {
+            type: "progress",
+            executor: "gateway",
+            externalUrl: destination,
+          },
+        });
+        if (!first.step) {
+          throw new Error("expected browser sign-in progress");
+        }
+        expect(wizardStepAwaitsInput(first.step)).toBe(false);
+
+        const prompter = await ready.promise;
+        const progress = prompter.progress("Waiting for approval");
+        const approval = await session.next();
+        expect(approval.step).toMatchObject({
+          type: "progress",
+          executor: "gateway",
+          message: "Waiting for approval",
+          externalUrl: destination,
+        });
+        for (const message of ["Approval received", "Finishing sign-in"]) {
+          progress.update(message);
+          const update = await session.next();
+          expect(update.step).toMatchObject({
+            type: "progress",
+            executor: "gateway",
+            message,
+            externalUrl: destination,
+          });
+        }
+
+        if (status === "cancelled") {
+          session.cancel();
+        }
+        callback.resolve();
+        await session.whenSettled();
+        expect(await session.next()).toMatchObject({ done: true, status });
+      } finally {
+        session.cancel();
+        callback.resolve();
+        await session.whenSettled();
+        await next;
+      }
+    },
+  );
 
   test("carries device-code presentation without parsing provider prose", async () => {
     const session = new WizardSession(async (prompter) => {

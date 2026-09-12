@@ -60,65 +60,6 @@ suite.define(() => {
     page = undefined;
   });
 
-  it("retires failed history released after clicking Send", async () => {
-    const context = await suite.newBrowserContext({});
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const sessionKey = "agent:main:main";
-    const diagnostic = "⚠️ ✉️ Message failed: delivery unavailable near 🧭";
-    const renderedDiagnostic = "Message failed: delivery unavailable near 🧭";
-    const gateway = await installMockGateway(currentPage, {
-      sessionKey,
-      // Account recovery can replace startup with a scoped history request.
-      heldMethods: ["chat.startup", "chat.history", "chat.send"],
-      sessions: [
-        {
-          key: sessionKey,
-          status: "failed",
-          hasActiveRun: false,
-          lastRunId: "failed-run",
-          lastRunError: diagnostic,
-        },
-      ],
-    });
-    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-    const startup = await gateway.waitForRequest("chat.startup");
-    expect(startup.params).toMatchObject({ sessionKey });
-    await currentPage.locator(".agent-chat__input textarea").fill("Try again");
-    await currentPage.getByRole("button", { name: "Send message" }).click();
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-    // Fault injection controls only WebSocket delivery, never application state.
-    await gateway.resolveDeferred("chat.startup");
-    await expect
-      .poll(async () =>
-        (await gateway.getRequests()).some(
-          ({ method }) => method === "chat.history" || method === "chat.send",
-        ),
-      )
-      .toBe(true);
-    if ((await gateway.getRequests("chat.history")).length > 0) {
-      await gateway.resolveDeferred("chat.history");
-    }
-    const send = await gateway.waitForRequest("chat.send");
-    const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
-    expect(runId).toEqual(expect.any(String));
-    const alert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
-    await alert.waitFor();
-    await alert.locator(".chat-error__content > strong").getByText(renderedDiagnostic).waitFor();
-    expect(await alert.locator("details").count()).toBe(0);
-    await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    await gateway.emitChatFinal({ sessionKey, runId, text: "Recovery completed." });
-    await currentPage
-      .locator(".chat-group.assistant")
-      .getByText("Recovery completed.", { exact: true })
-      .waitFor();
-    await expect.poll(() => alert.count()).toBe(0);
-    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-  });
-
   it("excludes a reply-less failed turn's idle time from the next successful turn", async () => {
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
@@ -225,16 +166,19 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
-    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
+    const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
+    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
     await elapsedLabel.waitFor();
-    expect.soft(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await operationLabel.textContent()).toBe("Ran a command");
+    expect.soft(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
     await currentPage.reload();
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
     await elapsedLabel.waitFor();
-    expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await operationLabel.textContent()).toBe("Ran a command");
+    expect(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
   });
 

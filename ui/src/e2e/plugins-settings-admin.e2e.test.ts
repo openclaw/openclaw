@@ -272,7 +272,7 @@ function pluginResponses() {
       ok: true,
       pluginId: workboard.id,
       removed: ["config entry", "install record"],
-      restartRequired: true,
+      restartRequired: false,
     },
   };
 }
@@ -581,15 +581,20 @@ suite.define(() => {
         await openWorkboard(page, suite.server.baseUrl);
 
         const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
+        const connections = (await gateway.getRequests("connect")).length;
         await toggle.click();
         await gateway.waitForRequest("plugins.setEnabled");
-        await page.getByRole("status").filter({ hasText: "Disabled Workboard." }).waitFor();
-        expect(
-          await page
-            .locator(".plugins-row-message")
-            .filter({ hasText: "Disabled Workboard." })
-            .count(),
-        ).toBe(1);
+
+        await expect
+          .poll(() =>
+            page
+              .getByRole("status")
+              .filter({ hasText: "Disabled Workboard." })
+              .and(page.locator(".plugins-row-message:visible"))
+              .count(),
+          )
+          .toBe(1);
+        expect(await gateway.getRequests("connect")).toHaveLength(connections);
 
         await page.getByRole("tab", { name: "Configuration", exact: true }).click();
         const workspace = page.getByLabel("Workspace label", { exact: true });
@@ -624,9 +629,64 @@ suite.define(() => {
           .getByRole("status")
           .filter({ hasText: /removed|uninstalled/iu })
           .waitFor();
+        expect(await gateway.getRequests("connect")).toHaveLength(connections);
+        expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
       },
     );
   });
+
+  it.each(["click", "Enter", " "] as const)(
+    "retains a fallback tab selected with %j while reconnect inspection finishes",
+    async (activation) => {
+      await suite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 1000, width: 1440 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            featureMethods: pluginMethods,
+            methodResponses: pluginResponses(),
+            operatorScopes: ["operator.read", "operator.admin"],
+          });
+          await openWorkboard(page, suite.server.baseUrl);
+          const readme = page.getByRole("tab", { name: "README", exact: true });
+          await readme.waitFor();
+          const inspections = (await gateway.getRequests("plugins.inspect")).length;
+          await gateway.deferNext("plugins.inspect");
+          await page
+            .locator("wa-switch")
+            .filter({ hasText: "Enable or disable Workboard" })
+            .click();
+          await gateway.waitForRequest("plugins.inspect", { after: inspections });
+          await readme.waitFor({ state: "detached" });
+
+          const configuration = page.getByRole("tab", { name: "Configuration", exact: true });
+          await configuration.waitFor();
+          expect(await configuration.getAttribute("aria-selected")).toBe("true");
+          if (activation === "click") {
+            await configuration.click();
+          } else {
+            await configuration.press(activation);
+          }
+          await gateway.resolveDeferred("plugins.inspect", inspection);
+          await readme.waitFor();
+          if (captureUiProof && activation === "click") {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "selected-tab-after-inspection.png"),
+            });
+          }
+
+          await expect.poll(() => new URL(page.url()).hash).toBe("#configuration");
+          expect(await configuration.getAttribute("aria-selected")).toBe("true");
+          await page.getByLabel("Workspace label", { exact: true }).waitFor();
+        },
+      );
+    },
+  );
 
   it("keeps global plugin policy in Advanced and exposes read-only details without mutations", async () => {
     await suite.withPage(

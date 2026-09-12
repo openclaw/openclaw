@@ -66,6 +66,7 @@ type PluginsPageViewActions = {
   handlePluginIconError: (pluginId: string) => void;
   updateEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   uninstall: (pluginId: string, rowKey: string) => void;
+  reload: (pluginId: string, rowKey: string) => void;
   patchConfig: (path: Array<string | number>, value: unknown) => void;
   removeConfig: (path: Array<string | number>) => void;
   reloadConfig: () => void;
@@ -99,6 +100,7 @@ export type PluginsPageViewModel = {
   installWizard: PluginInstallWizardState | null;
   mutationBlockedReason: string | null;
   canMutate: boolean;
+  reloadBlockedReason: string | null;
   canEditConfig: boolean;
   discovery: PluginDiscoveryController;
   consentController: PluginsConsentController;
@@ -137,6 +139,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     pageNotice: model.pageNotice,
     iconUrls: model.iconUrls,
     canMutate: model.canMutate,
+    reloadBlockedReason: model.reloadBlockedReason,
     mutationBlockedReason: model.mutationBlockedReason,
     configBusy: configState.configLoading || configState.configSaving,
     configError: configState.lastError,
@@ -148,6 +151,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     onIconError: actions.handlePluginIconError,
     onSetEnabled: actions.updateEnabled,
     onUninstall: actions.uninstall,
+    onReload: actions.reload,
     onConfigPatch: actions.patchConfig,
     onConfigRemove: actions.removeConfig,
     onConfigReload: actions.reloadConfig,
@@ -212,13 +216,12 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         error: discovery.error ?? model.error,
                         remoteError: discovery.remoteError,
                         categories: discovery.categories,
-                        categoriesError: discovery.categoriesError,
                         featured: discovery.featured,
                         featuredLoading: discovery.featuredLoading,
-                        featuredError: discovery.featuredError,
                         trending: discovery.trending,
                         trendingLoading: discovery.trendingLoading,
-                        trendingError: discovery.trendingError,
+                        loadingMore: discovery.loadingMore,
+                        loadMoreError: discovery.loadMoreError,
                         intent: discovery.intent,
                         category: discovery.category,
                         query: discovery.query,
@@ -234,15 +237,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                             pathname: pathForPluginCatalogEntry(id, context.basePath),
                           }),
                         onInstall: actions.installCatalogEntry,
+                        onLoadMore: () => void discovery.loadMore(),
                         onRetry: () => void discovery.refresh(),
-                        onRetryGrouped: () => {
-                          void Promise.all([
-                            discovery.refresh(),
-                            discovery.refreshFeatured(),
-                            discovery.refreshTrending(),
-                          ]);
-                        },
-                        onRetryCategories: () => void discovery.refreshCategories(),
                       }),
                       { wide: true, carapace: true },
                     )

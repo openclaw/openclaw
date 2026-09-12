@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,11 +9,12 @@ import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
 
 const DAY_MS = 86_400_000;
+const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
 const resources: Array<{ store: TeamReportsStore; directory: string }> = [];
 
-function openStore() {
+async function openStore() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-store-"));
-  const store = createTeamReportsStore({ stateDir: directory });
+  const store = await createTeamReportsStore({ stateDir: directory, workerModuleUrl });
   resources.push({ directory, store });
   return { store, dbPath: path.join(directory, "plugins", "team-reports", "team-reports.sqlite") };
 }
@@ -55,17 +57,17 @@ const summary: SummaryDocument = {
   warnings: ["Model summary unavailable: completion failed"],
 };
 
-afterEach(() => {
+afterEach(async () => {
   for (const { store, directory } of resources.splice(0)) {
-    store.close();
+    await store.close();
     fs.rmSync(directory, { force: true, recursive: true });
   }
 });
 
 describe("Team Reports storage", () => {
-  it("creates private STRICT tables and reopens durable reports with summary warnings in WAL mode", () => {
-    const { store, dbPath } = openStore();
-    store.upsertPeriod({ report: report(), summary, markdown: "# Daily report" });
+  it("creates private STRICT tables and reopens durable reports with summary warnings in WAL mode", async () => {
+    const { store, dbPath } = await openStore();
+    await store.upsertPeriod({ report: report(), summary, markdown: "# Daily report" });
     const database = openNodeSqliteDatabase(dbPath);
     try {
       const tables = database
@@ -84,60 +86,96 @@ describe("Team Reports storage", () => {
     } finally {
       database.close();
     }
-    store.close();
-    const reopened = createTeamReportsStore({ dbPath });
+    await store.close();
+    const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
     try {
-      expect(reopened.getPeriod("day", "2026-08-20")).toEqual({
+      expect(await reopened.getPeriod("day", "2026-08-20")).toEqual({
         report: report(),
         summary,
         markdown: "# Daily report",
       });
     } finally {
-      reopened.close();
+      await reopened.close();
     }
-    expect(() => store.listPeriods()).toThrow("store is closed");
+    await expect(store.listPeriods()).rejects.toThrow("store is closed");
   });
 
-  it("replaces the document, summary, markdown, and person-day counts as one unit", () => {
-    const { store } = openStore();
-    store.upsertPeriod({ report: report(), summary, markdown: "original" });
-    expect(store.listPersonDays("ALICE")).toMatchObject([
+  it("keeps timers responsive during lock contention and drains admitted writes before closing", async () => {
+    const { store, dbPath } = await openStore();
+    const retained = await createTeamReportsStore({ dbPath, workerModuleUrl });
+    const blocker = openNodeSqliteDatabase(dbPath);
+    let released = false;
+    blocker.exec("BEGIN IMMEDIATE");
+    const release = setTimeout(() => {
+      blocker.exec("ROLLBACK");
+      released = true;
+    }, 20);
+    try {
+      const write = store.upsertPeriod({ report: report(), markdown: "drained before close" });
+      const closing = store.close().then(() => expect(released).toBe(true));
+      await expect(store.listPeriods()).rejects.toThrow("store is closed");
+      await Promise.all([write, closing]);
+      expect(released).toBe(true);
+    } finally {
+      clearTimeout(release);
+      if (!released) {
+        blocker.exec("ROLLBACK");
+      }
+      blocker.close();
+      await retained.close();
+    }
+    const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
+    try {
+      expect((await reopened.getPeriod("day", "2026-08-20"))?.markdown).toBe(
+        "drained before close",
+      );
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  it("replaces the document, summary, markdown, and person-day counts as one unit", async () => {
+    const { store } = await openStore();
+    await store.upsertPeriod({ report: report(), summary, markdown: "original" });
+    expect(await store.listPersonDays("ALICE")).toMatchObject([
       { dayKey: "2026-08-20", githubTotal: 1, commits: 1, discordMessages: 2 },
     ]);
-    expect(() =>
+    await expect(
       store.upsertPeriod({
         report: report("2026-08-20", ["alice", "alice"]),
         markdown: "failed refresh",
       }),
-    ).toThrow();
-    expect(store.getPeriod("day", "2026-08-20")?.markdown).toBe("original");
-    expect(store.listPersonDays("bob")).toHaveLength(1);
+    ).rejects.toThrow();
+    expect((await store.getPeriod("day", "2026-08-20"))?.markdown).toBe("original");
+    expect(await store.listPersonDays("bob")).toHaveLength(1);
     const refreshed = report("2026-08-20", ["alice"]);
     refreshed.members[0]!.github.commits = 3;
     refreshed.members[0]!.github.total = 3;
     refreshed.generatedAtMs += 1000;
-    store.upsertPeriod({ report: refreshed, markdown: "refreshed" });
-    expect(store.getPeriod("day", "2026-08-20")).toEqual({
+    await store.upsertPeriod({ report: refreshed, markdown: "refreshed" });
+    expect(await store.getPeriod("day", "2026-08-20")).toEqual({
       report: refreshed,
       summary: null,
       markdown: "refreshed",
     });
-    expect(store.listPersonDays("alice")[0]).toMatchObject({ githubTotal: 3, commits: 3 });
-    expect(store.listPersonDays("bob")).toEqual([]);
+    expect((await store.listPersonDays("alice"))[0]).toMatchObject({ githubTotal: 3, commits: 3 });
+    expect(await store.listPersonDays("bob")).toEqual([]);
   });
 
-  it("rejects a report exceeding the UTF-8 byte limit without replacing existing data", () => {
-    const { store } = openStore();
-    store.upsertPeriod({ report: report(), markdown: "kept" });
+  it("rejects a report exceeding the UTF-8 byte limit without replacing existing data", async () => {
+    const { store } = await openStore();
+    await store.upsertPeriod({ report: report(), markdown: "kept" });
     const oversized = report();
     oversized.period.title = "é".repeat(1024 * 1024);
-    expect(() => store.upsertPeriod({ report: oversized, markdown: "too large" })).toThrow("2 MiB");
-    expect(store.getPeriod("day", "2026-08-20")?.markdown).toBe("kept");
-    expect(store.listPersonDays("alice")).toHaveLength(1);
+    await expect(store.upsertPeriod({ report: oversized, markdown: "too large" })).rejects.toThrow(
+      "2 MiB",
+    );
+    expect((await store.getPeriod("day", "2026-08-20"))?.markdown).toBe("kept");
+    expect(await store.listPersonDays("alice")).toHaveLength(1);
   });
 
-  it("lists stored totals for each period kind and reflects regenerated documents", () => {
-    const { store } = openStore();
+  it("lists stored totals for each period kind and reflects regenerated documents", async () => {
+    const { store } = await openStore();
     for (const [period, key] of [
       ["day", "2026-08-20"],
       ["week", "2026-W34"],
@@ -154,8 +192,8 @@ describe("Team Reports storage", () => {
         securityAdvisories: 6,
       };
       document.totals.discord.messages = 7;
-      store.upsertPeriod({ report: document, markdown: key });
-      expect(store.listPeriods({ period })).toEqual([
+      await store.upsertPeriod({ report: document, markdown: key });
+      expect(await store.listPeriods({ period })).toEqual([
         {
           period,
           key,
@@ -174,8 +212,8 @@ describe("Team Reports storage", () => {
         },
       ]);
     }
-    store.upsertPeriod({ report: report("2026-08-20", []), markdown: "refreshed" });
-    expect(store.listPeriods({ period: "day" })[0]).toMatchObject({
+    await store.upsertPeriod({ report: report("2026-08-20", []), markdown: "refreshed" });
+    expect((await store.listPeriods({ period: "day" }))[0]).toMatchObject({
       activeMembers: 0,
       memberCount: 0,
       githubTotal: 0,
@@ -187,16 +225,16 @@ describe("Team Reports storage", () => {
     });
   });
 
-  it("lists all logins since an inclusive day without the individual timeline limit", () => {
-    const { store } = openStore();
+  it("lists all logins since an inclusive day without the individual timeline limit", async () => {
+    const { store } = await openStore();
     const logins = Array.from(
       { length: 30 },
       (_, index) => `member-${String(index).padStart(2, "0")}`,
     );
-    store.upsertPeriod({ report: report("2026-08-18", ["older"]), markdown: "older" });
-    store.upsertPeriod({ report: report("2026-08-19", logins), markdown: "boundary" });
-    store.upsertPeriod({ report: report("2026-08-20", ["latest"]), markdown: "latest" });
-    const days = store.listPersonDaysSince("2026-08-19");
+    await store.upsertPeriod({ report: report("2026-08-18", ["older"]), markdown: "older" });
+    await store.upsertPeriod({ report: report("2026-08-19", logins), markdown: "boundary" });
+    await store.upsertPeriod({ report: report("2026-08-20", ["latest"]), markdown: "latest" });
+    const days = await store.listPersonDaysSince("2026-08-19");
     expect(days.map(({ dayKey, login }) => [dayKey, login])).toEqual([
       ["2026-08-20", "latest"],
       ...logins.map((login) => ["2026-08-19", login]),
@@ -215,13 +253,42 @@ describe("Team Reports storage", () => {
       reviewComments: 0,
       discordMessages: 2,
     });
-    expect(store.listPersonDaysSince("2026-08-21")).toEqual([]);
+    expect(await store.listPersonDaysSince("2026-08-21")).toEqual([]);
   });
 
-  it("reads half-open day ranges and indexes newest first without projecting week rows onto people", () => {
-    const { store } = openStore();
+  it("reads a complete month of individually valid reports across the worker boundary", async () => {
+    const { store } = await openStore();
+    const titlePrefix = "x".repeat(1_100_000);
+    const expected: Array<{ key: string; titleLength: number; titleHash: string }> = [];
+    for (let day = 1; day <= 31; day++) {
+      const key = `2026-08-${String(day).padStart(2, "0")}`;
+      const document = report(key);
+      document.period.title = `${titlePrefix}:${key}`;
+      expected.push({
+        key,
+        titleLength: document.period.title.length,
+        titleHash: createHash("sha256").update(document.period.title).digest("hex"),
+      });
+      await store.upsertPeriod({ report: document, markdown: key });
+    }
+    const days = await store.getDayReports(
+      Date.parse("2026-08-01T00:00:00Z"),
+      Date.parse("2026-09-01T00:00:00Z"),
+    );
+    expect(days).toHaveLength(31);
+    expect(
+      days.map(({ period }) => ({
+        key: period.key,
+        titleLength: period.title.length,
+        titleHash: createHash("sha256").update(period.title).digest("hex"),
+      })),
+    ).toEqual(expected);
+  });
+
+  it("reads half-open day ranges and indexes newest first without projecting week rows onto people", async () => {
+    const { store } = await openStore();
     for (const key of ["2026-08-18", "2026-08-19", "2026-08-20"]) {
-      store.upsertPeriod({ report: report(key), markdown: key });
+      await store.upsertPeriod({ report: report(key), markdown: key });
     }
     const week = report();
     week.period = {
@@ -231,40 +298,42 @@ describe("Team Reports storage", () => {
       sinceMs: Date.parse("2026-08-17T00:00:00Z"),
       untilMs: Date.parse("2026-08-24T00:00:00Z"),
     };
-    store.upsertPeriod({ report: week, markdown: "week" });
+    await store.upsertPeriod({ report: week, markdown: "week" });
     expect(
-      store
-        .getDayReports(Date.parse("2026-08-19T00:00:00Z"), Date.parse("2026-08-20T00:00:00Z"))
-        .map((day) => day.period.key),
+      (
+        await store.getDayReports(
+          Date.parse("2026-08-19T00:00:00Z"),
+          Date.parse("2026-08-20T00:00:00Z"),
+        )
+      ).map((day) => day.period.key),
     ).toEqual(["2026-08-19"]);
-    expect(store.listPeriods({ period: "day", limit: 2 }).map((entry) => entry.key)).toEqual([
-      "2026-08-20",
-      "2026-08-19",
-    ]);
     expect(
-      store
-        .listPersonDays("alice", { since: "2026-08-18", until: "2026-08-20" })
-        .map((day) => day.dayKey),
+      (await store.listPeriods({ period: "day", limit: 2 })).map((entry) => entry.key),
+    ).toEqual(["2026-08-20", "2026-08-19"]);
+    expect(
+      (await store.listPersonDays("alice", { since: "2026-08-18", until: "2026-08-20" })).map(
+        (day) => day.dayKey,
+      ),
     ).toEqual(["2026-08-19", "2026-08-18"]);
-    expect(store.getPeriod("month", "2026-08")).toBeUndefined();
+    expect(await store.getPeriod("month", "2026-08")).toBeUndefined();
   });
 
-  it("records run outcomes once, including bounded failures and collector statistics", () => {
-    const { store } = openStore();
-    store.startRun({
+  it("records run outcomes once, including bounded failures and collector statistics", async () => {
+    const { store } = await openStore();
+    await store.startRun({
       id: "first",
       kind: "manual",
       startedAtMs: 1,
       periods: [{ period: "day", key: "2026-08-20" }],
     });
-    store.startRun({ id: "second", kind: "intraday", startedAtMs: 2, periods: [] });
-    store.finishRun("first", {
+    await store.startRun({ id: "second", kind: "intraday", startedAtMs: 2, periods: [] });
+    await store.finishRun("first", {
       finishedAtMs: 3,
       status: "error",
       error: "x".repeat(3000),
       stats: { apiCalls: 2 },
     });
-    expect(store.listRuns()).toMatchObject([
+    expect(await store.listRuns()).toMatchObject([
       { id: "second", status: "running", finishedAtMs: null },
       {
         id: "first",
@@ -274,21 +343,21 @@ describe("Team Reports storage", () => {
         periods: [{ period: "day", key: "2026-08-20" }],
       },
     ]);
-    expect(store.listRuns()[1]?.error).toHaveLength(2000);
-    expect(store.listRuns(1, { kind: "manual", status: "error" }).map((run) => run.id)).toEqual([
-      "first",
-    ]);
-    expect(() => store.finishRun("first", { finishedAtMs: 4, status: "ok" })).toThrow(
+    expect((await store.listRuns())[1]?.error).toHaveLength(2000);
+    expect(
+      (await store.listRuns(1, { kind: "manual", status: "error" })).map((run) => run.id),
+    ).toEqual(["first"]);
+    await expect(store.finishRun("first", { finishedAtMs: 4, status: "ok" })).rejects.toThrow(
       "not running",
     );
-    store.finishRun("second", { finishedAtMs: 4, status: "ok" });
-    expect(store.listRuns(1)).toMatchObject([{ id: "second", status: "ok", periods: [] }]);
+    await store.finishRun("second", { finishedAtMs: 4, status: "ok" });
+    expect(await store.listRuns(1)).toMatchObject([{ id: "second", status: "ok", periods: [] }]);
   });
 
-  it("prunes old complete periods and person days, retaining overlap, active runs, and keep-all state", () => {
-    const { store } = openStore();
+  it("prunes old complete periods and person days, retaining overlap, active runs, and keep-all state", async () => {
+    const { store } = await openStore();
     for (const key of ["2026-08-15", "2026-08-16", "2026-08-17"]) {
-      store.upsertPeriod({ report: report(key, ["alice"]), markdown: key });
+      await store.upsertPeriod({ report: report(key, ["alice"]), markdown: key });
     }
     const periods: PeriodDescriptor[] = [
       {
@@ -307,17 +376,20 @@ describe("Team Reports storage", () => {
       },
     ];
     for (const period of periods) {
-      store.upsertPeriod({ report: { ...report(), period }, markdown: period.title });
+      await store.upsertPeriod({ report: { ...report(), period }, markdown: period.title });
     }
-    store.startRun({ id: "old-complete", kind: "closed-day", startedAtMs: 1, periods: [] });
-    store.finishRun("old-complete", { finishedAtMs: 2, status: "ok" });
-    store.startRun({ id: "running", kind: "manual", startedAtMs: 3, periods: [] });
+    await store.startRun({ id: "old-complete", kind: "closed-day", startedAtMs: 1, periods: [] });
+    await store.finishRun("old-complete", { finishedAtMs: 2, status: "ok" });
+    await store.startRun({ id: "running", kind: "manual", startedAtMs: 3, periods: [] });
     const now = Date.parse("2026-08-20T13:00:00Z");
-    expect(store.prune(0, now)).toEqual({ periods: 0, personDays: 0, runs: 0 });
-    expect(store.listPeriods()).toHaveLength(5);
-    expect(store.prune(3, now)).toEqual({ periods: 3, personDays: 2, runs: 1 });
-    expect(store.listPeriods().map((entry) => entry.key)).toEqual(["2026-08-17", "2026-08"]);
-    expect(store.listPersonDays("alice").map((day) => day.dayKey)).toEqual(["2026-08-17"]);
-    expect(store.listRuns().map((run) => run.id)).toEqual(["running"]);
+    expect(await store.prune(0, now)).toEqual({ periods: 0, personDays: 0, runs: 0 });
+    expect(await store.listPeriods()).toHaveLength(5);
+    expect(await store.prune(3, now)).toEqual({ periods: 3, personDays: 2, runs: 1 });
+    expect((await store.listPeriods()).map((entry) => entry.key)).toEqual([
+      "2026-08-17",
+      "2026-08",
+    ]);
+    expect((await store.listPersonDays("alice")).map((day) => day.dayKey)).toEqual(["2026-08-17"]);
+    expect((await store.listRuns()).map((run) => run.id)).toEqual(["running"]);
   });
 });

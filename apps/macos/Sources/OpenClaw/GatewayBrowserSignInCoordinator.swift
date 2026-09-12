@@ -2,6 +2,27 @@ import Foundation
 import OpenClawKit
 
 enum GatewayBrowserSignInCoordinator {
+    static func reconnectGateway(id: String) async throws {
+        let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
+        guard let profile = profiles.first(where: { $0.profile.id == id }) else {
+            throw MacGatewayProfileError.profileNotFound
+        }
+        try Task.checkCancellation()
+        if profile.usesBrowserIdentity {
+            _ = try await GatewayBrowserSignInCoordinator.connect(
+                name: profile.profile.name,
+                address: profile.profile.url.absoluteString,
+                token: "",
+                password: "")
+        } else {
+            let binding = try await MacGatewayConnectionFleet.shared.binding(profileID: id)
+            try Task.checkCancellation()
+            await binding.connection.shutdown(ifCurrent: { !Task.isCancelled })
+            try Task.checkCancellation()
+            _ = try await binding.connection.acquireServerLease()
+        }
+    }
+
     static func gatewayURL(from address: String) throws -> URL {
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let input = address.contains("://") ? address : "https://\(address)"

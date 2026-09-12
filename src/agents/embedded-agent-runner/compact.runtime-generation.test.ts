@@ -74,7 +74,7 @@ it("uses the admitted config and agent storage throughout queued compaction", as
   }
 
   expect(result).toMatchObject({ ok: true, compacted: true });
-  const { snapshot, release } = await expectDefined(
+  const { snapshot, [Symbol.asyncDispose]: release } = await expectDefined(
     acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value,
     "admitted runtime lease",
   );

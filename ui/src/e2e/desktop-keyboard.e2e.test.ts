@@ -53,9 +53,13 @@ function keyPresses(keysyms: readonly number[]) {
 }
 
 suite.define(() => {
-  it.each(["canvas", "toolbar"])(
-    "keeps Shift held across a $0 click but never restores it after release and menu paste",
-    async (destination) => {
+  it.each([
+    { destination: "canvas", release: true },
+    { destination: "toolbar", release: true },
+    { destination: "toolbar", release: false },
+  ])(
+    "keeps Shift held across $destination focus and respects release=$release before paste",
+    async ({ destination, release }) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const { panel, peer, input } = await openKeyboard(page);
         await page.keyboard.down("Shift");
@@ -65,11 +69,17 @@ suite.define(() => {
         await (
           destination === "canvas"
             ? panel.locator(".desktop-surface canvas")
-            : panel.getByRole("button", { name: "Use actual size", exact: true })
+            : panel.getByRole("combobox", { name: "Desktop size", exact: true })
         ).click();
         await expect.poll(peer.keyEvents).toEqual(held);
-        await page.keyboard.up("Shift");
+        if (release) {
+          await page.keyboard.up("Shift");
+        }
+        if (destination === "toolbar") {
+          await page.keyboard.press("Escape");
+        }
         await keyboardButton.click();
+        await expect.poll(() => input.evaluate((element) => element.matches(":focus"))).toBe(true);
         await input.evaluate((element) => {
           if (!(element instanceof HTMLTextAreaElement)) {
             throw new Error("Expected the desktop keyboard textarea");
@@ -83,7 +93,15 @@ suite.define(() => {
             }),
           );
         });
-        await expect.poll(peer.keyEvents).toEqual(keyPresses([0xffe1, 0x70]));
+        await expect
+          .poll(peer.keyEvents)
+          .toEqual([...keyPresses([0xffe1, 0x70]), ...(release ? [] : held)]);
+        if (!release) {
+          await page.keyboard.up("Shift");
+          await expect
+            .poll(peer.keyEvents)
+            .toEqual([...keyPresses([0xffe1, 0x70]), ...keyPresses([0xffe1])]);
+        }
       });
     },
   );

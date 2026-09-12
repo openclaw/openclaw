@@ -338,7 +338,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.assistantTexts).toEqual([]);
   });
 
-  it("preserves aggregate commentary for providers without Responses item boundaries", async () => {
+  it("preserves current aggregate commentary without Responses item boundaries", async () => {
     const onAgentEvent = vi.fn();
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
     const message = {
@@ -356,7 +356,19 @@ describe("subscribeEmbeddedAgentSession", () => {
       message,
       assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: message },
     });
-    emit({ type: "message_end", message });
+    const completed = {
+      ...message,
+      content: [
+        { type: "text", text: "First." },
+        { type: "text", text: "Second. Updated." },
+      ],
+    } as AssistantMessageWithPhase;
+    emit({
+      type: "message_update",
+      message: completed,
+      assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: completed },
+    });
+    emit({ type: "message_end", message: completed });
     await subscription.waitForPendingEvents();
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
@@ -374,8 +386,17 @@ describe("subscribeEmbeddedAgentSession", () => {
         data: {
           kind: "preamble",
           title: "Preamble",
+          phase: "update",
+          progressText: "First. Second. Updated.",
+        },
+      },
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          title: "Preamble",
           phase: "end",
-          progressText: "First. Second.",
+          progressText: "First. Second. Updated.",
         },
       },
     ]);

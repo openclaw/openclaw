@@ -204,8 +204,13 @@ export class DiscordActivityStore {
     // launch cannot poison the next click on a different widget for the whole TTL.
     // Different-widget and ambiguous records stay: their Activities may still query.
     const key = pendingLaunchKey(accountId, channelId, discordUserId);
-    await this.stores.launches.update(key, (existing) =>
-      existing?.state === "single" && existing.widgetId === widgetId ? undefined : existing,
+    const launches = this.stores.launches;
+    if (!launches.deleteIf) {
+      throw new Error("Discord Activities require atomic pending-launch deletion");
+    }
+    await launches.deleteIf(
+      key,
+      (existing) => existing.state === "single" && existing.widgetId === widgetId,
     );
   }
 

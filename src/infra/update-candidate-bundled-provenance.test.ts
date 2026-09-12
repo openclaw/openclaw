@@ -8,8 +8,8 @@ import * as bundledMetadata from "../plugins/bundled-plugin-metadata.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import * as pluginCacheFiles from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -231,7 +231,6 @@ it.each([
         ),
       ),
     ).toEqual(sourceModes);
-    expect(await rehearsal.changedConfigKeys()).toEqual([]);
   } finally {
     closeOpenClawStateDatabaseForTest();
     await cleanupRehearsal?.();

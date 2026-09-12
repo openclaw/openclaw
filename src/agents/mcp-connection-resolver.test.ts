@@ -27,7 +27,6 @@ import {
   resolveRequesterScopedMcpConnections,
 } from "./mcp-connection-resolver.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
-import { clearCurrentProviderAuthState } from "./model-provider-auth.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 type AuthenticatedMcpProofEndpoint = {
@@ -327,6 +326,12 @@ describe("mcp connection resolver helpers", () => {
         },
       };
       let attachedRegistry = previous.registry;
+      const runtime = {
+        operationId: "mcp-plugin-disable",
+        generation: 1,
+        pluginIds: ["active-drive", "startup-mail"],
+        sourceDigests: {},
+      };
       const gatewayReload = createGatewayReloadHandlers({
         deps: {},
         broadcast() {},
@@ -341,12 +346,14 @@ describe("mcp connection resolver helpers", () => {
         async stopChannel() {},
         releaseChannelRouteHandoffs() {},
         pruneInactiveChannelAccountState() {},
-        async reloadPlugins({ beforeReplace, commitRuntime }) {
-          await beforeReplace(new Set());
-          await commitRuntime();
-          attachedRegistry = replacement.registry;
-          setActivePluginRegistry(replacement.registry);
-          return { restartChannels: new Set(), activeChannels: new Set() };
+        async reloadPlugins({ commitRuntime }) {
+          await commitRuntime({
+            publish() {
+              attachedRegistry = replacement.registry;
+              setActivePluginRegistry(replacement.registry);
+            },
+          });
+          return { restartChannels: new Set(), activeChannels: new Set(), runtime };
         },
         logHooks: reloadLog,
         logChannels: reloadLog,
@@ -361,7 +368,10 @@ describe("mcp connection resolver helpers", () => {
         requestRecoveryRestart,
       });
 
-      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBe("applied");
+      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toEqual({
+        status: "applied",
+        runtime,
+      });
       expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
         allowGatewaySubagentBinding: true,
         catalogMode: "static",
@@ -415,7 +425,6 @@ describe("mcp connection resolver helpers", () => {
       expect(proof.pinnedDrive.requests).toBe(0);
     } finally {
       await disposeAllSessionMcpRuntimes();
-      clearCurrentProviderAuthState();
       await resetPreparedModelRuntimeSnapshotsForTest();
       setGatewaySigusr1RestartPolicy({ allowExternal: previousExternalRestartPolicy });
       await proof.close();

@@ -256,9 +256,15 @@ export function resolveSessionChildOwners(params: {
     ? normalizeOptionalString(latest.controllerSessionKey) ||
       normalizeOptionalString(latest.requesterSessionKey)
     : normalizeOptionalString(entry.spawnedBy);
-  return [...new Set([controller, normalizeOptionalString(entry.parentSessionKey)])].filter(
-    (owner): owner is string => Boolean(owner) && owner !== key,
-  );
+  const parent = normalizeOptionalString(entry.parentSessionKey);
+  const owners: string[] = [];
+  if (controller && controller !== key) {
+    owners.push(controller);
+  }
+  if (parent && parent !== key && parent !== controller) {
+    owners.push(parent);
+  }
+  return owners;
 }
 
 /** Index only canonical children; retained run results cannot create session links. */
@@ -275,11 +281,17 @@ export function buildStoreChildSessionIndex(params: {
   }
   const parents = new Set(params.keys);
   // One store pass discovers both persisted navigation and runtime-only controller links.
-  for (const [key, entry] of Object.entries(params.store)) {
+  for (const key of Object.keys(params.store)) {
+    const entry = params.store[key];
     if (!entry || params.excludedChildKeys?.has(key)) {
       continue;
     }
-    for (const owner of resolveSessionChildOwners({ ...params, key, entry })) {
+    for (const owner of resolveSessionChildOwners({
+      key,
+      entry,
+      now: params.now,
+      subagentRuns: params.subagentRuns,
+    })) {
       if (parents.has(owner)) {
         const siblings = children.get(owner) ?? [];
         siblings.push(key);

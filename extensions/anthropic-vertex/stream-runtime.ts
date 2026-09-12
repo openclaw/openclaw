@@ -206,8 +206,7 @@ export function createAnthropicVertexStreamFn(
     const reasoning =
       requestedReasoning === "off" && mandatoryAdaptiveThinking
         ? "low"
-        : (requestedReasoning ??
-          (mandatoryAdaptiveThinking || adaptiveDefaultClaude5 ? "high" : undefined));
+        : (requestedReasoning ?? (adaptiveDefaultClaude5 ? "high" : undefined));
     const adaptiveThinking =
       mandatoryAdaptiveThinking ||
       Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));
@@ -259,7 +258,6 @@ export function createAnthropicVertexStreamFn(
       }
     } else if (mandatoryAdaptiveThinking) {
       opts.thinkingEnabled = true;
-      opts.effort = "high";
     } else {
       opts.thinkingEnabled = false;
     }

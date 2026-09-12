@@ -1,4 +1,3 @@
-// Google tests cover embedding batch bounded JSON response reads.
 import { createServer } from "node:http";
 import * as embeddingSdk from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,13 +38,6 @@ function fetchInputUrl(input: RequestInfo | URL): string {
     return input.href;
   }
   return input.url;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
 }
 
 async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
@@ -132,15 +124,15 @@ function batchStageForUrl(url: string): BatchStage {
 function defaultBatchResponse(stage: BatchStage): Response {
   switch (stage) {
     case "upload":
-      return jsonResponse({ file: { name: "files/f-ok" } });
+      return Response.json({ file: { name: "files/f-ok" } });
     case "create":
-      return jsonResponse({
+      return Response.json({
         name: "batches/b-0",
         done: false,
         metadata: { state: "BATCH_STATE_PENDING" },
       });
     case "status":
-      return jsonResponse({
+      return Response.json({
         name: "batches/b-0",
         done: true,
         metadata: { state: "BATCH_STATE_SUCCEEDED" },
@@ -300,9 +292,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
   });
 
   it("marks create 404 as unavailable while preserving the structured cause", async () => {
-    const response = jsonResponse(
+    const response = Response.json(
       { error: { code: 404, message: "Input file was not found", status: "NOT_FOUND" } },
-      404,
+      { status: 404 },
     );
     stubBatchFetch((stage) => (stage === "create" ? response : undefined));
 
@@ -525,7 +517,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("honors terminal LRO fields when metadata is stale", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state: "BATCH_STATE_RUNNING" },
@@ -540,7 +532,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("keeps a terminal Operation error ahead of stale success metadata", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state: "BATCH_STATE_SUCCEEDED" },
@@ -597,7 +589,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   ])("surfaces $state Operation failures", async ({ state, normalized }) => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state },
@@ -611,7 +603,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("rejects conflicting output files in one Operation", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: {

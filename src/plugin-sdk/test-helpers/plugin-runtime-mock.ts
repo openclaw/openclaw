@@ -1,6 +1,7 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
+import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.shared.js";
@@ -39,7 +40,7 @@ export const createTestInboundDebounceFlush: InboundDebounceFlushFactory = (para
 };
 
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_MODEL = "gpt-5.6-sol";
+const DEFAULT_MODEL = "gpt-6-astra";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -1011,6 +1012,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveDefaultModelForAgent:
         vi.fn<PluginRuntime["modelConfig"]["resolveDefaultModelForAgent"]>(),
       resolveAllowedModelRef: vi.fn<PluginRuntime["modelConfig"]["resolveAllowedModelRef"]>(),
+      resolveModelRuntimePolicy: vi.fn(resolveModelRuntimePolicy),
     },
     modelAuth: {
       resolveProviderIdForAuth: vi.fn<PluginRuntime["modelAuth"]["resolveProviderIdForAuth"]>(

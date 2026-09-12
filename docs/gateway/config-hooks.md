@@ -292,7 +292,7 @@ using a static `sessionKey`. Keep isolated mode unless context reuse is intended
       renewEveryMinutes: 720,
       serve: { bind: "127.0.0.1", port: 8788, path: "/" },
       tailscale: { mode: "funnel", path: "/gmail-pubsub" },
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       thinking: "high",
     },
   },

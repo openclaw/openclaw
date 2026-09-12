@@ -2,8 +2,9 @@ import { html, nothing } from "lit";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
-import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
+import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -16,6 +17,7 @@ import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
+import { renderToolFailures } from "./chat-tool-failure.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
@@ -31,6 +33,7 @@ type StreamMessageOptions = Pick<
   | "boardProvider"
   | "agentId"
   | "runActive"
+  | "asyncQuestions"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
@@ -44,6 +47,7 @@ type StreamMessageOptions = Pick<
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
+  | "pluginToolIcons"
   | "githubRepo"
   | "onOpenWorkspaceFile"
 >;
@@ -51,7 +55,7 @@ type StreamMessageOptions = Pick<
 export type StreamGroupOptions = StreamMessageOptions & {
   onReply?: (target: MessageReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
-  assistant?: AssistantIdentity;
+  assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
@@ -105,7 +109,7 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, resourceBasePath } = opts;
+  const { assistant } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -121,7 +125,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
-      : renderChatAvatar("assistant", assistant, undefined, resourceBasePath);
+      : renderChatAvatar("assistant", assistant);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
@@ -144,13 +148,9 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   `;
 }
 
-/**
- * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
- * for the turn's intermediate work once the run is done. The check icon is
- * the turn's done indicator; the expanded groups render after this row.
- */
+/** Completed work keeps its operation summary and elapsed time above the expanded groups. */
 export function renderWorkGroupSummary(
-  item: { key: string; durationMs: number | null },
+  item: { key: string; durationMs: number | null; groups: readonly MessageGroup[] },
   opts: {
     expanded: boolean;
     onToggle: () => void;
@@ -159,7 +159,14 @@ export function renderWorkGroupSummary(
   },
 ) {
   const duration = formatDurationCompact(item.durationMs);
-  const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
+  const cards = item.groups.flatMap((group) =>
+    group.messages.flatMap(({ message }) => extractToolCardsCached(message)),
+  );
+  const label = cards.length
+    ? summarizeToolGroup(cards.map((card) => ({ ...card, isError: isToolCardError(card) })))
+    : duration
+      ? t("chat.workRun.workedFor", { duration })
+      : t("chat.workRun.worked");
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button
@@ -177,8 +184,18 @@ export function renderWorkGroupSummary(
         <span class="chat-tool-disclosure__content">
           <span class="chat-activity-group__label" title=${label}>${label}</span>
         </span>
+        ${
+          cards.length && duration
+            ? html`<span
+                class="chat-activity-group__duration"
+                aria-label=${t("chat.workRun.workedFor", { duration })}
+                >${duration}</span
+              >`
+            : nothing
+        }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
+      ${opts.expanded ? nothing : renderToolFailures(cards)}
       <div class="chat-work-group__separator" aria-hidden="true"></div>
       ${opts.expanded ? nothing : (opts.browserTabPreviews ?? nothing)}
     </div>

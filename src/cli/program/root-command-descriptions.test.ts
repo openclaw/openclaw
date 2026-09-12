@@ -30,6 +30,7 @@ const JSON_NOT_APPLICABLE = {
   namespaces: {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
+      "agents team",
       "backup",
       "backup git",
       "backup sqlite",
@@ -175,6 +176,7 @@ const JSON_NOT_APPLICABLE = {
       "models image-fallbacks add",
       "models image-fallbacks remove",
       "models image-fallbacks clear",
+      "models auth activate",
       "models auth logout",
       "models auth order set",
       "models auth order clear",

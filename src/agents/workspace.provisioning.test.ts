@@ -67,7 +67,7 @@ describe("ensureAgentWorkspace runtime-managed-implicit provisioning", () => {
     await expectPathMissing(path.join(targetDir, DEFAULT_AGENTS_FILENAME));
     await expectPathMissing(path.join(targetDir, DEFAULT_BOOTSTRAP_FILENAME));
     await expectPathMissing(path.join(targetDir, ".git"));
-    expect(workspaceState.readWorkspaceStateSnapshot(targetDir).setupExists).toBe(false);
+    expect((await workspaceState.readWorkspaceStateSnapshot(targetDir)).setupExists).toBe(false);
   });
 
   it("runtime-managed-implicit provisioning preserves pre-existing workspace content", async () => {
@@ -86,6 +86,79 @@ describe("ensureAgentWorkspace runtime-managed-implicit provisioning", () => {
     await expectPathMissing(path.join(targetDir, DEFAULT_AGENTS_FILENAME));
     await expectPathMissing(path.join(targetDir, ".git"));
   });
+});
+
+describe("workspace completion persistence", () => {
+  it.each(["committed", "failed", "retired-before-commit", "retired-after-commit"] as const)(
+    "waits for the completion write before bootstrap cleanup: %s",
+    async (outcome) => {
+      const dir = testState!.workspaceDir;
+      await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });
+      const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
+      await fs.writeFile(path.join(dir, DEFAULT_USER_FILENAME), "A configured user.\n");
+      const entered = createDeferred();
+      const release = createDeferred();
+      const realMerge = workspaceState.mergeWorkspaceSetupState;
+      const write = vi
+        .spyOn(workspaceState, "mergeWorkspaceSetupState")
+        .mockImplementation(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          if (outcome === "failed") {
+            throw new Error("completion write failed");
+          }
+          const result = await realMerge(...args);
+          if (outcome === "retired-after-commit") {
+            current = false;
+          }
+          return result;
+        });
+      let current = true;
+      let settled = false;
+      const pending = ensureAgentWorkspace({
+        dir,
+        ensureBootstrapFiles: true,
+        beforePersistentApply: () => {
+          if (!current) {
+            throw new Error("workspace owner retired");
+          }
+        },
+      });
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await withTestTimeout(entered.promise, 5_000, "Completion write was not reached");
+        await checkpoint();
+        expect(settled).toBe(false);
+        await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
+        current = outcome !== "retired-before-commit";
+        release.resolve();
+        if (outcome === "committed") {
+          await expect(pending).resolves.toMatchObject({ bootstrapPending: false });
+          await expectPathMissing(bootstrapPath);
+        } else {
+          await expect(pending).rejects.toThrow(
+            outcome === "failed" ? "completion write failed" : "workspace owner retired",
+          );
+          await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
+        }
+        const snapshot = await workspaceState.readWorkspaceStateSnapshot(dir);
+        expect(Boolean(snapshot.setup.setupCompletedAt)).toBe(
+          outcome === "committed" || outcome === "retired-after-commit",
+        );
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending]);
+        write.mockRestore();
+      }
+    },
+  );
 });
 
 function startGitProvisioning(directories: string[], retryAfterFailure = false) {
@@ -139,8 +212,8 @@ function startGitProvisioning(directories: string[], retryAfterFailure = false) 
   const realMerge = workspaceState.mergeWorkspaceSetupState;
   const mergeSpy = vi
     .spyOn(workspaceState, "mergeWorkspaceSetupState")
-    .mockImplementation((...args) => {
-      const result = realMerge(...args);
+    .mockImplementation(async (...args) => {
+      const result = await realMerge(...args);
       if (initGates.has(args[0]) && ++setupWrites === dirs.length - Number(retryAfterFailure)) {
         setup.resolve();
       }

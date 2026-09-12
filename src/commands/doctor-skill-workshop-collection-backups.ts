@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
+import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { resolveSkillManifestMetadata } from "../skills/loading/frontmatter.js";
 import { readSkillFrontmatterSafe } from "../skills/loading/local-loader.js";
 import { resolveSkillDiscoveryLimits } from "../skills/loading/skill-root-discovery.js";
@@ -34,23 +35,47 @@ export type LegacyCollectionBackupRoot =
     }
   | { legacyRoot: string; warning: string; recoverable?: true };
 
-export async function listPendingLegacyCollectionBackupRoots(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<LegacyCollectionBackupRoot[]> {
+async function listLegacyCollectionBackupRoots(env: NodeJS.ProcessEnv): Promise<string[]> {
   const backupRoot = path.join(resolveStateDir(env), "skill-workshop", "collection-backups");
   if (!(await pathExists(backupRoot))) {
     return [];
   }
-  const names = (await fs.readdir(backupRoot, { withFileTypes: true }))
+  return (await fs.readdir(backupRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && /^[a-f0-9]{16}$/u.test(entry.name))
-    .map((entry) => entry.name);
+    .map((entry) => path.join(backupRoot, entry.name));
+}
+
+export async function listLegacyCollectionBackupWorkspaceDirs(
+  env: NodeJS.ProcessEnv,
+): Promise<string[]> {
+  const workspaces = new Set<string>();
+  for (const legacyRoot of await listLegacyCollectionBackupRoots(env)) {
+    try {
+      for (const backup of await readLegacyCollectionBackups(legacyRoot)) {
+        workspaces.add(backup.workspaceDir);
+      }
+    } catch {
+      // The migration reports invalid manifests; they cannot establish a workspace.
+    }
+  }
+  return [...workspaces];
+}
+
+export async function listPendingLegacyCollectionBackupRoots(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<LegacyCollectionBackupRoot[]> {
   const roots: LegacyCollectionBackupRoot[] = [];
-  for (const name of names) {
-    const legacyRoot = path.join(backupRoot, name);
+  for (const legacyRoot of await listLegacyCollectionBackupRoots(env)) {
+    if (isUpdateRehearsalReadOnlyPath(legacyRoot, env)) {
+      continue;
+    }
     try {
       const backups = await readLegacyCollectionBackups(legacyRoot);
-      if (backups.length === 0) {
+      if (
+        backups.length === 0 ||
+        backups.some((backup) => isReadOnlyRehearsalBackup(backup, env))
+      ) {
         continue;
       }
       const workspaceDirs = new Set(backups.map((backup) => backup.workspaceDir));
@@ -80,6 +105,9 @@ export async function listPendingLegacyCollectionBackupRoots(
         operation: "doctor",
       });
       const destinationRoot = resolveSkillCollectionBackupRoot(config, ownerAgentId, env);
+      if (isUpdateRehearsalReadOnlyPath(destinationRoot, env)) {
+        continue;
+      }
       const alreadyArchived = await Promise.all(
         backups.map((backup) =>
           isHistoryOnlyBackup(path.join(destinationRoot, backup.manifest.id)),
@@ -107,6 +135,20 @@ type LegacyCollectionBackup = {
   manifest: CollectionBackupManifest;
   sourceDirs: ReadonlyMap<string, string>;
 };
+
+function isReadOnlyRehearsalBackup(
+  backup: LegacyCollectionBackup,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return [
+    backup.backupDir,
+    backup.workspaceDir,
+    ...[...backup.sourceDirs.values()].flatMap((relativeDir) => [
+      path.join(backup.workspaceDir, relativeDir),
+      path.join(backup.backupDir, "workspace", relativeDir),
+    ]),
+  ].some((filePath) => isUpdateRehearsalReadOnlyPath(filePath, env));
+}
 
 export function inferWorkspaceOwnerAgentId(
   config: OpenClawConfig,
@@ -482,6 +524,14 @@ export async function migrateLegacyCollectionBackups(
       continue;
     }
     const { legacyRoot, backups, ownerAgentId, destinationRoot } = root;
+    if (
+      [legacyRoot, destinationRoot].some((filePath) =>
+        isUpdateRehearsalReadOnlyPath(filePath, env),
+      ) ||
+      backups.some((backup) => isReadOnlyRehearsalBackup(backup, env))
+    ) {
+      continue;
+    }
     try {
       const newerBackupExists = await hasNewerUnrelatedCollectionBackup(destinationRoot, backups);
       const restorable: LegacyCollectionBackup[] = [];
@@ -507,6 +557,9 @@ export async function migrateLegacyCollectionBackups(
         );
       }
       for (const backup of restorable) {
+        if (isReadOnlyRehearsalBackup(backup, env)) {
+          continue;
+        }
         await fs.rm(backup.backupDir, { recursive: true, force: false });
       }
       if ((await fs.readdir(legacyRoot)).length === 0) {

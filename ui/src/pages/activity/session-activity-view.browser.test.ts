@@ -38,7 +38,11 @@ it.each([
       context: {
         basePath: "",
         navigate: vi.fn(),
-        gateway: { snapshot: { hello: null } },
+        gateway: {
+          snapshot: { hello: null, client: null, phase: "stopped" },
+          subscribe: () => () => {},
+          subscribeEvents: () => () => {},
+        },
         agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
         agentSelection: { state: { selectedId: "main" } },
         sessions: { state: { result: { sessions: [] } } },

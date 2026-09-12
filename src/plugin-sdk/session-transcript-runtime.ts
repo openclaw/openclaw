@@ -15,6 +15,7 @@ import {
   readTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
+  readLatestSessionTranscriptMessageEvent,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
   type TranscriptMessageAppendOptions,
@@ -253,11 +254,16 @@ export async function readSessionTranscriptRawDelta(
   params: SessionTranscriptRawDeltaParams,
 ): Promise<SessionTranscriptRawDeltaResult> {
   const { cursor, maxBytes, maxEvents, ...target } = params;
-  return readTranscriptRawDelta(bindSessionTranscriptStoreScope(target), {
-    ...(cursor !== undefined ? { cursor } : {}),
-    ...(maxBytes !== undefined ? { maxBytes } : {}),
-    ...(maxEvents !== undefined ? { maxEvents } : {}),
-  });
+  const scope = bindSessionTranscriptStoreScope(target);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  return readRestoredSessionTranscript(scope, () =>
+    readTranscriptRawDelta(scope, {
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(maxBytes !== undefined ? { maxBytes } : {}),
+      ...(maxEvents !== undefined ? { maxEvents } : {}),
+    }),
+  );
 }
 
 /** Reads one bounded active-path page that resumes appends and resets after discontinuities. */
@@ -265,13 +271,18 @@ export async function readSessionTranscriptVisibleMessageDelta(
   params: SessionTranscriptVisibleMessageDeltaParams,
 ): Promise<SessionTranscriptVisibleMessageDeltaResult> {
   const { cursor, maxBytes, maxMessages, ...target } = params;
+  const scope = bindSessionTranscriptStoreScope(target);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
   let result: ReturnType<typeof readVisibleMessageDelta>;
   try {
-    result = readVisibleMessageDelta(bindSessionTranscriptStoreScope(target), {
-      ...(cursor !== undefined ? { cursor } : {}),
-      ...(maxBytes !== undefined ? { maxBytes } : {}),
-      ...(maxMessages !== undefined ? { maxMessages } : {}),
-    });
+    result = await readRestoredSessionTranscript(scope, () =>
+      readVisibleMessageDelta(scope, {
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
+        ...(maxMessages !== undefined ? { maxMessages } : {}),
+      }),
+    );
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return { kind: "unavailable", reason: "projection_rebuilding" };
@@ -314,7 +325,10 @@ export async function readVisibleSessionTranscriptMessageEntries(
 export async function readLatestAssistantTextByIdentity(
   params: SessionTranscriptTargetParams,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  return readLatestTranscriptAssistantText(bindSessionTranscriptStoreScope(params));
+  const scope = bindSessionTranscriptStoreScope(params);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  return readRestoredSessionTranscript(scope, () => readLatestTranscriptAssistantText(scope));
 }
 
 /**
@@ -331,7 +345,7 @@ export async function appendAssistantMirrorMessageByIdentity(
   if (!text) {
     return { ok: false, reason: "empty message" };
   }
-  const message = createAssistantMirrorMessage({
+  let message = createAssistantMirrorMessage({
     ...(params.deliveryMirror !== undefined ? { deliveryMirror: params.deliveryMirror } : {}),
     ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
     text,
@@ -359,6 +373,50 @@ export async function appendAssistantMirrorMessageByIdentity(
         ok: true,
         messageId: latestEquivalentAssistantId,
       };
+    }
+    if (params.deliveryMirror?.kind === "channel-final" && params.idempotencyKey) {
+      const key = params.idempotencyKey.trim();
+      const facts = await locked.readMessageFacts({ idempotencyKeys: [key] });
+      let sourceAssistantMessageId: string | undefined;
+      if (facts.existingIdempotencyKeys.has(key)) {
+        // Keep the writer's original correlation while normal append still checks the payload.
+        const stored = facts.messagesByIdempotencyKey.get(key);
+        const marker = isRecord(stored) ? stored.openclawDeliveryMirror : undefined;
+        if (isRecord(marker) && typeof marker.sourceAssistantMessageId === "string") {
+          sourceAssistantMessageId = marker.sourceAssistantMessageId;
+        }
+      } else {
+        let events: readonly SessionTranscriptEvent[];
+        try {
+          const latest = readLatestSessionTranscriptMessageEvent({
+            ...scope,
+            sessionId: currentEntry.sessionId,
+          });
+          events = latest ? [latest.event] : [];
+        } catch (error) {
+          if (!isSessionTranscriptProjectionUnavailableError(error)) {
+            throw error;
+          }
+          events = selectVisibleTranscriptEvents(await locked.readEvents());
+        }
+        sourceAssistantMessageId = findLatestEquivalentAssistantMessageId(
+          events,
+          message,
+          params.config,
+          true,
+        );
+      }
+      const correlatedMessage = {
+        ...message,
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          ...(params.deliveryMirror.sourceMessageId !== undefined
+            ? { sourceMessageId: params.deliveryMirror.sourceMessageId }
+            : {}),
+          ...(sourceAssistantMessageId !== undefined ? { sourceAssistantMessageId } : {}),
+        },
+      };
+      message = correlatedMessage;
     }
     params.signal?.throwIfAborted();
     const appendResult = await locked.appendMessage({
@@ -489,7 +547,19 @@ function createAssistantMirrorMessage(params: {
     stopReason: "stop",
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
+    ...(params.deliveryMirror
+      ? {
+          openclawDeliveryMirror: {
+            kind: params.deliveryMirror.kind,
+            ...(params.deliveryMirror.sourceMessageId !== undefined
+              ? { sourceMessageId: params.deliveryMirror.sourceMessageId }
+              : {}),
+            ...(params.deliveryMirror.kind === "channel-final-suppressed"
+              ? { reason: params.deliveryMirror.reason }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -497,6 +567,7 @@ function findLatestEquivalentAssistantMessageId(
   events: readonly SessionTranscriptEvent[],
   message: SessionTranscriptAssistantMessage,
   config: OpenClawConfig | undefined,
+  excludeDeliveryMirrors = false,
 ): string | undefined {
   const expectedText = extractAssistantMirrorComparableText(message, config);
   if (!expectedText) {
@@ -512,7 +583,10 @@ function findLatestEquivalentAssistantMessageId(
     if (!candidate) {
       continue;
     }
-    if (candidate.role !== "assistant") {
+    if (
+      candidate.role !== "assistant" ||
+      (excludeDeliveryMirrors && isDeliveryMirrorAssistantMessage(candidate))
+    ) {
       return undefined;
     }
     return extractAssistantMirrorComparableText(candidate, config) === expectedText &&

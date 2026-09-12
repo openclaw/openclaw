@@ -2007,6 +2007,7 @@ describe("runDoctorSessionSqlite", () => {
       ok: true,
       snapshot: {
         sessionIdsBySessionKey: new Map([["agent:main:v13-reader", "v13-reader-session"]]),
+        sessionKeysBySessionId: new Map(),
         transcriptEventCountsBySessionId: new Map(),
       },
     });
@@ -2042,6 +2043,7 @@ describe("runDoctorSessionSqlite", () => {
       ok: true,
       snapshot: {
         sessionIdsBySessionKey: new Map([["agent:main:v14-reader", "v14-reader-session"]]),
+        sessionKeysBySessionId: new Map(),
         transcriptEventCountsBySessionId: new Map(),
       },
     });
@@ -2090,6 +2092,7 @@ describe("runDoctorSessionSqlite", () => {
         ok: true,
         snapshot: {
           sessionIdsBySessionKey: new Map([["agent:main:compact", "promoted-session-id"]]),
+          sessionKeysBySessionId: new Map(),
           transcriptEventCountsBySessionId: new Map([["promoted-session-id", 2]]),
         },
       });

@@ -1,13 +1,20 @@
 ---
-summary: "What `plugins uninstall` removes, and how `plugins update` resolves sources, channels, pins, and integrity drift"
+summary: "What `plugins uninstall` removes, how `plugins update` resolves sources, channels, pins, and integrity drift, and reloading edited plugins"
 title: "Uninstall and update plugins"
 read_when:
   - You want to remove a plugin and know exactly what uninstall touches
   - You want to update a plugin and understand pin, channel, and integrity rules
+  - You want to reload an edited plugin without restarting the Gateway
 ---
 
-This page covers the two commands that change an existing install:
-`openclaw plugins uninstall` and `openclaw plugins update`.
+This page covers removing and updating installed plugins, and reloading edited
+plugin code without restarting the Gateway.
+
+With a running Gateway, ordinary uninstall waits for the package runtime owners
+to stop before removing files, and update refreshes the Gateway after the local
+package operation finishes. Without a running Gateway, these commands save changes
+for its next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+for the separate CLI installation flow.
 
 ## Uninstall
 
@@ -20,7 +27,7 @@ openclaw plugins uninstall <id> --force
 
 `uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
-Matching load-path references are removed before package files so symlink aliases cannot leave invalid config; if file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
+Matching load-path references are removed before package files so symlink aliases cannot leave invalid config. With a running Gateway, runtime drain also precedes removal of the install record, including with `--keep-files` or a linked install. If runtime drain or file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
@@ -45,19 +52,21 @@ openclaw plugins update openclaw-codex-app-server --acknowledge-install-policy-w
 
 Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in shared SQLite state. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
 
+On source installations, a selected plugin built with the host stays in use. Named updates, `--all`, and stable/beta core updates report why the registry copy was not admitted and leave its dormant install record unchanged. Package ownership checks still apply to plugins being updated; explicit plugin paths retain their selection priority.
+
 `update --all` reports and skips orphaned path-source install records so remaining plugins can update. Remove an orphan record with `openclaw plugins uninstall <id>` when its files are no longer needed.
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
-    When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins. Previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
+    When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins. Stored dist-tags such as `@beta` retain their selected release line.
 
     The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
 
-    Exact pinned npm and trusted official ClawHub installs stay pinned during targeted and bulk updates, including dry runs. If OpenClaw can resolve a newer release on the package's registry default line, it reports the pin and prints an explicit command to replace it. The ClawHub recovery command uses `plugins install clawhub:<package> --force` because `plugins update` accepts selector overrides only for npm records. Official plugins still follow the configured core-channel compatibility policy after the selector changes.
+    Verified OpenClaw-owned npm and official ClawHub plugins resume automatic updates when their recorded exact OpenClaw release is no newer than core and their catalog source follows the default release line. The update uses the existing channel and compatibility rules, retains the recorded registry, and saves the default selector only after a successful install or an unchanged-artifact verification. For npm installs, recovery can save the default selector without downloading or reinstalling when the existing version and recorded artifact identity already match the target.
 
-    Bulk `openclaw plugins update --all` also preserves ordinary exact pins and explicit tags. Floating trusted official records follow the current registry-channel policy. Doctor separately refreshes stale official runtime plugins bound to the current OpenClaw release cohort, keeping the recorded registry and recording an exact replacement version when the previous npm record was pinned.
+    An explicit npm version or tag supplied in the current command remains authoritative. Newer release pins, independently versioned packages, third-party packages, local, Git, marketplace, and custom ClawHub sources keep their existing selectors. An npm registry mirror stays in use while eligible official npm packages receive recovery. If a retained pin has a newer available release, OpenClaw prints an explicit replacement command. ClawHub selector replacement uses `plugins install clawhub:<package> --force` because `plugins update` accepts explicit selector overrides only for npm records.
 
-    Older official-plugin syncs could record an exact version automatically. That record is indistinguishable from an intentional user pin, so OpenClaw reports newer releases without silently unpinning it. Use the printed package command when you want to change the recorded selector.
+    Older official-plugin syncs could save an exact version without a user request. Those records do not distinguish automatic pins from manual ones, so qualifying older OpenClaw release pins resume automatic updates in both cases. The same recovery applies to targeted updates, `--all`, `openclaw update`, and `openclaw update repair`. A failed replacement keeps the previous install record for retry.
 
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 
@@ -65,16 +74,16 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. On an installed beta core, eligible official npm and trusted official ClawHub plugins with default/latest intent target that exact core version when the effective plugin update channel is beta. This prevents a moving plugin `@beta` tag from selecting a different beta release. Targeted updates with an explicitly configured stable channel retain that selection. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
+    Targeted `openclaw plugins update <id-or-npm-spec>` uses the configured update channel when present. Otherwise, recognized official plugins inherit OpenClaw's registry channel. Bulk `openclaw plugins update --all` uses the same registry-channel resolver for official plugins. Moving selectors remain moving even when the downloaded artifact has an exact version; recovered OpenClaw release pins follow that same policy.
 
-    `openclaw update` resolves plugin targets from the newly installed core, so a one-off beta `--tag` also aligns eligible official npm and trusted official ClawHub plugins even when the configured channel is stable. Other default-line npm and ClawHub plugin records on the beta channel try `@beta` first. OpenClaw falls back to the recorded default/latest spec only if the selected beta release is unavailable. Integrity, compatibility, trust, install-policy, and capability-consent failures do not trigger fallback. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit non-`latest` tags stay pinned to that selector for targeted and bulk updates except while completing the trusted plugin id replacement above.
+    `openclaw update` resolves plugin targets from the newly installed core. npm updates on the beta channel select the newer of the package's `beta` and `latest` releases; ClawHub default-line updates try `@beta` and can fall back to the recorded default/latest selector when that release is unavailable. Integrity, compatibility, trust, install-policy, and capability-consent failures do not trigger source fallback. An unavailable plugin update leaves a notice without failing an otherwise successful core update. Explicit selectors retain their meaning, with the managed OpenClaw release-pin recovery described above.
 
   </Accordion>
   <Accordion title="Existing plugin source choices">
-    Updates retain the recorded npm or ClawHub source and selector. Older install records do not distinguish automatic ClawHub selection from an explicit `clawhub:` request, so OpenClaw does not silently switch those records to npm. To change an existing plugin deliberately, review and run `openclaw plugins install npm:<package> --force`. Automatic externalization of an image-owned bundled plugin uses npm first and its declared ClawHub source second.
+    Updates retain the recorded npm or ClawHub source. Older install records do not distinguish automatic ClawHub selection from an explicit `clawhub:` request, so OpenClaw does not silently switch those records to npm. To change an existing plugin deliberately, review and run `openclaw plugins install npm:<package> --force`. Automatic externalization of an image-owned bundled plugin uses npm first and its declared ClawHub source second.
   </Accordion>
   <Accordion title="Version checks and integrity drift">
-    Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, the update is skipped without downloading, reinstalling, or rewriting `openclaw.json`.
+    Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, it avoids downloading or reinstalling. A requested selector change or managed release-pin recovery can still update the plugin index without rewriting `openclaw.json`.
 
     When a stored integrity hash exists and the fetched artifact hash changes, OpenClaw treats that as npm artifact drift. The interactive `openclaw plugins update` command prints the expected and actual hashes and asks for confirmation before proceeding. Non-interactive update helpers fail closed unless the caller supplies an explicit continuation policy.
 
@@ -86,3 +95,40 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
     Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Review outcomes are printed informationally and continue; blocked releases remain non-installable. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
   </Accordion>
 </AccordionGroup>
+
+## Reload
+
+```bash
+openclaw plugins reload <plugin-id>
+openclaw plugins reload <plugin-id> --json
+```
+
+Reload a discovered plugin after editing its TypeScript source, imported helpers,
+or manifest, including plugins selected through `plugins.load.paths`. The command
+requires a running Gateway and waits for the replacement to finish without
+restarting it. Configured enablement is preserved, and unchanged
+plugins keep their runtime instances. JSON output includes `pluginIds`,
+`restartRequired: false`, and the applied runtime receipt with its generation
+and source digests when available. The CLI still takes one plugin ID; the Gateway
+request uses the same target-array envelope as a multi-plugin reload.
+
+Cleanup is best effort. A successful replacement can return `warnings` when an
+old service or cleanup hook could not stop. Modules and native libraries may
+remain loaded after their registrations are removed. Inspect the warning before
+retrying; restart the Gateway if residual plugin behavior causes problems.
+
+Bundled plugins can reload while preserving their enabled or disabled policy.
+Reload does not rebuild compiled bundled code; changed compiled code still needs
+a build and Gateway restart. Reloading a discovered source does not create an
+install record or grant permission to install, replace, or remove its files.
+
+Reload also works with externally managed config (`OPENCLAW_CONFIG_READONLY=1`)
+and in Nix mode (`OPENCLAW_NIX_MODE=1`), including config composed with `$include`.
+It preserves config and installation state. If changed capabilities need new
+consent, record that acceptance through the deployment owner before reloading.
+
+Changed declared capabilities may require another review. Interactive callers are
+prompted; use `--accept-capabilities` only after reviewing the change. If preparation
+fails, the error reports whether a replacement was published. A failure after
+publication can leave the new generation active; inspect the reported state before
+retrying.

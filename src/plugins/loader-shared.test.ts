@@ -451,6 +451,67 @@ module.exports = { id: "source-fixture", register(api) {
                     }) === alternate,
                   ).toBe(true);
 
+                  const replacement = loadOpenClawPlugins({
+                    ...alternateOptions,
+                    cache: false,
+                    previousRegistry: registry,
+                  });
+                  expect(
+                    replacement.cliRegistrars.flatMap((registrar) => registrar.descriptors),
+                  ).toEqual([{ ...descriptor, description: "Alternate command" }]);
+                  for (const change of ["source-invalid", "resolved-secret", "disabled"] as const) {
+                    const nextRuntime: OpenClawConfig = {
+                      ...runtime,
+                      plugins: {
+                        ...runtime.plugins,
+                        entries: {
+                          [id]: {
+                            enabled: change !== "disabled",
+                            config: {
+                              credential:
+                                change === "resolved-secret"
+                                  ? "rotated-fixture-key"
+                                  : "resolved-fixture-key",
+                            },
+                          },
+                        },
+                      },
+                    };
+                    const nextSource =
+                      change === "resolved-secret"
+                        ? source
+                        : {
+                            ...source,
+                            plugins: {
+                              ...source.plugins,
+                              entries: {
+                                [id]: {
+                                  enabled: change !== "disabled",
+                                  config: { credential: null },
+                                },
+                              },
+                            },
+                          };
+                    const rejected = loadOpenClawPlugins({
+                      ...options,
+                      config: nextRuntime,
+                      activationSourceConfig: nextSource,
+                      cache: false,
+                      previousRegistry: registry,
+                    });
+                    expect(rejected.cliRegistrars).toHaveLength(0);
+                    expect(rejected.plugins.find((plugin) => plugin.id === id)).toMatchObject({
+                      status: change === "disabled" ? "disabled" : "error",
+                      error: expect.stringContaining(
+                        change === "resolved-secret"
+                          ? "paired runtime config was not hydrated"
+                          : change === "disabled"
+                            ? "disabled"
+                            : "invalid config",
+                      ),
+                    });
+                  }
+
                   setRuntimeConfigSnapshot(candidate, structuredClone(source));
                   expect(loadOpenClawPlugins({ ...options, config: candidate }) === registry).toBe(
                     true,

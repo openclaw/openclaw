@@ -2,7 +2,10 @@ import { AsyncResource } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
+import {
+  inspectSqliteSchemaHeader,
+  prepareSqliteReadOnlyLocation,
+} from "../infra/sqlite-snapshot-source.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeTrackedStateDatabase, openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import {
@@ -63,6 +66,9 @@ it("snapshots the drained source and committed WAL through its native mutation o
             );
             const owner = openOpenClawStateDatabase({ env: state.env });
             expect(await rows(pathname)).toEqual([{ state_key: "candidate.snapshot" }]);
+            expect(await inspectSqliteSchemaHeader(pathname)).toMatchObject({
+              userVersion: owner.db.prepare("PRAGMA user_version").get()?.user_version,
+            });
             expect(owner.db.isOpen).toBe(true);
             expect(openOpenClawStateDatabase({ env: state.env })).toBe(owner);
             await expect(outsider.runInAsyncScope(() => snapshot(pathname))).rejects.toThrow(
@@ -98,6 +104,9 @@ it("refuses inspection inside a transaction without releasing its real SQLite wr
           owner.db.exec("BEGIN IMMEDIATE");
           try {
             await expect(snapshot(pathname)).rejects.toThrow(/outside a transaction/);
+            await expect(inspectSqliteSchemaHeader(pathname)).rejects.toThrow(
+              /outside a transaction/,
+            );
             const competing = spawnSync(
               process.execPath,
               [

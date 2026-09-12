@@ -6,7 +6,7 @@ import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
@@ -32,6 +32,7 @@ import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-statu
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
+import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
@@ -46,7 +47,6 @@ import {
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
-import { readSessionTerminalModelFromTranscript } from "./session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   GatewaySessionModelSource,
@@ -219,13 +219,13 @@ export function buildGatewaySessionRow(params: {
     rowContext: params.rowContext,
   });
   // Display aliases do not change the selected route's catalog or runtime policy.
-  const completedModel =
-    entry?.status === "done" && entry.lastRunId && entry.fallbackNotice
-      ? readSessionTerminalModelFromTranscript(
-          { agentId: sessionAgentId, sessionKey: key, sessionId: entry.sessionId, storePath },
-          entry.lastRunId,
-        )
-      : undefined;
+  const completedModel = readSessionFallbackModel({
+    selectedProvider: rowModelProvider,
+    selectedModel: rowModel,
+    sessionEntry: entry,
+    config: cfg,
+    sessionScope: { agentId: sessionAgentId, sessionKey: key, storePath },
+  });
   const runtimeModels = resolveSelectedAndActiveModel({
     selectedProvider: rowModelProvider,
     selectedModel: rowModel,
@@ -293,12 +293,7 @@ export function buildGatewaySessionRow(params: {
     providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
   });
   const catalogEntry =
-    rowModelCatalog && rowModelProvider && rowModel
-      ? findModelCatalogEntry(rowModelCatalog, {
-          provider: rowModelProvider,
-          modelId: rowModel,
-        })
-      : undefined;
+    rowModelCatalog && rowModelProvider && rowModel ? thinkingProjection.catalogEntry : undefined;
   const contextWindowProfile = resolveModelContextWindowProfile({
     catalogEntry,
     selected: entry?.contextWindow,

@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
-export type CodexNativeSubagentHistoryOwner = {
-  parentThreadId: string;
-  sessionId: string;
-  lifecycleRevision?: string;
-  connectionFingerprint: string;
-};
+const nonBlankString = z.string().refine((value) => Boolean(value.trim()));
+const historyOwnerSchema = z.object({
+  parentThreadId: nonBlankString,
+  sessionId: nonBlankString,
+  lifecycleRevision: nonBlankString.optional(),
+  connectionFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+export type CodexNativeSubagentHistoryOwner = z.infer<typeof historyOwnerSchema>;
 
 export function codexNativeSubagentHistoryConnectionFingerprint(
   binding: CodexAppServerThreadBinding,
@@ -50,25 +53,10 @@ export function readCodexNativeSubagentHistoryOwner(
   if (value === undefined) {
     return undefined;
   }
-  const owner = asOptionalRecord(value);
-  if (
-    typeof owner?.parentThreadId !== "string" ||
-    !owner.parentThreadId.trim() ||
-    typeof owner.sessionId !== "string" ||
-    !owner.sessionId.trim() ||
-    (owner.lifecycleRevision !== undefined &&
-      (typeof owner.lifecycleRevision !== "string" || !owner.lifecycleRevision.trim())) ||
-    typeof owner.connectionFingerprint !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(owner.connectionFingerprint)
-  ) {
+  const owner = historyOwnerSchema.safeParse(value);
+  if (!owner.success) {
     throw new Error("Subagent history owner is invalid.");
   }
-  return {
-    parentThreadId: owner.parentThreadId,
-    sessionId: owner.sessionId,
-    ...(typeof owner.lifecycleRevision === "string"
-      ? { lifecycleRevision: owner.lifecycleRevision }
-      : {}),
-    connectionFingerprint: owner.connectionFingerprint,
-  };
+  const { lifecycleRevision, ...required } = owner.data;
+  return lifecycleRevision === undefined ? required : { ...required, lifecycleRevision };
 }

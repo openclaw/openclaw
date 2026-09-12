@@ -21,6 +21,7 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
+import { dispatchGroupThread } from "./group-thread-dispatch.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type {
@@ -193,7 +194,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
 }
 
 type DispatchInboundResult = DispatchFromConfigResult;
-export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
+export { settleReplyDispatcher } from "./dispatch-dispatcher.js";
 
 /** Dispatches one finalized inbound message through reply resolution and queued delivery. */
 export async function dispatchInboundMessage(params: {
@@ -243,8 +244,9 @@ export async function dispatchInboundMessage(params: {
     run: () =>
       measureDiagnosticsTimelineSpan(
         "auto_reply.dispatch_reply_from_config",
-        () =>
-          (params.dispatchReplyFromConfig ?? dispatchReplyFromConfig)({
+        async () => {
+          const dispatch = params.dispatchReplyFromConfig ?? dispatchReplyFromConfig;
+          const request = {
             ctx: finalized,
             cfg: params.cfg,
             dispatcher: params.dispatcher,
@@ -252,7 +254,9 @@ export async function dispatchInboundMessage(params: {
             replyResolver: params.replyResolver,
             onSessionMetadataChanges: params.onSessionMetadataChanges,
             usePublishedModelRuntime: true,
-          }),
+          };
+          return (await dispatchGroupThread(request, dispatch)) ?? (await dispatch(request));
+        },
         {
           phase: "agent-turn",
           config: params.cfg,

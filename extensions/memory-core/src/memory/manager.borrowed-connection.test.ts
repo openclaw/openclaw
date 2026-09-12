@@ -206,7 +206,7 @@ describe("memory manager shared agent connection", () => {
     closeOpenClawAgentDatabasesForTest();
     expect(originalDb.isOpen).toBe(false);
     const replacement = await fixture.getFreshManager(createConfig());
-    expect(replacement).not.toBe(first);
+    expect(replacement === first).toBe(false);
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
     expect(managerDatabase(replacement) === shared.db).toBe(true);
     await first.close();

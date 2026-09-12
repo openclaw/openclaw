@@ -29,7 +29,10 @@ import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
-import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
+import {
+  createWorkerPlacementInitialRecovery,
+  installWorkerPlacementReconcileGuard,
+} from "./server-worker-placement-reconcile-guard.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import {
   createWorkerPlacementNodeWorkspaceBindingResolver,
@@ -433,6 +436,11 @@ export function createGatewayWorkerPlacementRuntime(
         )?.gitAuthor,
     }),
     createGatewayWorkerDispatchAdmission(loadWorkerPlacementSessionRuntimeModule),
+    createWorkerPlacementInitialRecovery({
+      ...params,
+      isStopping: () =>
+        stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
+    }),
   );
   const dispatchService = {
     ...rawDispatchService,

@@ -38,9 +38,12 @@ release profile's required gates. No second commit or validation run is needed
 solely to name a Release SHA.
 
 If notes change after Code qualification, use `$openclaw-changelog-update`
-with current main for canonical PR provenance and commit only `CHANGELOG.md`.
-The complete Code-to-Release delta must be exactly that file to optionally use
-`changelog-only-release-v1`. That path requires green Code product evidence
+with current main for canonical PR provenance and commit the selected
+`CHANGELOG/YYYY.M.PATCH.md`, with any matching record and root index updates.
+The complete Code-to-Release delta must include that entry and only those
+paths, without renames or deletions, to optionally use
+`split-changelog-release-v1`. Historical root-only receipts retain
+`changelog-only-release-v1`. The split path requires green Code product evidence
 and fresh Release SHA npm qualification/Docker preparation; it does not reuse
 the earlier package bytes. Any other source change requires fresh product
 qualification.

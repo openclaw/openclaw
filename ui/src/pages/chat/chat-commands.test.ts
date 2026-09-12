@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import {
-  invalidateChatMetadataStore,
-  beginChatMetadataPublication,
-} from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { beginChatMetadataPublication } from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
@@ -29,14 +29,10 @@ function requireCommandByName(name: string): Record<string, unknown> {
   return command as unknown as Record<string, unknown>;
 }
 
+const requireRecord = createRequireRecord("record", "expected-label-object");
+
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 function connectedSessionAccess() {

@@ -10,6 +10,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH } from "../../../../scripts/lib/package-dist-inventory-contract.mts";
 import { writePackageDistInventoryForPublish } from "../../../../scripts/lib/package-dist-inventory.ts";
 import {
   preparePackageDocsMap,
@@ -288,6 +289,7 @@ describe("package-openclaw-for-docker", () => {
         files["package.json"],
       );
       expect(JSON.parse(fs.readFileSync(inventoryPath, "utf8"))).toEqual([
+        PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
         "dist/shared-runtime.js",
       ]);
       expect(fs.existsSync(path.join(sourceDir, ".openclaw-lifecycle-pending"))).toBe(false);
@@ -609,7 +611,7 @@ describe("package-openclaw-for-docker", () => {
         JSON.parse(
           fs.readFileSync(path.join(sourceDir, "dist/postinstall-inventory.json"), "utf8"),
         ),
-      ).toEqual(["dist/shared-runtime.js"]);
+      ).toEqual([PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH, "dist/shared-runtime.js"]);
     },
   );
 
@@ -633,7 +635,7 @@ describe("package-openclaw-for-docker", () => {
     );
     expect(
       JSON.parse(fs.readFileSync(path.join(sourceDir, "dist/postinstall-inventory.json"), "utf8")),
-    ).toEqual(["dist/shared-runtime.js"]);
+    ).toEqual([PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH, "dist/shared-runtime.js"]);
     expect(fs.existsSync(path.join(sourceDir, "dist/openclaw-install-guard"))).toBe(false);
     expect(fs.existsSync(path.join(sourceDir, ".openclaw-lifecycle-pending"))).toBe(false);
   });
@@ -679,6 +681,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/output-root-guard.mjs",
       "scripts/lib/package-lifecycle-marker.mjs",
       "scripts/lib/record-shared.mjs",
+      "scripts/lib/release-changelog.mjs",
       "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
@@ -911,8 +914,16 @@ describe("package-openclaw-for-docker", () => {
       .map((file) => `dist/${file}`)
       .toSorted();
 
-    expect(inventory).toEqual(publicFiles);
-    expect(packagedFiles).toEqual([...publicFiles, "dist/postinstall-inventory.json"].toSorted());
+    expect(inventory).toEqual(
+      [...publicFiles, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH].toSorted(),
+    );
+    expect(packagedFiles).toEqual(
+      [
+        ...publicFiles,
+        PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+        "dist/postinstall-inventory.json",
+      ].toSorted(),
+    );
   });
 
   it("omits stale hashed dist output when frozen sources expose only their own build", async () => {

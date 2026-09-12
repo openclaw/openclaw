@@ -52,7 +52,10 @@ suite.define(() => {
               {
                 id: "aws",
                 providerId: "crabbox",
-                machines: [{ id: "fast", label: "Fast" }],
+                machines: [
+                  { id: "standard", label: "Standard", default: true },
+                  { id: "fast", label: "Fast" },
+                ],
               },
               { id: "machine0", providerId: "crabbox" },
             ],
@@ -72,19 +75,17 @@ suite.define(() => {
       const trigger = page.locator("#new-session-where-trigger");
       const place = page.locator("wa-popover.new-session-page__where-popover");
       await trigger.click();
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
-      await trigger.click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       await place.getByRole("button", { name: "Fast", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await place.getByRole("button", { name: "Cloud · machine0" }).click();
+      await place.getByRole("button", { name: "machine0", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("machine0");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
-      await trigger.click();
       await expect
-        .poll(() => place.getByRole("button", { name: "Cloud · machine0" }).isDisabled())
+        .poll(() => place.getByRole("button", { name: "machine0", exact: true }).isDisabled())
         .toBe(false);
-      expect(await place.getByText("Machine", { exact: true }).count()).toBe(0);
-      expect(await place.locator('[data-value^="machine:"]').count()).toBe(0);
+      await expect.poll(() => place.getByText("Machine", { exact: true }).isVisible()).toBe(false);
+      await expect.poll(() => place.locator('[data-value^="machine:"]:visible').count()).toBe(0);
       await captureUiProof(suite, page, "optionless-cloud-profile.png");
       await page.keyboard.press("Escape");
 
@@ -229,14 +230,14 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await trigger.click();
       await place.getByText("Machine", { exact: true }).waitFor();
-      await place.getByRole("button", { name: /Fast/ }).click();
+      await place.locator('[data-value="machine:fast"]').click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
+      expect(await trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await page.keyboard.press("Escape");
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
@@ -365,9 +366,11 @@ suite.define(() => {
         await trigger.click();
         await writeFile(
           path.join(suite.artifactDir, "cloud-profile-refresh-retention", "01-before-refresh.png"),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            place.getByRole("button", { name: "Cloud · aws" }),
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator('wa-popup.popover > [part="popup"]'),
+            [place.locator('[data-value="cloud:aws"]')],
+          ),
         );
         await page.keyboard.press("Escape");
       }
@@ -411,15 +414,16 @@ suite.define(() => {
       );
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
+      expect(await trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await expect.poll(() => startButton.isDisabled()).toBe(false);
       await trigger.click();
-      const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
+      const retainedCloudProfile = place.locator('[data-value="cloud:aws"]');
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
-      await expect
-        .poll(() => tooltipTitleText(retainedCloudProfile))
-        .toBe("Cloud worker provider: crabbox");
-      await expect.poll(() => place.getByRole("button", { name: /Fast/ }).isVisible()).toBe(true);
+      await retainedCloudProfile.click();
+      const retainedMachine = place.locator('[data-value="machine:fast"]');
+      await expect.poll(() => retainedMachine.isVisible()).toBe(true);
+      expect(await retainedMachine.getAttribute("aria-pressed")).toBe("true");
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(
@@ -427,9 +431,11 @@ suite.define(() => {
             "cloud-profile-refresh-retention",
             "03-after-retry-exhaustion.png",
           ),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            retainedCloudProfile,
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator(".new-session-page__cloud-configuration"),
+            [retainedCloudProfile, place.locator('[data-value="machine:fast"]')],
+          ),
         );
       }
       await page.keyboard.press("Escape");

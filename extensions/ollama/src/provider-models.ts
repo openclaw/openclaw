@@ -10,7 +10,7 @@ import {
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  isOllamaCloudOrigin,
+  isHostedOllamaCloud,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -453,7 +453,7 @@ export function capLocalOllamaModelContext(
 ): ModelDefinitionConfig {
   // Direct hosted routes use bare model IDs; their context is not a local KV allocation.
   if (
-    isOllamaCloudOrigin(baseUrl) ||
+    isHostedOllamaCloud(baseUrl) ||
     isOllamaCloudModel(model.id) ||
     typeof model.contextWindow !== "number"
   ) {

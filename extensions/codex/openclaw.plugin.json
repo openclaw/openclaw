@@ -1,6 +1,9 @@
 {
   "id": "codex",
-  "categories": ["runtime", "tools", "web"],
+  "categories": ["agent-runtimes"],
+  "providers": ["codex"],
+  "syntheticAuthRefs": ["codex"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "backupResources": [
     {
       "disposition": "regenerable",
@@ -67,7 +70,7 @@
     "codex": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "gpt-5.6-sol"
+        "image": "gpt-6-astra"
       }
     }
   },
@@ -367,6 +370,19 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
+          "cyberFailover": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "string", "enum": ["auto", "off"], "default": "auto" },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "default": "gpt-daybreak-blue-latest"
+              },
+              "cooloffMs": { "type": "number", "minimum": 1, "default": 600000 }
+            }
+          },
           "networkProxy": {
             "type": "object",
             "additionalProperties": false,

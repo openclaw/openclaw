@@ -8,11 +8,15 @@ import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineControl,
 } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
-import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
+import {
+  createProviderHttpError,
+  readProviderJsonArrayFieldResponse,
+} from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service-target.js";
+import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
@@ -288,28 +292,38 @@ function malformedEmbeddingResponse(): Error {
   return new Error("openai-compatible embeddings failed: malformed JSON response");
 }
 
-async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
-  if (!response.body || response.bodyUsed) {
-    return undefined;
-  }
-  const prefix = await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
-    () => undefined,
+async function createEmbeddingHttpError(
+  response: Response,
+  requestHeaders: HeadersInit,
+): Promise<Error> {
+  const prefix =
+    response.body && !response.bodyUsed
+      ? await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
+          () => undefined,
+        )
+      : undefined;
+  const safeBody = prefix?.text
+    ? redactProviderResponseErrorText(prefix.text, requestHeaders, {
+        sourceTruncated: prefix.truncated,
+      })
+    : undefined;
+  const error = await createProviderHttpError(
+    new Response(safeBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+    "openai-compatible embeddings failed",
+    { requestHeaders },
   );
-  if (!prefix?.text) {
-    return undefined;
+  let snippet = safeBody;
+  if (snippet && snippet.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
+    snippet = `${truncateUtf16Safe(snippet, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+  } else if (snippet && prefix?.truncated) {
+    snippet = `${snippet}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
   }
-  const { text, truncated } = prefix;
-  if (text.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
-    return `${truncateUtf16Safe(text, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
-  }
-  return truncated ? `${text}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}` : text;
-}
-
-async function createEmbeddingHttpError(response: Response): Promise<Error> {
-  const snippet = await readEmbeddingErrorBodySnippet(response);
-  return new Error(
-    `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`,
-  );
+  error.message = `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`;
+  return error;
 }
 
 async function postEmbeddingRequest(params: {
@@ -355,7 +369,7 @@ async function postEmbeddingRequest(params: {
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
         if (!response.ok) {
-          throw await createEmbeddingHttpError(response);
+          throw await createEmbeddingHttpError(response, client.headers);
         }
         return readEmbeddingVectors(
           await readProviderJsonArrayFieldResponse(

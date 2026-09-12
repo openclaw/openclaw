@@ -37,7 +37,9 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyChild
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -47,6 +49,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
@@ -345,7 +348,7 @@ class SettingsScreensContrastTest {
       gateway.healthReady = false
       model.refreshChat()
     }
-    awaitConnectedHealthFailure(model)
+    awaitConnectedHealthFailure(model, showHeader = false)
     chatHealthStatusValue("Not ready").performScrollTo().assertIsDisplayed()
   }
 
@@ -360,21 +363,43 @@ class SettingsScreensContrastTest {
         .fetchSemanticsNode()
         .config[SemanticsProperties.ContentDescription]
         .single()
-    disconnectAndReconnectStatusControl(model, showHeader = true)
-    composeRule.onNodeWithContentDescription(readyDescription).assertIsDisplayed()
+    try {
+      disconnectAndReconnectStatusControl(model, showHeader = true)
+      composeRule.onNodeWithContentDescription(readyDescription).assertIsDisplayed()
 
-    composeRule.runOnIdle {
-      gateway.healthReady = false
-      model.refreshChat()
+      composeRule.runOnIdle {
+        gateway.healthReady = false
+        model.refreshChat()
+      }
+      awaitConnectedHealthFailure(model, showHeader = true)
+      composeRule.onNodeWithContentDescription(readyDescription.removeSuffix(ready) + nativeString("Not ready")).assertIsDisplayed()
+    } catch (failure: AssertionError) {
+      runCatching {
+        println("Chat header failure: initialHeader=$readyDescription, connected=${model.gatewayConnectionDisplay.value.isConnected}, health=${model.chatHealthOk.value}")
+        println("Chat header work: historyLoading=${model.chatHistoryLoading.value}, pendingRuns=${model.pendingRunCount.value}, sessionCreating=${model.chatSessionCreating.value}")
+        println("Chat header display: ${app.resources.configuration}, metrics=${app.resources.displayMetrics}")
+      }.onFailure(failure::addSuppressed)
+      for (unmerged in listOf(false, true)) {
+        runCatching {
+          println(
+            composeRule.onAllNodes(isRoot(), useUnmergedTree = unmerged).printToString(maxDepth = Int.MAX_VALUE),
+          )
+        }.onFailure(failure::addSuppressed)
+      }
+      throw failure
     }
-    awaitConnectedHealthFailure(model)
-    composeRule.onNodeWithContentDescription(readyDescription.removeSuffix(ready) + nativeString("Not ready")).assertIsDisplayed()
   }
 
-  private fun chatHealthStatusValue(value: String) =
-    composeRule.onNode(
-      hasText(nativeString(value)) and hasAnyAncestor(hasAnyChild(hasText(nativeString("Chat")))),
-    )
+  private fun chatHealthStatusValue(value: String) = composeRule.onNode(chatStatusMatcher(showHeader = false, value = value))
+
+  private fun chatStatusMatcher(
+    showHeader: Boolean,
+    value: String,
+  ) = if (showHeader) {
+    hasContentDescription(", ${nativeString(value)}", substring = true)
+  } else {
+    hasText(nativeString(value)) and hasAnyAncestor(hasAnyChild(hasText(nativeString("Chat"))))
+  }
 
   private fun showLiveChatStatus(showHeader: Boolean): MainViewModel {
     app = RuntimeEnvironment.getApplication() as NodeApp
@@ -406,17 +431,21 @@ class SettingsScreensContrastTest {
       }
     }
     composeRule.runOnIdle { model.connect(gateway.endpoint) }
-    awaitHealthyChatStatus(model)
+    awaitHealthyChatStatus(model, showHeader)
     return model
   }
 
-  private fun awaitHealthyChatStatus(model: MainViewModel) {
+  private fun awaitHealthyChatStatus(
+    model: MainViewModel,
+    showHeader: Boolean,
+  ) {
     composeRule.waitUntil(10_000) {
       // Live runtime updates reach ViewModel flows through Robolectric's paused main looper.
       shadowOf(Looper.getMainLooper()).idle()
       model.gatewayConnectionDisplay.value.isConnected && model.chatHealthOk.value &&
         !model.chatHistoryLoading.value && model.chatMessages.value.isEmpty() &&
-        model.pendingRunCount.value == 0 && !model.chatSessionCreating.value
+        model.pendingRunCount.value == 0 && !model.chatSessionCreating.value &&
+        composeRule.onAllNodes(chatStatusMatcher(showHeader, "Ready")).fetchSemanticsNodes().isNotEmpty()
     }
   }
 
@@ -427,7 +456,8 @@ class SettingsScreensContrastTest {
     composeRule.runOnIdle { model.disconnect() }
     composeRule.waitUntil(10_000) {
       shadowOf(Looper.getMainLooper()).idle()
-      !model.gatewayConnectionDisplay.value.isConnected && !model.isConnected.value && !model.chatHealthOk.value
+      !model.gatewayConnectionDisplay.value.isConnected && !model.isConnected.value && !model.chatHealthOk.value &&
+        composeRule.onAllNodesWithText(nativeString(if (showHeader) "Gateway offline" else "Offline")).fetchSemanticsNodes().isNotEmpty()
     }
     if (showHeader) {
       composeRule.onAllNodesWithText(nativeString("Gateway offline"))[0].assertIsDisplayed()
@@ -435,15 +465,19 @@ class SettingsScreensContrastTest {
       composeRule.onAllNodesWithText(nativeString("Offline"))[0].performScrollTo().assertIsDisplayed()
     }
     composeRule.runOnIdle { model.connect(gateway.endpoint) }
-    awaitHealthyChatStatus(model)
+    awaitHealthyChatStatus(model, showHeader)
   }
 
-  private fun awaitConnectedHealthFailure(model: MainViewModel) {
+  private fun awaitConnectedHealthFailure(
+    model: MainViewModel,
+    showHeader: Boolean,
+  ) {
     composeRule.waitUntil(10_000) {
       shadowOf(Looper.getMainLooper()).idle()
       model.gatewayConnectionDisplay.value.isConnected && !model.chatHealthOk.value &&
         !model.chatHistoryLoading.value && model.chatMessages.value.isEmpty() &&
-        model.pendingRunCount.value == 0 && !model.chatSessionCreating.value
+        model.pendingRunCount.value == 0 && !model.chatSessionCreating.value &&
+        composeRule.onAllNodes(chatStatusMatcher(showHeader, "Not ready")).fetchSemanticsNodes().isNotEmpty()
     }
   }
 

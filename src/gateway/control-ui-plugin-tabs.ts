@@ -1,12 +1,17 @@
+import type {
+  ControlUiPluginTab,
+  ControlUiPluginWidgetKind,
+  PluginControlUiDescriptor as WireControlUiDescriptor,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { BOARD_REPORT_WIDGET_KIND } from "../boards/board-report.js";
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
-// Descriptors come from the process-root registry installed by the gateway.
+// Descriptors follow the current Gateway's registry, including request-local snapshots.
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
 import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
@@ -23,26 +28,6 @@ import {
 } from "./server/plugins-http/route-match.js";
 
 const log = createSubsystemLogger("gateway/control-ui");
-
-type ControlUiPluginTab = {
-  pluginId: string;
-  id: string;
-  label: string;
-  description?: string;
-  icon?: string;
-  path?: string;
-  placement?: string;
-  slug?: string;
-  group?: "control" | "agent";
-  order?: number;
-  requiresGatewayAuth?: boolean;
-};
-
-type ControlUiPluginWidgetKind = {
-  pluginId: string;
-  kind: string;
-  label: string;
-};
 
 // `session` is core-reserved; its widgets are scope-gated rather than plugin-gated.
 const CORE_CONTROL_UI_WIDGET_KINDS: readonly ControlUiPluginWidgetKind[] = [
@@ -73,8 +58,46 @@ function findControlUiTabGatewayRoute(
 
 type ControlUiDescriptorEntry = {
   pluginId: string;
+  pluginName?: string;
   descriptor: PluginControlUiDescriptor;
 };
+
+function visibleDescriptors(
+  entries: readonly ControlUiDescriptorEntry[],
+  scopes: readonly string[],
+) {
+  return entries.filter(({ descriptor }) =>
+    (descriptor.requiredScopes ?? []).every(
+      (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
+    ),
+  );
+}
+
+/** Full descriptors and hello projections share the same scope admission. */
+export function listControlUiPluginDescriptors(
+  scopes: readonly string[],
+): WireControlUiDescriptor[] {
+  return visibleDescriptors(getPluginRegistryForContext()?.controlUiDescriptors ?? [], scopes)
+    .map(({ pluginId, pluginName, descriptor }) => ({
+      pluginId,
+      pluginName,
+      id: descriptor.id,
+      surface: descriptor.surface,
+      label: descriptor.label,
+      description: descriptor.description,
+      placement: descriptor.placement,
+      schema: descriptor.schema,
+      requiredScopes: descriptor.requiredScopes,
+      icon: descriptor.icon,
+      path: descriptor.path,
+      group: descriptor.group,
+      order: descriptor.order,
+    }))
+    .toSorted(
+      (left, right) =>
+        left.pluginId.localeCompare(right.pluginId) || left.id.localeCompare(right.id),
+    );
+}
 
 export type ControlUiPluginTabAuthGrant = {
   pluginId: string;
@@ -90,15 +113,9 @@ function projectControlUiPluginTabs(
   scopes: readonly string[],
 ): ControlUiPluginTab[] {
   const tabs: ControlUiPluginTab[] = [];
-  for (const entry of entries) {
+  for (const entry of visibleDescriptors(entries, scopes)) {
     const descriptor = entry.descriptor;
     if (descriptor.surface !== "tab") {
-      continue;
-    }
-    const visible = (descriptor.requiredScopes ?? []).every(
-      (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
-    );
-    if (!visible) {
       continue;
     }
     tabs.push({
@@ -128,7 +145,7 @@ export function listControlUiPluginTabs(
   scopes: readonly string[],
   opts: { requireGatewayAuthGrant?: boolean } = {},
 ): ControlUiPluginTab[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const basePath = normalizeControlUiBasePath(
     getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath,
   );
@@ -162,7 +179,7 @@ export function listControlUiPluginTabs(
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const entries = registry?.controlUiDescriptors ?? [];
   const disabled = new Set(
     registry?.plugins
@@ -172,23 +189,18 @@ export function listControlUiPluginWidgetKinds(
   const coreEntries = authorizeOperatorScopesForRequiredScope(READ_SCOPE, scopes).allowed
     ? CORE_CONTROL_UI_WIDGET_KINDS
     : [];
-  const pluginEntries = entries.flatMap((entry) => {
+  const pluginEntries = visibleDescriptors(entries, scopes).flatMap((entry) => {
     const descriptor = entry.descriptor;
     if (descriptor.surface !== "widget" || disabled.has(entry.pluginId)) {
       return [];
     }
-    const visible = (descriptor.requiredScopes ?? []).every(
-      (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
-    );
-    return visible
-      ? [
-          {
-            pluginId: entry.pluginId,
-            kind: `${entry.pluginId}:${descriptor.id}`,
-            label: descriptor.label,
-          },
-        ]
-      : [];
+    return [
+      {
+        pluginId: entry.pluginId,
+        kind: `${entry.pluginId}:${descriptor.id}`,
+        label: descriptor.label,
+      },
+    ];
   });
   return [...coreEntries, ...pluginEntries].toSorted(
     (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind),
@@ -199,7 +211,7 @@ export function listControlUiPluginWidgetKinds(
 export function listControlUiPluginTabAuthGrants(
   callerScopes: readonly string[],
 ): ControlUiPluginTabAuthGrant[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   if (!registry || !authorizeOperatorScopesForRequiredScope(READ_SCOPE, callerScopes).allowed) {
     return [];
   }

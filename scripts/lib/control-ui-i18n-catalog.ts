@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { buildBaseHints } from "../../src/config/schema.hints.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-home.ts";
+import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
@@ -13,6 +15,7 @@ import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
+import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
@@ -35,6 +38,8 @@ const sourceFiles = [
   "en.ts",
   "en-agents.ts",
   "en-activity.ts",
+  "en-agents-home.ts",
+  "en-browser.ts",
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
@@ -45,6 +50,7 @@ const sourceFiles = [
   "en-session-placement.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
+  "en-plugin-management.ts",
   "en-settings.ts",
   "en-skill-library.ts",
   "en-update-actions.ts",
@@ -63,6 +69,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       desktop: registerDesktopEnglish.catalog.desktop,
     },
     registerActivityEnglish.catalog,
+    registerAgentsHomeEnglish.catalog,
+    registerBrowserEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerLoginEnglish.catalog,
     registerMeetingsEnglish.catalog,
@@ -71,6 +79,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
     registerPluginConsentEnglish.catalog,
+    registerPluginManagementEnglish.catalog,
     registerSettingsEnglish.catalog,
     registerUpdateActionsEnglish.catalog,
     registerTranscriptsEnglish.catalog,

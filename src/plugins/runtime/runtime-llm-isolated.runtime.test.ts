@@ -7,7 +7,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
 import type { Model } from "../../llm/types.js";
-import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -120,7 +120,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       authority: { allowComplete: true, preferredProfile: "openai:authority-bound" },
     });
 
-    const result = await withPluginRuntimePluginIdScope("llm-task", () =>
+    const result = await withPluginRuntimePluginScope({ pluginId: "llm-task" }, () =>
       llm.complete({
         messages: [{ role: "user", content: "Return JSON" }],
         systemPrompt: "JSON only",
@@ -243,7 +243,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       usage,
     });
     hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: vi.fn(),
+      async [Symbol.asyncDispose]() {},
       selection,
       model,
       auth: { mode: "api-key", source: "fixture" },
@@ -345,7 +345,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("model-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "model-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.4@openai:model-profile",
           messages: [{ role: "user", content: "Return JSON" }],
@@ -375,7 +375,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
 
     await expect(
-      withPluginRuntimePluginIdScope("plain-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
         llm.complete({
           messages: [{ role: "user", content: "Return JSON" }],
           execution: {
@@ -410,7 +410,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("plain-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.4@openai:work",
           messages: [{ role: "user", content: "Return JSON" }],
@@ -463,7 +463,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("model-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "model-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.4",
           messages: [{ role: "user", content: "Return JSON" }],
@@ -511,6 +511,24 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     expect(hoisted.runIsolatedCompletion).not.toHaveBeenCalled();
     expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
+
+  it.each([{ requiredAuthMode: "oauth" }, { responseFormat: { type: "json_object" } }])(
+    "rejects direct-provider controls before isolated dispatch: %j",
+    async (controls) => {
+      const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
+
+      await expect(
+        llm.complete({
+          messages: [{ role: "user", content: "Return JSON" }],
+          execution: { mode: "isolated-agent-runtime" },
+          ...controls,
+        } as unknown as Parameters<typeof llm.complete>[0]),
+      ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
+      expect(hoisted.runIsolatedCompletion).not.toHaveBeenCalled();
+      expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([2_147_483_648, Number.NaN])("rejects invalid isolated timeout %s", async (timeoutMs) => {
     const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });

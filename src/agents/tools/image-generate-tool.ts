@@ -51,6 +51,7 @@ import {
   runMediaGenerationTask,
   type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import { acquireImageGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   applyAgentDefaultModelConfig,
@@ -183,16 +184,12 @@ function resolveRequestedCount(args: Record<string, unknown>): number {
   if (readSnakeCaseParamRaw(args, "count") === null) {
     throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
   }
-  const count = readPositiveIntegerParam(args, "count", {
-    message: `count must be between 1 and ${MAX_COUNT}`,
-  });
-  if (count === undefined) {
-    return DEFAULT_COUNT;
-  }
-  if (count < 1 || count > MAX_COUNT) {
-    throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
-  }
-  return count;
+  return (
+    readPositiveIntegerParam(args, "count", {
+      message: `count must be between 1 and ${MAX_COUNT}`,
+      max: MAX_COUNT,
+    }) ?? DEFAULT_COUNT
+  );
 }
 
 const parseImageOption = createEnumOptionParser(ToolInputError);
@@ -454,20 +451,21 @@ export function createImageGenerateTool(options?: {
               providers: [],
             })
           : null;
-      const readRequest = () => {
+      const readRequest = async () => {
         const prompt = readToolStringParam(params, "prompt", { required: true });
         return {
           prompt,
-          duplicate: createImageGenerateDuplicateGuardResult(options?.agentSessionKey, {
+          duplicate: await createImageGenerateDuplicateGuardResult(options?.agentSessionKey, {
             prompt,
             agentId: options?.requesterAgentId,
           }),
         };
       };
-      const configuredRequest = configuredModel ? readRequest() : undefined;
+      const configuredRequest = configuredModel ? await readRequest() : undefined;
       if (configuredRequest?.duplicate) {
         return configuredRequest.duplicate;
       }
+      signal?.throwIfAborted();
       const acquired = await acquireImageGenerationToolProviders({
         cfg: configuredModel
           ? (applyAgentDefaultModelConfig(cfg, "image", configuredModel) ?? cfg)
@@ -493,10 +491,12 @@ export function createImageGenerateTool(options?: {
         const effectiveCfg =
           applyAgentDefaultModelConfig(cfg, "image", imageGenerationModelConfig) ?? cfg;
         const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
-        const { prompt, duplicate } = configuredRequest ?? readRequest();
+        const { prompt, duplicate } = configuredRequest ?? (await readRequest());
         if (duplicate) {
           return { kind: "result" as const, result: duplicate };
         }
+        signal?.throwIfAborted();
+        acquired.assertOpen();
 
         const imageInputs = normalizeReferenceImages(params);
         const filename = readToolStringParam(params, "filename");
@@ -573,13 +573,15 @@ export function createImageGenerateTool(options?: {
           filename,
           providerOptions,
         });
-        const duplicateGuardResult = createImageGenerateDuplicateGuardResult(
+        const duplicateGuardResult = await createImageGenerateDuplicateGuardResult(
           options?.agentSessionKey,
           { prompt, requestKey, agentId: options?.requesterAgentId },
         );
         if (duplicateGuardResult) {
           return { kind: "result" as const, result: duplicateGuardResult };
         }
+        signal?.throwIfAborted();
+        acquired.assertOpen();
         validateImageGenerationCapabilities({
           provider: selectedProvider,
           count,
@@ -695,22 +697,11 @@ export function createImageGenerateTool(options?: {
           acquired.assertOpen();
         }
       } catch (error) {
-        let cleanupFailure: { error: unknown } | undefined;
-        try {
-          await acquired.release();
-        } catch (cleanupError) {
-          cleanupFailure = { error: cleanupError };
-        }
-        if (cleanupFailure) {
-          throw new AggregateError(
-            [error, cleanupFailure.error],
-            "Image preflight and cleanup failed",
-            {
-              cause: error,
-            },
-          );
-        }
-        throw error;
+        return rethrowAfterMediaCleanup(
+          error,
+          () => acquired.release(),
+          "Image preflight and cleanup failed",
+        );
       }
       if (prepared.kind === "result") {
         await acquired.release();

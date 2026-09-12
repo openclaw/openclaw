@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 // Setup wizard tests cover end-to-end onboarding prompt flows.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -11,6 +12,8 @@ import {
   removeOAuthTestTempRoot,
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { ConfigMutationConflictError } from "../config/config.js";
@@ -19,9 +22,9 @@ import { coerceConfig } from "../config/io.read-helpers.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
@@ -56,13 +59,7 @@ const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
 );
-const prepareAuthChoice = vi.hoisted(() =>
-  vi.fn<PrepareAuthChoice>(async (args) => ({
-    ...(await applyAuthChoice(args)),
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  })),
-);
+const prepareAuthChoice = vi.hoisted(() => vi.fn<PrepareAuthChoice>());
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
 const resolveManifestProviderAuthChoice = vi.hoisted(() =>
   vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
@@ -83,18 +80,7 @@ const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
-const configureGatewayForSetup = vi.hoisted(() =>
-  vi.fn<ConfigureGatewayForSetup>(async (args) => ({
-    nextConfig: args.nextConfig,
-    settings: {
-      port: args.localPort ?? 18789,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: "test-token",
-      tailscaleMode: "off",
-    },
-  })),
-);
+const configureGatewayForSetup = vi.hoisted(() => vi.fn<ConfigureGatewayForSetup>());
 const finalizeSetupWizard = vi.hoisted(() =>
   vi.fn(async (options) => {
     if (!options.nextConfig?.tools?.web?.search?.provider) {
@@ -138,13 +124,7 @@ const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
-const verifySetupInferenceConfig = vi.hoisted(() =>
-  vi.fn<VerifySetupInferenceConfig>(async () => ({
-    ok: true,
-    modelRef: "openai/gpt-5.5",
-    latencyMs: 250,
-  })),
-);
+const verifySetupInferenceConfig = vi.hoisted(() => vi.fn<VerifySetupInferenceConfig>());
 
 const setupChannels = vi.hoisted(() =>
   vi.fn(
@@ -222,11 +202,11 @@ function getWizardNoteCalls(note: WizardPrompter["note"]) {
   return (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
 }
 
-function modelConfigWithApiKey(apiKey: string): OpenClawConfig {
+function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { default: true } },
+      entries: { main: { default: true, agentDir } },
     },
     auth: {
       profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
@@ -244,17 +224,39 @@ function modelConfigWithApiKey(apiKey: string): OpenClawConfig {
   };
 }
 
-function stagedOpenAiProfile(apiKey: string) {
+function openAiAuthProfile(apiKey: string) {
   return {
     profileId: "openai:default",
     credential: { type: "api_key" as const, provider: "openai", key: apiKey },
   };
 }
 
-function prepareMockAuthProfilesIn(
-  agentDir: string,
-): Array<ProviderAuthResult["profiles"] | undefined> {
-  const persistCalls: Array<ProviderAuthResult["profiles"] | undefined> = [];
+function expectSavedSetupCredential(config: OpenClawConfig, agentDir: string, key: string): string {
+  const primary = expectDefined(
+    resolveAgentModelPrimaryValue(config.agents?.defaults?.model),
+    "selected model",
+  );
+  const profileId = expectDefined(
+    splitTrailingAuthProfile(primary).profile,
+    "selected credential profile",
+  );
+  expect(profileId).toMatch(/^openai:setup-/);
+  const { setup, ...credential } = expectDefined(
+    readAuthProfileStoreForTest(agentDir).profiles[profileId],
+    "saved credential profile",
+  );
+  expect(credential).toEqual(openAiAuthProfile(key).credential);
+  if (setup) {
+    expect(setup).toMatchObject({
+      modelRef: "openai/gpt-5.5",
+      replacement: expect.any(Boolean),
+      configJson: expect.any(String),
+    });
+  }
+  return profileId;
+}
+
+function prepareMockAuthProfilesIn(agentDir: string): void {
   prepareAuthChoice.mockImplementation(async (args) => {
     const result = await applyAuthChoice(args);
     const apiKey = result.config.models?.providers?.openai?.apiKey;
@@ -265,22 +267,15 @@ function prepareMockAuthProfilesIn(
         persistAuthProfiles: async () => {},
       };
     }
-    const profile = stagedOpenAiProfile(apiKey);
+    const profile = openAiAuthProfile(apiKey);
     return {
       ...result,
       authProfiles: [profile],
       persistAuthProfiles: async (profiles) => {
-        persistCalls.push(profiles);
-        for (const candidate of profiles ?? [profile]) {
-          const updated = await upsertAuthProfileWithLock({ ...candidate, agentDir });
-          if (!updated) {
-            throw new Error("test auth profile write failed");
-          }
-        }
+        await persistAuthProfileBatch({ profiles: profiles ?? [profile], agentDir });
       },
     };
   });
-  return persistCalls;
 }
 
 function persistedWizardConfigs(): OpenClawConfig[] {
@@ -346,9 +341,10 @@ vi.mock("../commands/onboard-remote.js", () => ({
   validateGatewayWebSocketUrl,
 }));
 
-vi.mock("../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore,
-}));
+vi.mock("../agents/auth-profiles.js", async () => {
+  const persistence = await import("../agents/auth-profiles/upsert-with-lock.js");
+  return { ensureAuthProfileStore, persistAuthProfileBatch: persistence.persistAuthProfileBatch };
+});
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore,
@@ -374,6 +370,14 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: resolvePluginSetupProvider,
+  resolvePluginSetupCliBackend: () => undefined,
+  resolvePluginSetupRegistry: () => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  }),
 }));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
@@ -2456,11 +2460,6 @@ describe("runSetupWizard", () => {
     );
     expectMockCallArgNotNull(warnIfModelConfigLooksOff, 0, 0, "model warning");
     expectMockCallArgNotNull(warnIfModelConfigLooksOff, 0, 1, "model warning");
-    expectRecordFields(
-      getMockCallArg(warnIfModelConfigLooksOff, 0, 2, "model warning"),
-      { validateCatalog: false },
-      "model warning options",
-    );
   });
 
   it("re-prompts for auth when applyAuthChoice requests retry selection", async () => {
@@ -3011,9 +3010,8 @@ describe("runSetupWizard", () => {
             : {}),
         },
       }));
-      verifySetupInferenceConfig.mockImplementationOnce(async ({ config, verifyAgentTools }) => {
+      verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
         expect(config.agents?.defaults?.experimental?.localModelLean).toBe(expectedLean);
-        expect(verifyAgentTools).toBe(true);
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: true, modelRef, latencyMs: 1 };
       });
@@ -3086,59 +3084,85 @@ describe("runSetupWizard", () => {
     expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toBeUndefined();
   });
 
-  it("does not persist staged model or auth choices when live verification is cancelled", async () => {
+  it("keeps the saved credential and leaves config unchanged when verification is cancelled", async () => {
     const stateDir = await makeCaseDir("cancelled-auth-verification-");
     const agentDir = path.join(stateDir, "agent");
-    const persistCalls = prepareMockAuthProfilesIn(agentDir);
+    prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice.mockResolvedValueOnce({
-      config: modelConfigWithApiKey("test-cancelled-key"),
+      config: modelConfigWithApiKey("test-cancelled-key", agentDir),
     });
-    verifySetupInferenceConfig.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
+    verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
+      expectSavedSetupCredential(config, agentDir, "test-cancelled-key");
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      throw new WizardCancelledError("cancelled");
+    });
     replaceConfigFile.mockClear();
 
-    await expect(
-      runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "demo-provider",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        createRuntime(),
-        buildWizardPrompter({ confirm: vi.fn(async () => true) }),
-      ),
-    ).rejects.toThrow("cancelled");
+    try {
+      await expect(
+        runSetupWizard(
+          {
+            acceptRisk: true,
+            flow: "quickstart",
+            authChoice: "demo-provider",
+            installDaemon: false,
+            skipChannels: true,
+            skipSkills: true,
+            skipSearch: true,
+            skipHealth: true,
+            skipUi: true,
+          },
+          createRuntime(),
+          buildWizardPrompter({ confirm: vi.fn(async () => true) }),
+        ),
+      ).rejects.toThrow("cancelled");
 
-    expect(replaceConfigFile).not.toHaveBeenCalled();
-    expect(persistCalls).toEqual([]);
-    await expect(fs.access(agentDir)).rejects.toThrow();
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      expect(Object.values(readAuthProfileStoreForTest(agentDir).profiles)).toContainEqual({
+        ...openAiAuthProfile("test-cancelled-key").credential,
+        setup: expect.objectContaining({
+          replacement: false,
+          modelRef: "openai/gpt-5.5",
+          configJson: expect.any(String),
+        }),
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
   });
 
-  it("keeps failed model/auth fixes in the verification loop without persisting them", async () => {
+  it("saves each retry credential before verification while failed candidates leave config unchanged", async () => {
     const stateDir = await makeCaseDir("failed-auth-profile-retry-");
-    const agentDir = path.join(stateDir, "agent");
-    await upsertAuthProfileWithLock({ ...stagedOpenAiProfile("test-original-key"), agentDir });
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    await upsertAuthProfileWithLock({ ...openAiAuthProfile("test-original-key"), agentDir });
     prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-original-key"),
+        config: modelConfigWithApiKey("test-original-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-retry-invalid-key"),
+        config: modelConfigWithApiKey("test-retry-invalid-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-retry-still-invalid-key"),
+        config: modelConfigWithApiKey("test-retry-still-invalid-key", agentDir),
       });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
     verifySetupInferenceConfig
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "key rejected" })
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "key still rejected" });
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-original-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: false, status: "auth", error: "login expired" };
+      })
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-retry-invalid-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: false, status: "auth", error: "key rejected" };
+      })
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-retry-still-invalid-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: false, status: "auth", error: "key still rejected" };
+      });
     const select = vi
       .fn()
       .mockResolvedValueOnce(false)
@@ -3159,7 +3183,9 @@ describe("runSetupWizard", () => {
         0,
         "third verification",
       ) as Parameters<VerifySetupInferenceConfig>[0];
-      expect(thirdVerification.config.models?.providers?.openai?.apiKey).toBe(
+      expectSavedSetupCredential(
+        thirdVerification.config,
+        agentDir,
         "test-retry-still-invalid-key",
       );
       const secondRetry = getMockCallArg(
@@ -3170,9 +3196,6 @@ describe("runSetupWizard", () => {
       ) as Parameters<ApplyAuthChoice>[0];
       expect(secondRetry.config.models?.providers?.openai?.apiKey).toBe("test-original-key");
       expect(select).toHaveBeenCalledTimes(4);
-      expect(thirdVerification.authProfiles).toEqual([
-        stagedOpenAiProfile("test-retry-still-invalid-key"),
-      ]);
       expect(
         persistedWizardConfigs().some(
           (config) =>
@@ -3182,32 +3205,35 @@ describe("runSetupWizard", () => {
         ),
       ).toBe(false);
       expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-        stagedOpenAiProfile("test-original-key").credential,
+        openAiAuthProfile("test-original-key").credential,
       );
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
   });
 
-  it("persists a model/auth fix after its live verification succeeds", async () => {
+  it("saves a retry credential before verification and commits its model after success", async () => {
     const stateDir = await makeCaseDir("successful-auth-profile-retry-");
     const agentDir = path.join(stateDir, "agent");
-    const persistCalls = prepareMockAuthProfilesIn(agentDir);
+    prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-original-key"),
+        config: modelConfigWithApiKey("test-original-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-retry-valid-key"),
+        config: modelConfigWithApiKey("test-retry-valid-key", agentDir),
       });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
     verifySetupInferenceConfig
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 300,
-        authProfiles: [stagedOpenAiProfile("test-retry-valid-key")],
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-original-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: false, status: "auth", error: "login expired" };
+      })
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-retry-valid-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 300 };
       });
     const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
@@ -3224,50 +3250,46 @@ describe("runSetupWizard", () => {
         0,
         "retry verification",
       ) as Parameters<VerifySetupInferenceConfig>[0];
-      expect(retryVerification.config.models?.providers?.openai?.apiKey).toBe(
+      expectSavedSetupCredential(retryVerification.config, agentDir, "test-retry-valid-key");
+      expectSavedSetupCredential(
+        expectDefined(persistedWizardConfigs().at(-1), "persisted wizard config"),
+        agentDir,
         "test-retry-valid-key",
       );
-      expect(retryVerification.authProfiles).toEqual([stagedOpenAiProfile("test-retry-valid-key")]);
-      expect(
-        persistedWizardConfigs().some(
-          (config) => config.models?.providers?.openai?.apiKey === "test-retry-valid-key",
-        ),
-      ).toBe(true);
-      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-        stagedOpenAiProfile("test-retry-valid-key").credential,
-      );
-      expect(persistCalls).toEqual([[stagedOpenAiProfile("test-retry-valid-key")]]);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
   });
 
-  it("retains a staged retry credential when a later Fix keeps the current auth", async () => {
+  it("reuses the saved retry credential when a later Fix keeps the current auth", async () => {
     const stateDir = await makeCaseDir("kept-auth-profile-retry-");
     const agentDir = path.join(stateDir, "agent");
     prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-original-key"),
+        config: modelConfigWithApiKey("test-original-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-staged-key"),
+        config: modelConfigWithApiKey("test-kept-retry-key", agentDir),
       });
     promptAuthChoiceGrouped
       .mockResolvedValueOnce("demo-provider")
       .mockResolvedValueOnce("__keep-current");
     verifySetupInferenceConfig
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: "timeout",
-        error: "request timed out",
-        authProfiles: [stagedOpenAiProfile("test-refreshed-key")],
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-original-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: false, status: "auth", error: "login expired" };
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 300,
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-kept-retry-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: false, status: "timeout", error: "request timed out" };
+      })
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-kept-retry-key");
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 300 };
       });
     const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
@@ -3284,10 +3306,24 @@ describe("runSetupWizard", () => {
         0,
         "final verification",
       ) as Parameters<VerifySetupInferenceConfig>[0];
-      expect(finalVerification.authProfiles).toEqual([stagedOpenAiProfile("test-refreshed-key")]);
-      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-        stagedOpenAiProfile("test-staged-key").credential,
+      const selected = expectSavedSetupCredential(
+        finalVerification.config,
+        agentDir,
+        "test-kept-retry-key",
       );
+      expectSavedSetupCredential(
+        expectDefined(persistedWizardConfigs().at(-1), "persisted wizard config"),
+        agentDir,
+        "test-kept-retry-key",
+      );
+      const priorVerification = expectDefined(
+        verifySetupInferenceConfig.mock.calls[1]?.[0],
+        "prior verification",
+      );
+      expect(
+        expectSavedSetupCredential(priorVerification.config, agentDir, "test-kept-retry-key"),
+      ).toBe(selected);
+      expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }

@@ -124,6 +124,60 @@ describe("config factory writer boundary", () => {
     expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19001);
   });
 
+  it("honors per-call unobserved mutation reads without disabling write auditing", async () => {
+    const { io, env, home, configPath } = await fixture();
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+    const { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
+      await import("../infra/kysely-sync.js");
+    const { listConfigAuditRecordsForTests } = await import("./io.audit.test-support.js");
+    const { transformConfigFileWithRetry } = await import("./mutate.js");
+    const health = () => {
+      const { db } = openOpenClawStateDatabase({ env });
+      return executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_health_entries">>(db)
+          .selectFrom("config_health_entries")
+          .selectAll()
+          .where("config_path", "=", configPath),
+      );
+    };
+    const audit = () => listConfigAuditRecordsForTests({ env, homedir: () => home });
+    await io.readConfigFileSnapshotForWrite();
+    const beforeHealth = health();
+    const beforeAudit = audit();
+    expect(beforeHealth?.last_known_good_json).toEqual(expect.any(String));
+    await fs.writeFile(configPath, '{"gateway":{"mode":"local","port":19001}}\n');
+
+    const failure = new Error("mutation declined before committing");
+    await expect(
+      transformConfigFileWithRetry({
+        io,
+        writeOptions: { observe: false },
+        transform() {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(health()).toEqual(beforeHealth);
+    expect(audit()).toEqual(beforeAudit);
+
+    await transformConfigFileWithRetry({
+      io,
+      writeOptions: { observe: false },
+      transform: (config) => ({
+        nextConfig: { ...config, gateway: { ...config.gateway, port: 19002 } },
+      }),
+    });
+    expect(health()).toEqual(beforeHealth);
+    expect(audit()).toContainEqual(
+      expect.objectContaining({ event: "config.write", configPath, result: "rename" }),
+    );
+    expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19002);
+
+    await io.readConfigFileSnapshotForWrite();
+    expect(health()?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
+  });
+
   it.each(["path", "snapshot"] as const)(
     "rejects %s changes while the writer import is pending",
     async (change) => {

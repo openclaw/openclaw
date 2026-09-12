@@ -12,7 +12,6 @@ import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { CatalogIconController } from "../../plugins/catalog-icon-controller.ts";
 import { renderPluginOfficialBadge } from "../../plugins/plugin-card.ts";
 import { PluginIconController } from "../../plugins/plugin-icon-controller.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
@@ -54,7 +53,8 @@ class ChatClawHubCard extends OpenClawLightDomElement {
     };
   }
 
-  private readonly catalogIcons = new CatalogIconController({
+  private readonly catalogIcons = new PluginIconController({
+    kind: "catalog",
     getFetchContext: () => this.iconFetchContext,
     isConnected: () => this.isConnected && this.gateway.connected,
     onUrlsChange: (urls) => {
@@ -102,7 +102,6 @@ class ChatClawHubCard extends OpenClawLightDomElement {
           description: plugin.catalog.summary,
           iconUrl: plugin.catalog.imageUrl,
           pluginId: plugin.local.pluginId,
-          packageName: plugin.catalog.packageName,
           official: plugin.catalog.official,
           installed: plugin.local.installed,
           canInstall: plugin.catalog.official && plugin.local.action === "install",
@@ -130,7 +129,6 @@ class ChatClawHubCard extends OpenClawLightDomElement {
         ...card,
         name: detail.skill.displayName,
         pluginId: undefined,
-        packageName: undefined,
         description: detail.skill.summary,
         official: detail.skill.isOfficial === true,
         installed,
@@ -145,7 +143,7 @@ class ChatClawHubCard extends OpenClawLightDomElement {
       if (card.pluginId) {
         this.pluginIcons.load(card.pluginId);
       }
-      this.catalogIcons.sync([], card.iconUrl ? [card.iconUrl] : []);
+      this.catalogIcons.syncCatalog([], card.iconUrl ? [card.iconUrl] : []);
     },
   });
 
@@ -185,7 +183,7 @@ class ChatClawHubCard extends OpenClawLightDomElement {
     const failed = this.statusTask.status === TaskStatus.ERROR;
     const resolved = ready ? this.statusTask.value : undefined;
     const icon = resolvePluginCatalogIconUrl(
-      { pluginId: resolved?.pluginId, packageName: resolved?.packageName, imageUrl: card.iconUrl },
+      { pluginId: resolved?.pluginId, imageUrl: card.iconUrl },
       { pluginIconUrls: this.pluginIconUrls, iconUrls: this.iconUrls },
       this.failedImages,
     );

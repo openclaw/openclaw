@@ -106,6 +106,11 @@ export async function copyPackagePathEntry(
       const target = await fs.readlink(source);
       assertCurrent();
       await fs.symlink(target, staged);
+      if (process.platform === "darwin") {
+        // macOS applies umask to symlinks; preserve the link, never chmod its target.
+        assertCurrent();
+        await fs.lchmod(staged, stat.mode);
+      }
     } else {
       assertCurrent();
       await fs.copyFile(source, staged);

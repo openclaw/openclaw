@@ -12,8 +12,10 @@ import {
 } from "../cli/update-cli/schema-preflight.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabase,
@@ -120,6 +122,95 @@ function sourceArtifacts(paths: string[], allowReadMarks: string[] = []): unknow
 }
 
 describe("schema preflight source artifacts", () => {
+  it("retains the source-reader lock tolerance beyond the runtime busy timeout", async () => {
+    const root = tempDirs.make("openclaw-header-lock-tolerance-");
+    const pathname = path.join(root, "agent.sqlite");
+    const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
+    writer.exec(`
+      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
+      INSERT INTO schema_meta VALUES ('primary', 'before-lock');
+      PRAGMA user_version = ${supportedVersions.agent};
+      BEGIN EXCLUSIVE;
+      UPDATE schema_meta SET app_version = 'after-lock';
+    `);
+    let released = false;
+    const release = setTimeout(() => {
+      writer.exec("COMMIT;");
+      released = true;
+    }, 8_000);
+    try {
+      const result = await preflightOpenClawDatabaseSchemas({
+        env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
+        supportedVersions,
+        configuredAgentDatabaseCandidatePaths: [pathname],
+      });
+      expect(result).toEqual({ incompatible: [], indeterminate: [] });
+      expect(hasSchemaRefusal(result)).toBe(false);
+      expect(released).toBe(true);
+    } finally {
+      clearTimeout(release);
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK;");
+      }
+      writer.close();
+    }
+  }, 20_000);
+
+  it.each([0, 8 * 1024 * 1024])(
+    "reads fresh WAL metadata without copying %i bytes of unrelated payload",
+    async (payloadBytes) => {
+      const root = tempDirs.make("openclaw-header-preflight-");
+      const pathname = path.join(root, "agent.sqlite");
+      const preload = path.join(root, "no-backup.cjs");
+      fs.writeFileSync(
+        preload,
+        `require('node:sqlite').backup = async () => { throw new Error('full-copy forbidden for header inspection'); };`,
+      );
+      const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
+        INSERT INTO schema_meta VALUES ('primary', 'original');
+        CREATE TABLE payload (data BLOB);
+        INSERT INTO payload VALUES (zeroblob(${payloadBytes}));
+        PRAGMA user_version = ${supportedVersions.agent};
+        PRAGMA wal_checkpoint(TRUNCATE);
+      `);
+      for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+        vi.stubEnv(key, value);
+      }
+      try {
+        for (const increment of [1, 2]) {
+          const foundVersion = supportedVersions.agent + increment;
+          writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${foundVersion};`);
+          writer.prepare("UPDATE schema_meta SET app_version = ?").run(`writer-${increment}`);
+          writer.exec("COMMIT;");
+          const before = sourceArtifacts([pathname], [pathname]);
+          const result = await preflightOpenClawDatabaseSchemas({
+            env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
+            supportedVersions,
+            configuredAgentDatabaseCandidatePaths: [pathname],
+          });
+          expect(result).toEqual({
+            incompatible: [
+              {
+                kind: "agent",
+                path: pathname,
+                foundVersion,
+                supportedVersion: supportedVersions.agent,
+                writerAppVersion: `writer-${increment}`,
+              },
+            ],
+            indeterminate: [],
+          });
+          expect(sourceArtifacts([pathname], [pathname])).toEqual(before);
+        }
+      } finally {
+        writer.close();
+      }
+    },
+  );
   it.each([OPENCLAW_AGENT_SCHEMA_VERSION, 999])(
     "includes configured partitions at schema %s without opening their source families",
     async (workerVersion) => {
@@ -615,7 +706,11 @@ describe("schema preflight source artifacts", () => {
           return await prepare(pathname, options);
         },
       );
-      const result = await checkTargetDatabaseSchemas(supportedVersions, fixture.env);
+      const result = await preflightOpenClawDatabaseSchemas({
+        env: fixture.env,
+        supportedVersions,
+        verifyCurrentSchemaShape: true,
+      });
       expect(result.incompatible).toEqual([]);
       expect(result.indeterminate).toEqual([
         {
@@ -650,7 +745,11 @@ describe("schema preflight source artifacts", () => {
           };
         },
       );
-      const result = await checkTargetDatabaseSchemas(supportedVersions, fixture.env);
+      const result = await preflightOpenClawDatabaseSchemas({
+        env: fixture.env,
+        supportedVersions,
+        verifyCurrentSchemaShape: true,
+      });
       expect(result.indeterminate).toEqual([
         expect.objectContaining({
           kind: kind === "state" ? "state" : "agent",

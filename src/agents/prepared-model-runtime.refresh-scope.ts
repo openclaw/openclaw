@@ -1,15 +1,33 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
-  listConfiguredOwnerInputs,
   normalizePreparedModelRuntimeInput,
   ownerKey,
 } from "./prepared-model-runtime.owner.js";
+import { releasePreparedPluginPublication } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
+  PreparedModelCatalogInventory,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeRefreshOptions,
 } from "./prepared-model-runtime.types.js";
+
+/** Retains provider inventory across runtime selection; rebuilds check its source and auth. */
+export function collectPreparedModelRuntimeInventories(
+  owners: Iterable<PreparedModelRuntimeOwner>,
+): Map<string, PreparedModelCatalogInventory> {
+  const inventories = new Map<string, PreparedModelCatalogInventory>();
+  for (const owner of owners) {
+    if (owner.provenance === "configured" && owner.catalogInventory) {
+      inventories.set(
+        ownerKey({ ...owner.input, runtimePluginSelections: undefined }),
+        owner.catalogInventory,
+      );
+    }
+  }
+  return inventories;
+}
 
 /** Whether a refresh scope must replace this owner rather than retain it. */
 export function isPreparedModelRuntimeOwnerInRefreshScope(
@@ -98,6 +116,7 @@ export function updateOwnersForScopedRefresh(
     if (options.retireStandalone && owner.provenance === "standalone") {
       owner.generation += 1;
       owners.delete(key);
+      releasePreparedPluginPublication(owner);
       continue;
     }
     owner.generation += 1;

@@ -138,6 +138,13 @@ suite.define(() => {
           const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
           await composer.waitFor({ state: "visible" });
           await composer.fill("/model thinking-fixture/no-effort");
+          await expect
+            .poll(() =>
+              page
+                .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .chat-send-btn--send")
+                .isEnabled(),
+            )
+            .toBe(true);
           await composer.press("Enter");
           await expect
             .poll(async () => {
@@ -296,6 +303,13 @@ suite.define(() => {
             await composer.fill("/think");
             await composer.press("Tab");
             await expect.poll(() => composer.inputValue()).toBe("/think ");
+            await expect
+              .poll(() =>
+                page
+                  .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .chat-send-btn--send")
+                  .isEnabled(),
+              )
+              .toBe(true);
             await composer.press("Enter");
             try {
               await expect
@@ -332,8 +346,8 @@ suite.define(() => {
               path: path.join(suite.artifactDir, "session-thinking.png"),
             });
 
-            stage = "open New session";
-            await page.getByRole("link", { name: "New session", exact: true }).first().click();
+            stage = "open New conversation";
+            await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
             await page.waitForURL((current) => current.pathname === "/new");
             await waitForControlUiGatewayReady(page);
             const modelControl = page.locator("[data-chat-model-select='true']");

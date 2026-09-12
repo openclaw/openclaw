@@ -73,3 +73,15 @@ export function environmentMenuFacts(
   }
   return facts;
 }
+
+export function environmentCapabilityLabels(capabilities: readonly string[] = []): string[] {
+  return [
+    ...new Set(
+      capabilities.flatMap((capability) => {
+        const family = capability.split(".", 1)[0]?.toLowerCase();
+        const key = Object.entries(CAPABILITY_FACT_KEYS).find(([name]) => name === family)?.[1];
+        return key ? [t(key)] : [];
+      }),
+    ),
+  ];
+}

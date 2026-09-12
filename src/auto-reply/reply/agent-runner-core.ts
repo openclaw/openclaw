@@ -41,7 +41,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
-import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -197,7 +197,7 @@ export function hasSuccessfulSourceReplyDelivery(params: {
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return (
-    (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
+    params.blockReplyPipeline?.didStream() ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasVisibleCommittedMessagingToolDeliveryEvidence(params)
   );
@@ -208,17 +208,17 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
     didStreamTerminalReply?: () => boolean;
     isAborted: () => boolean;
   } | null;
-  directlySentBlockPayloads?: ReplyPayload[];
+  directBlockDeliveries?: DirectBlockDelivery[];
 }): boolean {
-  const sentTerminalBlock = params.directlySentBlockPayloads?.some(
-    (payload) =>
+  const sentTerminalBlock = params.directBlockDeliveries?.some(
+    ({ payload, outcome, pending }) =>
+      outcome === "delivered" &&
+      !pending &&
       isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   return (
-    (params.blockReplyPipeline?.didStreamTerminalReply?.() === true &&
-      !params.blockReplyPipeline.isAborted()) ||
-    sentTerminalBlock === true
+    params.blockReplyPipeline?.didStreamTerminalReply?.() === true || sentTerminalBlock === true
   );
 }
 

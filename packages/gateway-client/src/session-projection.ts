@@ -138,11 +138,12 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
 
 /** Local turns have no durable transcript metadata beyond their own optional send key. */
 export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
-  const identity = readSessionMessageIdentity(message);
-  if (!identity || (identity.role !== "user" && identity.role !== "assistant")) {
+  const record = readRecord(message);
+  const role = readNonemptyString(record?.role)?.toLowerCase();
+  if (role !== "user" && role !== "assistant") {
     return false;
   }
-  const metadata = readRecord(readRecord(message)?.["__openclaw"]);
+  const metadata = readRecord(record?.["__openclaw"]);
   return !metadata || Object.keys(metadata).every((key) => key === "idempotencyKey");
 }
 

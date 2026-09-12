@@ -13,6 +13,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createImageProcessor,
@@ -405,6 +406,44 @@ describe("loadWebMedia", () => {
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("resolves hosted media from the request registry, including an empty selection", async () => {
+    const mediaUrl = "/__test__/scoped-hosted-media";
+    const files = [
+      path.join(fixtureRoot, "owner-a.txt"),
+      path.join(fixtureRoot, "owner-b.txt"),
+    ] as const;
+    await Promise.all(files.map((file, index) => fs.writeFile(file, `OWNER_${index}`)));
+    const selected = createEmptyPluginRegistry();
+    selected.hostedMediaResolvers.push({
+      pluginId: "scoped-owner",
+      source: "test",
+      resolver: (url) => (url === mediaUrl ? files[0] : null),
+    });
+    const active = createEmptyPluginRegistry();
+    const activeResolver = vi.fn((url: string) => (url === mediaUrl ? files[1] : null));
+    active.hostedMediaResolvers.push({
+      pluginId: "global-owner",
+      source: "test",
+      resolver: activeResolver,
+    });
+    setActivePluginRegistry(active);
+    try {
+      expect((await loadWebMediaRaw(mediaUrl)).buffer.toString()).toBe("OWNER_1");
+      const scoped = await withPluginRuntimeRegistryScope(selected, () =>
+        loadWebMediaRaw(mediaUrl),
+      );
+      expect(scoped.buffer.toString()).toBe("OWNER_0");
+      await expect(
+        withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+          loadWebMediaRaw(mediaUrl),
+        ),
+      ).rejects.toBeInstanceOf(LocalMediaAccessError);
+      expect(activeResolver).toHaveBeenCalledTimes(1);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("surfaces Rastermill decode failures when image optimization cannot produce a JPEG", async () => {

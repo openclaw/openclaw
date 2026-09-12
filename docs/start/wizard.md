@@ -93,7 +93,7 @@ conversationally. Docs: [Web tools](/tools/web).
 Fresh local interactive onboarding offers **Quick start** and **Custom setup**
 after a one-line pointer to the [security guide](/gateway/security). Quick start
 records the security acknowledgment; Custom setup shows the full security note
-and asks for confirmation. Quick start uses the default agent name `main` and
+and asks for confirmation. By default, Quick start uses the agent name `main` and
 full access, leaves telemetry consent unset, and skips memory import and app
 recommendations. Custom setup keeps the telemetry choice, agent name, access mode,
 and optional setup prompts. Both lanes require an explicit provider choice before
@@ -138,6 +138,41 @@ model first. Select it for a verification and repair pass. A failed check never
 replaces the configured model automatically; onboarding waits for your next choice. Run `openclaw channels add` or `openclaw configure` for
 later non-inference additions; use `openclaw onboard` for provider or auth route
 changes.
+
+## Choose one agent or a team
+
+When guided onboarding creates the first agent, choose **One agent** (the
+default) or **A small team: a chief of staff plus specialists**. The team choice
+uses the same preset as `openclaw agents team create`: a chief of staff (`coordinator`), researcher,
+writer, and reviewer with separate workspaces, completed identities, and written
+role contracts. The chief of staff delegates suitable tasks and verifies specialist
+results before reporting to you.
+
+Select the team directly in an interactive or non-interactive run with `--team`:
+
+```bash
+openclaw onboard --team
+openclaw onboard --non-interactive --team --accept-risk
+```
+
+The usual non-interactive provider and Gateway options still apply. Onboarding
+targets the coordinator explicitly for chat. It sets
+`agents.defaults.systemAgent.agentId` to the coordinator only when no ambient
+owner is configured; an existing owner is preserved and reported. A team does
+not introduce a universal default agent or change global delegation or tool
+policy. To address it later, use an explicit target:
+
+```bash
+openclaw agent --agent coordinator --message "Research a topic and prepare a draft."
+```
+
+`--team` is for local first-agent setup. It cannot be combined with remote,
+classic, or import onboarding. If an agent roster already exists, use
+`openclaw agents team create` instead.
+
+See [Team preset](/concepts/multi-agent#team-preset) for the delegation config and
+[`agents team create`](/cli/agents#agents-team-create) to add a namespaced team
+to an existing installation.
 
 ## Classic wizard setup modes
 
@@ -192,7 +227,7 @@ Local mode (default) walks through these steps:
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
    Fresh OpenAI API-key and ChatGPT/Codex setup default to
-   `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+   `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
    supported and resolves to Sol. Re-running setup preserves an existing
    explicit model, including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
    account does not expose GPT-5.6.
@@ -220,7 +255,11 @@ Local mode (default) walks through these steps:
    token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 4. **Channels** - built-in and official plugin chat channels, including
    Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
-   QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
+   QQ Bot, Signal, Slack, Telegram, WhatsApp, and more. When no command owner
+   exists, completed channel setup offers a separate operator-account step for
+   `/update` and other administration. Enter your own user ID and confirm it, or
+   skip. This works in servers and groups without DM pairing and does not promote
+   chat allowlists. See [command owner setup](/channels/pairing#set-up-an-owner-without-dm-pairing).
 5. **Web search** - configures an optional search provider.
 6. **Skills** - installs recommended skills and their optional dependencies.
 7. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit
@@ -274,7 +313,7 @@ Notes:
 - Default workspace: `~/.openclaw/workspace-<agentId>` (or under
   `agents.defaults.workspace` if that is set).
 - Add `bindings` to route inbound messages to this agent (onboarding can do this for you).
-- Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
+- Non-interactive flags: `--role`, `--model`, `--agent-dir`, `--bind`, `--non-interactive`. With `--role`, `--workspace` can be omitted. See [Role templates](/cli/agents#role-templates).
 
 ## Full reference
 
