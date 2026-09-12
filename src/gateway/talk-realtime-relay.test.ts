@@ -72,31 +72,11 @@ const RELAY_RETRY_ERROR = "Realtime provider cannot start this session right now
 const RELAY_UNAVAILABLE_ERROR = "Realtime provider is unavailable. Try again later.";
 const RELAY_GENERIC_ERROR = "Realtime provider error.";
 const providerErrorCases = [
-  {
-    name: "authentication",
-    error: { status: 401, message: "raw-auth-marker" },
-    expected: RELAY_AUTH_ERROR,
-  },
-  {
-    name: "configuration",
-    error: { status: 404, message: "raw-config-marker" },
-    expected: RELAY_CONFIG_ERROR,
-  },
-  {
-    name: "retry later",
-    error: { status: 429, message: "raw-rate-marker" },
-    expected: RELAY_RETRY_ERROR,
-  },
-  {
-    name: "unavailable",
-    error: { status: 503, message: "raw-unavailable-marker" },
-    expected: RELAY_UNAVAILABLE_ERROR,
-  },
-  {
-    name: "generic",
-    error: { message: "raw-generic-marker" },
-    expected: RELAY_GENERIC_ERROR,
-  },
+  ["authentication", { status: 401, message: "raw-auth-marker" }, RELAY_AUTH_ERROR],
+  ["configuration", { status: 404, message: "raw-config-marker" }, RELAY_CONFIG_ERROR],
+  ["retry later", { status: 429, message: "raw-rate-marker" }, RELAY_RETRY_ERROR],
+  ["unavailable", { status: 503, message: "raw-unavailable-marker" }, RELAY_UNAVAILABLE_ERROR],
+  ["generic", { message: "raw-generic-marker" }, RELAY_GENERIC_ERROR],
 ] as const;
 
 function makeRelayTransport<Overrides extends Partial<RealtimeVoiceBridge> = Record<never, never>>(
@@ -182,8 +162,8 @@ function ensureActiveRelayTurnId(relaySessionId: string): string {
 
 describe("talk realtime relay provider error projection", () => {
   it.each(providerErrorCases)(
-    "projects public $name failures to fixed copy",
-    ({ error, expected }) => {
+    "projects public %s failures to fixed copy",
+    (_name, error, expected) => {
       const message = projectTalkRealtimeRelayProviderError("relay-test", false, error);
 
       expect(message).toBe(expected);
@@ -191,7 +171,7 @@ describe("talk realtime relay provider error projection", () => {
     },
   );
 
-  it.each(providerErrorCases)("keeps opaque $name failures generic", ({ error }) => {
+  it.each(providerErrorCases)("keeps opaque %s failures generic", (_name, error, _expected) => {
     const message = projectTalkRealtimeRelayProviderError("relay-test", true, error);
 
     expect(message).toBe(RELAY_GENERIC_ERROR);
@@ -916,27 +896,12 @@ describe("talk realtime gateway relay", () => {
   });
 
   it.each([
-    {
-      sessionKey: "agent:main:main",
-      canonicalKey: "agent:main:main",
-      mainKey: "main",
-      scope: "per-sender" as const,
-    },
-    {
-      sessionKey: "main",
-      canonicalKey: "agent:main:work",
-      mainKey: "work",
-      scope: "per-sender" as const,
-    },
-    {
-      sessionKey: "agent:main:main",
-      canonicalKey: "global",
-      mainKey: "main",
-      scope: "global" as const,
-    },
+    ["agent:main:main", "agent:main:main", "main", "per-sender" as const],
+    ["main", "agent:main:work", "work", "per-sender" as const],
+    ["agent:main:main", "global", "main", "global" as const],
   ])(
-    "appends relay transcripts from $sessionKey to $canonicalKey",
-    async ({ sessionKey, canonicalKey, mainKey, scope }) => {
+    "appends relay transcripts from %s to %s",
+    async (sessionKey, canonicalKey, mainKey, scope) => {
       const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
       const tempDir = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-voice-")),
@@ -2468,10 +2433,10 @@ describe("talk realtime gateway relay", () => {
   });
 
   it.each([
-    { name: "opaque", hideModel: true, model: "gpt-live-test-private" },
-    { name: "released", hideModel: false, model: "gpt-live-1-codex" },
-    { name: "public", hideModel: false, model: "gpt-realtime-test-public" },
-  ])("redacts provider details for a $name relay model", ({ hideModel, model }) => {
+    ["opaque", true, "gpt-live-test-private"],
+    ["released", false, "gpt-live-1-codex"],
+    ["public", false, "gpt-realtime-test-public"],
+  ])("redacts provider details for a %s relay model", (_name, hideModel, model) => {
     const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const provider: RealtimeVoiceProviderPlugin = {
@@ -5267,36 +5232,16 @@ describe("talk realtime gateway relay", () => {
   });
 
   it.each([
-    {
-      text: "status",
-      supportsToolCalls: false,
-      handlesAgentConsult: false,
-      reply: "I'm not working on an active request right now.",
-    },
-    {
-      text: "cancel",
-      supportsToolCalls: false,
-      handlesAgentConsult: false,
-      reply: "There is no active OpenClaw run to cancel.",
-    },
-    { text: "status", supportsToolCalls: true, handlesAgentConsult: false, reply: undefined },
-    { text: "status", supportsToolCalls: undefined, handlesAgentConsult: false, reply: undefined },
-    {
-      text: "status",
-      supportsToolCalls: false,
-      handlesAgentConsult: true,
-      reply: "I'm not working on an active request right now.",
-    },
-    {
-      text: "cancel",
-      supportsToolCalls: false,
-      handlesAgentConsult: true,
-      reply: "There is no active OpenClaw run to cancel.",
-    },
-    { text: "cancel", supportsToolCalls: true, handlesAgentConsult: false, reply: undefined },
+    ["status", false, false, "I'm not working on an active request right now."],
+    ["cancel", false, false, "There is no active OpenClaw run to cancel."],
+    ["status", true, false, undefined],
+    ["status", undefined, false, undefined],
+    ["status", false, true, "I'm not working on an active request right now."],
+    ["cancel", false, true, "There is no active OpenClaw run to cancel."],
+    ["cancel", true, false, undefined],
   ])(
-    "routes idle $text (tools=$supportsToolCalls, delegation=$handlesAgentConsult)",
-    async ({ text, reply, supportsToolCalls, handlesAgentConsult }) => {
+    "routes idle %s (tools=%s, delegation=%s)",
+    async (text, supportsToolCalls, handlesAgentConsult, reply) => {
       let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
       const bridge = makeRelayTransport({
         sendUserMessage: vi.fn(),
