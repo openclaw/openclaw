@@ -53,7 +53,7 @@ describe("compaction summary format propagation", () => {
         signal: new AbortController().signal,
         reserveTokens: 1_000,
         maxChunkTokens: 200,
-        contextWindow: 2_000,
+        contextWindow: 900,
         summaryPrompt,
         customInstructions: "Preserve the canary decision.",
         streamFn,
