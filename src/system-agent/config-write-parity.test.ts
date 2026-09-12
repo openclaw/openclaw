@@ -79,4 +79,29 @@ describe("system-agent config write parity", () => {
     expect(classifyInferenceRouteConfigPath(["agents", "list", "1", "name"])).toBe("allowed");
     expect(classifyInferenceRouteConfigPath(["agents", "list", "1", "tools"])).toBe("allowed");
   });
+
+  it("classifies the canonical agents.entries shape exactly like agents.list", () => {
+    expect(classifyInferenceRouteConfigPath(["agents", "entries"])).toBe("blocked");
+    expect(classifyInferenceRouteConfigPath(["agents", "entries", "main"])).toBe("blocked");
+    for (const field of ["model", "models", "params", "agentRuntime"]) {
+      expect(classifyInferenceRouteConfigPath(["agents", "entries", "main", field])).toBe(
+        "agent-route",
+      );
+    }
+    for (const field of ["id", "default", "agentDir"]) {
+      expect(classifyInferenceRouteConfigPath(["agents", "entries", "main", field])).toBe(
+        "blocked",
+      );
+    }
+    expect(classifyInferenceRouteConfigPath(["agents", "entries", "main", "name"])).toBe("allowed");
+    expect(classifyInferenceRouteConfigPath(["agents", "entries", "main", "prompt"])).toBe(
+      "allowed",
+    );
+    expect(classifyInferenceRouteConfigPath(["agents", "entries", "main", "tools"])).toBe(
+      "allowed",
+    );
+    expect(classifyInferenceRouteConfigPath(["agents", "entries", "main", "models", "think"])).toBe(
+      "agent-route",
+    );
+  });
 });

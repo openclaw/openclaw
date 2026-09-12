@@ -42,7 +42,10 @@ export function classifyInferenceRouteConfigPath(
   if (root !== "agents") {
     return "allowed";
   }
-  if (!scope || (scope === "defaults" && !ownerOrField) || (scope === "list" && !ownerOrField)) {
+  if (
+    !scope ||
+    ((scope === "defaults" || scope === "list" || scope === "entries") && !ownerOrField)
+  ) {
     return "blocked";
   }
   if (scope === "defaults") {
@@ -50,13 +53,14 @@ export function classifyInferenceRouteConfigPath(
       ? "blocked"
       : "allowed";
   }
-  if (scope !== "list") {
+  if (scope !== "list" && scope !== "entries") {
     return "allowed";
   }
-  if (/^\d+$/.test(ownerOrField ?? "") && !field) {
+  const isEntryIndex = scope === "entries" || /^\d+$/.test(ownerOrField ?? "");
+  if (isEntryIndex && !field) {
     return "blocked";
   }
-  const routeField = /^\d+$/.test(ownerOrField ?? "") ? field : ownerOrField;
+  const routeField = isEntryIndex ? field : ownerOrField;
   // Identity/topology fields stay blocked for every agent; routing fields are
   // blocked only when the entry backs the default (system) inference route —
   // the caller resolves that from the config, since a path cannot tell.
