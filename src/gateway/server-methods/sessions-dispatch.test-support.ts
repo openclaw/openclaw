@@ -107,7 +107,10 @@ type DispatchSessionEntry = Pick<
   | "sessionRoot"
 >;
 
-export function makeSessionTarget(entry?: DispatchSessionEntry) {
+export function makeSessionTarget(
+  entry?: DispatchSessionEntry,
+  canonicalKey: string = dispatchTestSessionKey,
+) {
   // Pin an anthropic model by default: the effective-runtime fallback consults
   // the process-global harness registry, so the default openai model resolves
   // to "codex" whenever a sibling test in the shard registered that harness.
@@ -117,9 +120,9 @@ export function makeSessionTarget(entry?: DispatchSessionEntry) {
   return {
     agentId: "main",
     storePath: "/tmp/openclaw-agent.sqlite",
-    canonicalKey: dispatchTestSessionKey,
-    storeKeys: [dispatchTestSessionKey],
-    store: pinnedEntry ? { [dispatchTestSessionKey]: pinnedEntry } : {},
+    canonicalKey,
+    storeKeys: [canonicalKey],
+    store: pinnedEntry ? { [canonicalKey]: pinnedEntry } : {},
   };
 }
 
@@ -217,6 +220,7 @@ export async function invokeSessionDispatch(
 export async function invokeSessionMove(
   context: GatewayRequestContext,
   params: {
+    key?: string;
     expected: { generation: number; environmentId: string; ownerEpoch: number };
     abandonSource?: true;
     target:
