@@ -173,6 +173,23 @@ async function expectRemoteMarketplaceError(params: { manifest: unknown; expecte
   expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
 }
 
+it("removes the marketplace clone directory when acquisition throws", async () => {
+  const reason = new Error("Gateway startup interrupted by SIGTERM");
+  let clonedTmpDir = "";
+  runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+    const repoDir = argv.at(-1);
+    expect(typeof repoDir).toBe("string");
+    clonedTmpDir = path.dirname(repoDir as string);
+    expect(clonedTmpDir).toContain("openclaw-marketplace-");
+    // Acquisition rejections bypass cleanupOnFailure, mirroring the abort
+    // path where runCommandWithTimeout forwards cancellation by throwing.
+    throw reason;
+  });
+
+  await expect(listMarketplacePlugins({ marketplace: "owner/repo" })).rejects.toBe(reason);
+  await expect(fs.access(clonedTmpDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 function installPluginInput(callIndex = 0): Record<string, unknown> {
   const input = installPluginFromPathMock.mock.calls[callIndex]?.[0];
   if (!input || typeof input !== "object") {

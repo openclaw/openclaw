@@ -184,8 +184,21 @@ export async function resolveNpmInstallSpecsForUpdateChannel(
     }
     return { version: result.metadata.version ?? null, metadata: result.metadata, tag };
   };
-  const [beta, latest] = await Promise.all([resolveTag("beta"), resolveTag("latest")]);
+  // Join both started requests before propagating cancellation: rejecting as
+  // soon as one side aborts lets startup release its lease while the sibling
+  // request is still awaiting subprocess-tree termination, which lets managed
+  // shutdown exit before slower cleanup finishes.
+  const settled = await Promise.allSettled([resolveTag("beta"), resolveTag("latest")]);
+  type ChannelMetadataResult = Awaited<ReturnType<typeof resolveTag>>;
+  const resolveOutcome = (outcome: PromiseSettledResult<ChannelMetadataResult>) => {
+    if (outcome.status === "rejected") {
+      throw outcome.reason;
+    }
+    return outcome.value;
+  };
   params.signal?.throwIfAborted();
+  const beta = resolveOutcome(settled[0]!);
+  const latest = resolveOutcome(settled[1]!);
   const selected = selectNpmChannelVersion(beta, latest);
   if (!selected.version || !selected.metadata) {
     // Preserve the install owner's normal unavailable-source result and declared source fallback.

@@ -241,6 +241,33 @@ it("rethrows the original abort raised during parallel channel metadata resoluti
     }),
   ).rejects.toBe(reason);
 });
+
+it("joins both metadata requests before propagating cancellation", async () => {
+  const reason = new Error("Gateway startup interrupted by SIGTERM");
+  const controller = new AbortController();
+  let siblingSettled = false;
+  vi.mocked(resolveNpmSpecMetadata).mockImplementation(async ({ spec }) => {
+    if (spec.endsWith("@beta")) {
+      controller.abort(reason);
+      throw reason;
+    }
+    // The sibling request keeps awaiting subprocess-tree termination after
+    // the beta side raised; propagation must wait for it to settle so a
+    // slower cleanup is not cut short by an early startup release.
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    siblingSettled = true;
+    return { ok: false as const, error: "aborted" };
+  });
+
+  await expect(
+    resolveNpmInstallSpecsForUpdateChannel({
+      spec: "@openclaw/demo",
+      updateChannel: "beta",
+      signal: controller.signal,
+    }),
+  ).rejects.toBe(reason);
+  expect(siblingSettled).toBe(true);
+});
 describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
   it.each([
     ["stable", false, "2026.7.33", undefined],

@@ -542,20 +542,29 @@ async function cloneMarketplaceRepo(params: {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   };
   params.logger?.info?.(`Cloning marketplace source ${normalized.label}...`);
-  const acquired = await acquireGitSource({
-    ...normalized,
-    repoDir,
-    refMode: isImmutableGitCommitRef(normalized.ref) ? "detached" : "shallow-branch",
-    timeoutMs: params.timeoutMs,
-    ...(params.signal ? { signal: params.signal } : {}),
-    cloneSeparator: false,
-    recordCommit: false,
-    cleanupOnFailure: cleanup,
-    formatFailure: ({ action, stdout, stderr }) => {
-      const detail = stderr.trim() || stdout.trim() || `git ${action} failed`;
-      return `failed to ${action} marketplace source ${normalized.label}: ${detail}`;
-    },
-  });
+  // This caller owns tmpDir: acquisition rejections (cancellation included)
+  // bypass cleanupOnFailure and never hand back a cleanup handle, so remove
+  // the abandoned clone directory here and rethrow the original error.
+  let acquired: Awaited<ReturnType<typeof acquireGitSource>>;
+  try {
+    acquired = await acquireGitSource({
+      ...normalized,
+      repoDir,
+      refMode: isImmutableGitCommitRef(normalized.ref) ? "detached" : "shallow-branch",
+      timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
+      cloneSeparator: false,
+      recordCommit: false,
+      cleanupOnFailure: cleanup,
+      formatFailure: ({ action, stdout, stderr }) => {
+        const detail = stderr.trim() || stdout.trim() || `git ${action} failed`;
+        return `failed to ${action} marketplace source ${normalized.label}: ${detail}`;
+      },
+    });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
   if (!acquired.ok) {
     return acquired;
   }
