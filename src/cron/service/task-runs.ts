@@ -473,7 +473,11 @@ export function tryFinishCronTaskRun(
         status,
         endedAt: entry.ts,
         lastEventAt: entry.ts,
-        ...(status === "cancelled"
+        // Operator cancellation owns the task status and reason, so its
+        // finished event drops the execution error. A skipped run that maps to
+        // cancelled (an intentional no-op such as an empty heartbeat file) is
+        // not operator-cancelled: keep its skip reason for diagnostics.
+        ...(status === "cancelled" && entry.status !== "skipped"
           ? {}
           : {
               error: entry.error,
