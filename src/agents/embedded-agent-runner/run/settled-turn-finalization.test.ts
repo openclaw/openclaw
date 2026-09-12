@@ -506,6 +506,107 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     },
   );
 
+  it.each([
+    {
+      name: "optional authored silence",
+      text: SILENT_REPLY_TOKEN,
+      optional: true,
+      allowed: true,
+      failedTool: false,
+      silent: true,
+    },
+    {
+      name: "mandatory reply",
+      text: SILENT_REPLY_TOKEN,
+      optional: false,
+      allowed: true,
+      failedTool: false,
+      silent: false,
+    },
+    {
+      name: "silence disabled",
+      text: SILENT_REPLY_TOKEN,
+      optional: true,
+      allowed: false,
+      failedTool: false,
+      silent: false,
+    },
+    {
+      name: "blank output",
+      text: "",
+      optional: true,
+      allowed: true,
+      failedTool: false,
+      silent: false,
+    },
+    {
+      name: "failed tool",
+      text: SILENT_REPLY_TOKEN,
+      optional: true,
+      allowed: true,
+      failedTool: true,
+      silent: false,
+    },
+  ])(
+    "honors the finalization silence contract: $name",
+    async ({ text, optional, allowed, failedTool, silent }) => {
+      const attempt = failedTool ? settledFailedAttempt() : createSettledProviderFailureAttempt();
+      const input = finalizationInput(attempt);
+      Object.assign(input.terminalBase.runParams, {
+        trigger: "heartbeat",
+        terminalReplyExpectation: optional ? "optional" : "required",
+        allowEmptyAssistantReplyAsSilent: allowed,
+        sourceReplyDeliveryMode: "automatic",
+      });
+      backendMocks.runSettledFinalization.mockResolvedValue({
+        outcome: "empty",
+        result: { assistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] }) },
+      });
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(silent ? 1 : 2);
+      if (silent) {
+        expect(result.finalizationOutcome).toBe("answered");
+        expect(result.attempt.assistantTexts).toEqual([SILENT_REPLY_TOKEN]);
+        expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+        expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+      } else if (failedTool) {
+        expect(result.finalizationOutcome).toBe("failed");
+        expect(result.attempt).toBe(attempt);
+        expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
+      } else {
+        expect(result.finalizationOutcome).toBe("completed-empty");
+        expect(result.prepared.payloadsWithToolMedia).toEqual([
+          expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+        ]);
+      }
+    },
+  );
+
+  it("does not accept optional authored silence after an original timeout", async () => {
+    const attempt = createSettledProviderFailureAttempt();
+    attempt.terminal = { kind: "timeout", phase: "prompt", source: "idle" };
+    const input = finalizationInput(attempt);
+    Object.assign(input.terminalBase.runParams, {
+      trigger: "heartbeat",
+      terminalReplyExpectation: "optional",
+      allowEmptyAssistantReplyAsSilent: true,
+      sourceReplyDeliveryMode: "automatic",
+    });
+    backendMocks.runSettledFinalization.mockResolvedValue({
+      outcome: "empty",
+      result: {
+        assistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+        }),
+      },
+    });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).not.toBe("answered");
+  });
+
   it("persists fallback with the queue signal after the original attempt aborts", async () => {
     const attempt = settledSuccessfulAttempt();
     const emptyAssistant = buildEmbeddedRunnerAssistant({

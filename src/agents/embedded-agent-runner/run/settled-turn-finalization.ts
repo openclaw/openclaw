@@ -3,6 +3,7 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
+import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -33,9 +34,14 @@ import {
   resolveRuntimeModelAttempt,
   runEmbeddedSettledTurnFinalizationWithBackend,
 } from "./backend.js";
-import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import { resolveFinalAssistantVisibleText } from "./helpers.js";
+import {
+  resolveSettledToolBatchEvidence,
+  shouldTreatEmptyAssistantReplyAsSilent,
+} from "./incomplete-turn-recovery.js";
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
+  isEmbeddedRunTerminalTimeout,
   resolveEmbeddedRunAttemptTerminalOutcome,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
@@ -174,6 +180,24 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       });
       assertFinalizationActive();
       attempt = finalization.attempt;
+      // The harness retains authored silence as an empty result; only the host
+      // owns the optional terminal reply contract and the settled tool failures.
+      if (
+        finalization.outcome === "empty" &&
+        runParams.terminalReplyExpectation === "optional" &&
+        !initial.attempt.lastToolError &&
+        shouldTreatEmptyAssistantReplyAsSilent({
+          allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
+          terminalReplyExpectation: runParams.terminalReplyExpectation,
+          onlyExplicitSilentReply: true,
+          payloadCount: 0,
+          aborted: input.finalization.abortSignal.aborted,
+          timedOut: isEmbeddedRunTerminalTimeout(initial.terminalState.outcome),
+          attempt,
+        })
+      ) {
+        finalization.outcome = "answered";
+      }
       mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
       mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
       lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
@@ -429,7 +453,13 @@ function buildSettledTurnFinalizationAttemptResult(input: {
   runtimePlan?: EmbeddedRunAttemptParams["runtimePlan"];
 }): EmbeddedRunAttemptWithReceiptEvidence {
   const { result, settledAttempt } = input;
-  const text = input.outcome === "empty" ? "" : resolveSettledTurnFinalizationText(result);
+  const authoredText = resolveFinalAssistantVisibleText(result.assistant) ?? "";
+  const text =
+    input.outcome === "empty"
+      ? isSilentReplyText(authoredText)
+        ? authoredText
+        : ""
+      : resolveSettledTurnFinalizationText(result);
   // Finalization replaces terminal ownership, not host-private facts from settled tools.
   // Its response model does not replace the original runtime-owned selection.
   // Replay, abort, and lifecycle state remain finalizer-local.
