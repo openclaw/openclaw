@@ -20,6 +20,7 @@ import {
   type HybridSearchResult,
 } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
+import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import { MemoryKeywordRetrieval, type KeywordSearchHit } from "./manager-keyword-retrieval.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
@@ -303,7 +304,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             ? await this.searchKeywordWithFallback(
                 cleaned,
                 candidates,
-                { boostFallbackRanking: true },
+                { boostFallbackRanking: true, signal: opts?.signal },
                 sourceFilterList,
               ).catch((err: unknown) => {
                 log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
@@ -516,6 +517,22 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       snippetMaxChars: SNIPPET_MAX_CHARS,
       signal,
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
+      runFallback: () =>
+        runMemoryVectorFallback(
+          {
+            agentId: this.agentId,
+            databasePath: resolveUserPath(this.settings.store.databasePath),
+          },
+          {
+            providerModel: providerIdentity.model,
+            providerModelAliases: providerIdentity.aliases,
+            queryVec,
+            limit,
+            snippetMaxChars: SNIPPET_MAX_CHARS,
+            sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+          },
+          signal,
+        ),
       runVectorKnn: async (request, knnSignal) =>
         await runVectorKnnInSubprocess({
           databasePath: resolveUserPath(this.settings.store.databasePath),

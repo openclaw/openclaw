@@ -420,7 +420,8 @@
     "!dist/plugin-sdk/provider-auth-aliases.d.ts",
     "!dist/plugin-sdk/provider-model-metadata.d.ts",
     "!dist/plugin-sdk/websocket-runtime.d.ts",
-    "!dist/plugin-sdk/memory-core-host-engine-knn.d.ts"
+    "!dist/plugin-sdk/memory-core-host-engine-knn.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-indexing.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1318,6 +1319,9 @@
     "./plugin-sdk/memory-core-host-engine-foundation": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-indexing": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-indexing.js"
     },
     "./plugin-sdk/memory-core-host-engine-knn": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-knn.js"

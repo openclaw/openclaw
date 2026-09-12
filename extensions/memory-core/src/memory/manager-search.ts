@@ -1,11 +1,11 @@
 // Memory Core plugin module implements manager search behavior.
 import type { DatabaseSync } from "node:sqlite";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   cosineSimilarity,
   parseEmbedding,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   normalizeStringEntries,
   normalizeStringEntriesLower,
@@ -350,6 +350,7 @@ export async function searchVector(params: {
   signal?: AbortSignal;
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
+  runFallback?: () => Promise<SearchRowResult[]>;
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
 }): Promise<SearchRowResult[]> {
@@ -358,17 +359,19 @@ export async function searchVector(params: {
   }
   params.signal?.throwIfAborted();
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const searchFallback = () =>
-    searchChunksByEmbedding({
-      db: params.db,
-      providerModel: params.providerModel,
-      providerModelAliases: params.providerModelAliases,
-      sourceFilter: params.sourceFilterChunks,
-      queryVec: params.queryVec,
-      limit: params.limit,
-      snippetMaxChars: params.snippetMaxChars,
-      signal: params.signal,
-    });
+  const searchFallback =
+    params.runFallback ??
+    (() =>
+      searchChunksByEmbedding({
+        db: params.db,
+        providerModel: params.providerModel,
+        providerModelAliases: params.providerModelAliases,
+        sourceFilter: params.sourceFilterChunks,
+        queryVec: params.queryVec,
+        limit: params.limit,
+        snippetMaxChars: params.snippetMaxChars,
+        signal: params.signal,
+      }));
   const vectorReady = await params.ensureVectorReady(params.queryVec.length);
   params.signal?.throwIfAborted();
   if (vectorReady) {
@@ -403,7 +406,7 @@ export async function searchVector(params: {
   return await searchFallback();
 }
 
-async function searchChunksByEmbedding(params: {
+export async function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   providerModelAliases?: string[];

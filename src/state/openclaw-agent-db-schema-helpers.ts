@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
 import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
@@ -14,10 +13,7 @@ import {
   getCanonicalSqliteTableNames,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
-import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_V14_BOARD_SCHEMA_SQL,
@@ -25,11 +21,11 @@ import {
 } from "./openclaw-agent-board-schema.js";
 import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engine-turn-outbox-schema.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
-  AGENT_MEDIA_SCHEMA_VERSION,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-} from "./openclaw-agent-db-contract.js";
-import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+  readExistingAgentSchemaMeta,
+  assertExistingAgentSchemaOwner,
+} from "./openclaw-agent-db-schema-read.js";
 import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
@@ -57,11 +53,12 @@ import {
   STANDING_INTENTS_TABLE,
 } from "./openclaw-agent-standing-intents-schema.js";
 
-type ExistingAgentSchemaMeta = {
-  agentId: string | null;
-  role: string | null;
-  schemaVersion: number | null;
-};
+export {
+  assertSupportedAgentSchemaVersion,
+  assertCanonicalAgentPersistenceVersion,
+  readExistingAgentSchemaMeta,
+  assertExistingAgentSchemaOwner,
+} from "./openclaw-agent-db-schema-read.js";
 
 export function migratedSessionColumn(
   columns: ReadonlySet<string>,
@@ -251,84 +248,6 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     assertSqliteSchemaTablesPresent(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
     ensureOpenClawAgentProgressCardSchemaInTransaction(database);
     repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
-  }
-}
-
-export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): number {
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw agent database",
-      pathname,
-      userVersion,
-      OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
-  }
-  return userVersion;
-}
-
-/** Readers may pass their immediate check; writers reread the version after integrity work. */
-export function assertCanonicalAgentPersistenceVersion(
-  db: DatabaseSync,
-  pathname: string,
-  userVersion = readSqliteUserVersion(db),
-): void {
-  const hasApplicationSchema =
-    userVersion === 0 &&
-    db.prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1").get();
-  const isNewUnownedDatabase =
-    userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
-  if (userVersion < AGENT_MEDIA_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
-  }
-  if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; stop active agents and run openclaw doctor --fix to migrate session identities before using it.`,
-    );
-  }
-}
-
-export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
-  const schemaMetaTable = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
-    .get();
-  if (!schemaMetaTable) {
-    return null;
-  }
-  const row = db
-    .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-    .get() as { agent_id?: unknown; role?: unknown; schema_version?: unknown } | undefined;
-  if (!row) {
-    return null;
-  }
-  return {
-    agentId: normalizeNullableString(row.agent_id),
-    role: typeof row.role === "string" ? row.role : null,
-    schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
-  };
-}
-
-export function assertExistingAgentSchemaOwner(
-  existing: ExistingAgentSchemaMeta | null,
-  agentId: string,
-  pathname: string,
-): void {
-  if (!existing) {
-    return;
-  }
-  // Agent DB files are not interchangeable; opening another role/id would corrupt ownership.
-  if (existing.role !== "agent") {
-    throw new Error(
-      `OpenClaw agent database ${pathname} has schema role ${existing.role ?? "unknown"}; expected agent.`,
-    );
-  }
-  if (!existing.agentId) {
-    throw new Error(`OpenClaw agent database ${pathname} has no agent owner.`);
-  }
-  if (normalizeAgentId(existing.agentId) !== agentId) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
-    );
   }
 }
 

@@ -51,3 +51,17 @@ engine unchanged, and tries that engine again on the next logical turn.
   chain.
 - Embedding providers use `api.registerEmbeddingProvider(...)` and
   `contracts.embeddingProviders`; there is no separate memory-only registry.
+
+## Bundled Memory Core workers
+
+Memory Core uses the shared `process-runtime` worker pool for lexical retrieval,
+cosine fallback, and immutable chunk preparation. Retrieval retains the search
+generation until its readers close; publication, source-hash validation, and
+forget operations remain with their existing database owners.
+
+Bundled workers use the private `memory-core-host-engine-knn` facade for
+read-only database access and vector primitives, and
+`memory-core-host-engine-indexing` for pure chunking, annotations, hashes, and
+embedding input limits. These facades avoid loading provider registries or
+writable-store initialization into worker threads. They are bundled runtime
+contracts, not third-party typed SDK entrypoints.

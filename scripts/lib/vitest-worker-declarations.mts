@@ -1,5 +1,7 @@
 // Declaration paths are shared metadata; only the runner imports their build values.
 export const runtimeProcessDeclarationEntries = {
+  "extensions/memory-core/manager-cpu-entrypoints":
+    "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
   "extensions/memory-core/manager-search-knn-entrypoint":
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",

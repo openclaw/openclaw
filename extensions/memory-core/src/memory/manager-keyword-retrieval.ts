@@ -1,6 +1,9 @@
 // Memory Core plugin module owns keyword retrieval and ranking.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  createSubsystemLogger,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   readCuratedProjectMemoryCandidates,
@@ -11,15 +14,11 @@ import {
   type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { bm25RankToScore, buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
+import { buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
+import { runMemoryKeywordSearch } from "./manager-cpu-worker-runtime.js";
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
-import {
-  resolveExactPathSpecificity,
-  searchKeyword,
-  searchPathKeyword,
-  type ExactPathSpecificity,
-} from "./manager-search.js";
+import { resolveExactPathSpecificity, type ExactPathSpecificity } from "./manager-search.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
@@ -230,20 +229,23 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       this.db,
       results.map((entry) => entry.id),
     );
-    return results.map((entry) => {
-      const row = metadataById.get(entry.id);
-      return {
-        ...entry,
-        ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
-        ...(typeof row?.triggers === "string" && row.triggers.trim()
-          ? { triggers: row.triggers.trim() }
-          : {}),
-        ...(typeof row?.project_key === "string" && row.project_key.trim()
-          ? { projectKey: row.project_key.trim() }
-          : {}),
-        ...(row?.provenance ? { provenance: row.provenance } : {}),
-      };
-    });
+    // The left-joined metadata reader omits only missing chunks. A forget may
+    // delete one while the worker is reading its earlier snapshot.
+    return results
+      .filter((entry) => metadataById.has(entry.id))
+      .map((entry) => {
+        const row = metadataById.get(entry.id);
+        return Object.assign(entry, {
+          ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
+          ...(typeof row?.triggers === "string" && row.triggers.trim()
+            ? { triggers: row.triggers.trim() }
+            : {}),
+          ...(typeof row?.project_key === "string" && row.project_key.trim()
+            ? { projectKey: row.project_key.trim() }
+            : {}),
+          ...(row?.provenance ? { provenance: row.provenance } : {}),
+        });
+      });
   }
 
   private async searchKeyword(
@@ -251,6 +253,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     limit: number,
     options?: {
       boostFallbackRanking?: boolean;
+      signal?: AbortSignal;
       exactPathQuery?: string;
       rankingQuery?: string;
     },
@@ -259,40 +262,41 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const bodySearch = searchKeyword({
-      db: this.db,
-      ftsTable: FTS_TABLE,
-      query,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
-      buildFtsQuery,
-      bm25RankToScore,
-      boostFallbackRanking: options?.boostFallbackRanking,
-      rankingQuery: options?.rankingQuery,
-    }).catch((err: unknown) => {
-      log.warn(`memory search: body keyword query failed: ${formatErrorMessage(err)}`);
-      return [];
-    });
     const exactPathQuery = options?.exactPathQuery ?? query;
-    const pathSearch = searchPathKeyword({
-      db: this.db,
-      pathFtsTable: PATH_FTS_TABLE,
-      query,
-      exactPathQuery,
-      exactPathLimit: EXACT_PATH_CANDIDATE_LIMIT,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
-      buildFtsQuery,
-      bm25RankToScore,
-    }).catch((err: unknown) => {
-      log.warn(`memory search: path keyword query failed: ${formatErrorMessage(err)}`);
-      return [];
-    });
-    const [bodyResults, pathResults] = await Promise.all([bodySearch, pathSearch]);
+    const result = await runMemoryKeywordSearch(
+      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+      {
+        body: {
+          ftsTable: FTS_TABLE,
+          query,
+          ftsTokenizer: this.settings.store.fts.tokenizer,
+          limit,
+          snippetMaxChars: SNIPPET_MAX_CHARS,
+          sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+          boostFallbackRanking: options?.boostFallbackRanking,
+          rankingQuery: options?.rankingQuery,
+        },
+        path: {
+          pathFtsTable: PATH_FTS_TABLE,
+          query,
+          exactPathQuery,
+          exactPathLimit: EXACT_PATH_CANDIDATE_LIMIT,
+          ftsTokenizer: this.settings.store.fts.tokenizer,
+          limit,
+          snippetMaxChars: SNIPPET_MAX_CHARS,
+          sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
+        },
+      },
+      options?.signal,
+    );
+    if (result.body.error) {
+      log.warn(`memory search: body keyword query failed: ${result.body.error}`);
+    }
+    if (result.path.error) {
+      log.warn(`memory search: path keyword query failed: ${result.path.error}`);
+    }
+    const bodyResults = result.body.rows;
+    const pathResults = result.path.rows;
     const merged = this.mergeKeywordSearchHits(
       [
         bodyResults.map((entry) =>
@@ -311,15 +315,11 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   protected async searchKeywordWithFallback(
     query: string,
     limit: number,
-    options: { boostFallbackRanking?: boolean } | undefined,
+    options: { boostFallbackRanking?: boolean; signal?: AbortSignal } | undefined,
     sourceFilterList: MemorySource[],
   ): Promise<KeywordSearchHit[]> {
-    const fullQueryResults = await this.searchKeyword(
-      query,
-      limit,
-      options,
-      sourceFilterList,
-    ).catch(() => []);
+    const fullQueryResults = await this.searchKeyword(query, limit, options, sourceFilterList);
+    options?.signal?.throwIfAborted();
     const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
     if (nonExactResults.length >= limit) {
       return this.attachRecallMetadata(fullQueryResults);
@@ -339,16 +339,25 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       return this.attachRecallMetadata(fullQueryResults);
     }
 
-    const resultSets = await Promise.all(
+    const settled = await Promise.allSettled(
       fallbackTerms.map((term) =>
         this.searchKeyword(
           term,
           limit,
           { ...options, exactPathQuery: query, rankingQuery: query },
           sourceFilterList,
-        ).catch(() => []),
+        ),
       ),
     );
+    options?.signal?.throwIfAborted();
+    // Keep the generation leased until every admitted probe has closed its reader,
+    // including siblings of a failed or cancelled worker request.
+    const resultSets = settled.map((result) => {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      return result.value;
+    });
     // Enrich only the retained candidates after all probes deduplicate. Provenance
     // and recall annotations share one read under the search generation lease.
     return this.attachRecallMetadata(
