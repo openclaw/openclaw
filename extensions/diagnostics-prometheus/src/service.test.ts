@@ -30,7 +30,7 @@ describe("diagnostics-prometheus service", () => {
       method: "sessions.list",
       trace: { traceId: "4bf92f3577b34da6a3ce929d0e0e4736" },
     };
-    for (const event of [
+    const events = [
       { ...base, phase: "received" },
       { ...base, phase: "response", outcome: "ok", durationMs: 250 },
       { ...base, phase: "handler", outcome: "returned", durationMs: 400, admissionMs: 100 },
@@ -44,9 +44,8 @@ describe("diagnostics-prometheus service", () => {
       },
       { ...base, method: "health", phase: "response", outcome: "ok", durationMs: 10 },
       { ...base, method: "health", phase: "response", outcome: "error", durationMs: 20 },
-    ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event, trusted);
-    }
+    ] satisfies DiagnosticEventPayload[];
+    events.forEach((event) => metrics.record(event, trusted));
 
     const rendered = metrics.render();
     expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="sessions.list"} 1');
@@ -893,7 +892,7 @@ describe("diagnostics-prometheus service", () => {
     const exporter = createDiagnosticsPrometheusExporter();
     const unsubscribe = vi.fn();
 
-    exporter.service.start({
+    void exporter.service.start({
       config: {} as never,
       stateDir: "/tmp/openclaw-prometheus-test",
       logger: {
