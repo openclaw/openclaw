@@ -84,8 +84,12 @@ function resolveDefaultCronStorePath(env: NodeJS.ProcessEnv): string {
 }
 
 /** Resolves the cron jobs store path, expanding home-relative user input. */
-export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.ProcessEnv = process.env) {
-  const selected = storePath?.trim() || readCronStoreStatePath(env);
+export function resolveCronJobsStorePath(
+  storePath?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  stateEnv: NodeJS.ProcessEnv = env,
+) {
+  const selected = storePath?.trim() || readCronStoreStatePath(stateEnv);
   if (selected) {
     const raw = selected.trim();
     if (raw.startsWith("~")) {
@@ -100,9 +104,10 @@ export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.Process
 export function resolveCronJobsStorePathFromConfig(
   cfg: { cron?: unknown },
   env: NodeJS.ProcessEnv = process.env,
+  stateEnv: NodeJS.ProcessEnv = env,
 ): string {
   const store = (cfg.cron as { store?: unknown } | undefined)?.store;
-  return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env);
+  return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env, stateEnv);
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */

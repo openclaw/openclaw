@@ -190,7 +190,9 @@ describe("SQLite session participants", () => {
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:bounded" };
       await upsertSessionEntryCore(scope, { sessionId: "bounded", updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "bounded" });
       database.db.exec("DROP TABLE session_participants");
+      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "bounded" });
       expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toBeUndefined();
       expect(
         database.db

@@ -4,6 +4,13 @@ import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { translateActive } from "../i18n/lib/translate.ts";
 
+export function isSensitiveLeafValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0 && !/^\$\{[^}]*\}$/.test(value.trim());
+  }
+  return value !== undefined && value !== null;
+}
+
 export type JsonSchema = {
   type?: string | string[];
   title?: string;

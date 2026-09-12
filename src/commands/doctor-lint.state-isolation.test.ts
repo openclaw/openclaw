@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,9 +16,13 @@ import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePathFromConfig, saveCronStore } from "../cron/store.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
+import { createSkillProposalEvent } from "../skills/workshop/plugin-hooks.js";
+import { appendSkillProposalEvent } from "../skills/workshop/store-sqlite-event.js";
+import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
@@ -31,6 +34,9 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
+import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
+import { createAppliedLegacyProposal } from "./doctor-skill-workshop-sqlite.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveDoctorContributionHealthChecks: vi.fn(),
@@ -62,11 +68,7 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
   };
 });
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 const originalEnv = {
   HOME: process.env.HOME,
@@ -86,6 +88,189 @@ describe("doctor lint state isolation", () => {
     closeOpenClawStateDatabaseForTest();
     restoreEnv(originalEnv);
   });
+
+  it.each([false, true])(
+    "runDoctorLintCli --all classifies registered Workshop targets (external=%s)",
+    async (external) => {
+      await withOpenClawTestState({ prefix: "openclaw-doctor-lint-workshop-" }, async (state) => {
+        const customDir = state.path("custom-agent");
+        await state.writeConfig({
+          agents: { entries: { main: { default: true }, custom: { agentDir: customDir } } },
+          memory: { search: { enabled: false } },
+        });
+        const targets = [
+          { id: "canonical-main", owner: "main", root: state.agentDir("main") },
+          { id: "canonical-custom", owner: "custom", root: customDir },
+          ...(external ? [{ id: "external", owner: "main", root: state.path("outside") }] : []),
+        ];
+        for (const { id, owner, root } of targets) {
+          const skillDir = path.join(root, "workshop-skills", id);
+          const content = `---\nname: ${id}\ndescription: Saved test procedure\n---\n`;
+          const record = createAppliedLegacyProposal({
+            id,
+            title: id,
+            description: "Saved test procedure",
+            content,
+            target: { skillKey: id, skillDir },
+          });
+          fs.mkdirSync(skillDir, { recursive: true });
+          fs.writeFileSync(record.target.skillFile, content);
+          importLegacySkillProposal({ record, ownerAgentId: owner, store: { env: state.env } });
+        }
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        closeOpenClawStateDatabaseByPath(databasePath);
+        const before = snapshotDoctorLintSqliteFamily(databasePath);
+        const filesBefore = fs
+          .readdirSync(state.stateDir, { recursive: true, encoding: "utf8" })
+          .toSorted((left, right) => left.localeCompare(right));
+        const skillContents = targets.map(({ id, root }) =>
+          fs.readFileSync(path.join(root, "workshop-skills", id, "SKILL.md"), "utf8"),
+        );
+        const check = await selectWorkshopCheckWithUnavailableSource(databasePath);
+        mocks.sqliteOpen.mockClear();
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        try {
+          const exitCode = await runDoctorLintCli(runtime, { json: true, includeAllChecks: true });
+          const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+          expect(exitCode).toBe(external ? 1 : 0);
+          if (external) {
+            expect(report.findings).toEqual([
+              expect.objectContaining({
+                checkId: check.id,
+                message: expect.stringContaining("1 proposal target outside agent directories"),
+              }),
+            ]);
+            expect(report.findings[0].message).toContain(state.path("outside"));
+            expect(report.findings[0].message).not.toContain("canonical-main");
+            expect(report.findings[0].message).not.toContain("canonical-custom");
+          } else {
+            expect(report.findings).toEqual([]);
+          }
+          expect(mocks.sqliteOpen).toHaveBeenCalled();
+          expect(mocks.sqliteOpen.mock.calls.every(([file]) => file !== databasePath)).toBe(true);
+          expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+          expect(
+            fs
+              .readdirSync(state.stateDir, { recursive: true, encoding: "utf8" })
+              .toSorted((left, right) => left.localeCompare(right)),
+          ).toEqual(filesBefore);
+          expect(
+            targets.map(({ id, root }) =>
+              fs.readFileSync(path.join(root, "workshop-skills", id, "SKILL.md"), "utf8"),
+            ),
+          ).toEqual(skillContents);
+          expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+        } finally {
+          stdout.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "runDoctorLintCli --all retains registered Workshop history findings (custom partition=%s)",
+    async (customPartition) => {
+      await withOpenClawTestState(
+        { prefix: "openclaw-doctor-lint-workshop-history-" },
+        async (state) => {
+          const config: OpenClawConfig = {
+            agents: { entries: { main: { workspace: state.workspaceDir } } },
+            memory: { search: { enabled: false } },
+          };
+          await state.writeConfig(config);
+          const legacyDir = path.join(state.workspaceDir, "skills", "relocated");
+          const destination = path.join(state.agentDir("main"), "workshop-skills", "relocated");
+          const record = createAppliedLegacyProposal({
+            id: "relocated",
+            title: "Relocated procedure",
+            description: "Saved test procedure",
+            content: "# Saved procedure\n",
+            target: { skillKey: "relocated", skillDir: destination },
+          });
+          fs.mkdirSync(destination, { recursive: true });
+          fs.writeFileSync(record.target.skillFile, "# Saved procedure\n");
+          importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+          appendSkillProposalEvent(
+            openOpenClawStateDatabase({ env: state.env }).db,
+            createSkillProposalEvent({
+              record,
+              type: "applied",
+              payload: { targetSkillFile: path.join(legacyDir, "SKILL.md") },
+            }),
+          );
+          if (customPartition) {
+            writeConfigMachineState("cron.store", "~/custom-jobs.json");
+          }
+          await saveCronStore(resolveCronJobsStorePathFromConfig(config, state.env), {
+            version: 1,
+            jobs: [
+              {
+                id: "legacy-command",
+                name: "Legacy command",
+                agentId: "main",
+                enabled: true,
+                createdAtMs: 1,
+                updatedAtMs: 1,
+                schedule: { kind: "every", everyMs: 86400000 },
+                sessionTarget: "isolated",
+                wakeMode: "now",
+                payload: { kind: "command", argv: ["node", "check.js"], cwd: legacyDir },
+                state: {},
+              },
+            ],
+          });
+          const backup = await state.writeJson(
+            "skill-workshop/collection-backups/0123456789abcdef/retained/manifest.json",
+            {
+              schema: "openclaw.skill-collection-backup.v1",
+              id: "retained",
+              createdAt: "2026-09-01T00:00:00.000Z",
+              workspaceDir: state.workspaceDir,
+              skillDirs: [],
+              resultSkillDirs: [],
+              resultSkillHashes: {},
+            },
+          );
+          const databasePath = resolveOpenClawStateSqlitePath(state.env);
+          closeOpenClawStateDatabaseByPath(databasePath);
+          const before = snapshotDoctorLintSqliteFamily(databasePath);
+          const backupBefore = fs.readFileSync(backup, "utf8");
+          await selectWorkshopCheckWithUnavailableSource(databasePath);
+          mocks.sqliteOpen.mockClear();
+          const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+          try {
+            await expect(
+              runDoctorLintCli(runtime, { json: true, includeAllChecks: true }),
+            ).resolves.toBe(1);
+            const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+            expect(report.findings).toHaveLength(2);
+            expect(report.findings).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  target: "legacy-command",
+                  path: "payload.cwd",
+                  fixHint: expect.stringContaining(destination),
+                }),
+                expect.objectContaining({
+                  path: "skills.workshop",
+                  message: expect.stringContaining(
+                    "0 proposal targets outside agent directories () and 1 legacy collection backup root",
+                  ),
+                }),
+              ]),
+            );
+            expect(mocks.sqliteOpen).toHaveBeenCalled();
+            expect(mocks.sqliteOpen.mock.calls.every(([file]) => file !== databasePath)).toBe(true);
+            expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+            expect(fs.readFileSync(backup, "utf8")).toBe(backupBefore);
+            expect(fs.readFileSync(record.target.skillFile, "utf8")).toBe("# Saved procedure\n");
+          } finally {
+            stdout.mockRestore();
+          }
+        },
+      );
+    },
+  );
 
   it.each([
     { label: "--all", selection: "all", profile: undefined, isolated: true },
@@ -115,7 +300,7 @@ describe("doctor lint state isolation", () => {
         const sourcePath = await state.writeText("identity/device-auth.json", "legacy-file-marker");
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         closeOpenClawStateDatabaseByPath(databasePath);
-        const before = snapshotSqliteFamily(databasePath);
+        const before = snapshotDoctorLintSqliteFamily(databasePath);
         const actual = await vi.importActual<
           typeof import("../flows/doctor-health-contributions.js")
         >("../flows/doctor-health-contributions.js");
@@ -183,7 +368,7 @@ describe("doctor lint state isolation", () => {
             }
           }
           expect(fs.readFileSync(sourcePath, "utf8")).toBe("legacy-file-marker");
-          const after = snapshotSqliteFamily(databasePath);
+          const after = snapshotDoctorLintSqliteFamily(databasePath);
           if (entry.isolated) {
             expect(after).toEqual(before);
           } else {
@@ -553,7 +738,7 @@ describe("doctor lint state isolation", () => {
         writer.exec(
           "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
         );
-        const before = snapshotSqliteFamily(databasePath);
+        const before = snapshotDoctorLintSqliteFamily(databasePath);
         let observed: unknown;
         mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
           {
@@ -577,7 +762,7 @@ describe("doctor lint state isolation", () => {
             await collectDoctorFindings(runtime);
           }
           expect(observed).toEqual([{ value: "committed" }]);
-          expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+          expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
         } finally {
           stdout.mockRestore();
           writer.close();
@@ -606,7 +791,7 @@ describe("doctor lint state isolation", () => {
     closeOpenClawStateDatabaseByPath(databasePath);
     const lock = new DatabaseSync(databasePath);
     lock.exec("BEGIN IMMEDIATE");
-    const before = snapshotSqliteFamily(databasePath);
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
     mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
       {
         id: "core/doctor/runtime-tool-schemas",
@@ -637,7 +822,7 @@ describe("doctor lint state isolation", () => {
         checksRun: 1,
         findings: [],
       });
-      expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
       lock.exec("ROLLBACK");
@@ -648,14 +833,32 @@ describe("doctor lint state isolation", () => {
   });
 });
 
-function snapshotSqliteFamily(databasePath: string): Array<{ path: string; sha256: string }> {
-  return ["", "-journal", "-shm", "-wal"]
-    .map((suffix) => `${databasePath}${suffix}`)
-    .filter((candidate) => fs.existsSync(candidate))
-    .map((candidate) => ({
-      path: candidate,
-      sha256: createHash("sha256").update(fs.readFileSync(candidate)).digest("hex"),
-    }));
+async function selectWorkshopCheckWithUnavailableSource(databasePath: string) {
+  const actual = await vi.importActual<typeof import("../flows/doctor-health-contributions.js")>(
+    "../flows/doctor-health-contributions.js",
+  );
+  const check = (await actual.resolveDoctorContributionHealthChecks()).find(
+    (entry) => entry.id === "core/doctor/skill-workshop-relocation",
+  );
+  if (!check) {
+    throw new Error("skill-workshop-relocation contribution is missing");
+  }
+  mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+    {
+      ...check,
+      async detect(ctx: HealthCheckContext) {
+        // Lint has already copied state; findings must survive without reopening its source.
+        const retainedPath = `${databasePath}.retained`;
+        fs.renameSync(databasePath, retainedPath);
+        try {
+          return await check.detect(ctx);
+        } finally {
+          fs.renameSync(retainedPath, databasePath);
+        }
+      },
+    },
+  ]);
+  return check;
 }
 
 function restoreEnv(values: typeof originalEnv): void {

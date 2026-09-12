@@ -2,7 +2,10 @@ import { once } from "node:events";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseCoordinator,
+  acquireStateDatabaseHandleExclusion,
+} from "../infra/state-database-coordinator.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   acquireOpenClawStateDatabaseFileExclusion,
@@ -131,18 +134,20 @@ describe("maintenance lease heartbeat", () => {
       const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
       await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
         closeOpenClawStateDatabaseByPath(databasePath);
-        let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+        let exclusion:
+          | Awaited<ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion>>
+          | undefined;
         try {
-          expect(() => {
-            exclusion = acquireOpenClawStateDatabaseFileExclusion(databasePath);
-          }).toThrow(/state-handles/);
+          await expect(async () => {
+            exclusion = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
+          }).rejects.toThrow(/state-handles/);
         } finally {
           exclusion?.release();
         }
         lease.assertOwned();
       });
       // withOpenClawStateLease joins the real worker, then releases its durable row.
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(databasePath);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
       exclusion.release();
     });
   });
@@ -207,10 +212,10 @@ describe("maintenance lease heartbeat", () => {
           block(100);
           const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
           closeOpenClawStateDatabaseByPath(databasePath);
-          let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+          let exclusion: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
           try {
             expect(() => {
-              exclusion = acquireOpenClawStateDatabaseFileExclusion(databasePath);
+              exclusion = acquireStateDatabaseHandleExclusion({ databasePath });
             }).toThrow(/state-handles/);
           } finally {
             exclusion?.release();

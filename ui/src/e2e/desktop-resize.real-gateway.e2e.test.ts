@@ -558,7 +558,7 @@ suite.define(() => {
             await verifyMatch(stage, observerCanvas);
             expect(
               await observerPanel.locator(".desktop-touch-action, .desktop-sizing").count(),
-            ).toBe(4);
+            ).toBe(5);
           }
           const colorCount = await observerCanvas.evaluate((element) => {
             const surface = element as HTMLCanvasElement;

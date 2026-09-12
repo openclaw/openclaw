@@ -2310,11 +2310,6 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       const sessions = await discoverAllSessions();
       expect(sessions.map((session) => session.sessionId)).toEqual(["sess-deleted", "sess-reset"]);
-      expect(
-        sessions
-          .map((session) => session.firstUserMessage)
-          .toSorted((a, b) => String(a).localeCompare(String(b))),
-      ).toEqual(["deleted transcript", "reset transcript"]);
     });
   });
 
@@ -2358,7 +2353,6 @@ describe("session cost usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.sessionId).toBe("sess-shared");
       expect(sessions[0]?.sessionFile).toContain(".jsonl.deleted.");
-      expect(sessions[0]?.firstUserMessage).toBe("newer archive");
     });
   });
 
@@ -2399,40 +2393,6 @@ describe("session cost usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.sessionId).toBe("sess-live");
       expect(sessions[0]?.sessionFile).toBe(activePath);
-      expect(sessions[0]?.firstUserMessage).toBe("active transcript");
-    });
-  });
-
-  it("keeps discovered first-message text on a UTF-16 boundary", async () => {
-    const root = await makeSessionCostRoot("discover-utf16-first-message");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const content = `${"a".repeat(99)}🚀tail`;
-    const fixtures = [
-      { sessionId: "sess-string", content },
-      { sessionId: "sess-block", content: [{ type: "text", text: content }] },
-    ];
-    for (const fixture of fixtures) {
-      await fs.writeFile(
-        path.join(sessionsDir, `${fixture.sessionId}.jsonl`),
-        JSON.stringify({
-          type: "message",
-          timestamp: "2026-02-21T17:47:00.000Z",
-          message: { role: "user", content: fixture.content },
-        }),
-        "utf-8",
-      );
-    }
-
-    await withStateDir(root, async () => {
-      const messages = new Map(
-        (await discoverAllSessions()).map((session) => [
-          session.sessionId,
-          session.firstUserMessage,
-        ]),
-      );
-      expect(messages.get("sess-string")).toBe("a".repeat(99));
-      expect(messages.get("sess-block")).toBe("a".repeat(99));
     });
   });
 

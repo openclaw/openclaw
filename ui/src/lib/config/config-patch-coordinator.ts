@@ -1,7 +1,7 @@
 import {
-  adoptConfigPatchAck,
   patchConfig,
   type ConfigPatchBuildResult,
+  type ConfigSubmissionObserver,
 } from "./config-gateway-operations.ts";
 import {
   currentConfigConnectionEpoch,
@@ -11,8 +11,7 @@ import {
 
 export function createConfigPatchCoordinator(options: {
   state: RuntimeConfigState;
-  dispatch: (task: () => Promise<boolean>) => Promise<boolean>;
-  invalidateConfigLoad: () => void;
+  dispatch: (task: (onSubmitted: ConfigSubmissionObserver) => Promise<boolean>) => Promise<boolean>;
   cancelAppliedRefresh: () => void;
   reconcileAppliedRefresh: () => void;
   reconcileDraft: () => void;
@@ -25,7 +24,7 @@ export function createConfigPatchCoordinator(options: {
   const queue = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
     options.cancelAppliedRefresh();
     return options
-      .dispatch(async () => {
+      .dispatch(async (onSubmitted) => {
         // A drained autosave can start its own refresh while this patch waits.
         options.cancelAppliedRefresh();
         const client = state.client;
@@ -41,10 +40,7 @@ export function createConfigPatchCoordinator(options: {
           if (!client || !state.configSnapshot || resolved.options.canDispatch?.() === false) {
             return false;
           }
-          const patched = await patchConfig(state, resolved.options, (ack, snapshotAtDispatch) => {
-            options.invalidateConfigLoad();
-            adoptConfigPatchAck(state, ack, snapshotAtDispatch);
-          });
+          const patched = await patchConfig(state, resolved.options, onSubmitted);
           if (isCurrentConfigConnection(state, client, epoch)) {
             failedPatch = patched ? null : resolveOptions;
             if (patched) {

@@ -7,7 +7,13 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as commandRunner from "../../process/exec-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { insertRegistryWorktree } from "./registry.js";
+import { snapshotProvisionedFiles } from "./provisioned-files.js";
+import {
+  getRegistryWorktreeProvisionedChunk,
+  getRegistryWorktreeProvisionedState,
+  insertRegistryWorktree,
+  insertRegistryWorktreeProvisionedChunk,
+} from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -74,6 +80,57 @@ describe("ManagedWorktreeService provisioned state", () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it.each([false, true])(
+    "skips inventories for absent provisioned contents and restores their state (deleted=%s)",
+    async (deleted) => {
+      await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nignored/\n");
+      await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+      await git(repo, "add", ".gitignore", ".worktreeinclude");
+      await git(repo, "commit", "-m", "configure worktree provisioning");
+      if (deleted) {
+        await fs.writeFile(path.join(repo, ".env.local"), "synthetic provisioned bytes\n");
+      }
+      const created = await service.create({ repoRoot: repo, name: "absent", baseRef: "HEAD" });
+      const ledger = deleted ? [".env.local"] : [];
+      const expected = deleted ? [{ path: ".env.local", mode: null, chunks: 0 }] : [];
+      if (deleted) {
+        await fs.rm(path.join(created.path, ".env.local"));
+      }
+      await fs.writeFile(path.join(created.path, "README.md"), "preserved edit\n");
+      const oldChunk = { worktreeId: created.id, path: "old.local", chunkIndex: 0 };
+      const oldBytes = new TextEncoder().encode("old");
+      insertRegistryWorktreeProvisionedChunk(env, { ...oldChunk, data: oldBytes });
+      const guard = vi.fn();
+      const commands = vi.spyOn(commandRunner, "runCommandWithTimeout");
+      try {
+        await expect(
+          snapshotProvisionedFiles(env, created.id, created.path, ledger, () => {
+            throw new Error("authority changed");
+          }),
+        ).rejects.toThrow("authority changed");
+        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
+        expect(
+          await snapshotProvisionedFiles(env, created.id, created.path, ledger, guard),
+        ).toEqual(expected);
+        expect(guard).toHaveBeenCalled();
+        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
+        expect(commands.mock.calls.length).toBe(0);
+      } finally {
+        commands.mockRestore();
+      }
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      expect(removed.removed).toBe(true);
+      expect(getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
+      const restored = await service.restore({ id: created.id });
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "preserved edit\n",
+      );
+      await expect(fs.stat(path.join(restored.path, ".env.local"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it("snapshots large provisioned files without buffering them in the service", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "large.local\n");

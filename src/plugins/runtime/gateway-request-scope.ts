@@ -14,6 +14,8 @@ import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
 
 type PluginRuntimeGatewayRequestScope = {
+  /** Recheck the admitted HTTP device grant before effects; rejection sends HTTP 401 and throws. */
+  revalidate?: () => Promise<void>;
   /** Exact placement owner captured before the local harness begins. */
   assertNodeExecutionCurrent?: (request: {
     runId: string;

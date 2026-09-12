@@ -87,7 +87,8 @@ export class DesktopSessionController {
             host.documentMode &&
             host.sessionKey !== null &&
             host.requestedSource === null &&
-            event.event === "sessions.changed"
+            event.event === "sessions.changed" &&
+            !(isRecord(event.payload) && event.payload.phase === "message")
               ? readSessionChangedEvent(event.payload)
               : null;
           if (changed && areUiSessionKeysEquivalent(changed.key, host.sessionKey)) {

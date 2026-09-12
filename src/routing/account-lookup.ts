@@ -40,15 +40,10 @@ export function resolveChannelAccountKey<T>(
   accountKeyPolicy?: ChannelAccountKeyPolicy,
   options?: { allowMissing?: boolean },
 ): string | undefined {
-  const policy =
-    accountKeyPolicy ??
-    snapshotReaderSlot
-      .getCurrentPluginMetadataSnapshot?.({
-        allowScopedSnapshot: true,
-        allowWorkspaceScopedSnapshot: true,
-      })
-      ?.owners.channelAccountKeyPolicies?.get(channelId);
-  return resolveAccountKey(accounts, accountId, normalizeAccountId, policy, options);
+  return resolveAccountKey(accounts, accountId, normalizeAccountId, accountKeyPolicy, {
+    ...options,
+    channelId,
+  });
 }
 
 export function resolveChannelAccountEntry<T>(
@@ -96,11 +91,28 @@ export function resolveAccountKey<T>(
   accountId: string,
   normalizeAccountId?: (accountId: string) => string,
   policy?: ChannelAccountKeyPolicy,
-  options?: { allowMissing?: boolean },
+  options?: { allowMissing?: boolean; channelId?: string },
 ): string | undefined {
-  const normalizer = policy ? normalizeRoutingAccountId : normalizeAccountId;
+  const effectivePolicy =
+    policy ??
+    (options?.channelId
+      ? snapshotReaderSlot
+          .getCurrentPluginMetadataSnapshot?.({
+            allowScopedSnapshot: true,
+            allowWorkspaceScopedSnapshot: true,
+          })
+          ?.owners.channelAccountKeyPolicies?.get(options.channelId)
+      : undefined);
+  const normalizer = effectivePolicy ? normalizeRoutingAccountId : normalizeAccountId;
   const normalize = normalizer ?? normalizeLowercaseStringOrEmpty;
-  const targetId = policy ? normalize(accountId) : accountId;
+  if (
+    options?.allowMissing &&
+    (isBlockedObjectKey(normalizeLowercaseStringOrEmpty(accountId)) ||
+      isBlockedObjectKey(normalize(accountId)))
+  ) {
+    throw new Error(`Account id "${accountId}" is reserved. Choose a different account id.`);
+  }
+  const targetId = effectivePolicy ? normalize(accountId) : accountId;
   // Creation uses the owner's target id, never the spelling of a rejected alias.
   const missingKey = options?.allowMissing ? targetId : undefined;
   if (!accounts || typeof accounts !== "object") {
@@ -117,7 +129,7 @@ export function resolveAccountKey<T>(
       continue;
     }
     // Existing case-only matches retain precedence over newly reachable aliases.
-    if (policy && normalizeLowercaseStringOrEmpty(key) === lowercaseTarget) {
+    if (effectivePolicy && normalizeLowercaseStringOrEmpty(key) === lowercaseTarget) {
       return key;
     }
     const candidate = normalize(key);
@@ -126,15 +138,15 @@ export function resolveAccountKey<T>(
         (Boolean(normalizeOptionalAccountId(key)) && !isBlockedObjectKey(candidate))) &&
       candidate === normalized
     ) {
-      if (!policy) {
+      if (!effectivePolicy) {
         return key;
       }
       const entry = asOptionalRecord(accounts[key]);
       if (
         canonicalMatch === undefined &&
         entry &&
-        Object.hasOwn(entry, policy.canonicalAliasesRequireOwnField) &&
-        normalizeOptionalString(entry[policy.canonicalAliasesRequireOwnField])
+        Object.hasOwn(entry, effectivePolicy.canonicalAliasesRequireOwnField) &&
+        normalizeOptionalString(entry[effectivePolicy.canonicalAliasesRequireOwnField])
       ) {
         canonicalMatch = key;
       }

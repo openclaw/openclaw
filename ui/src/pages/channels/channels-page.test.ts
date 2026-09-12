@@ -188,6 +188,50 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
+  it.each(["Imported name", null])(
+    "openclaw-channels-page Import from Relays preserves profile name %s with extra fields",
+    async (name) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({
+            ok: true,
+            saved: true,
+            merged: { name, displayName: "Imported display", extra: { value: true } },
+          }),
+        ),
+      );
+      const { source, page } = await mountNostrProfile();
+      profileButton(page, "Import from Relays").click();
+      await vi.waitFor(() => expect(page.textContent).toContain("Profile imported"));
+      expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe(name ?? "");
+      expect(page.querySelector<HTMLInputElement>("#nostr-profile-displayName")?.value).toBe(
+        "Imported display",
+      );
+      source.runtimeConfig.dispose();
+      source.channels.dispose();
+    },
+  );
+
+  it("openclaw-channels-page Save & Publish preserves HTTP validation details", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json(
+          { ok: false, error: "Validation failed", details: ["name: Name is too long"] },
+          { status: 400 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const { source, page } = await mountNostrProfile();
+    profileButton(page, "Save & Publish").click();
+    await vi.waitFor(() => expect(page.textContent).toContain("HTTP 400: Validation failed"));
+    expect(page.textContent).toContain("Name is too long");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it.each([
     ["Save & Publish", 401, 200],
     ["Import from Relays", 401, 200],
@@ -195,16 +239,25 @@ describe("ChannelsPage lifecycle", () => {
     ["Import from Relays", 401, 401],
     ["Save & Publish", 403, 200],
     ["Import from Relays", 403, 200],
+    ["Save & Publish", 401, 503],
+    ["Import from Relays", 401, 503],
   ] as const)(
-    "handles credentials through rendered %s after %s then %s",
+    "openclaw-channels-page %s handles credentials and HTTP errors after %s then %s",
     async (action, firstStatus, nextStatus) => {
       const fetchMock = vi
         .fn<typeof fetch>()
-        .mockResolvedValueOnce(new Response(null, { status: firstStatus }))
+        .mockResolvedValueOnce(
+          Response.json(
+            { error: { message: firstStatus === 403 ? "Forbidden" : "Unauthorized" } },
+            { status: firstStatus },
+          ),
+        )
         .mockResolvedValueOnce(
           nextStatus === 200
             ? Response.json({ ok: true, persisted: true, saved: true, merged: { name: "Alice" } })
-            : new Response(null, { status: nextStatus }),
+            : nextStatus === 503
+              ? new Response("gateway unavailable", { status: 503 })
+              : Response.json({ error: { message: "Unauthorized" } }, { status: nextStatus }),
         );
       vi.stubGlobal("fetch", fetchMock);
       const { source, page } = await mountNostrProfile();
@@ -226,6 +279,15 @@ describe("ChannelsPage lifecycle", () => {
           ? ["Bearer device-token"]
           : ["Bearer device-token", "Bearer saved-token"],
       );
+      if (!recovered) {
+        expect(page.textContent).toContain(
+          firstStatus === 403
+            ? "HTTP 403: Forbidden"
+            : nextStatus === 503
+              ? "HTTP 503"
+              : "HTTP 401: Unauthorized",
+        );
+      }
       source.runtimeConfig.dispose();
       source.channels.dispose();
     },

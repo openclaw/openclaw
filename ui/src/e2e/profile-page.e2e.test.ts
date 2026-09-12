@@ -316,7 +316,7 @@ suite.define(() => {
         );
 
         await gateway.waitForRequest("agent.identity.get");
-        const image = page.locator(".profile-hero__avatar-image");
+        const image = page.locator(".profile-hero__avatar .identity-avatar__image");
         await image.waitFor({ timeout: 10_000 });
         await expect.poll(() => image.getAttribute("src")).toMatch(/^blob:/u);
         await expect
@@ -497,7 +497,7 @@ suite.define(() => {
         await expect(page.locator(".sidebar-identity-card__name")).toHaveText(updatedDisplayName);
         expect(
           await originalSidebarImage?.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+            image.closest(".viewer-avatar")?.classList.contains("is-pending"),
           ),
         ).toBe(true);
         expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);

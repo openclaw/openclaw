@@ -454,7 +454,7 @@ export async function runSqliteSessionReclamation(params: {
   if (!retained.found) {
     throw new Error("SQLite session reclamation lost its prepared database");
   }
-  const { claim } = retained;
+  const { database, claim } = retained;
   try {
     const assertCommitAllowed = () => {
       claim.assertCurrent();
@@ -466,7 +466,7 @@ export async function runSqliteSessionReclamation(params: {
       ...params.plan,
       databaseOptions: {
         ...params.plan.databaseOptions,
-        path: readOpenClawAgentDatabaseIdentity(claim.database).filename,
+        path: readOpenClawAgentDatabaseIdentity(database).filename,
       },
     };
     const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
@@ -474,7 +474,7 @@ export async function runSqliteSessionReclamation(params: {
     let publishCommitted: (() => void) | undefined;
     const [workerResult] = await withSqliteReclamationAuthorization(
       commitGate,
-      claim.database.db,
+      database.db,
       () => {
         assertCommitAllowed();
         // A blocked writer may authorize before the Worker's queued request.

@@ -41,7 +41,7 @@ function createRelayTone(): Buffer {
 type TestableAudioPeer = {
   connected: boolean;
   handleInboundRtp(packet: unknown): void;
-  mediaTimer: ReturnType<typeof setInterval> | undefined;
+  mediaTimer: ReturnType<typeof setTimeout> | undefined;
   pendingAudio: OpenAIQuicksilverPendingAudio;
   sequenceNumber: number;
   timestamp: number;
@@ -111,6 +111,25 @@ async function createInboundAudioHarness(params?: {
       Buffer.from([sequenceNumber & 0xff]),
     );
   return { decode, decodeOrder, decodePacketLoss, onAudio, onError, packet, peer, testPeer };
+}
+
+async function captureOutboundRtp(testPeer: TestableAudioPeer) {
+  const { RtpPacket } = await import("werift");
+  const packets: Array<{ atMs: number; sequenceNumber: number; timestamp: number }> = [];
+  const send = vi
+    .spyOn(testPeer.state.transceiver.sender, "sendRtp")
+    .mockImplementation(async (packet) => {
+      const rtp = Buffer.isBuffer(packet) ? RtpPacket.deSerialize(packet) : packet;
+      if (!(rtp instanceof RtpPacket)) {
+        throw new Error("Expected an RTP packet");
+      }
+      packets.push({
+        atMs: performance.now(),
+        sequenceNumber: rtp.header.sequenceNumber,
+        timestamp: rtp.header.timestamp,
+      });
+    });
+  return { packets, send };
 }
 
 describe("GPT-Live werift audio peer", () => {
@@ -401,6 +420,106 @@ describe("GPT-Live werift audio peer", () => {
       ]);
     } finally {
       peer.close();
+    }
+  });
+
+  it("keeps the RTP sample clock aligned through a minute of late timer callbacks", async () => {
+    const { onError, peer, testPeer } = await createInboundAudioHarness();
+    const { packets, send } = await captureOutboundRtp(testPeer);
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+    });
+    const scheduleTimeout = globalThis.setTimeout;
+    const scheduleInterval = globalThis.setInterval;
+    // Both timer APIs incur the same scheduler lateness; only a deadline can compensate.
+    const timeout = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) =>
+        scheduleTimeout(callback, (delay ?? 0) + 1, ...args),
+      );
+    const interval = vi
+      .spyOn(globalThis, "setInterval")
+      .mockImplementation((callback, delay, ...args) =>
+        scheduleInterval(callback, (delay ?? 0) + 1, ...args),
+      );
+    try {
+      peer.sendAudio(createRelayTone());
+      testPeer.state.peer.connectionStateChange.execute("connected");
+      expect(packets).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const first = packets[0]!;
+      expect(packets.at(-1)!.atMs - first.atMs).toBeGreaterThanOrEqual(59_980);
+      const clockErrors = packets.map((packet) =>
+        Math.abs(packet.atMs - first.atMs - ((packet.timestamp - first.timestamp) >>> 0) / 48),
+      );
+      expect(Math.max(...clockErrors)).toBeLessThanOrEqual(20);
+      expect(onError).not.toHaveBeenCalled();
+
+      const sentBeforeClose = packets.length;
+      peer.close();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(packets).toHaveLength(sentBeforeClose);
+    } finally {
+      peer.close();
+      timeout.mockRestore();
+      interval.mockRestore();
+      send.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps queued audio paced after a five-second scheduler pause", async () => {
+    const { onError, peer, testPeer } = await createInboundAudioHarness();
+    const { packets, send } = await captureOutboundRtp(testPeer);
+    const pendingAudio = new OpenAIQuicksilverPendingAudio();
+    const readFrame = vi.spyOn(pendingAudio, "readInto");
+    const frames = [1, 2, 3].map((value) =>
+      Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES, value),
+    );
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+    });
+    const timerNow = performance.now.bind(performance);
+    let suspensionMs = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
+    try {
+      peer.adoptPendingAudio(pendingAudio);
+      peer.sendAudio(Buffer.concat(frames));
+      testPeer.state.peer.connectionStateChange.execute("connected");
+      expect(packets).toHaveLength(1);
+
+      suspensionMs = 5_000;
+      await vi.advanceTimersByTimeAsync(20);
+      expect(packets).toHaveLength(2);
+      expect(pendingAudio).toHaveLength(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(packets).toHaveLength(3);
+      const first = packets[0]!;
+      expect(packets.map((packet) => packet.atMs - first.atMs)).toEqual([0, 5_020, 5_040]);
+      expect(packets.map((packet) => (packet.timestamp - first.timestamp) >>> 0)).toEqual([
+        0,
+        5_020 * 48,
+        5_040 * 48,
+      ]);
+      expect(
+        packets.map((packet) => (packet.sequenceNumber - first.sequenceNumber) & 0xffff),
+      ).toEqual([0, 1, 2]);
+      expect(readFrame.mock.calls.map(([frame]) => frame)).toEqual(frames);
+      expect(pendingAudio).toHaveLength(0);
+      expect(onError).not.toHaveBeenCalled();
+
+      peer.close();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(packets).toHaveLength(3);
+    } finally {
+      peer.close();
+      now.mockRestore();
+      readFrame.mockRestore();
+      send.mockRestore();
+      vi.useRealTimers();
     }
   });
 

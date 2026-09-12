@@ -1,6 +1,33 @@
 import "./chat-engine.mocks.test-support.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
+import { withCommandPluginMetadata } from "../commands/config-validation.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import {
+  hasPluginLifecycleLease,
+  withPluginLifecycleLease,
+} from "../plugins/plugin-lifecycle-lease.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getPluginRuntimeGenerationRegistry,
+  withPluginRuntimeGenerationScope,
+} from "../plugins/runtime/generation-scope.js";
+import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/install-account-policy.test-support.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
   fakeOverviewLoader,
   sharedVerifiedInferenceConfig,
@@ -13,6 +40,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
+import { ChatWizardHost } from "./chat-wizard-host.js";
 
 describe("SystemAgentChatEngine runtime", () => {
   it("hosts a channel setup wizard as chat turns", async () => {
@@ -670,6 +698,169 @@ describe("SystemAgentChatEngine runtime", () => {
 });
 
 describe("hosted channel post-write hooks", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it("ChatWizardHost.startChannel owns plugin resources through deferred hooks without retiring Gateway boot", async () => {
+    await using bootCache = createPluginCache({ kind: "process" });
+    const fixture = createInstallAccountPolicyFixture(
+      tempDirs.make("openclaw-hosted-install-policy-"),
+      "signal",
+    );
+    const baseConfig = fixture.config;
+    const metadataSnapshot = fixture.readMetadata();
+    const resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+      .mockImplementation(({ config, workspaceDir }) => fixture.readMetadata(config, workspaceDir));
+    const readAccount: ChannelPlugin["config"]["resolveAccount"] = (config, accountId) =>
+      resolveChannelAccountEntry(
+        config.channels?.signal?.accounts,
+        normalizeAccountId(accountId),
+        "signal",
+      );
+    bindPluginMetadataSnapshotCache(metadataSnapshot, bootCache);
+    const pluginRegistry = createEmptyPluginRegistry();
+    const bootInstance = new PluginInstance("gateway-boot");
+    bootCache.instances.add(bootInstance);
+    const readBoot = bootInstance.wrap(() => "Gateway available");
+    pluginRegistry.channels.push({
+      pluginId: "signal",
+      source: "test",
+      plugin: createChannelTestPluginBase({
+        id: "signal",
+        config: { resolveAccount: bootInstance.wrap(readAccount) },
+      }),
+    });
+    const setupInstance = new PluginInstance("chat-channel-setup");
+    const events: string[] = [];
+    const caches: PluginCache[] = [];
+    const readSetup = setupInstance.wrap(() => "post-write complete");
+    setupInstance.lifecycle.onDispose(() => {
+      events.push("disposed");
+    });
+    const hookStarted = createDeferred();
+    const finishHook = createDeferred();
+    const observedScope = createDeferred<{
+      metadata: ReturnType<typeof getCurrentPluginMetadataSnapshot>;
+      registry: ReturnType<typeof getPluginRuntimeGenerationRegistry>;
+    }>();
+    const recordPhase = (phase: string) => {
+      events.push(phase);
+      caches.push(getPluginCache());
+    };
+    const hook = {
+      channel: "signal",
+      accountId: "work-phone",
+      run: async ({ cfg }: { cfg: OpenClawConfig }) => {
+        expect(hasPluginLifecycleLease()).toBe(false);
+        expect(readAccount(cfg, "work-phone")).toEqual({
+          account: "+12025550123",
+          name: "Work calls",
+        });
+        events.push("after-write");
+        hookStarted.resolve();
+        await finishHook.promise;
+        events.push(readSetup());
+      },
+    };
+    mocks.readSetupConfigFileSnapshot.mockImplementation(async () => {
+      recordPhase("read");
+      getPluginCache().instances.add(setupInstance);
+      observedScope.resolve({
+        metadata: getCurrentPluginMetadataSnapshot(),
+        registry: getPluginRuntimeGenerationRegistry(),
+      });
+      return {
+        exists: true,
+        valid: true,
+        hash: "setup-base-hash",
+        config: baseConfig,
+        sourceConfig: baseConfig,
+      };
+    });
+    mocks.setupChannels.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        _prompter: WizardPrompter,
+        options: { onPostWriteHook?: (value: typeof hook) => void },
+      ) => {
+        recordPhase("setup");
+        await withCommandPluginMetadata({ config }, () => {
+          expect(readAccount(config, "work-phone")).toBeUndefined();
+        });
+        await withPluginLifecycleLease({ env: fixture.env }, async () => {
+          fixture.installPolicy();
+        });
+        recordPhase("installed");
+        options.onPostWriteHook?.(hook);
+        return await withCommandPluginMetadata({ config }, () =>
+          applyAccountNameToChannelSection({
+            cfg: config,
+            channelKey: "signal",
+            accountId: "work-phone",
+            name: "Work calls",
+          }),
+        );
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
+      recordPhase("write");
+      expect(config.channels?.signal?.accounts).toEqual({
+        "Work Phone": { account: "+12025550123", name: "Work calls" },
+      });
+      return hostedConfigFiles.write(config);
+    });
+    const host = new ChatWizardHost({
+      surface: "gateway",
+      beforePersistentApply: async () => {
+        recordPhase("authorize");
+      },
+    });
+    const running = withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () =>
+      host.startChannel("signal"),
+    );
+
+    try {
+      await Promise.race([
+        hookStarted.promise,
+        running.then(() => {
+          throw new Error("chat setup completed before its post-write hook");
+        }),
+      ]);
+      expect(await observedScope.promise).toEqual({ metadata: undefined, registry: undefined });
+      expect(caches[0]).not.toBe(bootCache);
+      expect(caches.slice(0, 4).every((cache) => cache === caches[0])).toBe(true);
+      expect(events).toEqual([
+        "read",
+        "setup",
+        "installed",
+        "authorize",
+        "write",
+        "authorize",
+        "after-write",
+      ]);
+      expect(readSetup()).toBe("post-write complete");
+      finishHook.resolve();
+      expect((await running).text).toContain("signal is configured");
+      expect(events.slice(-2)).toEqual(["post-write complete", "disposed"]);
+      expect(() => readSetup()).toThrow("reloaded or disabled");
+      withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
+        expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+        expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
+        expect(pluginRegistry.channels).toHaveLength(1);
+        expect(
+          pluginRegistry.channels[0]?.plugin.config.resolveAccount(baseConfig, "work-phone"),
+        ).toBeUndefined();
+        expect(readBoot()).toBe("Gateway available");
+      });
+    } finally {
+      finishHook.resolve();
+      await running;
+      await setupInstance.dispose();
+      host.dispose();
+      resolveMetadata.mockRestore();
+    }
+  });
+
   it("runs collected channel hooks after writing config", async () => {
     const hook = { channel: "matrix", accountId: "default", run: vi.fn() };
     mocks.readSetupConfigFileSnapshot.mockResolvedValue({

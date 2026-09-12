@@ -63,6 +63,31 @@ function observeArchiveReads(database: DatabaseSync) {
     }
     const record = { sql, rows: 0, bytes: 0, maxRowBytes: 0, closed: false };
     queries.push(record);
+    const observeRow = (row: Record<string, unknown>) => {
+      const bytes = Object.values(row).reduce<number>(
+        (total, value) => total + (typeof value === "string" ? Buffer.byteLength(value) : 0),
+        0,
+      );
+      record.rows++;
+      record.bytes += bytes;
+      record.maxRowBytes = Math.max(record.maxRowBytes, bytes);
+    };
+    const nativeGet = statement.get.bind(statement);
+    vi.spyOn(statement, "get").mockImplementation(
+      new Proxy(nativeGet, {
+        apply(get, _receiver, parameters) {
+          try {
+            const row = get(...parameters);
+            if (row) {
+              observeRow(row);
+            }
+            return row;
+          } finally {
+            record.closed = true;
+          }
+        },
+      }),
+    );
     const iterate = statement.iterate.bind(statement);
     vi.spyOn(statement, "iterate").mockImplementation((...parameters) => {
       const iterator = iterate(...parameters);
@@ -72,13 +97,7 @@ function observeArchiveReads(database: DatabaseSync) {
         if (result.done) {
           record.closed = true;
         } else {
-          const bytes = Object.values(result.value).reduce<number>(
-            (total, value) => total + (typeof value === "string" ? Buffer.byteLength(value) : 0),
-            0,
-          );
-          record.rows++;
-          record.bytes += bytes;
-          record.maxRowBytes = Math.max(record.maxRowBytes, bytes);
+          observeRow(result.value);
         }
         return result;
       });

@@ -29,6 +29,7 @@ import {
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const inventory = vi.hoisted(() => ({ load: vi.fn(), hostedCatalog: vi.fn() }));
 
@@ -232,14 +233,9 @@ describe("plugins cli policy mutations", () => {
         }
         return receipt;
       });
-      const streams = [process.stdin, process.stdout].map((stream) => ({
-        stream,
-        descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
-      }));
+      const tty = createCliTtyMock();
       try {
-        for (const { stream } of streams) {
-          Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
-        }
+        tty.set(true);
         await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
           const reload = runPluginsCommand([
             "plugins",
@@ -255,13 +251,7 @@ describe("plugins cli policy mutations", () => {
           }
         });
       } finally {
-        for (const { stream, descriptor } of streams) {
-          if (descriptor) {
-            Object.defineProperty(stream, "isTTY", descriptor);
-          } else {
-            Reflect.deleteProperty(stream, "isTTY");
-          }
-        }
+        tty.restore();
       }
       expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
         "plugins.reload",

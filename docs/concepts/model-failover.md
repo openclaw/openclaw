@@ -357,6 +357,8 @@ Live model switching follows these rules:
 
 The active run carries its chosen candidate directly. Live reconciliation changes that candidate only for an explicit pending user switch, so no temporary fallback override or rollback is needed.
 
+When a recorded fallback notice belongs to a different selected model, status and session lists skip its optional transcript lookup. That stale-notice path no longer surfaces transcript-only errors or starts projection reconciliation. Matching notices still use the canonical transcript reader, including its errors and reconciliation behavior.
+
 ## User-visible fallback notices
 
 Outside group and channel conversations, OpenClaw sends a status notice in the same reply surface when a session moves onto an auto-selected fallback:

@@ -558,10 +558,7 @@ describe("plugin service replacement", () => {
 
   it("bounds strict cleanup and fences timed-out service routes, events, and health", async () => {
     vi.useFakeTimers();
-    let releaseCleanup: (() => void) | undefined;
-    const cleanupReleased = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const cleanupDeferred = createDeferredCore();
     const received = vi.fn();
     const siblingStop = vi.fn();
     const broadcastPluginEvent = vi.fn();
@@ -578,7 +575,7 @@ describe("plugin service replacement", () => {
           registerPluginHttpRoute({ path: "/owned-route", auth: "plugin", handler: vi.fn() });
         },
         stop: async (ctx) => {
-          await cleanupReleased;
+          await cleanupDeferred.promise;
           ctx.serviceHealth?.reportFailure(new Error("late stale failure"));
           for (const run of [
             () => ctx.gatewayEvents?.emit("late", {}, { scope: "operator.read" }),
@@ -654,7 +651,7 @@ describe("plugin service replacement", () => {
         }),
       ]);
 
-      releaseCleanup?.();
+      cleanupDeferred.resolve();
       await Promise.resolve();
       await Promise.resolve();
       queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
@@ -667,7 +664,7 @@ describe("plugin service replacement", () => {
       expect(registry.httpRoutes).toEqual([]);
       expect(nestedRegistry.httpRoutes).toEqual([]);
     } finally {
-      releaseCleanup?.();
+      cleanupDeferred.resolve();
       await stopping;
       vi.useRealTimers();
     }
@@ -738,10 +735,7 @@ describe("plugin service replacement", () => {
   it("honors a replacement deadline inherited after ownership consumed most of its budget", async () => {
     vi.useFakeTimers();
     const broadcastPluginEvent = vi.fn();
-    let releaseCleanup: (() => void) | undefined;
-    const cleanupReleased = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const cleanup = createDeferredCore();
     let context: OpenClawPluginServiceContext | undefined;
     const registry = createRegistry([
       {
@@ -751,7 +745,7 @@ describe("plugin service replacement", () => {
           registerPluginHttpRoute({ path: "/deadline-route", auth: "plugin", handler: vi.fn() });
         },
         stop: async (serviceContext) => {
-          await cleanupReleased;
+          await cleanup.promise;
           serviceContext.gatewayEvents?.emit("late", {}, { scope: "operator.read" });
         },
       },
@@ -782,7 +776,7 @@ describe("plugin service replacement", () => {
       );
       expect(broadcastPluginEvent).not.toHaveBeenCalled();
     } finally {
-      releaseCleanup?.();
+      cleanup.resolve();
       await stopping;
       vi.useRealTimers();
     }
@@ -790,10 +784,7 @@ describe("plugin service replacement", () => {
 
   it("bounds strict shutdown while startup is unsettled and revokes its late continuation", async () => {
     vi.useFakeTimers();
-    let releaseStartup: (() => void) | undefined;
-    const startupReleased = new Promise<void>((resolve) => {
-      releaseStartup = resolve;
-    });
+    const startup = createDeferredCore();
     const broadcastPluginEvent = vi.fn();
     const lateFailures: unknown[] = [];
     let lifecycleHandle: PluginServicesHandle | undefined;
@@ -801,7 +792,7 @@ describe("plugin service replacement", () => {
       {
         id: "blocked-startup",
         start: async (ctx) => {
-          await startupReleased;
+          await startup.promise;
           ctx.serviceHealth?.reportFailure(new Error("late startup failure"));
           for (const run of [
             () => ctx.gatewayEvents?.emit("late", {}, { scope: "operator.read" }),
@@ -846,7 +837,7 @@ describe("plugin service replacement", () => {
         message: expect.stringContaining("plugin service startup settlement timed out"),
       });
 
-      releaseStartup?.();
+      startup.resolve();
       await starting;
       await stopping;
       expect(lateFailures).toHaveLength(2);
@@ -854,7 +845,7 @@ describe("plugin service replacement", () => {
       expect(listPluginServiceHealthFailures(registry)).toEqual([]);
       expect(registry.httpRoutes).toEqual([]);
     } finally {
-      releaseStartup?.();
+      startup.resolve();
       await starting;
       await stopping;
       vi.useRealTimers();

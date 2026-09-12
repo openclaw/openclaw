@@ -58,6 +58,8 @@ describe("worker environment service", () => {
 
   it("maintains configured providers on the existing timer with no environments", async () => {
     vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const maintain = vi.fn(async () => {});
     const workerService = support.createService(support.createProvider(), {
       maintainProviders: maintain,
@@ -69,9 +71,11 @@ describe("worker environment service", () => {
     expect(maintain).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(25);
     expect(maintain).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(1);
+    expect(setIntervalSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 25);
     await workerService.stop();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(setIntervalSpy.mock.results[0]?.value);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(maintain).toHaveBeenCalledTimes(2);
   });
 
   it("keeps maintenance off reconciliation and allocation while shutdown aborts and drains it", async () => {
@@ -271,6 +275,8 @@ describe("worker environment service", () => {
 
   it("owns and clears one periodic reconciliation timer", async () => {
     vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const environmentId = "worker-guarded-reconcile";
     support.seedReady(environmentId);
     const inspect = vi.fn(async () => ({ status: "active" as const }));
@@ -306,7 +312,7 @@ describe("worker environment service", () => {
     workerService.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(liveEvents.start).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(1);
+    expect(setIntervalSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 25);
     await vi.advanceTimersByTimeAsync(25);
     expect(guardedEnvironmentIds).toEqual([environmentId, environmentId, environmentId]);
     expect(inspect).toHaveBeenCalledTimes(3);
@@ -318,7 +324,9 @@ describe("worker environment service", () => {
 
     expect(liveEvents.clear).toHaveBeenCalledTimes(2);
     expect(unsubscribeTurnClaimClosed).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(setIntervalSpy.mock.results[0]?.value);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(inspect).toHaveBeenCalledTimes(4);
   });
 
   it("closes new guarded reconciliation and drains the admitted operation on uninstall", async () => {

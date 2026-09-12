@@ -157,6 +157,7 @@ type CliOptions = {
   maxHandshakeMs?: number;
   output?: string;
   pluginCount: number;
+  probeRounds?: number;
   runs: number;
   sessionCount: number;
   sessionUpdateClients: number;
@@ -218,6 +219,7 @@ const VALUE_FLAGS = new Set([
   "--max-handshake-ms",
   "--output",
   "--plugin-count",
+  "--probe-rounds",
   "--runs",
   "--session-count",
   "--session-update-clients",
@@ -323,6 +325,15 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--plugin-count",
       MAX_PLUGIN_COUNT,
     ),
+    probeRounds:
+      parseFlagValue(argv, "--probe-rounds") === undefined
+        ? undefined
+        : parseBoundedPositiveInt(
+            parseFlagValue(argv, "--probe-rounds"),
+            1,
+            "--probe-rounds",
+            MAX_SAMPLES_PER_RUN,
+          ),
     runs: parseBoundedPositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs", MAX_RUNS),
     sessionCount: parseBoundedNonNegativeInt(
       parseFlagValue(argv, "--session-count"),
@@ -379,6 +390,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   const historyMessageCount =
     Math.max(options.sessionCount, options.concurrency) * options.historyMessages;
   if (
+    options.probeRounds !== undefined &&
+    options.probeRounds * options.historyClients * options.historyBurst > MAX_SAMPLES_PER_RUN
+  ) {
+    throw new CliArgumentError("fixed history workload must not exceed 2048 requests per run");
+  }
+  if (
     historyMessageCount > 100_000 ||
     historyMessageCount * options.historyMessageChars > 256 * 1024 * 1024
   ) {
@@ -405,6 +422,7 @@ Options:
   --runs <n>         Measured gateway runs (default: ${DEFAULT_RUNS})
   --warmup <n>       Warmup gateway runs (default: ${DEFAULT_WARMUP})
   --cadence-ms <ms>  Probe cadence (default: ${DEFAULT_CADENCE_MS})
+  --probe-rounds <n> Run exactly n sampler rounds and n bursts per history client
   --timeout-ms <ms>  Per-run cap, excluding probe warmup (default: ${DEFAULT_TIMEOUT_MS})
   --entry <path>     Gateway CLI entry file (default: ${DEFAULT_ENTRY})
   --session-count <n> Seed up to ${MAX_SESSION_COUNT} distinct sessions before load
@@ -1063,6 +1081,41 @@ async function warmGatewayProbes(params: {
   );
 }
 
+async function runProbeRounds(params: {
+  rounds?: number;
+  deadlineAt: number;
+  cadenceMs: number;
+  cadenceFrom: "start" | "completion";
+  runFirst: boolean;
+  shouldContinue: () => boolean;
+  stopped: () => boolean;
+  runRound: (index: number) => Promise<void>;
+}): Promise<number> {
+  let completed = 0;
+  const hasWork = () =>
+    !params.stopped() &&
+    (params.rounds === undefined
+      ? (completed === 0 && params.runFirst) || params.shouldContinue()
+      : completed < params.rounds);
+  while (hasWork()) {
+    requireRemainingMs(params.deadlineAt, "starting gateway probe round");
+    const startedAt = performance.now();
+    await params.runRound(completed);
+    completed += 1;
+    if (!hasWork()) {
+      break;
+    }
+    const elapsed = params.cadenceFrom === "start" ? performance.now() - startedAt : 0;
+    await delay(
+      Math.min(
+        Math.max(0, params.cadenceMs - elapsed),
+        requireRemainingMs(params.deadlineAt, "pacing gateway probes"),
+      ),
+    );
+  }
+  return completed;
+}
+
 async function runGatewaySample(options: {
   cadenceMs: number;
   concurrency: number;
@@ -1077,6 +1130,7 @@ async function runGatewaySample(options: {
   historyMessages: number;
   historyMessageChars: number;
   pluginCount: number;
+  probeRounds?: number;
   sessionCount: number;
   sessionUpdateClients: number;
   sessionUpdates: number;
@@ -1101,6 +1155,8 @@ async function runGatewaySample(options: {
   let mockProvider: ChildProcessWithoutNullStreams | undefined;
   let client: Awaited<ReturnType<typeof connectGateway>> | undefined;
   const auxiliaryClients: Array<Awaited<ReturnType<typeof connectGateway>>> = [];
+  let probesStopped = false;
+  const probeJobs: Promise<unknown>[] = [];
   let gatewayOutput = { readOutput: () => "", readStderrTail: () => "" };
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
   let result: BenchmarkRun;
@@ -1392,9 +1448,15 @@ async function runGatewaySample(options: {
           };
         }
       });
-      const sampler = (async () => {
-        for (;;) {
-          const sampleStartedAt = performance.now();
+      const sampler = runProbeRounds({
+        rounds: options.probeRounds,
+        deadlineAt: loadDeadlineAt,
+        cadenceMs: options.cadenceMs,
+        cadenceFrom: "start",
+        runFirst: true,
+        shouldContinue: () => !workloadDone() && readyz.length < MAX_SAMPLES_PER_RUN,
+        stopped: () => probesStopped,
+        runRound: async () => {
           const subscriptionKey = turnSessionKeys[readyz.length % turnSessionKeys.length];
           const [sample, subscription, controlProbes] = await Promise.all([
             sampleGateway({
@@ -1437,37 +1499,37 @@ async function runGatewaySample(options: {
             peakRssMb = Math.max(peakRssMb, readGatewayProcessRssMb(gateway?.pid) ?? 0);
             lastRssSampleAt = performance.now();
           }
-          if (workloadDone() || readyz.length >= MAX_SAMPLES_PER_RUN) {
-            break;
-          }
-          await delay(
-            Math.min(
-              Math.max(0, options.cadenceMs - (performance.now() - sampleStartedAt)),
-              requireRemainingMs(loadDeadlineAt, "sampling gateway load"),
-            ),
-          );
-        }
-      })();
+        },
+      });
+      probeJobs.push(sampler);
       const historyLoad = Promise.all(
-        historyClients.map(async (historyClient, clientIndex) => {
+        historyClients.map((historyClient, clientIndex) => {
           let offset = clientIndex * options.historyBurst;
-          while (!workloadDone() && history.length < MAX_SAMPLES_PER_RUN) {
-            const probes = await Promise.all(
-              Array.from({ length: options.historyBurst }, (_, index) =>
-                timeRpcProbe(
-                  historyClient.request,
-                  "chat.history",
-                  { sessionKey: sessionKeys[(offset + index) % sessionKeys.length] },
-                  runStartedAt,
+          const job = runProbeRounds({
+            rounds: options.probeRounds,
+            deadlineAt: loadDeadlineAt,
+            cadenceMs: options.cadenceMs,
+            cadenceFrom: "completion",
+            runFirst: false,
+            shouldContinue: () => !workloadDone() && history.length < MAX_SAMPLES_PER_RUN,
+            stopped: () => probesStopped,
+            runRound: async () => {
+              const probes = await Promise.all(
+                Array.from({ length: options.historyBurst }, (_, index) =>
+                  timeRpcProbe(
+                    historyClient.request,
+                    "chat.history",
+                    { sessionKey: sessionKeys[(offset + index) % sessionKeys.length] },
+                    runStartedAt,
+                  ),
                 ),
-              ),
-            );
-            history.push(...probes);
-            offset += options.historyBurst;
-            if (!workloadDone()) {
-              await delay(Math.min(options.cadenceMs, remainingMs(loadDeadlineAt)));
-            }
-          }
+              );
+              history.push(...probes);
+              offset += options.historyBurst;
+            },
+          });
+          probeJobs.push(job);
+          return job;
         }),
       );
       let nextUpdateIndex = 0;
@@ -1548,6 +1610,7 @@ async function runGatewaySample(options: {
       const detail = formatRunFailure(error, gatewayOutput, mockOutput);
       throw new Error(detail, { cause: error });
     } finally {
+      probesStopped = true;
       for (const auxiliaryClient of auxiliaryClients) {
         auxiliaryClient.close();
       }
@@ -1565,6 +1628,9 @@ async function runGatewaySample(options: {
         }
         gatewayExit = await stopChild(gateway);
       }
+      // A fatal turn may end Promise.all before fixed probe rounds settle.
+      // Join their closed-client failures before removing the fixture state.
+      await Promise.allSettled(probeJobs);
     }
     if (options.diagnosticsTimeline) {
       if (!gatewayExit || gatewayExit.exitCode !== 0 || gatewayExit.signal !== null) {
@@ -1785,6 +1851,15 @@ async function main(): Promise<void> {
     historyClients: options.historyClients,
     mode: "mock-streaming-agent",
     pluginCount: options.pluginCount,
+    probeWorkload: {
+      mode: options.probeRounds === undefined ? "adaptive" : "fixed-rounds",
+      samplerRoundsPerRun: options.probeRounds ?? null,
+      historyRequestsPerRun:
+        options.probeRounds === undefined
+          ? null
+          : options.probeRounds * options.historyClients * options.historyBurst,
+      peakRssSampling: "sampler-rounds-and-final-memory",
+    },
     runs,
     sessionCount: Math.max(options.sessionCount, options.concurrency),
     sessionUpdateClients: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0,
@@ -1815,6 +1890,7 @@ export const testing = {
   formatRunFailure,
   requestHttp,
   runBenchmarkSamples,
+  runProbeRounds,
   runSessionTurns,
   runTurn,
   sampleGateway,

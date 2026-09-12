@@ -3676,6 +3676,30 @@ NODE
   );
 
   it.skipIf(process.platform === "win32")(
+    "defers timing refits when only the runtime group codec changes on main",
+    () => {
+      const workflow = readWorkflow(".github/workflows/ci-test-timings-refit.yml");
+      const publisher = expectDefined(
+        workflow.jobs.refit.steps.find(
+          (step: WorkflowStep) => step.uses === "./.github/actions/publish-generated-pr",
+        ),
+        "timing refit publisher",
+      );
+      const result = runGeneratedPublisherScenario(null, {
+        invalidationPaths: publisher.with["invalidation-paths"],
+        updateSource: "scripts/lib/ci-node-test-groups-codec.mts",
+      });
+
+      expect(result.branchExists).toBe(false);
+      expect(result.mainGeneratedA).toBe("old-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toContain(
+        "Deferred stale generated output because generator inputs changed on main.",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "publishes after unrelated source changes when input invalidation is disabled",
     () => {
       const result = runGeneratedPublisherScenario(null, {
@@ -13460,8 +13484,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             }
           }
           if (
-            node.expression.text === "createSessionManagementE2eSuite" &&
-            node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword
+            node.expression.text === "createQuotaResetFixture" ||
+            (node.expression.text === "createSessionManagementE2eSuite" &&
+              node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword)
           ) {
             ownsPrivateServer = true;
             return;
@@ -13510,6 +13535,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
       "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
       "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+      "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",
       "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
     ]);

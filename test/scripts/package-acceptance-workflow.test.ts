@@ -10031,6 +10031,21 @@ describe("package artifact reuse", () => {
     expect(openaiDefault.command).not.toContain("OPENCLAW_LIVE_GATEWAY_MODELS=");
   });
 
+  it("retains the full OpenAI Ultra model coverage independently of the fresh default", () => {
+    const ultra = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-openai-gpt56-ultra",
+    );
+    expect(ultra).toMatchObject({
+      profiles: "stable full",
+      timeout_minutes: 75,
+      profile_env_only: false,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_THINKING=ultra OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-sol,openai/gpt-5.6-terra,openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=300000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=900000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+    });
+  });
+
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const providerSuites = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_docker_provider_suites");
@@ -10103,6 +10118,7 @@ describe("package artifact reuse", () => {
     );
     expect(runCodexSuite?.if).toContain("steps.codex_compat.outputs.run_lane != 'false'");
     for (const [model, thinking] of [
+      ["sol", "ultra"],
       ["terra", "ultra"],
       ["luna", "max"],
     ]) {

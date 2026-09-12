@@ -111,6 +111,7 @@ describe("runIsolatedCompletion native authorization", () => {
         );
         expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
           expect.objectContaining({ profileId: "openai:key" }),
+          expect.any(Function),
         );
       } else {
         await expect(pending).rejects.toMatchObject({
@@ -441,6 +442,7 @@ describe("runIsolatedCompletion native authorization", () => {
     expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
     expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
       expect.objectContaining({ preparedModelRuntime, workspaceDir: "/tmp/workspace" }),
+      expect.any(Function),
     );
     expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();

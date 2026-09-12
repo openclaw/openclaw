@@ -353,6 +353,10 @@ export function createPreparedModelCatalogWorker(
       assertCurrent();
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
+      if (failure instanceof WorkerTaskError && failure.code === "overloaded") {
+        // Admission pressure rejects this request without retiring the prepared generation.
+        throw failure;
+      }
       if (failure instanceof PreparedModelCatalogGenerationMismatchError) {
         // Keep the generation open, but retire only this request's pool: a delayed rejection
         // from it must not close a replacement already serving the same lifecycle plan.

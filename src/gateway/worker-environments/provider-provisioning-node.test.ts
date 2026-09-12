@@ -46,6 +46,7 @@ describe("node worker provider provisioning", () => {
         payload: support.BOOTSTRAP_RECEIPT,
       }));
       const transport: NodeWorkerSupervisorTransport = {
+        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
         hasCurrentRunner: () => true,
         listCurrentNodes: async () => [node],
         isCurrent: (candidate) => candidate === node,

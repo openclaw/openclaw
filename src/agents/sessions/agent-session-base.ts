@@ -76,8 +76,6 @@ export abstract class AgentSessionBase {
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;
 
-  protected scopedModelEntries: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
-
   // Event subscription state
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
@@ -145,7 +143,6 @@ export abstract class AgentSessionBase {
     this.agent = config.agent;
     this.sessionManager = config.sessionManager;
     this.settingsManager = config.settingsManager;
-    this.scopedModelEntries = config.scopedModels ?? [];
     this.sessionResourceLoader = config.resourceLoader;
     this.customTools = config.customTools ?? [];
     this.cwd = config.cwd;
@@ -773,16 +770,6 @@ export abstract class AgentSessionBase {
   /** Current session display name, if set */
   get sessionName(): string | undefined {
     return this.sessionManager.getSessionName();
-  }
-
-  /** Scoped models for cycling (from --models flag) */
-  get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
-    return this.scopedModelEntries;
-  }
-
-  /** Update scoped models for cycling */
-  setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void {
-    this.scopedModelEntries = scopedModels;
   }
 
   /** File-based prompt templates */

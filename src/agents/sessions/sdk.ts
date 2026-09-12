@@ -61,8 +61,6 @@ export interface CreateAgentSessionOptions {
   model?: Model;
   /** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
   thinkingLevel?: ThinkingLevel;
-  /** Models available for cycling (Ctrl+P in interactive mode) */
-  scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
   /**
    * Optional default tool suppression mode when no explicit allowlist is provided.
@@ -531,7 +529,6 @@ async function createAgentSessionImpl(
     sessionManager,
     settingsManager,
     cwd,
-    scopedModels: options.scopedModels,
     resourceLoader,
     customTools: options.customTools,
     modelRegistry,

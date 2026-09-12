@@ -4,6 +4,7 @@ import {
   type SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntryReadOnly,
@@ -203,6 +204,65 @@ const rows = (respond: ReturnType<typeof vi.fn>) =>
   );
 
 describe("catalog delivery uses current canonical privacy", () => {
+  it("materializes only delivered catalog rows while preserving full planning and fresh identity", async () => {
+    await withCatalog(async ({ call, callerId, enumerate, list, owner, replaceForeign }) => {
+      for (let index = 0; index < 24; index++) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
+          { sessionId: `unrelated-${index}`, updatedAt: 1 },
+        );
+      }
+      type ReadPhase = "planning" | "progress" | "mutation" | "final";
+      let phase: ReadPhase = "planning";
+      const reads: Array<{ phase: ReadPhase; count: number }> = [];
+      const original = sessionAccessor.listSessionEntriesReadOnly;
+      const read = vi
+        .spyOn(sessionAccessor, "listSessionEntriesReadOnly")
+        .mockImplementation((scope) => {
+          const result = original(scope);
+          reads.push({ phase, count: result.length });
+          return result;
+        });
+      list.mockImplementation(async ({ sessionEntries, onHost }) => {
+        expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(27);
+        const host = enumerate(sessionEntries);
+        phase = "progress";
+        onHost?.(host);
+        phase = "mutation";
+        await replaceForeign();
+        phase = "final";
+        return [host];
+      });
+      try {
+        const broadcast = vi.fn();
+        const response = await call(
+          "sessions.catalog.list",
+          { progressId: "delivery-budget" },
+          owner,
+          broadcast,
+        );
+        const progress = broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions;
+        expect(broadcast).toHaveBeenCalledOnce();
+        expect(progress?.map((session: { threadId: string }) => session.threadId)).toEqual([
+          "foreign",
+          "owned",
+        ]);
+        expect(
+          progress?.find((session: { threadId: string }) => session.threadId === "owned"),
+        ).toMatchObject({ createdActor: { id: callerId } });
+        expect(rows(response)).toEqual(["owned"]);
+        for (const deliveryPhase of ["progress", "final"] as const) {
+          const materializedRows = reads
+            .filter((observed) => observed.phase === deliveryPhase)
+            .reduce((total, observed) => total + observed.count, 0);
+          expect(materializedRows).toBeLessThanOrEqual(3);
+        }
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
   it("keeps caller-bound provider enumeration separate while sharing the same caller's work", async () => {
     await withCatalog(async ({ call, owner, foreignOwner, host, list }) => {
       const release = createDeferredCore();

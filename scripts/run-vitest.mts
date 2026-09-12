@@ -576,7 +576,7 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
   if (collectExplicitDirectoryTargetArgs(argv, cwd).length > 0) {
     return argv;
   }
-  const testTargets = argv
+  const testTargets = collectVitestFileFilters(argv)
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
   if (testTargets.length > 0 && testTargets.every(isToolingDockerTestTarget)) {
@@ -784,7 +784,7 @@ function forwardVitestOutput(
 }
 
 /**
- * Spawns Vitest with output forwarding, watchdogs, and process-group cleanup.
+ * Joins watched Vitest processes and keeps expired deadlines failed after cooperative exits.
  */
 export function spawnWatchedVitestProcess({
   pnpmArgs,
@@ -804,7 +804,7 @@ export function spawnWatchedVitestProcess({
   if (homeMode !== "tooling") {
     assertTestHomeSelection(env, homeMode);
   }
-  let diagnosticsCompletion: Promise<void> | null = null;
+  let timeoutCompletion: Promise<boolean> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
   if (workerRun && directNodeArgs) {
     // Preserve Node flags while giving the same owned child its private generation.
@@ -861,7 +861,7 @@ export function spawnWatchedVitestProcess({
         },
         onTimeout: onNoOutputTimeout,
       });
-      diagnosticsCompletion = termination.diagnostics;
+      timeoutCompletion = termination.diagnostics.then(() => true);
     },
     onForceKill: () => {
       forwardSignalToVitestProcessGroup({
@@ -887,8 +887,8 @@ export function spawnWatchedVitestProcess({
     teardownNoOutputWatchdog();
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
-    .then(async ([{ code, signal, groupJoined }]) => {
-      await diagnosticsCompletion;
+    .then(async ([{ code: childCode, signal, groupJoined }]) => {
+      const code = (await timeoutCompletion) && childCode === 0 ? 1 : childCode;
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);

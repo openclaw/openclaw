@@ -59,7 +59,8 @@ export async function createSystemdCommandQuery(
             (detail === `Call failed: Unit ${unitName} not loaded.` ||
               detail === `Call failed: Unit ${unitName} not found.`)) ||
           (args.includes("GetUnitFileState") &&
-            detail === `Call failed: Unit file ${unitName} does not exist.`))
+            (detail === `Call failed: Unit file ${unitName} does not exist.` ||
+              detail === "Call failed: No such file or directory")))
       ) {
         return null;
       }

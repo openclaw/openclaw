@@ -44,6 +44,7 @@ describe("update.run chat restart permission", () => {
       params: {
         requester,
         sessionKey: "agent:main:slack:dm:owner:thread:123",
+        deliveryContext: { channel: "slack", to: "owner" },
       },
       context: { getRuntimeConfig: () => config },
       respond: (_ok: boolean, result: UpdateRunPayload) => {

@@ -25,7 +25,17 @@
 }
 
 .identity-avatar--agent:not(.is-fallback) > .identity-avatar__image + .identity-avatar__fallback,
-.identity-avatar--agent.is-fallback > .identity-avatar__image {
+.identity-avatar--agent.is-fallback > .identity-avatar__image,
+.identity-avatar--agent.is-pending > * {
+  visibility: hidden;
+}
+
+:is(.identity-avatar--agent, .viewer-avatar, .chat-author-avatar, .chat-avatar-slot).is-pending {
+  background: var(--secondary);
+  border-radius: var(--radius-full);
+}
+
+:is(.viewer-avatar, .chat-author-avatar, .chat-avatar-slot).is-pending > * {
   visibility: hidden;
 }
 

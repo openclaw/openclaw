@@ -59,6 +59,7 @@ type PairingLeaseResolution =
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
 export type NodeWorkerSupervisorTransport = {
+  getCurrentNode(nodeId: string): Promise<NodeWorkerSupervisorNodeProof | undefined>;
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
   hasCurrentRunner(nodeId: string): boolean;
   /** Diagnostic connection presence, independent of session-host eligibility. */
@@ -90,6 +91,7 @@ type NodeRegistryPrivateContext = {
   getNode: (nodeId: string) => PairingBoundNodeSession | undefined;
   isCommandAllowed: (nodeId: string, command: string) => boolean;
   listCurrentConnected: () => Promise<NodeRegistryPrivateSession[]>;
+  getCurrentConnected: (nodeId: string) => Promise<NodeRegistryPrivateSession | undefined>;
   hasCurrentPairingStateResolver: boolean;
   resolvePairingLease: (node: PairingBoundNodeSession) => Promise<PairingLeaseResolution>;
   pendingInvokes: Map<string, PendingInvoke>;
@@ -455,6 +457,10 @@ export function registerNodeRegistryPrivateRuntime(
     await invokeNodeRegistryCore(state, params, allowPrivateCommand, isCompletionAuthorized);
   state.updateRunnerInventory = (params) => updateWorkerRunnerInventory(state, params);
   state.workerSupervisorTransport = {
+    getCurrentNode: async (nodeId) => {
+      const node = await context.getCurrentConnected(nodeId);
+      return node ? resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn) : undefined;
+    },
     listCurrentNodes: async () => {
       const current = await context.listCurrentConnected();
       return current.flatMap((node) => {

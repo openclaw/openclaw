@@ -119,7 +119,8 @@ export const updateHandlers: GatewayRequestHandlers = {
             (sessionKey && isInternalMessageChannel(requesterChannel ?? deliveryContext?.channel))
           ? "control-ui"
           : "api";
-    const config = context.getRuntimeConfig();
+    const getConfig = context.getRuntimeConfig;
+    const config = getConfig();
     const noticeTarget = resolveUpdateRunNoticeTarget({
       cfg: config,
       sessionKey,
@@ -179,7 +180,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
         return false;
       }
-      const currentConfig = context.getRuntimeConfig();
+      const currentConfig = getConfig();
       const reason = !isConfiguredCommandOwner(currentConfig, requester)
         ? "owner_required"
         : !isRestartEnabled(currentConfig)
@@ -216,7 +217,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       return;
     }
     const { createUpdateRunNotifier } = await import("../update-run-notice.runtime.js");
-    const notify = createUpdateRunNotifier(run, config, context.deps, noticeTarget);
+    const notify = createUpdateRunNotifier(run, getConfig, context.deps, noticeTarget);
     const sentinelMeta: UpdateRestartSentinelMeta = {
       runId,
       ...(sessionKey ? { sessionKey } : {}),

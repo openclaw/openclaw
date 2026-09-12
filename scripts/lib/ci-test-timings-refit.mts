@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
+import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
 import type { CiTestTimings } from "./ci-test-timings-schema.mts";
-import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
+import { parseCompactSplitTimingKey, runtimePlacementTimingKey } from "./vitest-shard-metadata.mts";
 
 export type CiTimingRun = {
   id: number;
@@ -12,6 +13,56 @@ export type CiTimingRun = {
 };
 
 type Samples = Map<string, number[]>;
+
+type RuntimeTimingGroup = {
+  shard_name: string;
+  timing_key?: string;
+  configs: string[];
+  includePatterns: string[];
+  env?: Record<string, string>;
+};
+
+function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
+  const encoded = new Set(
+    [
+      ...text.matchAll(
+        /\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: (\S+)$/gmu,
+      ),
+    ].map((match) => match[1]!),
+  );
+  if (encoded.size !== 1) {
+    return [];
+  }
+  try {
+    const groups = decodeNodeTestGroups([...encoded][0]!);
+    const strings = (value: unknown): value is string[] =>
+      Array.isArray(value) && value.every((entry) => typeof entry === "string");
+    return groups.filter((group): group is RuntimeTimingGroup => {
+      if (typeof group !== "object" || group === null) {
+        return false;
+      }
+      return (
+        "shard_name" in group &&
+        typeof group.shard_name === "string" &&
+        (!("timing_key" in group) || typeof group.timing_key === "string") &&
+        "configs" in group &&
+        strings(group.configs) &&
+        group.configs.length > 0 &&
+        "includePatterns" in group &&
+        strings(group.includePatterns) &&
+        group.includePatterns.length > 0 &&
+        (!("env" in group) ||
+          (typeof group.env === "object" &&
+            group.env !== null &&
+            !Array.isArray(group.env) &&
+            Object.values(group.env).every((value) => typeof value === "string")))
+      );
+    });
+  } catch {
+    // Historical/malformed descriptors cannot supply a placement identity.
+    return [];
+  }
+}
 const MIN_PRUNE_RUNS = 3;
 
 function median(values: number[]): number {
@@ -78,7 +129,23 @@ function readCompactLog(
 ) {
   const profile = labels.some((label) => label.startsWith("blacksmith-")) ? "blacksmith" : "github";
   const starts = new Map<string, number>();
+  const descriptors = readRuntimeTimingGroups(text);
+  const runtimeModes = new Map<string, "runtime" | "private-qa">();
   for (const line of text.split("\n")) {
+    const readiness =
+      /\[shard:([^\]]+)\] \[test\] preparing (runtime|private-qa) runtime before Vitest workers/u.exec(
+        line,
+      );
+    if (readiness) {
+      const matches = descriptors.filter((group) => group.shard_name === readiness[1]);
+      if (matches.length === 1) {
+        const group = matches[0]!;
+        const key = group.timing_key ?? group.shard_name;
+        if (starts.has(key)) {
+          runtimeModes.set(key, readiness[2] === "private-qa" ? "private-qa" : "runtime");
+        }
+      }
+    }
     const event =
       /(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+.*?\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))/u.exec(line);
     if (!event) {
@@ -90,6 +157,7 @@ function readCompactLog(
     const exitCode = event[4];
     if (action === "begin") {
       starts.set(key, Date.parse(timestamp));
+      runtimeModes.delete(key);
       continue;
     }
     const started = starts.get(key);
@@ -97,6 +165,14 @@ function readCompactLog(
       // Preserve the workload as executed. Packed plans may be serial or
       // concurrent, and admission must use the wrapper span it actually ran.
       recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
+      const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
+      const placementKey =
+        matches.length === 1
+          ? runtimePlacementTimingKey({ ...matches[0]!, pretestBuildMode: runtimeModes.get(key) })
+          : undefined;
+      if (placementKey) {
+        recordSample(samples[profile], placementKey, (Date.parse(timestamp) - started) / 1000);
+      }
     }
     starts.delete(key);
   }

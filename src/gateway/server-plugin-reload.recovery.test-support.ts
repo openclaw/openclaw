@@ -306,6 +306,15 @@ export type RecoveryFixtureFactory = (
   options?: Parameters<typeof createPluginReloadRecoveryFixture>[1],
 ) => ReturnType<typeof createPluginReloadRecoveryFixture>;
 
+export function createRecoveryChannelManager(fixture: Awaited<ReturnType<RecoveryFixtureFactory>>) {
+  return createChannelManager({
+    getRuntimeConfig: fixture.getConfig,
+    getPluginRegistry: () => fixture.registryOwner.registry,
+    channelLogs: {},
+    channelRuntimeEnvs: {},
+  });
+}
+
 export async function verifyMalformedReloadFailureReceipt(
   createRecoveryFixture: RecoveryFixtureFactory,
   boundary: "prepare" | "committed",
@@ -420,12 +429,7 @@ export async function verifyChannelReplacementContracts(
       });
     },
   });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   try {
     await manager.startChannel(channelId);
@@ -484,12 +488,7 @@ export async function verifyColdAccountReplacement(createRecoveryFixture: Recove
       });
     },
   });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   setActiveDegradedSecretOwners([
     {
@@ -564,12 +563,7 @@ export async function verifyChannelCleanupFailureFence(
       });
     },
   });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   await manager.startChannel("cleanup-first");
   await manager.startChannel("cleanup-sibling");

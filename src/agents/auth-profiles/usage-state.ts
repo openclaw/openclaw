@@ -92,7 +92,7 @@ export function isActiveUnusableWindow(until: number | undefined, now: number): 
   return timestamp !== undefined && timestamp > 0 && now < timestamp;
 }
 
-function isBlockedWindowActiveForModel(
+export function isBlockedWindowActiveForModel(
   stats: Pick<ProfileUsageStats, "blockedUntil" | "blockedModel" | "blockedScope">,
   now: number,
   forModel?: string | null,
@@ -117,26 +117,27 @@ function isBlockScopedToDifferentModel(
   );
 }
 
-function shouldBypassModelScopedCooldown(
-  stats: Pick<
-    ProfileUsageStats,
-    | "blockedUntil"
-    | "blockedModel"
-    | "blockedScope"
-    | "cooldownReason"
-    | "cooldownModel"
-    | "disabledUntil"
-  >,
-  now: number,
+export function isCooldownScopedToDifferentModel(
+  stats: Pick<ProfileUsageStats, "cooldownReason" | "cooldownModel">,
   forModel?: string | null,
 ): boolean {
   return Boolean(
     (forModel === null || forModel) &&
     isModelScopedCooldownReason(stats.cooldownReason) &&
     stats.cooldownModel &&
-    (forModel === null || stats.cooldownModel !== forModel) &&
+    (forModel === null || stats.cooldownModel !== forModel),
+  );
+}
+
+function shouldBypassModelScopedCooldown(
+  stats: ProfileUsageStats,
+  now: number,
+  forModel?: string | null,
+): boolean {
+  return (
+    isCooldownScopedToDifferentModel(stats, forModel) &&
     !isBlockedWindowActiveForModel(stats, now, forModel) &&
-    !isActiveUnusableWindow(stats.disabledUntil, now),
+    !isActiveUnusableWindow(stats.disabledUntil, now)
   );
 }
 

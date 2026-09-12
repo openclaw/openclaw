@@ -65,6 +65,18 @@ function listResolvedIncludePaths(includeFilePathsForWatch: ReadonlySet<string>)
   return [...includeFilePathsForWatch].toSorted();
 }
 
+export function hashConfigRevision(
+  raw: string,
+  includeFileHashes: Record<string, string>,
+  includeFileTargets: Record<string, string>,
+): string {
+  const revision = createHash("sha256").update(raw);
+  for (const [includePath, includeHash] of Object.entries(includeFileHashes)) {
+    revision.update(JSON.stringify([includePath, includeFileTargets[includePath], includeHash]));
+  }
+  return revision.digest("hex");
+}
+
 export async function readConfigFileSnapshotInternal(
   context: ConfigIoContext,
   options: InternalReadOptions = {},
@@ -222,13 +234,11 @@ export async function readConfigFileSnapshotInternal(
     const snapshotRaw = raw;
     const snapshotParsed = effectiveParsed;
     // The write revision covers every authored input, without hashing runtime defaults or env.
-    const revision = createHash("sha256").update(raw);
-    for (const [includePath, includeHash] of Object.entries(includeFileHashesForWrite)) {
-      revision.update(
-        JSON.stringify([includePath, includeFileTargetsForWrite[includePath], includeHash]),
-      );
-    }
-    const snapshotHash = revision.digest("hex");
+    const snapshotHash = hashConfigRevision(
+      raw,
+      includeFileHashesForWrite,
+      includeFileTargetsForWrite,
+    );
     fallbackHash = snapshotHash;
     fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({

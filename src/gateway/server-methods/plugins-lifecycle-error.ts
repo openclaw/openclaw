@@ -10,8 +10,10 @@ import {
   readInstallPolicyWarningErrorDetails,
 } from "../../../packages/gateway-protocol/src/install-policy-warning-error-details.js";
 import {
+  capturePluginRuntimeApplications,
   PluginInstallPersistedError,
   projectPluginRuntimeFailure,
+  type PluginLifecycleRuntimeApply,
   type PluginRuntimeApplication,
 } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
@@ -20,6 +22,23 @@ import {
   type PluginLifecycleLeaseContext,
 } from "../../plugins/plugin-lifecycle-lease.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+
+export function captureGatewayPluginRuntimeApplications(
+  applyRuntime: PluginLifecycleRuntimeApply,
+  assertCurrent: () => void,
+) {
+  assertCurrent();
+  return capturePluginRuntimeApplications((change) => {
+    assertCurrent();
+    return applyRuntime({
+      ...change,
+      assertInvokerOwned: () => {
+        assertCurrent();
+        change.assertInvokerOwned?.();
+      },
+    });
+  });
+}
 
 class GatewayPluginLifecycleBusyError extends Error {
   constructor(cause: OpenClawStateLeaseError) {
@@ -71,10 +90,6 @@ export function pluginLifecycleError(error: unknown, application?: PluginRuntime
   const failure = projectPluginRuntimeFailure(error, application);
   const cause = error instanceof PluginInstallPersistedError ? error.cause : error;
   const lifecycleError = cause instanceof ManagedPluginLifecycleError ? cause : undefined;
-  const trustCode =
-    lifecycleError?.code && isClawHubTrustErrorCode(lifecycleError.code)
-      ? lifecycleError.code
-      : undefined;
   const installDetails = lifecycleError?.capabilityConsent
     ? buildCapabilityConsentErrorDetails(lifecycleError.capabilityConsent)
     : lifecycleError?.installPolicyWarning
@@ -84,9 +99,9 @@ export function pluginLifecycleError(error: unknown, application?: PluginRuntime
         })
       : lifecycleError
         ? buildClawHubTrustErrorDetails({
-            ...(trustCode ? { code: trustCode } : {}),
-            ...(lifecycleError.version ? { version: lifecycleError.version } : {}),
-            ...(lifecycleError.warning ? { warning: lifecycleError.warning } : {}),
+            code: isClawHubTrustErrorCode(lifecycleError.code) ? lifecycleError.code : undefined,
+            version: lifecycleError.version,
+            warning: lifecycleError.warning,
           })
         : undefined;
   const refusal =

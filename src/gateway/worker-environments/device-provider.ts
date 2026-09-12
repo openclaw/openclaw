@@ -114,12 +114,10 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   const now = options.now ?? Date.now;
   let nodeTransport: NodeWorkerSupervisorTransport | undefined;
   const launchAdapter = createNodeWorkerLaunchAdapter({ getTransport: () => nodeTransport });
-  const findConnectedNode = async (deviceId: string) =>
-    (await nodeTransport?.listCurrentNodes())?.find((node) => node.nodeId === deviceId);
   const resolveAvailability = async (deviceId: string): Promise<DeviceWorkerAvailability> => {
     const [paired, connected] = await Promise.all([
       options.getPairedDevice(deviceId),
-      findConnectedNode(deviceId),
+      nodeTransport?.getCurrentNode(deviceId),
     ]);
     const current = connected && nodeTransport?.isCurrent(connected) ? connected : undefined;
     // Transport availability is runtime-neutral; only worker-turn placement consumes a slot.
@@ -163,7 +161,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       if (!hasPairedNodeRole(paired)) {
         return { status: "unknown" };
       }
-      const connected = await findConnectedNode(deviceId);
+      const connected = await nodeTransport?.getCurrentNode(deviceId);
       if (connected) {
         return { status: "active", sharedHost: true };
       }

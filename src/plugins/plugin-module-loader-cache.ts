@@ -113,6 +113,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
     ? {
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
         getAliasMap: () => explicit,
+        getSourceTransformAliasMap: () => explicit,
         resolveAlias: (specifier: string) => explicit[specifier],
       }
     : preparePluginLoaderAliases({
@@ -123,7 +124,9 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
         pluginSdkResolution: params.pluginSdkResolution,
       });
   const moduleConfigCacheKey = `${tryNative ? "native" : "transform"}\0${aliases.cacheKey}`;
-  const transformOpenClawDependencies = params.transformOpenClawDependencies ?? tryNative;
+  const lazyNativeAliasFallback = tryNative && typeof Module.registerHooks !== "function";
+  const transformOpenClawDependencies =
+    params.transformOpenClawDependencies ?? (lazyNativeAliasFallback ? false : tryNative);
   const cacheKey = `${moduleConfigCacheKey}\0transform-openclaw=${transformOpenClawDependencies ? "1" : "0"}`;
   const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${cacheKey}`;
   return {
@@ -132,6 +135,9 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
     resolveAlias: aliases.resolveAlias,
     tryNative,
     transformOpenClawDependencies,
+    sourceTransformAliasMap: lazyNativeAliasFallback
+      ? aliases.getSourceTransformAliasMap
+      : undefined,
     scopedCacheKey,
   };
 }
@@ -149,9 +155,12 @@ function createPluginModuleLoader(
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
-    const jitiOptions = buildPluginLoaderJitiOptions(params.getAliasMap(), {
-      modulePath: params.loaderFilename,
-    });
+    const jitiOptions = buildPluginLoaderJitiOptions(
+      params.sourceTransformAliasMap?.() ?? params.getAliasMap(),
+      {
+        modulePath: params.loaderFilename,
+      },
+    );
     const jitiLoader = (params.createLoader ?? createJiti)(params.loaderFilename, {
       ...jitiOptions,
       // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
@@ -402,6 +411,7 @@ export function bindPluginInstanceModuleLoader(params: {
         specifier.startsWith(PLUGIN_SOURCE_RESOLVE_PREFIX)
       ) {
         return params.instance.run(() => {
+          // SAFETY: Generated resolver requests always encode this request/options tuple.
           const [request, options] = JSON.parse(
             decodeURIComponent(specifier.slice(PLUGIN_SOURCE_RESOLVE_PREFIX.length)),
           ) as [string, string | JitiResolveOptions];

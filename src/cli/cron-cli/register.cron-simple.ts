@@ -1,7 +1,5 @@
 // Cron simple command registration: remove, toggle, show, runs, and run-now.
 import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -23,6 +21,7 @@ import {
   enrichCronJsonWithStatus,
   formatCronLookupMiss,
   handleCronCliError,
+  parseCronIntegerOption,
   printCronJson,
   printCronShow,
   requireCronJobId,
@@ -238,15 +237,8 @@ export function registerCronSimpleCommands(cron: Command) {
             );
           }
           const id = requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
-          const limit = parseStrictPositiveInteger(opts.limit ?? "50");
-          if (limit === undefined) {
-            throw new CronCliError("Invalid --limit (must be a positive integer).");
-          }
-          const offset =
-            opts.offset === undefined ? undefined : parseStrictNonNegativeInteger(opts.offset);
-          if (opts.offset !== undefined && offset === undefined) {
-            throw new CronCliError("Invalid --offset (must be a non-negative integer).");
-          }
+          const limit = parseCronIntegerOption(opts.limit ?? "50", "--limit");
+          const offset = parseCronIntegerOption(opts.offset, "--offset", "non-negative");
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new CronCliError("--run-id must not be blank");
           }

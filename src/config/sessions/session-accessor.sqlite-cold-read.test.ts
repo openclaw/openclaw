@@ -133,6 +133,16 @@ async function prepareRace(state: OpenClawTestState) {
       if (!matches(query)) {
         return statement;
       }
+      const nativeGet = statement.get.bind(statement);
+      vi.spyOn(statement, "get").mockImplementation(
+        new Proxy(nativeGet, {
+          apply(get, _receiver, args) {
+            const row = get(...args);
+            commitArchive();
+            return row;
+          },
+        }),
+      );
       const iterate = statement.iterate.bind(statement);
       vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
         yield* iterate(...args);

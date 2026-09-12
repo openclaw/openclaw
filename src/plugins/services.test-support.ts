@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import type { startPluginServices } from "./services.js";
 import type { OpenClawPluginService } from "./types.js";
 
 export function createRegistry(
@@ -15,9 +15,8 @@ export function createRegistry(
     source: "test",
     origin,
     rootDir: "/plugins/test-plugin",
-  })) as typeof registry.services;
+  }));
   return registry;
 }
 
-export const createServiceConfig = () =>
-  ({}) as Parameters<typeof startPluginServices>[0]["config"];
+export const createServiceConfig = (): OpenClawConfig => ({});

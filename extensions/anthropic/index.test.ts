@@ -1192,6 +1192,39 @@ describe("anthropic provider replay hooks", () => {
     }
   });
 
+  it.each([
+    { maxTokensSource: "configured" as const, expectedMaxTokens: 128 },
+    { maxTokensSource: "discovered" as const, expectedMaxTokens: 128_000 },
+  ])(
+    "normalizes modern output limits using $maxTokensSource provenance",
+    async ({ maxTokensSource, expectedMaxTokens }) => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const model: ProviderRuntimeModel = {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 128,
+        maxTokensSource,
+      };
+
+      const normalized =
+        provider.normalizeResolvedModel?.({
+          provider: "anthropic",
+          modelId: model.id,
+          model,
+        }) ?? model;
+
+      expect(normalized.maxTokens).toBe(expectedMaxTokens);
+      expect(normalized.maxTokensSource).toBe(maxTokensSource);
+    },
+  );
+
   it("keeps bare Claude CLI context plan-safe and honors explicit 1M variants", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const baseModel = {

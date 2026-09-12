@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/account-resolution";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSignalAccountEntry, signalAccountKeyPolicy } from "./account-selection.js";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import type { SignalAccountConfig, SignalTransportConfig } from "./account-types.js";
 import {
   allocateSignalManagedNativePort,
@@ -74,8 +74,7 @@ export function resolveSignalAccountConfig(
       | Record<string, Partial<SignalAccountConfig>>
       | undefined,
     accountId,
-    normalizeAccountId,
-    accountKeyPolicy: signalAccountKeyPolicy,
+    channelId: "signal",
     nestedObjectKeys: ["aliases"],
   });
   if (accountId === DEFAULT_ACCOUNT_ID && channelConfig?.transport) {

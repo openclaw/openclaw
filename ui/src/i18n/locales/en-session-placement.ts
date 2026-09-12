@@ -32,7 +32,7 @@ const enSessionPlacement = {
     restartSessionTitle: "Restart session",
     restartSessionDescription: 'Choose where "{session}" should restart.',
     restartSessionWarning:
-      "A new worker starts from the last reconciled worktree. Changes that the previous worker did not upload may be lost.",
+      "The session restarts from its last saved workspace on the selected destination. Changes that the previous worker did not upload may be lost.",
     restartSessionAction: "Restart session",
     stoppingSession: "Stopping session…",
     finishingSessionMove: "Finishing session move…",

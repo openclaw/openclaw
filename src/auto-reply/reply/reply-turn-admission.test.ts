@@ -147,7 +147,7 @@ describe("reply turn admission", () => {
       owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
       assertAllowed: () => {},
     });
-    const loadSpy = vi.spyOn(sessionEntryAccessor, "loadSessionEntryWithDatabase");
+    const loadSpy = vi.spyOn(sessionEntryAccessor, "loadSessionEntryForAdmission");
     const controller = new AbortController();
     const admission = admitTestReplyTurn({
       sessionKey,

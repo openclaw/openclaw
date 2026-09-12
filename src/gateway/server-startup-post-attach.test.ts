@@ -12,7 +12,7 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as configPaths from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeRestartSentinel } from "../infra/restart-sentinel.js";
+import { hasRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
@@ -1493,9 +1493,9 @@ describe("startGatewayPostAttachRuntime", () => {
       );
 
       expect(
-        await testing.hasRestartSentinelFast({
+        await hasRestartSentinel({
           OPENCLAW_STATE_DIR: stateDir,
-        } as NodeJS.ProcessEnv),
+        }),
       ).toBe(true);
     } finally {
       closeOpenClawStateDatabaseForTest();
@@ -1523,9 +1523,9 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       try {
         await expect(
-          testing.hasRestartSentinelFast({
+          hasRestartSentinel({
             OPENCLAW_STATE_DIR: stateDir,
-          } as NodeJS.ProcessEnv),
+          }),
         ).resolves.toBe(true);
         expect(
           existsSync.mock.calls.filter((call) => String(call[0]).startsWith(stateDir)),

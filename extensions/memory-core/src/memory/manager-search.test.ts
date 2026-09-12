@@ -503,6 +503,64 @@ describe("searchKeyword FTS MATCH fallback", () => {
 });
 
 describe("searchPathKeyword", () => {
+  it.each([
+    ["unicode61", "common"],
+    ["unicode61", "README.md"],
+    ["trigram", "common"],
+    ["trigram", "README.md"],
+  ] as const)(
+    "resolves first chunks only within the retained %s window for %s",
+    async (ftsTokenizer, query) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        db.prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', '', 0, 0)",
+        ).run("memory/common/00-empty/README.md");
+        for (let index = 0; index < 64; index++) {
+          for (let chunk = 2; chunk >= 0; chunk--) {
+            insertKeywordFixture(db, {
+              id: `path-${index}-chunk-${chunk}`,
+              path: `memory/common/${String(index).padStart(3, "0")}/README.md`,
+              source: index % 2 === 0 ? "memory" : "sessions",
+              startLine: chunk * 5 + 1,
+              endLine: chunk * 5 + 4,
+              text: `body ${index}/${chunk}`,
+            });
+          }
+        }
+        let examinedChunkLines = 0;
+        db.function("observe_path_chunk_line", (line) => {
+          examinedChunkLines++;
+          return line;
+        });
+        db.exec(`
+          ALTER TABLE memory_index_chunks RENAME TO observed_chunks;
+          CREATE VIEW memory_index_chunks AS
+            SELECT id, path, source, observe_path_chunk_line(start_line) AS start_line,
+                   end_line, text FROM observed_chunks;
+        `);
+
+        const results = await searchPathKeywordFixture(db, query, {
+          ftsTokenizer,
+          limit: 2,
+          sourceFilter: {
+            sql: " AND memory_index_paths_fts.source IN (?)",
+            params: ["memory"],
+          },
+        });
+
+        expect(results.map(({ id, snippet }) => ({ id, snippet }))).toEqual([
+          { id: "path-0-chunk-0", snippet: "body 0/0" },
+          { id: "path-2-chunk-0", snippet: "body 2/0" },
+        ]);
+        expect(examinedChunkLines).toBeGreaterThan(0);
+        expect(examinedChunkLines).toBeLessThanOrEqual(16);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it("returns the first scoped chunk and reserves exact precedence for path identifiers", async () => {
     const { db, schema } = createMemorySearchDb();
     try {
@@ -926,6 +984,73 @@ describe("searchPathKeyword", () => {
       expect(results).toHaveLength(204);
       expect(results.filter((entry) => entry.exactPathSpecificity === 2)).toHaveLength(200);
       expect(results.filter((entry) => entry.exactPathSpecificity === 0)).toHaveLength(4);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("searchKeyword ranked limits", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "stops examining scoped candidates after filling the %s result window",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (let index = 0; index < 64; index++) {
+          insertKeywordFixture(db, {
+            id: `chunk-${index}`,
+            path: `memory/${index}.md`,
+            text: "common keyword",
+            source: index % 2 === 0 ? "memory" : "sessions",
+          });
+        }
+        let examined = 0;
+        db.function("observe_keyword_candidate", () => {
+          examined++;
+          return 1;
+        });
+        const results = await searchKeywordFixture(db, "common", {
+          ftsTokenizer,
+          limit: 3,
+          sourceFilter: {
+            sql: " AND source IN (?) AND observe_keyword_candidate() = 1",
+            params: ["sessions"],
+          },
+        });
+        expect(results.map((row) => row.id)).toEqual(["chunk-1", "chunk-3", "chunk-5"]);
+        expect(examined).toBeLessThanOrEqual(6);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it("preserves default BM25 scores without changing a configured rank mapping", async () => {
+    const { db } = createMemorySearchDb();
+    try {
+      insertKeywordFixture(db, {
+        id: "weak",
+        path: "memory/weak.md",
+        text: "common " + "unrelated ".repeat(20),
+      });
+      insertKeywordFixture(db, {
+        id: "strong",
+        path: "memory/strong.md",
+        text: "common common common",
+      });
+      const expected = await searchKeywordFixture(db, "common");
+      expect(expected.map((row) => row.id)).toEqual(["strong", "weak"]);
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts(memory_index_chunks_fts, rank) VALUES ('rank', 'bm25(0.0)')",
+      ).run();
+
+      await expect(searchKeywordFixture(db, "common")).resolves.toEqual(expected);
+      expect(
+        db
+          .prepare("SELECT rank FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+          .all("common")
+          .map((row) => row.rank),
+      ).toEqual([-0, -0]);
     } finally {
       db.close();
     }

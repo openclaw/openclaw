@@ -91,9 +91,7 @@ export function readConfigMutationFileSync(
 }
 
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
-  return Boolean(
-    normalizeOptionalString(opts.batchJson) || normalizeOptionalString(opts.batchFile),
-  );
+  return opts.batchJson !== undefined || opts.batchFile !== undefined;
 }
 
 export function hasRefBuilderOptions(opts: ConfigSetOptions): boolean {
@@ -211,10 +209,9 @@ export function parseConfigSetCurrentExpectation(
 
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
   // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
-  const batchJson = normalizeOptionalString(opts.batchJson);
-  const batchFile = normalizeOptionalString(opts.batchFile);
-  const hasInline = Boolean(batchJson);
-  const hasFile = Boolean(batchFile);
+  const batchJson = opts.batchJson;
+  const hasInline = batchJson !== undefined;
+  const hasFile = opts.batchFile !== undefined;
   if (!hasInline && !hasFile) {
     return null;
   }
@@ -222,7 +219,7 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
     throw new Error("Use either --batch-json or --batch-file, not both.");
   }
   if (hasInline) {
-    return parseBatchEntries(batchJson as string, "--batch-json");
+    return parseBatchEntries(batchJson, "--batch-json");
   }
   const pathname = normalizeStringifiedOptionalString(opts.batchFile) ?? "";
   if (!pathname) {

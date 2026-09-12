@@ -491,7 +491,7 @@ async function sendQueuedChatMessage(
       (err instanceof GatewayRequestError
         ? err.retryable
         : /gateway (?:not connected|closed)|websocket|disconnected/i.test(error));
-    if (!activeLeafChanged && recoverable) {
+    if (recoverable) {
       const failedBeforeTransport =
         err instanceof Error &&
         !(err instanceof GatewayRequestError) &&
@@ -576,10 +576,8 @@ async function sendQueuedChatMessage(
     if (!restoreCommand) {
       setState("failed", error);
     }
-    if (isVisible()) {
-      if (activeLeafChanged) {
-        void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
-      }
+    if (isVisible() && activeLeafChanged) {
+      void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
     }
     surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
       inline: storageMode === "durable" && !restoreCommand,

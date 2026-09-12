@@ -308,7 +308,8 @@ async function openSystemdConnection(
             (["GetUnit", "LoadUnit"].includes(member) &&
               native.errorHasName(error, "org.freedesktop.systemd1.NoSuchUnit")) ||
             (args[4] === "GetUnitFileState" &&
-              native.errorHasName(error, "org.freedesktop.systemd1.NoSuchUnitFile"))
+              (native.errorHasName(error, "org.freedesktop.systemd1.NoSuchUnitFile") ||
+                native.errorHasName(error, "org.freedesktop.DBus.Error.FileNotFound")))
           ) {
             return null;
           }

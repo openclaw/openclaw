@@ -21,6 +21,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
+import { withCommandPluginMetadata } from "../config-validation.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName } from "./add-mutators.js";
 
@@ -201,28 +202,33 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
         initialValue: false,
       });
   if (wantsNames) {
-    for (const channel of selection) {
-      const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-      const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
-      const account = plugin?.config.resolveAccount(nextConfig, accountId) as
-        | { name?: string }
-        | undefined;
-      const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
-      const existingName = snapshot?.name ?? account?.name;
-      const name = await prompter.text({
-        message: `${channel} display name for account "${accountId}"`,
-        initialValue: existingName,
-      });
-      if (name?.trim()) {
-        nextConfig = applyAccountName({
-          cfg: nextConfig,
-          channel,
-          accountId,
-          name,
-          plugin,
-        });
-      }
-    }
+    await withCommandPluginMetadata(
+      { config: nextConfig, workspaceDir: params.workspaceDir },
+      async () => {
+        for (const channel of selection) {
+          const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
+          const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
+          const account = plugin?.config.resolveAccount(nextConfig, accountId) as
+            | { name?: string }
+            | undefined;
+          const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
+          const existingName = snapshot?.name ?? account?.name;
+          const name = await prompter.text({
+            message: `${channel} display name for account "${accountId}"`,
+            initialValue: existingName,
+          });
+          if (name?.trim()) {
+            nextConfig = applyAccountName({
+              cfg: nextConfig,
+              channel,
+              accountId,
+              name,
+              plugin,
+            });
+          }
+        }
+      },
+    );
   }
 
   const bindTargets = selection

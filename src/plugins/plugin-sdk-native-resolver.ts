@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
-import { supportsNativeModuleAliasHooks } from "./native-module-require.js";
+import { supportsNativeModuleAliasHooks, type BunPluginRuntime } from "./native-module-require.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginSdkHostFacts } from "./plugin-cache-sdk.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -25,18 +25,6 @@ type ResolveFilename = (
 
 type ModuleWithResolver = typeof Module & {
   _resolveFilename?: ResolveFilename;
-  registerHooks?: (options: {
-    resolve?: (
-      specifier: string,
-      context: { parentURL?: string | undefined; conditions: readonly string[] },
-      nextResolve: (
-        specifier: string,
-        context?: { parentURL?: string | undefined },
-      ) => {
-        url: string;
-      },
-    ) => { shortCircuit?: boolean; url: string };
-  }) => { deregister: () => void };
 };
 
 /** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
@@ -254,13 +242,6 @@ function isWithinRoot(candidate: string, root: string): boolean {
   return isPathInside(root, normalizePathForBoundary(candidate));
 }
 
-function resolveAliasTargetForParent(
-  request: string,
-  parent: NodeJS.Module | undefined,
-): string | undefined {
-  return resolveAliasTargetForParentPath(request, parent?.filename);
-}
-
 function resolveAliasTargetForParentUrl(
   request: string,
   parentUrl: string | undefined,
@@ -305,10 +286,7 @@ function resolveAliasTargetForParentPath(
   return entries.find((entry) => isWithinRoot(parentFilename, entry.parentRoot))?.target;
 }
 
-function listInternalCorePackageNativeAliases(
-  options: InstallOpenClawPluginSdkNativeResolverOptions,
-  packageRoot = resolveInternalCorePackageHostRoot(resolveLoaderModulePath(options)),
-): Array<{
+function listInternalCorePackageNativeAliases(packageRoot: string): Array<{
   request: string;
   target: string;
   parentRoots: string[];
@@ -352,18 +330,33 @@ function listInternalCorePackageNativeAliases(
 
 function installResolver(): void {
   const native = getPluginCache().sdk.native;
+  if (installed || !(native.aliases.size || native.sdkProviders.size)) {
+    return;
+  }
+  // SAFETY: Bun exposes this synchronous public API; Node leaves the optional global absent.
+  const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
+  if (bun) {
+    bun.plugin({
+      name: "openclaw-plugin-sdk-alias",
+      setup(builder) {
+        builder.onResolve(
+          { filter: /^(?:openclaw|@openclaw)\/plugin-sdk\//u, namespace: "file" },
+          ({ path: request, importer }) => {
+            const target = resolveAliasTargetForParentPath(request, importer);
+            return target ? { path: target, namespace: "file" } : undefined;
+          },
+        );
+      },
+    });
+  }
   const previousResolveFilename = moduleWithResolver[nodeResolveFilenameProperty];
   // Packaged runtimes without aliases must retain the runtime's native resolution path.
-  if (
-    installed ||
-    !previousResolveFilename ||
-    !(native.aliases.size || native.sdkProviders.size) ||
-    !supportsNativeModuleAliasHooks()
-  ) {
+  if (!previousResolveFilename || !supportsNativeModuleAliasHooks()) {
+    installed = Boolean(bun);
     return;
   }
   moduleWithResolver[nodeResolveFilenameProperty] = ((request, parent, isMain, options) =>
-    resolveAliasTargetForParent(request, parent) ??
+    resolveAliasTargetForParentPath(request, parent?.filename) ??
     previousResolveFilename(request, parent, isMain, options)) satisfies ResolveFilename;
   moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
@@ -442,7 +435,7 @@ function registerInternalCorePackageNativeAliases(
   if (registeredInternalCorePackageHosts.has(packageRoot)) {
     return;
   }
-  for (const alias of listInternalCorePackageNativeAliases(options, packageRoot)) {
+  for (const alias of listInternalCorePackageNativeAliases(packageRoot)) {
     registerNativeAlias(alias);
   }
   registeredInternalCorePackageHosts.add(packageRoot);

@@ -65,9 +65,12 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
-  it("keeps fenced code blocks balanced across chunks", () => {
+  it.each([
+    { ending: "closed", suffix: "\n```\n\nDone." },
+    { ending: "open at EOF", suffix: "" },
+  ])("keeps $ending fenced code blocks balanced across chunks", ({ suffix }) => {
     const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
-    const text = `Here is code:\n\n\`\`\`js\n${body}\n\`\`\`\n\nDone.`;
+    const text = `Here is code:\n\n\`\`\`js\n${body}${suffix}`;
 
     const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 10 });
     expect(chunks.length).toBeGreaterThan(1);
@@ -78,7 +81,7 @@ describe("chunkDiscordText", () => {
     }
 
     expect(chunks[0]).toContain("```js");
-    expect(chunks.at(-1)).toContain("Done.");
+    expect(chunks.at(-1)).toContain(suffix ? "Done." : "console.log(29);");
   });
 
   it("keeps fenced blocks intact when chunkMode is newline", () => {

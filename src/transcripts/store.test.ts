@@ -57,7 +57,7 @@ describe("TranscriptsStore", () => {
       await store.writeSession({ ...session("c"), title: "changed" });
       closeOpenClawStateDatabaseForTest();
       expect(writer.db.isOpen).toBe(false);
-      expect(() => acquireOpenClawStateDatabaseFileExclusion(writer.path)).toThrow(
+      await expect(acquireOpenClawStateDatabaseFileExclusion(writer.path)).rejects.toThrow(
         StateDatabaseCoordinatorContentionError,
       );
       const remaining: string[] = [];
@@ -68,7 +68,7 @@ describe("TranscriptsStore", () => {
     } finally {
       await rows.return(false);
     }
-    const exclusion = acquireOpenClawStateDatabaseFileExclusion(writer.path);
+    const exclusion = await acquireOpenClawStateDatabaseFileExclusion(writer.path);
     exclusion.release();
     expect((await store.readSession("c"))?.title).toBe("changed");
   });
@@ -88,7 +88,7 @@ describe("TranscriptsStore", () => {
       try {
         const first = await rows.next();
         expect(first.done).toBe(false);
-        expect(() => acquireOpenClawStateDatabaseFileExclusion(writer.path)).toThrow(
+        await expect(acquireOpenClawStateDatabaseFileExclusion(writer.path)).rejects.toThrow(
           StateDatabaseCoordinatorContentionError,
         );
         if (finish === "return") {
@@ -107,7 +107,7 @@ describe("TranscriptsStore", () => {
       } finally {
         await rows.return(undefined);
       }
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(writer.path);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(writer.path);
       exclusion.release();
       expect((await store.readUtterancesForSession(target)).map((row) => row.text)).toEqual([
         "first",

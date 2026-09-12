@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { RawData, WebSocket } from "ws";
 import {
@@ -30,6 +31,12 @@ import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environ
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+import {
+  captureGatewayRpcReceivedAt,
+  createWorkerRpcDiagnostics,
+  type GatewayRpcQueueTiming,
+} from "./request-diagnostics.js";
 import { raiseGatewayReceiverPayloadLimit } from "./request-start.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
@@ -54,7 +61,7 @@ type WorkerWsMessageHandlerParams = {
   connId: string;
   service?: WorkerConnectionService;
   isStartupPending?: () => boolean;
-  send(frame: unknown): void;
+  send: GatewayWsMessageHandlerParams["send"];
   close(code?: number, reason?: string): void;
   isClosed(): boolean;
   clearHandshakeTimer(): void;
@@ -240,7 +247,11 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     expiryTimer.unref?.();
   };
 
-  const handleMessage = async (data: RawData, admissionOpen: boolean) => {
+  const handleMessage = async (
+    data: RawData,
+    admissionOpen: boolean,
+    timing: GatewayRpcQueueTiming | undefined,
+  ) => {
     const client = params.getClient();
     if (client?.invalidated) {
       failFrame(1008, "credential-replaced");
@@ -324,32 +335,38 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       closeWorker(1008, "environment-unavailable");
       return;
     }
+    const diagnostics = createWorkerRpcDiagnostics(parsed.method, timing);
     const respond = (
       ok: boolean,
       payload?: unknown,
       error?: Parameters<Parameters<typeof dispatchWorkerRequest>[0]["respond"]>[2],
     ) => {
       if (disposed || params.isClosed() || params.getClient() !== client || client.invalidated) {
+        diagnostics?.response("suppressed");
         return;
       }
-      params.send(
+      const result = params.send(
         ok
           ? { type: "res", id: parsed.id, ok, payload }
           : { type: "res", id: parsed.id, ok, error },
       );
+      diagnostics?.response(result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable");
     };
-    const dispatch = (signal?: AbortSignal) =>
-      dispatchWorkerRequest({
-        request: parsed,
-        identity: client.worker!,
-        connectionId: params.connId,
-        service: params.service,
-        send: (frame) => params.send(frame),
-        respond,
-        close: closeWorker,
-        warn: (message) => params.logGateway.warn(message),
-        ...(signal ? { signal } : {}),
-      });
+    const dispatch = (signal?: AbortSignal) => {
+      const invoke = () =>
+        dispatchWorkerRequest({
+          request: parsed,
+          identity: client.worker!,
+          connectionId: params.connId,
+          service: params.service,
+          send: (frame) => params.send(frame),
+          respond,
+          close: closeWorker,
+          warn: (message) => params.logGateway.warn(message),
+          ...(signal ? { signal } : {}),
+        });
+      return diagnostics ? diagnostics.runHandler(invoke) : invoke();
+    };
     const isLongSessionOperation =
       parsed.method === "worker.sessions.spawn" ||
       parsed.method === "worker.sessions.send" ||
@@ -358,13 +375,16 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     if (isLongSessionOperation) {
       if (sessionOperations.has(parsed.id)) {
         failFrame(1008, "invalid-frame");
+        diagnostics?.finish("rejected");
         return;
       }
       if (sessionOperations.size >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
         respond(false, undefined, workerProtocolError("gateway-unavailable"));
+        diagnostics?.finish("rejected");
         return;
       }
       sessionOperations.add(parsed.id);
+      let outcome: "returned" | "threw" = "returned";
       // Release the frame queue while retaining shutdown admission. Desktop input
       // belongs to this socket; durable session work survives response-transport loss.
       void params.connectionWork.track(() =>
@@ -373,15 +393,27 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           "worker:dispatch",
         )
           .catch(() => {
+            outcome = "threw";
             respond(false, undefined, workerProtocolError("gateway-unavailable"));
           })
           .finally(() => {
             sessionOperations.delete(parsed.id);
+            // A socket abort can follow successful execution. Record the actual
+            // dispatch settlement separately from suppressed/unavailable delivery.
+            diagnostics?.finish(outcome);
           }),
       );
       return;
     }
-    await dispatch();
+    let outcome: "returned" | "threw" = "returned";
+    try {
+      await dispatch();
+    } catch (error) {
+      outcome = "threw";
+      throw error;
+    } finally {
+      diagnostics?.finish(outcome);
+    }
   };
 
   let queue = Promise.resolve();
@@ -406,10 +438,15 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     }
     pendingFrames += 1;
     pendingBytes += frameBytes;
+    const receivedAt = captureGatewayRpcReceivedAt();
     const previous = queue;
     queue = params.connectionWork.track(() =>
       previous
         .then(async () => {
+          // Preserve the FIFO wait before parsing/classifying the request. This
+          // starts at the JS socket callback, not at network or event-loop receipt.
+          const timing =
+            receivedAt === undefined ? undefined : { receivedAt, dequeuedAt: performance.now() };
           if (disposed || params.isClosed()) {
             return;
           }
@@ -426,18 +463,18 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
               params.service?.validateWorkerConnection(identity) === null
             ) {
               const continuation = runWorkerTurnAdmissionContinuation(identity, () =>
-                handleMessage(data, true),
+                handleMessage(data, true, timing),
               );
               if (continuation) {
                 await continuation;
                 return;
               }
             }
-            await handleMessage(data, false);
+            await handleMessage(data, false, timing);
             return;
           }
           try {
-            await admission.run(() => handleMessage(data, true));
+            await admission.run(() => handleMessage(data, true, timing));
           } finally {
             admission.release();
           }

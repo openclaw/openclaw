@@ -5,10 +5,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isGatewayServiceEnv, resolveGatewayProfileSuffix } from "../../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
-import {
-  isScheduledTaskDefinitelyNotRunning,
-  readWindowsStartupFallbackRuntimeForUpdate,
-} from "../../daemon/schtasks-runtime.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import {
   formatServiceInspectionReason,
@@ -43,11 +39,16 @@ import {
   type ManagedGatewayUpdateVerdict,
 } from "./update-command-service-plan.js";
 import {
+  isManagedGatewayServiceOffline,
+  observedSystemdManagerUid,
+} from "./update-command-service-publication.js";
+import {
   createWindowsTaskAutoStartRecovery,
   UpdateCommandAbort,
   type WindowsTaskAutoStartRecovery,
 } from "./update-command-windows-task.js";
 
+export { withGatewayRuntimeArtifactPublication } from "./update-command-service-publication.js";
 export type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 export { UpdateCommandAbort } from "./update-command-windows-task.js";
 
@@ -80,13 +81,6 @@ export function resolvePreparedGatewayUpdatePolicy(
     allowGatewayActivation:
       shouldRestart && stopState?.stopped === true && verdict?.kind === "owned",
   };
-}
-
-function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {
-  const uid = state.runtime?.systemd?.managerUid;
-  return typeof uid === "number" && Number.isInteger(uid) && uid >= 0 && uid < 0xffffffff
-    ? uid
-    : undefined;
 }
 
 async function inspectManagedGatewayServiceBeforeUpdate(params: {
@@ -472,21 +466,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     inspected: true,
     runtimeInspected: ["running", "stopped"].includes(serviceState.runtime?.status ?? ""),
     running: serviceState.running,
-    // Enabled systemd units may be manually stopped; loaded LaunchAgents can
-    // respawn. Windows needs the live numeric task state, not its last result.
-    offline:
-      serviceState.runtime?.status === "stopped" &&
-      (process.platform === "darwin"
-        ? serviceState.loadState.status === "not-loaded" ||
-          (serviceState.loadState.status === "loaded" &&
-            (await service
-              .isEnabled?.({ env: serviceState.env, timeoutMs: params.timeoutMs })
-              .catch(() => undefined)) === false)
-        : process.platform === "win32"
-          ? isScheduledTaskDefinitelyNotRunning(resolveTaskName(serviceState.env)) ||
-            (await readWindowsStartupFallbackRuntimeForUpdate(serviceState.env).catch(() => null))
-              ?.status === "stopped"
-          : process.platform === "linux"),
+    offline: await isManagedGatewayServiceOffline(service, serviceState, params.timeoutMs),
     serviceEnv: serviceState.env,
     serviceDefinitionEnv:
       resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},

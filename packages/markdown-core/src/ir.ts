@@ -684,8 +684,7 @@ function appendParagraphSeparator(
 }
 
 function appendTopLevelListSeparator(state: RenderState) {
-  const trailingNewlines = state.text.match(/\n*$/)?.[0].length ?? 0;
-  if (trailingNewlines < 2) {
+  if (!state.text.endsWith("\n\n")) {
     state.text += "\n";
   }
 }

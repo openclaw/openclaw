@@ -17,7 +17,7 @@ import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
-import type { WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import type { WorkerComputerExecutor } from "./worker-turn-computer-rpc.js";
 
@@ -71,8 +71,7 @@ export function createWorkerComputerTransportOwner(options: {
     if (!node) {
       throw new WorkerRunnerUnavailableError();
     }
-    const environmentIsCurrent = () => {
-      const current = options.store.get(environment.environmentId);
+    const environmentIsCurrent = (current: WorkerEnvironmentRecord | undefined) => {
       const currentNode = context.nodeRegistry.get(node.nodeId);
       return (
         options.resolveGatewayContext() === context &&
@@ -89,7 +88,7 @@ export function createWorkerComputerTransportOwner(options: {
       const current = options.placements.get(claim.sessionId);
       const currentEnvironment = options.store.get(environment.environmentId);
       return (
-        environmentIsCurrent() &&
+        environmentIsCurrent(currentEnvironment) &&
         options.placements.validateTurnClaim(claim) &&
         current?.state === "active" &&
         current.generation === claim.placementGeneration &&
@@ -113,9 +112,7 @@ export function createWorkerComputerTransportOwner(options: {
     // their private endpoint. A failed private probe never selects another connected computer.
     const privateNode = environment.sharedHost
       ? undefined
-      : (await nodeTransport.listCurrentNodes()).find(
-          (candidate) => candidate.nodeId === node.nodeId,
-        );
+      : await nodeTransport.getCurrentNode(node.nodeId);
     assertPlacement();
     if (!environment.sharedHost && !privateNode) {
       throw new Error("Session desktop node lacks the current private worker protocol");
@@ -174,9 +171,10 @@ export function createWorkerComputerTransportOwner(options: {
     let closing: Promise<void> | undefined;
     const activeBindings = new Set<{ close(reason: string): Promise<unknown> }>();
     const resourceBindingIsCurrent = () =>
-      environmentIsCurrent() && (!privateNode || nodeTransport.isCurrent(privateNode));
+      environmentIsCurrent(options.store.get(environment.environmentId)) &&
+      (!privateNode || nodeTransport.isCurrent(privateNode));
     const bindingIsCurrent = () =>
-      resourceBindingIsCurrent() &&
+      (!privateNode || nodeTransport.isCurrent(privateNode)) &&
       getActivePluginGatewayNodePolicyRegistry() === registry &&
       policyOwners.every((isCurrent) => isCurrent()) &&
       (privateNode !== undefined ||

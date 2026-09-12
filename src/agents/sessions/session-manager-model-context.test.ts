@@ -12,10 +12,67 @@ import {
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+
+it("reports context queue overload without losing context and recovers in admission order", async () => {
+  await withOpenClawTestState({ label: "model-context-pressure" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "context-pressure",
+      sessionKey: "agent:main:context-pressure",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const source = SessionManager.open(scope);
+    source.appendMessage(makeUserMessage("retain this context", 1));
+    await waitForSessionTranscriptProjection(scope);
+    const expected = source.buildSessionContext();
+    const release = createDeferredCore();
+    const completed: number[] = [];
+    const spy = vi
+      .spyOn(WorkerTaskPool.prototype, "run")
+      .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
+        spy.mockRestore();
+        // Hold this caller's first preparation while real pool admission fills the queue.
+        return this.run(async () => {
+          await release.promise;
+          return input;
+        }, options);
+      });
+    const accepted = Array.from({ length: 128 }, (_, index) =>
+      SessionManager.openModelContextAsync(scope).then((context) => {
+        completed.push(index);
+        return context.buildSessionContext();
+      }),
+    );
+    let reported: unknown;
+    const excess = SessionManager.openModelContextAsync(scope).catch((error: unknown) => {
+      reported = error;
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(reported).toMatchObject({ name: "WorkerTaskError", code: "overloaded" });
+      expect(completed).toEqual([]);
+      expect(source.buildSessionContext()).toEqual(expected);
+      release.resolve();
+      expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => expected));
+      expect(completed).toEqual(Array.from({ length: 128 }, (_, index) => index));
+      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
+        expected,
+      );
+    } finally {
+      release.resolve();
+      spy.mockRestore();
+      await Promise.allSettled([...accepted, excess]);
+    }
+  });
+});
 
 it("acquires a long sparse context with bounded queries and preserved message order", async () => {
   await withOpenClawTestState({ label: "model-context-batch" }, async (state) => {
@@ -44,7 +101,8 @@ it("acquires a long sparse context with bounded queries and preserved message or
     ]);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
     const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
-    const spy = vi.spyOn(prototype, "iterate");
+    const iterate = vi.spyOn(prototype, "iterate");
+    const get = vi.spyOn(prototype, "get");
     try {
       const context = SessionManager.openModelContext(scope).buildSessionContext();
       expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
@@ -53,12 +111,13 @@ it("acquires a long sparse context with bounded queries and preserved message or
           .map((entry) => entry.message.content),
       );
       // Protect acquisition cost independently of the exact chunk size or query implementation.
-      expect(spy.mock.calls.length).toBeLessThan(20);
+      expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         context,
       );
     } finally {
-      spy.mockRestore();
+      iterate.mockRestore();
+      get.mockRestore();
     }
   });
 });

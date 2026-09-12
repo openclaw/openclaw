@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
@@ -193,11 +194,9 @@ it("fetches local avatars with the bearer credential when token auth is active",
       static override revokeObjectURL = revokeObjectURL;
     },
   );
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: true,
-    blob: async () => new Blob(["avatar"], { type: "image/png" }),
-  });
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const response = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(response.promise);
+  vi.stubGlobal("fetch", fetchMock);
 
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
@@ -205,21 +204,30 @@ it("fetches local avatars with the bearer credential when token auth is active",
   });
 
   try {
-    // The generated fallback renders while the authenticated fetch is in flight.
-    await waitForFast(() =>
-      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-    );
+    const avatar = element.querySelector(".agent-select__trigger .agent-select__avatar");
+    expect(avatar?.classList).toContain("is-pending");
+    expect(avatar?.classList).not.toContain("is-fallback");
     expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
       credentials: "include",
       headers: { Authorization: "Bearer tok" },
       signal: expect.any(AbortSignal),
     });
 
+    response.resolve(
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+    );
     await waitForFast(() => {
       expect(
         element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
       ).toBe("blob:agent-avatar");
     });
+    expect(avatar?.classList).toContain("is-pending");
+    avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
+    expect(avatar?.classList).not.toContain("is-pending");
+    element.accessibleLabel = "Choose an agent";
+    await element.updateComplete;
+    expect(avatar?.classList).not.toContain("is-pending");
+    expect(avatar?.classList).not.toContain("is-fallback");
     expect(createObjectURL).toHaveBeenCalledTimes(1);
 
     element.remove();
@@ -227,6 +235,7 @@ it("fetches local avatars with the bearer credential when token auth is active",
     setAvatarGatewayOrigin(null);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:agent-avatar");
   } finally {
+    response.resolve(new Response(null, { status: 404 }));
     element.remove();
     vi.unstubAllGlobals();
   }
@@ -253,7 +262,7 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
 
   try {
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(element.querySelector(".agent-select__avatar img")).toBeNull();
+    await waitForFast(() => expect(element.querySelector(".agent-select__avatar img")).toBeNull());
 
     setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
     await element.updateComplete;

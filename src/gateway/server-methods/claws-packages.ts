@@ -12,12 +12,10 @@ import {
 } from "../../claws/package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../../claws/package-remove.js";
 import { readClawInstallRecord } from "../../claws/provenance.js";
-import {
-  capturePluginRuntimeApplications,
-  projectPluginRuntimeFailure,
-} from "../../plugins/lifecycle.js";
+import { projectPluginRuntimeFailure } from "../../plugins/lifecycle.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import {
+  captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
   withGatewayPluginLifecycleLease,
 } from "./plugins-lifecycle-error.js";
@@ -55,7 +53,7 @@ export const clawsPackageHandlers = {
       return;
     }
     const input = parsed.data;
-    let captured: ReturnType<typeof capturePluginRuntimeApplications> | undefined;
+    let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
@@ -81,17 +79,7 @@ export const clawsPackageHandlers = {
           throw new Error("Claw package cleanup no longer owns the current removal state.");
         }
       };
-      assertCurrent();
-      captured = capturePluginRuntimeApplications((change) => {
-        assertCurrent();
-        return applyRuntime({
-          ...change,
-          assertInvokerOwned: () => {
-            assertCurrent();
-            change.assertInvokerOwned?.();
-          },
-        });
-      });
+      captured = captureGatewayPluginRuntimeApplications(applyRuntime, assertCurrent);
       const applyOwnedRuntime = captured.applyRuntime;
       const { runtimeFailure, ...removed } = await withGatewayPluginLifecycleLease(
         signal,

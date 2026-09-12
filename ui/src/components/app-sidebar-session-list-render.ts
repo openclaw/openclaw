@@ -590,17 +590,15 @@ function renderSessionListBody(params: {
           }
           return renderSessionSection({ host, section, personHeaders });
         }
-        // An owner filter hides empty Other regardless of paging or drag state.
-        // Without it, preserve the collaborator and drag destination behavior.
+        // Personal filters already omit empty sections in the projection.
+        // Otherwise preserve the collaborator and drag destination behavior.
         if (
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
-          (host.sessionOwnerFilterActive ||
-            host.sessionInvolvingMeFilterActive ||
-            (!params.nativeSessionsHaveMore &&
-              !host.sessionOwnershipVisible &&
-              host.sessionsStatusFilter === "active" &&
-              host.sessionOrganizer.draggingSessionKey === null))
+          !params.nativeSessionsHaveMore &&
+          !host.sessionOwnershipVisible &&
+          host.sessionsStatusFilter === "active" &&
+          host.sessionOrganizer.draggingSessionKey === null
         ) {
           return nothing;
         }

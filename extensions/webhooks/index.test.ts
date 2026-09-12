@@ -16,6 +16,11 @@ function createApi(params?: {
     pluginConfig: params?.pluginConfig ?? {},
     runtime: {
       tasks: {
+        async: {
+          managedFlows: {
+            bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+          },
+        },
         managedFlows: {
           bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
         },

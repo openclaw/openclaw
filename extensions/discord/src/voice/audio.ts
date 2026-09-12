@@ -141,7 +141,8 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
 }
 
 class DiscordOpusEncodeStream extends Transform {
-  #buffer = Buffer.alloc(0);
+  #buffer: Buffer = Buffer.alloc(0);
+  #partialFrame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
   #encoder!: LibopusEncoder;
   readonly #packetPcmBytes = new WeakMap<Buffer, number>();
 
@@ -167,12 +168,35 @@ class DiscordOpusEncodeStream extends Transform {
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, done: TransformCallback): void {
     try {
-      this.#buffer =
-        this.#buffer.length > 0 ? Buffer.concat([this.#buffer, chunk]) : Buffer.from(chunk);
+      if (this.#buffer.length > 0) {
+        const bufferedBytes = this.#buffer.length;
+        const copiedBytes = chunk.copy(
+          this.#partialFrame,
+          bufferedBytes,
+          0,
+          DISCORD_OPUS_FRAME_BYTES - bufferedBytes,
+        );
+        if (bufferedBytes + copiedBytes < DISCORD_OPUS_FRAME_BYTES) {
+          this.#buffer = this.#partialFrame.subarray(0, bufferedBytes + copiedBytes);
+          done();
+          return;
+        }
+        this.#buffer = chunk.subarray(copiedBytes);
+        this.#encodeFrame(this.#partialFrame);
+      } else {
+        this.#buffer = chunk;
+      }
       while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
         const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
         this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
         this.#encodeFrame(frame);
+      }
+      // Complete frames are consumed synchronously; own the tail before the write callback.
+      if (this.#buffer.length > 0) {
+        this.#buffer.copy(this.#partialFrame);
+        this.#buffer = this.#partialFrame.subarray(0, this.#buffer.length);
+      } else {
+        this.#buffer = Buffer.alloc(0);
       }
       done();
     } catch (err) {
@@ -210,6 +234,7 @@ class DiscordOpusEncodeStream extends Transform {
   override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
     this.#encoder?.free();
     this.#buffer = Buffer.alloc(0);
+    this.#partialFrame = Buffer.alloc(0);
     done(err);
   }
 

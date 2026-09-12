@@ -1,6 +1,9 @@
 import type { Worker } from "node:worker_threads";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
-import type { createSqliteWorkerTransferReceiver } from "./sqlite-worker-transfer.js";
+import type {
+  createSqliteWorkerTransferOwner,
+  createSqliteWorkerTransferReceiver,
+} from "./sqlite-worker-transfer.js";
 
 export type RequestBody = SqliteWorkerRequest extends infer Request
   ? Request extends SqliteWorkerRequest
@@ -9,6 +12,10 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
   : never;
 export type DispatchState = { dispatched: boolean };
 export type Job = {
+  inputTransfer?: {
+    id: number;
+    producer: ReturnType<typeof createSqliteWorkerTransferOwner>;
+  };
   transfer?: {
     id: number;
     receiver: ReturnType<typeof createSqliteWorkerTransferReceiver>;
@@ -43,4 +50,11 @@ export type Actor = {
   openDispatch: DispatchState;
   initialized: boolean;
   closing?: Promise<void>;
+};
+
+export type SqliteWorkerStoreOptions = {
+  moduleUrl: URL;
+  databasePath: string;
+  input: unknown;
+  existingOnly?: boolean;
 };

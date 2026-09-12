@@ -20,6 +20,12 @@ type StaticExtensionAssetParams = {
   warn?: (message: string) => void;
 };
 
+export function shouldCopyStaticExtensionAssets(
+  params: Pick<StaticExtensionAssetParams, "env"> = {},
+) {
+  return (params.env ?? process.env).OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS !== "0";
+}
+
 function toPosixPath(value: unknown) {
   return (typeof value === "string" ? value : "").replaceAll("\\", "/");
 }
@@ -329,11 +335,14 @@ export function copyStaticExtensionAssets(params: StaticExtensionAssetParams = {
 /**
  * Copies static assets into the dist-runtime overlay from source or root dist.
  */
-export function copyStaticExtensionAssetsToRuntimeOverlay(params: StaticExtensionAssetParams = {}) {
+export function copyStaticExtensionAssetsToRuntimeOverlay(
+  params: StaticExtensionAssetParams & { runtimeRoot?: string } = {},
+) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
   const assets = discoverStaticExtensionRuntimeOverlayAssets({ ...params, rootDir, fs: fsImpl });
-  const runtimeExtensionsRoot = path.join(rootDir, "dist-runtime", "extensions");
+  const runtimeRoot = params.runtimeRoot ?? path.join(rootDir, "dist-runtime");
+  const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
   if (!fsImpl.existsSync(runtimeExtensionsRoot)) {
     return;
   }
@@ -346,9 +355,14 @@ export function copyStaticExtensionAssetsToRuntimeOverlay(params: StaticExtensio
     const srcPath = path.join(rootDir, src);
     const distPath = path.join(rootDir, dest);
     const copySourcePath = fsImpl.existsSync(srcPath) ? srcPath : distPath;
-    const destPath = path.join(rootDir, "dist-runtime", normalizedDest.slice("dist/".length));
+    const destPath = path.join(runtimeRoot, normalizedDest.slice("dist/".length));
     if (fsImpl.existsSync(copySourcePath)) {
       fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
+      // Staging links target the final location, so replace the link instead of
+      // following it into the live output while materializing a static asset.
+      if (fsImpl.lstatSync(destPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        fsImpl.unlinkSync(destPath);
+      }
       fsImpl.copyFileSync(copySourcePath, destPath);
     } else {
       warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);

@@ -85,7 +85,7 @@ describe("config patch recovery", () => {
 
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
     expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configForm).toEqual({ count: 7 });
+    expect(runtimeConfig.state.configForm).toEqual({ count: 7, enabled: false });
     expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
     await expect(server.store.request("config.get")).resolves.toMatchObject({
       config: { count: 1, enabled: false },
@@ -210,7 +210,7 @@ describe("config patch recovery", () => {
       expect(runtimeConfig.state.configFormMode).toBe(mode);
       expect(runtimeConfig.state.configRaw).toBe(draftRaw);
       expect(runtimeConfig.state.configFormOriginal).toEqual({ count: 1 });
-      expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
+      expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-3");
       expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(1);
       await expect(server.store.request("config.get")).resolves.toMatchObject({
         config: { count: 9, enabled: false },

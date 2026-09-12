@@ -6182,7 +6182,7 @@ describe("google-meet plugin", () => {
       {
         defaultTransport: "chrome-node",
         defaultMode: "agent",
-        chrome: { reuseExistingTab: false },
+        chrome: { reuseExistingTab: false, waitForInCallMs: 1 },
       },
       {
         nodesInvokeHandler: createNodeBrowserScenario({

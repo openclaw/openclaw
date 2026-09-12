@@ -70,7 +70,8 @@ If a New Session model lookup does not finish within 30 seconds, the controls
 show **Models unavailable**. Open the model picker to retry; your draft stays
 in place.
 
-When you open an existing session, you can start typing as soon as its identity
+When you open an existing session, the conversation appears before supporting
+panels and pull-request details load. You can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
 composer keeps your draft and focus when the conversation appears. You can send
 ordinary messages and attachments while history loads: the message enters the
@@ -256,7 +257,7 @@ cancel native clipboard writes that the browser has already accepted.
 ### Markdown tables
 
 Markdown tables scroll horizontally within the conversation. **Copy table** copies
-tab-separated cells, and **Expand table** opens a larger view. In Chat, workspace
+tab-separated cells, and **Expand table** opens a larger view. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 

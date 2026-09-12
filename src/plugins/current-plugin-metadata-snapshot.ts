@@ -11,16 +11,20 @@ import {
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
   getPluginMetadataSnapshotCache,
+  getScopedPluginCaches,
+  invalidatePluginCacheMetadata,
   getProcessPluginCache,
   getScopedPluginCache,
   runOutsidePluginCache,
   withPluginCache,
+  type PluginCache,
 } from "./plugin-cache.js";
 import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type {
   PluginMetadataSnapshot,
@@ -60,6 +64,9 @@ type PluginMetadataSnapshotCandidate = {
 };
 
 type ScopedPluginMetadataSnapshot = PluginMetadataSnapshotCandidate & {
+  snapshot: PluginMetadataSnapshot;
+  cache: PluginCache;
+  metadata: PluginCache["metadata"];
   parent?: ScopedPluginMetadataSnapshot;
 };
 
@@ -186,13 +193,30 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   prepareCurrentPluginMetadataSnapshotPublication(snapshot, options)();
 }
 
+/** Installation revokes operation facts even when it runs between metadata scopes. */
+function revokeCurrentPluginMetadataSnapshotScopes(): void {
+  const caches = new Set(getScopedPluginCaches());
+  const runtimeCaches = new Set();
+  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (scoped.immutableRuntimeGeneration) {
+      runtimeCaches.add(scoped.cache);
+    } else {
+      caches.add(scoped.cache);
+    }
+  }
+  for (const cache of caches) {
+    if (cache.kind === "operation" && !runtimeCaches.has(cache)) {
+      invalidatePluginCacheMetadata(cache);
+    }
+  }
+}
+
 function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): boolean {
+  if (!scoped.immutableRuntimeGeneration && scoped.metadata !== scoped.cache.metadata) {
+    return false;
+  }
   const cache = getScopedPluginCache();
-  return (
-    cache?.kind !== "operation" ||
-    !scoped.snapshot ||
-    getPluginMetadataSnapshotCache(scoped.snapshot) === cache
-  );
+  return cache?.kind !== "operation" || scoped.cache === cache;
 }
 
 /** Carries one owner-prepared metadata generation through nested async plugin lookups. */
@@ -235,10 +259,13 @@ export function withPluginMetadataSnapshotScope<T>(
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);
   }
-  return withPluginCache(getPluginMetadataSnapshotCache(snapshot), () =>
+  const cache = getPluginMetadataSnapshotCache(snapshot);
+  return withPluginCache(cache, () =>
     scopedPluginMetadataSnapshot.run(
       {
         snapshot,
+        cache,
+        metadata: cache.metadata,
         configFingerprint,
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
         compatiblePolicyHashes,
@@ -415,4 +442,8 @@ export function getCurrentPluginMetadataSnapshot(
 registerPluginMetadataSnapshotReaders({
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
+});
+
+registerPluginMetadataProcessMemoLifecycleClear(revokeCurrentPluginMetadataSnapshotScopes, {
+  owner: "operation",
 });

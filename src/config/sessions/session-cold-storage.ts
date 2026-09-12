@@ -89,7 +89,7 @@ async function runColdMutation(
   if (!retained.found) {
     throw new Error("Cold transcript operation lost its owning database");
   }
-  const { claim } = retained;
+  const { database, claim } = retained;
   try {
     const assertAllowed = () => {
       claim.assertCurrent();
@@ -98,7 +98,7 @@ async function runColdMutation(
     const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
     const [completed] = await withSqliteReclamationAuthorization(
       commitGate,
-      claim.database.db,
+      database.db,
       assertAllowed,
       (authorize) =>
         runSqliteTranscriptArchiveWorkerOperation<{

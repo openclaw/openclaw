@@ -22,6 +22,11 @@ Dreaming is enabled by default. Set
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
 Long-term promotion still writes only to `MEMORY.md`.
+Deep reports summarize why ranked candidates were not promoted, using counts by
+rejection category without copying rejected snippets or source identifiers.
+These counts cover candidates that reached promotion; they do not describe
+entries excluded during ranking. A candidate that changes during the final
+apply check keeps a general change reason rather than an inferred cause.
 An empty sweep records completion in plugin state without creating memory or
 dreaming files, so it does not complete a new workspace's first-run setup.
 Existing daily notes can still receive managed phase-block updates.

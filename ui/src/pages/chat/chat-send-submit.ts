@@ -582,7 +582,6 @@ export async function handleSendChat(
       return;
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
-    let waitingForSettings = Boolean(pendingSettings);
     const applyRunPolicy = hasDirectSessionRun(host) || isInitialChatHistoryUnavailable(host);
     // Only an explicit browser override replaces inherited Gateway policy.
     const followUpMode =
@@ -601,7 +600,7 @@ export async function handleSendChat(
       deliveredAttachments.length ? deliveredAttachments : undefined,
       Boolean(intent) || isChatResetCommand(message),
       submittedAtMs,
-      waitingForSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
+      pendingSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
       replyToId,
       resumedEdit?.orderKey,
       activeRunQueueMode,
@@ -640,8 +639,7 @@ export async function handleSendChat(
       // Retain a picker captured before storage, including its rejected result;
       // delivery follows the latest picker tail before issuing the request.
       pendingSettings ??= getPendingChatPickerPatch(host, submittedSessionKey);
-      waitingForSettings = Boolean(pendingSettings);
-      queued.sendState = waitingForSettings ? "waiting-model" : reconnectSafeQueuedSendState(host);
+      queued.sendState = pendingSettings ? "waiting-model" : reconnectSafeQueuedSendState(host);
     }
     const cleared =
       messageOverride == null
@@ -679,7 +677,7 @@ export async function handleSendChat(
       // A still-open edit means its stored source outlived the rejected write;
       // sending the replacement from memory would strand the original as a duplicate.
       !activeQueuedMessageEdit(host) &&
-      !waitingForSettings &&
+      !pendingSettings &&
       canSendVolatileQueueItem(host, queued, submittedSessionKey);
     if (!admittedDurably && !canSendFromMemory) {
       retireOutboxPayload(queued);

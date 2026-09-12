@@ -167,6 +167,51 @@ describe("Markdown table interactions", () => {
     expect(copy.querySelector("svg rect")).not.toBeNull();
   });
 
+  it.each([true, false])(
+    "shows a failed current table copy without stale success (previous success: %s)",
+    async (previousSuccess) => {
+      vi.useFakeTimers();
+      const execDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+      const legacyCopy = vi.fn(() => false);
+      Object.defineProperty(document, "execCommand", { configurable: true, value: legacyCopy });
+      try {
+        const { owner } = interactiveOwner();
+        const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
+        if (previousSuccess) {
+          copy.click();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(copy.getAttribute("aria-label")).toBe("Copied!");
+          expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
+        }
+
+        writeText.mockRejectedValueOnce(
+          new DOMException("Clipboard access denied", "NotAllowedError"),
+        );
+        copy.click();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(writeText).toHaveBeenLastCalledWith("Name\tValue\nAlpha\tOne");
+        expect(legacyCopy).toHaveBeenCalledExactlyOnceWith("copy");
+        expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+        expect(copy.querySelector("svg rect")).not.toBeNull();
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+
+        copy.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(copy.getAttribute("aria-label")).toBe("Copied!");
+        expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
+        await vi.advanceTimersByTimeAsync(500);
+        expect(copy.getAttribute("aria-label")).toBe("Copied!");
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(copy.getAttribute("aria-label")).toBe("Copy table");
+        expect(copy.querySelector("svg rect")).not.toBeNull();
+      } finally {
+        restoreProperty(document, "execCommand", execDescriptor);
+      }
+    },
+  );
+
   it("restores focus after the table dialog closes", async () => {
     const { owner } = interactiveOwner();
     const expand = owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!;

@@ -6,8 +6,10 @@ import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { createChannelManager } from "./server-channels.js";
-import type { RecoveryFixtureFactory } from "./server-plugin-reload.recovery.test-support.js";
+import {
+  createRecoveryChannelManager,
+  type RecoveryFixtureFactory,
+} from "./server-plugin-reload.recovery.test-support.js";
 
 export async function verifyPreparedSidecarRecovery(
   createFixture: RecoveryFixtureFactory,
@@ -66,12 +68,7 @@ export async function verifyPreparedSidecarRecovery(
       },
     },
   ];
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   let stopping: Promise<void> | undefined;
   try {
@@ -283,12 +280,7 @@ export async function verifyIndependentPostCommitActivation(
       throw failure;
     };
   }
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   const channelIds = ["first-channel", "healthy-channel", "removed-channel"];
   try {
@@ -385,12 +377,7 @@ export async function verifyLifecycleHookSettlement(
       });
     },
   });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   await manager.startChannel("hook-dependent");
   const reloading = fixture.reload().catch((error: unknown) => error);
@@ -484,12 +471,7 @@ export async function verifyIndependentRollbackRestoration(
       },
     }),
   }));
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   try {
     await manager.startChannel("first-restore");

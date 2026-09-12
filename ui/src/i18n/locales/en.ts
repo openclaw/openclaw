@@ -520,11 +520,9 @@ export const en: TranslationMap & {
           "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
         operationFailed: "{prefix}: {error}",
         updateFailed: "Profile update failed",
-        updateFailedStatus: "Profile update failed ({status})",
         publishFailed: "Profile publish failed on all relays.",
         published: "Profile published to relays.",
         importFailed: "Profile import failed",
-        importFailedStatus: "Profile import failed ({status})",
         importedFromRelays: "Profile imported from relays. Review and publish.",
         imported: "Profile imported. Review and publish.",
       },
@@ -1897,6 +1895,8 @@ export const en: TranslationMap & {
       "Unsaved raw config edits — save or discard them before switching to Form.",
     rawDraftBlocksFormEdit:
       "Unsaved raw config edits could not be parsed; resolve them in the Raw editor before changing settings.",
+    rawDraftUnverified:
+      "Cannot verify the raw draft against the saved configuration; reload and retry.",
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
     dismissWarning: "Don't remind again",
     viewPendingChangesRaw: "View pending changes",

@@ -37,7 +37,7 @@ import {
   closeSessionMenus,
   createControllerHost,
   isPlaceTopologyEvent,
-  presenceStateSignature,
+  nodePresenceStateSignature,
 } from "./new-session-runtime.ts";
 import type { SubmissionOutcomeReason } from "./session-placement-recovery-state.ts";
 import { renderAgentSelect, renderNewSessionPlaceControls } from "./target-controls.ts";
@@ -189,7 +189,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       .effect(
         () => this.context?.gateway,
         (gateway) => {
-          this.presenceSignature = presenceStateSignature(
+          this.presenceSignature = nodePresenceStateSignature(
             readPresenceEntries(gateway.snapshot.hello?.snapshot) ?? [],
           );
           return gateway.subscribeEvents((event) => {
@@ -205,7 +205,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             if (!presence) {
               return;
             }
-            const signature = presenceStateSignature(presence);
+            const signature = nodePresenceStateSignature(presence);
             if (signature !== this.presenceSignature) {
               this.presenceSignature = signature;
               void this.gateway.refreshCloudProfiles();

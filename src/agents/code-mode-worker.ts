@@ -94,7 +94,10 @@ function getCodeModePool(url: URL): WorkerTaskPool<unknown, unknown> {
     // A runtime entry change retires its old workers; ordinary runs reuse the
     // process-stable entry while each request still creates an isolated VM.
     void sharedPool?.pool.close();
-    sharedPool = { url: url.href, pool: new WorkerTaskPool({ workerUrl: url }) };
+    sharedPool = {
+      url: url.href,
+      pool: new WorkerTaskPool({ workerUrl: url, sharedCompute: true }),
+    };
   }
   return sharedPool.pool;
 }
@@ -135,6 +138,13 @@ export async function runCodeModeWorker(
       {
         timeoutMs,
         signal,
+        inputBytes: isRecord(workerData)
+          ? isRecord(workerData.snapshot) && workerData.snapshot.memory instanceof Uint8Array
+            ? workerData.snapshot.memory.byteLength
+            : typeof workerData.source === "string"
+              ? workerData.source.length * 2
+              : 0
+          : 0,
         onInputConsumed: inlineHost?.onInputConsumed,
         onRequest: inlineHost
           ? async (value, context): Promise<WorkerTaskResponse> => {

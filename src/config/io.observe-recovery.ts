@@ -10,9 +10,11 @@ import {
 } from "./io.clobber-snapshot.js";
 import {
   readConfigHealthStateFromStore,
+  readConfigHealthStateFromStoreAsync,
   writeConfigHealthStateToStore,
   type ConfigHealthEntry,
   type ConfigHealthFingerprint,
+  type ConfigHealthState,
 } from "./io.health-state.js";
 import {
   createConfigHealthFingerprint,
@@ -411,7 +413,10 @@ function* planSuspiciousConfigRead(
     stat,
     observedAt: now,
   });
-  const healthState = readConfigHealthStateFromStore(deps);
+  const healthState = (yield {
+    sync: () => readConfigHealthStateFromStore(deps),
+    async: () => readConfigHealthStateFromStoreAsync(deps),
+  }) as ConfigHealthState; // SAFETY: Both runners resume with the selected effect's result.
   const entry = readConfigHealthEntry(healthState, configPath);
   const backupPath = `${configPath}.bak`;
   const backupBaseline =

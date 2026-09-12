@@ -41,13 +41,28 @@ async function selectChatPanePlacementTarget(params: {
   const { showSessionPlacementTargetDialog } =
     await import("../../components/session-placement-move-dialog.ts");
   const runtime = params.row.agentRuntime;
+  const gatewayAccess = readSessionMethodAccess(params.gatewaySnapshot, {
+    method: params.mode === "restart" ? "sessions.reclaim" : "sessions.move",
+    requiredScope: "operator.write",
+  });
+  const workerAccess = readSessionMethodAccess(params.gatewaySnapshot, {
+    method: params.mode === "restart" ? "sessions.dispatch" : "sessions.move",
+    requiredScope: "operator.write",
+  });
   return await showSessionPlacementTargetDialog({
     mode: params.mode,
     sessionLabel: params.row.label || params.row.key,
     activeRun: params.row.hasActiveRun === true,
-    deviceDisabledReason:
-      runtime && !runtime.devicePlacement ? t("newSession.deviceRuntimeUnsupported") : undefined,
+    gatewayDisabledReason: gatewayAccess.allowed ? undefined : gatewayAccess.reason,
+    deviceDisabledReason: !workerAccess.allowed
+      ? workerAccess.reason
+      : runtime && !runtime.devicePlacement
+        ? t("newSession.deviceRuntimeUnsupported")
+        : undefined,
     profileDisabledReason: (profile) => {
+      if (!workerAccess.allowed) {
+        return workerAccess.reason;
+      }
       if (runtime?.cloudPlacementSupported === false) {
         return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
       }
@@ -177,7 +192,11 @@ export async function restartChatPanePlacement(params: {
     method: "sessions.dispatch",
     requiredScope: "operator.write",
   });
-  if (!access.allowed) {
+  const localAccess = readSessionMethodAccess(params.gatewaySnapshot, {
+    method: "sessions.reclaim",
+    requiredScope: "operator.write",
+  });
+  if (!access.allowed && !localAccess.allowed) {
     params.publishError(access.reason);
     return;
   }
@@ -187,7 +206,7 @@ export async function restartChatPanePlacement(params: {
     mode: "restart",
     row: params.row,
   });
-  if (!target || target.kind === "gateway") {
+  if (!target) {
     return;
   }
   if (!params.isCurrent(client, params.connectionGeneration)) {
@@ -197,17 +216,29 @@ export async function restartChatPanePlacement(params: {
   const agentId = parseAgentSessionKey(params.row.key)?.agentId;
   params.onRestartingChange(params.row.key);
   try {
-    await client.request("sessions.dispatch", {
-      key: params.row.key,
-      ...(agentId ? { agentId } : {}),
-      ...(target.kind === "profile"
-        ? {
-            profileId: target.profileId,
-            ...(target.os ? { os: target.os } : {}),
-            ...(target.machineClass ? { machineClass: target.machineClass } : {}),
-          }
-        : { deviceId: target.deviceId }),
-    });
+    if (target.kind === "gateway") {
+      await client.request(
+        "sessions.reclaim",
+        {
+          key: params.row.key,
+          ...(agentId ? { agentId } : {}),
+          recoverToGateway: { expectedGeneration: placement.generation },
+        },
+        { timeoutMs: null },
+      );
+    } else {
+      await client.request("sessions.dispatch", {
+        key: params.row.key,
+        ...(agentId ? { agentId } : {}),
+        ...(target.kind === "profile"
+          ? {
+              profileId: target.profileId,
+              ...(target.os ? { os: target.os } : {}),
+              ...(target.machineClass ? { machineClass: target.machineClass } : {}),
+            }
+          : { deviceId: target.deviceId }),
+      });
+    }
     if (params.isCurrent(client, params.connectionGeneration)) {
       await params.refreshReplacement(agentId);
     }

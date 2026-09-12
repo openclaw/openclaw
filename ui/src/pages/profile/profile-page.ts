@@ -71,7 +71,6 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private identityLoading = false;
   @state() private identityBusy: IdentityChange["kind"] | null = null;
   @state() private identityError: string | null = null;
-  @state() private failedHeroAvatarUrl: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -378,11 +377,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       row,
       user: this.selfUser,
       identity: this.context.agentIdentity.get(agentId),
-      resolveImageUrl: (avatarUrl) => this.heroAvatarLoader.resolve(avatarUrl),
-      failedAvatarUrl: this.failedHeroAvatarUrl,
-      onAvatarError: (avatarUrl) => {
-        this.failedHeroAvatarUrl = avatarUrl;
-      },
+      avatarLoader: this.heroAvatarLoader,
     });
   }
 

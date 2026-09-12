@@ -73,10 +73,10 @@ function shape(pathname: string) {
     db.close();
   }
 }
-it("refuses existing-state writes while another owner excludes the physical state file", () => {
+it("refuses existing-state writes while another owner excludes the physical state file", async () => {
   const f = source();
   const before = fs.readFileSync(f.pathname);
-  const held = acquireOpenClawStateDatabaseFileExclusion(f.pathname);
+  const held = await acquireOpenClawStateDatabaseFileExclusion(f.pathname);
   try {
     expect(() => probeExistingWriter(f)).toThrow(/state-handles/);
     expect(fs.readFileSync(f.pathname)).toEqual(before);

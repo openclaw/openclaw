@@ -20,6 +20,8 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
+import { resolveSkillKey } from "../loading/frontmatter.js";
+import { resolveSkillSource } from "../loading/source.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
@@ -30,9 +32,9 @@ import type {
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import {
-  buildSkillIndexEntries,
+  isSkillPromptVisible,
+  isSkillUserInvocable,
   normalizeSkillIndexName,
-  type SkillIndexEntry,
 } from "./skill-index.js";
 import type { SkillInstallOption, SkillStatusEntry, SkillStatusReport } from "./status.types.js";
 export type { SkillStatusEntry, SkillStatusReport } from "./status.types.js";
@@ -176,24 +178,20 @@ type BuildSkillStatusContext = {
   prefs: SkillsInstallPreferences;
   eligibility?: SkillEligibilityContext;
   allowBundled: ReadonlySet<string> | undefined;
-  agentSkillFilter?: string[];
+  agentSkillSet: ReadonlySet<string> | undefined;
   workspaceDir: string;
   clawhubLockRead: ClawHubSkillsLockfileStatusRead;
   managedSkillsDir: string;
   managedLockRead: ClawHubSkillsLockfileStatusRead;
 };
 
-function buildSkillStatus(
-  indexed: SkillIndexEntry,
-  context: BuildSkillStatusContext,
-): SkillStatusEntry {
-  const entry = indexed.entry;
-  const skillKey = indexed.skillKey;
-  const { config, prefs, eligibility, allowBundled, agentSkillFilter, workspaceDir } = context;
+function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): SkillStatusEntry {
+  const skillKey = resolveSkillKey(entry.skill, entry);
+  const { config, prefs, eligibility, allowBundled, agentSkillSet, workspaceDir } = context;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
-  const blockedByAgentFilter = agentSkillFilter !== undefined && !indexed.agentAllowed;
+  const blockedByAgentFilter = agentSkillSet !== undefined && !agentSkillSet.has(entry.skill.name);
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
     isSkillEnvRequirementSatisfied({
@@ -202,8 +200,9 @@ function buildSkillStatus(
       primaryEnv: entry.metadata?.primaryEnv,
     });
   const isConfigSatisfied = (pathStr: string) => isSkillConfigPathTruthy(config, pathStr);
-  const skillSource = indexed.source;
-  const bundled = indexed.bundled;
+  const skillSource = resolveSkillSource(entry.skill);
+  // Loader provenance owns bundled status; a matching name cannot establish source.
+  const bundled = skillSource === "openclaw-bundled" || skillSource === "openclaw-custodian";
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
@@ -221,7 +220,7 @@ function buildSkillStatus(
   // remote node can satisfy is not flagged incompatible.
   const platformIncompatible = missing.os.length > 0;
   const availableToAgent = eligible && !blockedByAgentFilter;
-  const userInvocable = indexed.userInvocable;
+  const userInvocable = isSkillUserInvocable(entry);
 
   // Source ownership survives canonicalization of symlinked managed installs.
   const isGlobalManagedSkill = !bundled && skillSource === "openclaw-managed";
@@ -256,7 +255,7 @@ function buildSkillStatus(
     blockedByAgentFilter,
     eligible,
     platformIncompatible,
-    modelVisible: availableToAgent && indexed.promptVisible,
+    modelVisible: availableToAgent && isSkillPromptVisible(entry),
     userInvocable,
     commandVisible: availableToAgent && userInvocable,
     requirements: required,
@@ -316,21 +315,19 @@ export function buildWorkspaceSkillStatus(
     managedParentDir === path.resolve(workspaceDir)
       ? clawhubLockRead
       : readClawHubSkillsLockfileStatusSync(managedParentDir);
-  const skillIndexEntries = buildSkillIndexEntries(skillEntries, {
-    agentSkillFilter,
-  });
+  const agentSkillSet = agentSkillFilter === undefined ? undefined : new Set(agentSkillFilter);
   return {
     workspaceDir,
     managedSkillsDir,
     agentId: opts?.agentId,
     agentSkillFilter,
-    skills: skillIndexEntries.map((entry) =>
+    skills: skillEntries.map((entry) =>
       buildSkillStatus(entry, {
         config: opts?.config,
         prefs,
         eligibility: opts?.eligibility,
         allowBundled,
-        agentSkillFilter,
+        agentSkillSet,
         workspaceDir,
         clawhubLockRead,
         managedSkillsDir,

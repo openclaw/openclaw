@@ -76,9 +76,9 @@ describe("writeConfigFile canonical reread", () => {
       // new config into place, every subsequent sync read sees corrupt content,
       // so the canonical reread parses invalid.
       let corrupted = false;
-      const realRename = fsNode.promises.rename.bind(fsNode.promises);
-      vi.spyOn(fsNode.promises, "rename").mockImplementation(async (from, to) => {
-        await realRename(from, to);
+      const realRename = fsNode.renameSync;
+      vi.spyOn(fsNode, "renameSync").mockImplementation((from, to) => {
+        realRename(from, to);
         if (to === configPath) {
           corrupted = true;
         }
@@ -247,6 +247,16 @@ describe("writeConfigFile canonical reread", () => {
             : undefined;
         let committed = false;
         let compensationDenied = false;
+        const renameSync = fsNode.renameSync;
+        vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {
+          renameSync(source, destination);
+          if (destination === configPath) {
+            committed = true;
+            if (writer === "direct") {
+              env.OPENCLAW_CONFIG_PATH = `${configPath}.replacement`;
+            }
+          }
+        });
         const rename = fsNode.promises.rename.bind(fsNode.promises);
         vi.spyOn(fsNode.promises, "rename").mockImplementation(async (source, destination) => {
           if (destination === configPath && committed) {
@@ -254,12 +264,6 @@ describe("writeConfigFile canonical reread", () => {
             throw Object.assign(new Error("compensation rename denied"), { code: "EPERM" });
           }
           await rename(source, destination);
-          if (destination === configPath) {
-            committed = true;
-            if (writer === "direct") {
-              env.OPENCLAW_CONFIG_PATH = `${configPath}.replacement`;
-            }
-          }
         });
         if (writer !== "direct") {
           setRuntimeConfigSnapshotRefreshHandler({

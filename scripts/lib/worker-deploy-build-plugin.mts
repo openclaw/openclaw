@@ -23,7 +23,8 @@ export function getPlaywrightUserAgent() { return getUserAgent(); }`;
 const UNDICI_REQUIRE_BOOTSTRAP = [
   'import { createRequire } from "node:module";',
   "const requireUndici = createRequire(import.meta.url);\n",
-  'return requireUndici("undici/index.js") as typeof import("undici");',
+  'let undiciModule: typeof import("undici") | undefined;\n',
+  'return (undiciModule ??= requireUndici("undici/index.js") as typeof import("undici"));',
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
 const WS_REQUIRE_BOOTSTRAP = `require(
@@ -62,9 +63,12 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
   );
   const websocketRuntimePaths = new Set(
-    ["packages/gateway-client/src/websocket.ts", "src/gateway/server-runtime-state.ts"].map(
-      (source) => fs.realpathSync(path.resolve(source)),
-    ),
+    [
+      "packages/gateway-client/src/websocket.ts",
+      "src/gateway/desktop/node-stream-broker.ts",
+      "src/gateway/desktop/observe-bridge.ts",
+      "src/gateway/server-runtime-state.ts",
+    ].map((source) => fs.realpathSync(path.resolve(source))),
   );
   const transcriptionWebsocketPath = fs.realpathSync(
     path.resolve("src/realtime-transcription/websocket-session.ts"),
@@ -136,7 +140,8 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         return code
           .replace(UNDICI_REQUIRE_BOOTSTRAP[0], WORKER_UNDICI_IMPORT)
           .replace(UNDICI_REQUIRE_BOOTSTRAP[1], "")
-          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "return bundledUndici;");
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "")
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[3], "return bundledUndici;");
       }
       if (
         resolvedId !== coreBundlePath ||

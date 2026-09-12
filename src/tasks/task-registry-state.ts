@@ -1,11 +1,15 @@
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
-import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  compareTasksForRunIdLookup,
+  getTaskRelatedSessionIndexKeys,
+  normalizeTaskTimestamps,
+} from "./task-registry-records.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import {
   getTaskRegistryObservers,
@@ -264,14 +268,6 @@ function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: 
 
 type TaskSessionKeys = Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "childSessionKey">;
 
-function getTaskRelatedSessionIndexKeys(task: TaskSessionKeys) {
-  return uniqueStrings(
-    [task.requesterSessionKey, task.ownerKey, task.childSessionKey]
-      .map(normalizeOptionalString)
-      .filter((key): key is string => Boolean(key)),
-  );
-}
-
 export function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
   const key = normalizeOptionalString(task.ownerKey);
   if (!key) {
@@ -406,19 +402,8 @@ export function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
   );
 }
 
-function taskLookupPriority(task: TaskRecord): number {
-  const runtimePriority = task.runtime === "cli" ? 1 : 0;
-  return runtimePriority;
-}
-
 export function pickPreferredRunIdTask(matches: TaskRecord[]): TaskRecord | undefined {
-  return [...matches].toSorted((left, right) => {
-    const priorityDiff = taskLookupPriority(left) - taskLookupPriority(right);
-    if (priorityDiff !== 0) {
-      return priorityDiff;
-    }
-    return left.createdAt - right.createdAt;
-  })[0];
+  return [...matches].toSorted(compareTasksForRunIdLookup)[0];
 }
 
 export function compareTasksNewestFirst(

@@ -1,6 +1,7 @@
 // Exercises restart-notice retries against the real SQLite outbound queue.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
 import { runOutboundDeliveryInternal } from "../infra/outbound/deliver-queue.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
@@ -32,6 +33,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { resolveUpdateRunNoticeTarget } from "./update-run-notice-target.js";
 
 const mocks = vi.hoisted(() => ({
   sendDurableMessageBatch: vi.fn(),
@@ -156,60 +159,95 @@ describe("restart sentinel notice recovery", () => {
     });
   }
 
-  it("sends only the four update milestones across repeated phases and successor startup", async () => {
-    const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
-    setActivePluginRegistry(
-      createTestRegistry([
+  it.each(["owner", "non-owner", "no-owners", "control-ui"] as const)(
+    "sends the four update milestones only to a configured owner (%s)",
+    async (destination) => {
+      const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "matrix",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: async () => ({ channel: "matrix", messageId: "notice" }),
+              },
+            }),
+          },
+        ]),
+      );
+      mocks.sendDurableMessageBatch.mockImplementation(async (request) => {
+        await markAttempt(request);
+        return { status: "sent", results: [{ channel: "matrix", messageId: "notice" }] };
+      });
+      const cfg = {
+        commands: {
+          ownerAllowFrom: destination === "no-owners" ? [] : ["matrix:@owner:example.org"],
+        },
+      };
+      const sessionKey = "agent:main:matrix:direct:contact";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
         {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => ({ channel: "matrix", messageId: "notice" }),
+          sessionId: "update-contact",
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "matrix",
+              to: destination === "owner" ? "@owner:example.org" : "@contact:example.org",
             },
           }),
         },
-      ]),
-    );
-    mocks.sendDurableMessageBatch.mockImplementation(async (request) => {
-      await markAttempt(request);
-      return { status: "sent", results: [{ channel: "matrix", messageId: "notice" }] };
-    });
-    let run = createUpdateRun({
-      trigger: "chat",
-      before: { version: "2026.9.1" },
-      target: { version: "2026.9.2" },
-      origin: { deliveryContext: { channel: "matrix", to: "room:update" } },
-    });
-    const notify = createUpdateRunNotifier(run, {}, {});
-    await notify(run, "ack");
-    await notify(run, "ack");
-    for (const phase of ["staging", "validating", "activating"] as const) {
-      run = recordUpdateRunPhase(run.runId, phase);
+      );
+      let run = createUpdateRun({
+        trigger: destination === "control-ui" ? "control-ui" : "chat",
+        before: { version: "2026.9.1" },
+        target: { version: "2026.9.2" },
+        origin: destination === "control-ui" ? {} : { sessionKey },
+      });
+      const target = resolveUpdateRunNoticeTarget({ cfg, sessionKey: run.origin.sessionKey });
+      expect.soft(target.kind).toBe(destination === "owner" ? "route" : "none");
+      const notify = createUpdateRunNotifier(run, () => cfg, {});
+      await notify(run, "ack");
+      await notify(run, "ack");
+      for (const phase of ["staging", "validating", "activating"] as const) {
+        run = recordUpdateRunPhase(run.runId, phase);
+        await notify(run, "activating");
+      }
       await notify(run, "activating");
-    }
-    await notify(run, "activating");
-    run = recordUpdateRunPhase(run.runId, "verifying");
-    run = recordUpdateRunVerification(run.runId, { booted: true, runningVersion: "2026.9.2" });
-    const successor = createUpdateRunNotifier(run, {}, {});
-    await successor(run, "verifying");
-    await successor(run, "verifying");
-    run = finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.2" } });
-    await successor(run, "finished");
-    await notify(run, "finished");
-    expect(
-      mocks.sendDurableMessageBatch.mock.calls.map(([request]) => request.payloads[0].text),
-    ).toEqual([
-      "⬆️ Updating OpenClaw 2026.9.1 → 2026.9.2. The gateway stays available while the update is validated; you'll get a message here when it finishes.",
-      "⏳ Restarting the gateway now (v2026.9.1 → v2026.9.2)…",
-      "🔁 Back on v2026.9.2, verifying…",
-      renderUpdateRunReport(run).markdown,
-    ]);
-    expect(getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(true);
-    expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
-  });
+      run = recordUpdateRunPhase(run.runId, "verifying");
+      run = recordUpdateRunVerification(run.runId, { booted: true, runningVersion: "2026.9.2" });
+      const successor = createUpdateRunNotifier(run, () => cfg, {});
+      await successor(run, "verifying");
+      await successor(run, "verifying");
+      run = finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.2" } });
+      await successor(run, "finished");
+      await notify(run, "finished");
+      expect(
+        mocks.sendDurableMessageBatch.mock.calls.map(([request]) => request.payloads[0].text),
+      ).toEqual(
+        destination === "owner"
+          ? [
+              "⬆️ Updating OpenClaw 2026.9.1 → 2026.9.2. The gateway stays available while the update is validated; you'll get a message here when it finishes.",
+              "⏳ Restarting the gateway now (v2026.9.1 → v2026.9.2)…",
+              "🔁 Back on v2026.9.2, verifying…",
+              renderUpdateRunReport(run).markdown,
+            ]
+          : [],
+      );
+      expect(getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(destination === "owner");
+      if (destination !== "owner") {
+        for (const kind of ["ack", "activating", "verifying", "finished"]) {
+          expect(
+            deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
+          ).toBeNull();
+        }
+      }
+      expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["sent", "suppressed", "failed", "throw"] as const)(
     "reports %s lifecycle delivery without starting inline recovery",

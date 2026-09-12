@@ -76,29 +76,26 @@ export async function beginDoctorMaintenance(params: {
   const coordinators: Array<{ release(): void }> = [];
   let repairStoresMayBeOpen = false;
   const release = async () => {
+    if (repairStoresMayBeOpen) {
+      const [{ closeOpenClawAgentDatabasesAsync }, { closeOpenClawStateDatabaseByPathAsync }] =
+        await Promise.all([
+          import("../state/openclaw-agent-db.js"),
+          import("../state/openclaw-state-db.js"),
+        ]);
+      // Agent handles release leases through shared state. Keep maintenance
+      // ownership and retry state until both drains succeed.
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+      repairStoresMayBeOpen = false;
+    }
+    for (const coordinator of coordinators.splice(0).toReversed()) {
+      coordinator.release();
+    }
+    const recovery = stopped?.windowsTaskAutoStartRecovery;
     try {
-      if (repairStoresMayBeOpen) {
-        repairStoresMayBeOpen = false;
-        const [{ closeOpenClawAgentDatabasesAsync }, { closeOpenClawStateDatabaseByPath }] =
-          await Promise.all([
-            import("../state/openclaw-agent-db.js"),
-            import("../state/openclaw-state-db.js"),
-          ]);
-        // Agent handles release leases through shared state. Close them before
-        // handing off the coordinators, or the restarted Gateway sees Doctor as a writer.
-        await closeOpenClawAgentDatabasesAsync();
-        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
-      }
+      await serviceMaintenance?.maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
     } finally {
-      for (const coordinator of coordinators.splice(0).toReversed()) {
-        coordinator.release();
-      }
-      const recovery = stopped?.windowsTaskAutoStartRecovery;
-      try {
-        await serviceMaintenance?.maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
-      } finally {
-        await recovery?.complete();
-      }
+      await recovery?.complete();
     }
   };
   try {

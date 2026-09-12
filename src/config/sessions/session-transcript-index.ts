@@ -13,6 +13,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -465,13 +466,18 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
             .flatMap((row) => (row.ftsEntry ? [row.ftsEntry.messageId] : [])),
         ),
       ];
-  for (let offset = 0; offset < removedMessageIds.length; offset += 400) {
+  if (removedMessageIds.length > 0) {
+    // FTS metadata is unindexed; bind larger sets once instead of rescanning every 400 IDs.
     executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("session_transcript_fts")
         .where("session_id", "=", sessionId)
-        .where("message_id", "in", removedMessageIds.slice(offset, offset + 400)),
+        .where(
+          "message_id",
+          "in",
+          removedMessageIds.length <= 400 ? removedMessageIds : sqliteStringSet(removedMessageIds),
+        ),
     );
   }
   executeSqliteQuerySync(

@@ -93,6 +93,9 @@ function pendingTransport(params: {
       }),
   );
   const transport: NodeWorkerSupervisorTransport = {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
     listCurrentNodes: async () => [params.proof],
     hasCurrentRunner: (nodeId) => nodeId === params.proof.nodeId && params.isProofCurrent(),
     isCurrent: () => params.isProofCurrent(),
@@ -283,6 +286,7 @@ describe("worker node desktop carrier", () => {
     });
     carrier.bindRuntime({
       transport: {
+        getCurrentNode: async (nodeId) => (proof.nodeId === nodeId ? proof : undefined),
         listCurrentNodes: async () => [proof],
         hasCurrentRunner: (nodeId) => nodeId === proof.nodeId,
         isCurrent: () => true,
@@ -317,6 +321,7 @@ describe("worker node desktop carrier", () => {
       });
       carrier.bindRuntime({
         transport: {
+          getCurrentNode: async (nodeId) => (proof.nodeId === nodeId ? proof : undefined),
           listCurrentNodes: async () => [proof],
           hasCurrentRunner: (nodeId) => nodeId === proof.nodeId && proofCurrent,
           isCurrent: () => proofCurrent,

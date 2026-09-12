@@ -104,6 +104,7 @@ function formatIgnoredVideoGenerationOverride(override: VideoGenerationIgnoredOv
 
 export async function loadReferenceAssets(params: {
   inputs: string[];
+  roles: string[];
   expectedKind: "image" | "video" | "audio";
   maxBytes: number;
   workspaceDir?: string;
@@ -133,9 +134,16 @@ export async function loadReferenceAssets(params: {
     }),
     mapRemote: (url) => ({ url }),
   });
-  return loaded.map(({ source, resolvedInput, rewrittenFrom }) =>
-    Object.assign({ sourceAsset: source, resolvedInput }, rewrittenFrom ? { rewrittenFrom } : {}),
-  );
+  return loaded.map(({ source, resolvedInput, rewrittenFrom }, index) => {
+    const role = params.roles[index];
+    if (role) {
+      source.role = role;
+    }
+    return Object.assign(
+      { sourceAsset: source, resolvedInput },
+      rewrittenFrom ? { rewrittenFrom } : {},
+    );
+  });
 }
 
 type LoadedReferenceAsset = Awaited<ReturnType<typeof loadReferenceAssets>>[number];

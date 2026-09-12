@@ -31,6 +31,7 @@ import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 import {
   applySelectedSessionProjection,
+  dismissChatError,
   resolveAssistantAttachmentAuthToken,
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
@@ -123,6 +124,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return;
     }
     const onRestartingChange = (restartingKey: string | null) => {
+      if (restartingKey !== null && this.state) {
+        dismissChatError(this.state);
+        this.state.chatRunError = null;
+      }
       if (restartingKey !== null || this.headerPlacementRestartingKey === row.key) {
         this.headerPlacementRestartingKey = restartingKey;
       }

@@ -10,7 +10,8 @@ import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import { CLOUD_PROFILE_RETRY_DELAYS_MS, discoverPlaceCatalog } from "./cloud-profile-discovery.ts";
+import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
+import { requestPlaceCatalog } from "./cloud-target.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -78,6 +79,7 @@ export class DraftGatewayState {
   private catalogRetryAttempt = 0;
   private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private cloudProfileRetryAttempt = 0;
+  private cloudProfileRefresh: Promise<void> | null = null;
   private cloudProfileRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private preferenceScope = "";
   private preferenceModeValue: "local" | "loading" | "remote" = "local";
@@ -117,19 +119,25 @@ export class DraftGatewayState {
           this.gatewayRecoveryScopeValue,
           this.read().runtimeId,
         ] as const,
-      task: ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) =>
-        client ? discoverPlaceCatalog(client, canWrite, isAdmin, runtimeId) : initialState,
+      task: async ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) => {
+        if (!client) {
+          return initialState;
+        }
+        if (!canWrite) {
+          return { profiles: [], environments: [] };
+        }
+        const result = await requestPlaceCatalog(client, runtimeId);
+        return { ...result, profiles: isAdmin ? result.profiles : [] };
+      },
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
         this.applyCloudProfiles(placeCatalog.profiles);
         this.cloudProfilesReadyValue = true;
-        this.callbacks.requestUpdate();
       },
       onError: () => {
         // A failed refresh cannot invalidate this Gateway's last successful place catalog.
         this.scheduleCloudProfileRetry();
-        this.callbacks.requestUpdate();
       },
     });
   }
@@ -207,7 +215,24 @@ export class DraftGatewayState {
       : undefined;
   }
 
-  refreshCloudProfiles() {
+  refreshCloudProfiles(): Promise<void> {
+    if (this.cloudProfileTask.status === TaskStatus.PENDING) {
+      const queued =
+        this.cloudProfileRefresh ??
+        this.cloudProfileTask.taskComplete
+          .catch(() => undefined)
+          .then(() => {
+            if (this.cloudProfileRefresh === queued) {
+              this.cloudProfileRefresh = null;
+              return this.refreshCloudProfiles();
+            }
+            return undefined;
+          });
+      this.cloudProfileRefresh = queued;
+      return queued;
+    }
+    globalThis.clearTimeout(this.cloudProfileRetryTimer);
+    this.cloudProfileRetryTimer = undefined;
     return this.cloudProfileTask.run();
   }
 
@@ -297,6 +322,7 @@ export class DraftGatewayState {
   }
 
   invalidateDiscovery(resetHostSelection: boolean, submissionOutcome: SubmissionOutcomeReason) {
+    this.cloudProfileRefresh = null;
     // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
     void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.cloudProfilesValue = [];
@@ -462,6 +488,7 @@ export class DraftGatewayState {
   }
 
   disconnect() {
+    this.cloudProfileRefresh = null;
     this.gatewaySource = null;
     this.gatewayClientValue = null;
     this.gatewayConnectedValue = false;

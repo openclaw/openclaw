@@ -877,6 +877,55 @@ describe("prepared model catalog worker boundary", () => {
     expect(loggedOut?.authStore.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
   });
 
+  it("keeps accepted catalog and auth work alive after overload and permits later refresh", async () => {
+    const fixture = await createReadyWorkerFixture(0);
+    const barrier = `${fixture.marker}.hold`;
+    fs.writeFileSync(barrier, "", "utf8");
+    const catalog = fixture.snapshot.loadFullModelCatalog!();
+    void catalog.catch(() => {});
+    const accepted: ReturnType<typeof loadPreparedModelRuntimeAuth>[] = [];
+    try {
+      await waitForMarker(fixture.marker);
+      // Alternating scopes reach the worker instead of sharing the latest auth request.
+      for (let index = 0; index < 127; index += 1) {
+        const auth = loadPreparedModelRuntimeAuth(fixture.snapshot, {
+          providerIds: index % 2 === 0 ? [PROVIDER_ID] : [PROVIDER_ID, SHARED_AUTH_PROVIDER_ID],
+        });
+        void auth.catch(() => {});
+        accepted.push(auth);
+      }
+      await expect(
+        loadPreparedModelRuntimeAuth(fixture.snapshot, {
+          providerIds: [PROVIDER_ID, SHARED_AUTH_PROVIDER_ID],
+        }),
+      ).rejects.toMatchObject({ name: "WorkerTaskError", code: "overloaded" });
+      fs.rmSync(barrier);
+
+      const outcomes = await Promise.allSettled([catalog, ...accepted]);
+      expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([]);
+      expect((await catalog).entries).toContainEqual(
+        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+      );
+      fs.writeFileSync(fixture.externalAuthPath, "B", "utf8");
+      const refreshedAuth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+        providerIds: [PROVIDER_ID],
+      });
+      expect(refreshedAuth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
+        access: "v1:B",
+      });
+      const refreshedCatalog = await fixture.snapshot.loadFullModelCatalog!({ refresh: true });
+      expect(refreshedCatalog.entries).toContainEqual(
+        expect.objectContaining({
+          provider: PROVIDER_ID,
+          id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
+        }),
+      );
+    } finally {
+      fs.rmSync(barrier, { force: true });
+      await Promise.allSettled([catalog, ...accepted]);
+    }
+  });
+
   it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
     const fixture = await createReadyWorkerFixture(0);
     const barrier = `${fixture.marker}.hold`;

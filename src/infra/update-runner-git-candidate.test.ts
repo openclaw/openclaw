@@ -20,6 +20,8 @@ async function git(root: string, ...args: string[]) {
 }
 
 const runtimeImports = [
+  "../dist-runtime/identity.cjs",
+  "../packages/runtime/dist-runtime/identity.cjs",
   "../node_modules/identity.cjs",
   "workspace-runtime",
   "relative-workspace-runtime",
@@ -41,11 +43,7 @@ async function writeRuntime(directory: string, sha: string, store: string, layou
   const root = await fs.realpath(directory);
   const dist = path.join(root, "dist");
   const external = path.join(store, sha);
-  await fs.mkdir(external, { recursive: true });
-  await fs.writeFile(path.join(external, "index.js"), `module.exports = ${JSON.stringify(sha)};`);
   await fs.mkdir(path.join(dist, "control-ui"), { recursive: true });
-  await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
-  await fs.mkdir(path.join(root, "packages", "runtime", "node_modules"), { recursive: true });
   const virtualStore =
     layout === "external"
       ? path.join(store, "virtual-store")
@@ -57,11 +55,17 @@ async function writeRuntime(directory: string, sha: string, store: string, layou
     await fs.symlink(linkedStore, virtualStore, "junction");
   }
   const virtualPackage = path.join(virtualStore, sha, "node_modules", "virtual-runtime");
-  await fs.mkdir(virtualPackage, { recursive: true });
-  await fs.writeFile(
+  for (const file of [
+    path.join(external, "index.js"),
     path.join(virtualPackage, "index.js"),
-    `module.exports = ${JSON.stringify(sha)};`,
-  );
+    path.join(root, "node_modules", "identity.cjs"),
+    path.join(root, "packages", "runtime", "node_modules", "nested.cjs"),
+    path.join(root, "dist-runtime", "identity.cjs"),
+    path.join(root, "packages", "runtime", "dist-runtime", "identity.cjs"),
+  ]) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, `module.exports = ${JSON.stringify(sha)};`);
+  }
   await fs.rm(path.join(root, "node_modules", "workspace-runtime"), { force: true });
   await fs.symlink(
     path.join(root, "packages", "runtime"),
@@ -92,14 +96,6 @@ async function writeRuntime(directory: string, sha: string, store: string, layou
             ? virtualStore
             : path.relative(path.join(root, "node_modules"), virtualStore),
       }),
-    ),
-    fs.writeFile(
-      path.join(root, "packages", "runtime", "node_modules", "nested.cjs"),
-      `module.exports = ${JSON.stringify(sha)};`,
-    ),
-    fs.writeFile(
-      path.join(root, "node_modules", "identity.cjs"),
-      `module.exports = ${JSON.stringify(sha)};`,
     ),
     fs.writeFile(
       path.join(dist, "entry.js"),
@@ -157,7 +153,7 @@ describe("Git candidate activation", () => {
     );
     await fs.writeFile(
       path.join(remote, ".gitignore"),
-      "node_modules/\ndist/\n.artifacts\n.pnpm\ncache/\n",
+      "node_modules/\ndist/\ndist-runtime/\n.artifacts\n.pnpm\ncache/\n",
     );
     await git(remote, "add", ".");
     await git(remote, "commit", "-m", "base");
