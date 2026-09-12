@@ -18,6 +18,7 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
@@ -37,6 +38,24 @@ import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
+
+const FILE_WRAP_PREFERENCE_KEY = "openclaw.control.fileView.wrap.v1";
+
+function loadFileWrapPreference(): boolean {
+  try {
+    return getSafeLocalStorage()?.getItem(FILE_WRAP_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveFileWrapPreference(wrap: boolean): void {
+  try {
+    getSafeLocalStorage()?.setItem(FILE_WRAP_PREFERENCE_KEY, String(wrap));
+  } catch {
+    // Preference persistence is best effort.
+  }
+}
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
@@ -59,6 +78,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @state() private visibleContent: ChatDetailPanelContent | null = null;
   @state() private error: Error | null = null;
   @state() private fileSearchOpen = false;
+  @state() private fileWrap = loadFileWrapPreference();
   @state() private fileSearchQuery = "";
   @state() private fileSearchMatchIndex = 0;
   @state() private fileEditorMenuOpen = false;
@@ -219,6 +239,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           content: this.fileDraftContent ?? current.content,
           name: current.name,
           editable: this.fileEditing,
+          wrap: this.fileWrap,
           onSave: this.saveFile,
         });
         if (
@@ -290,6 +311,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       editor.setContent(content.content);
     }
     editor.setEditable(this.fileEditing && !this.fileReloading);
+    editor.setLineWrapping(this.fileWrap);
     const matches = this.fileSearchMatches();
     editor.setDecorations({
       targetLine: content.line,
@@ -322,6 +344,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       this.fileEditor?.scrollToLine(line, true);
     }
   }
+
+  private readonly toggleFileWrap = () => {
+    this.fileWrap = !this.fileWrap;
+    saveFileWrapPreference(this.fileWrap);
+  };
 
   private readonly toggleFileSearch = () => {
     this.fileSearchOpen = !this.fileSearchOpen;
@@ -659,6 +686,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         saveNotice: this.fileSaveNotice,
         saving: this.fileSaving,
         searchOpen: this.fileSearchOpen,
+        wrap: this.fileWrap,
         onCopy: this.copyFileValue,
         onDiscard: this.discardFileEdits,
         onEdit: this.editFile,
@@ -675,6 +703,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           this.fileEditorMenuOpen = open;
         },
         onToggleSearch: this.toggleFileSearch,
+        onToggleWrap: this.toggleFileWrap,
       },
       canvasPluginSurfaceUrl: this.canvasPluginSurfaceUrl,
       embedSandboxMode: this.embedSandboxMode,

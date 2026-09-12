@@ -343,6 +343,10 @@ export const icons = {
     <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />`),
   search: strokeIcon(svg` <circle cx="11" cy="11" r="8" />
     <path d="m21 21-4.3-4.3" />`),
+  wrapText: strokeIcon(svg` <path d="M3 6h18" />
+    <path d="M3 12h15a3 3 0 1 1 0 6h-4" />
+    <path d="m16 16-2 2 2 2" />
+    <path d="M3 18h7" />`),
   brain: strokeIcon(svg` <path
       d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
     />

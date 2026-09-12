@@ -1416,6 +1416,15 @@ openclaw-session-discussion {
   caret-color: var(--text);
 }
 
+/* Word wrap: the editor wraps long lines at the panel width instead of scrolling. */
+.sidebar-file-view--wrap .cm-content {
+  min-width: 0;
+}
+
+.sidebar-file-view__wrap[aria-pressed="true"] {
+  color: var(--accent);
+}
+
 .sidebar-file-view .cm-line {
   padding: 0 12px 0 8px;
 }
