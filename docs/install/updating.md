@@ -184,17 +184,15 @@ starting the Gateway.
 
 ### From chat
 
-Send `/update` to update OpenClaw from Discord or another connected chat. This
-owner-only command works with the default tool profiles; it does not require
-adding the `gateway` tool to an allowlist.
+Ask the agent to update OpenClaw, or send `/update` from Discord or another
+connected chat. Natural-language requests use the existing `gateway` tool's
+`update.run` action. The minimal, coding, and messaging profiles expose that update
+action without granting configuration reads or other Gateway controls. Explicit tool
+restrictions still apply.
 
-A direct request such as "update OpenClaw" offers an **Update now** button where
-the channel supports buttons, with `/update` as the text fallback. Offering the
-button does not start an update. Clicking it runs the same command under the
-clicking user's current permissions. A rejected click does not invalidate the
-button; every click is a fresh owner-checked command. For other wording, the agent can guide you
-to `/update`; agents explicitly granted the `gateway` tool can also use
-`update.run` for a user-requested update.
+`/update` is the model-independent fallback: it works without a functioning model
+or access to the `gateway` tool. The tool, slash command, and Control UI all use
+the same Gateway update handler and current authorization checks.
 
 The candidate validates while the old Gateway serves, and an already-current
 update restarts it only when plugins change. Update runs can send these notices

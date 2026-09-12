@@ -455,6 +455,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       ? []
       : [
           createGatewayTool({
+            allowConfigReads: options?.gatewayConfigReadAllowed === true,
             senderIsOwner: options?.senderIsOwner,
             requesterSenderId: options?.requesterSenderId,
           }),
