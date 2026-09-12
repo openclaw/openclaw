@@ -11,6 +11,7 @@ import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
+import { cronDeliveryHasRedundantTelegramThreadId } from "./delivery-topic-routing.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -189,7 +190,10 @@ function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
   };
 }
 
-function coerceDelivery(delivery: UnknownRecord) {
+function coerceDelivery(
+  delivery: UnknownRecord,
+  options?: { preserveRedundantThreadId?: boolean },
+) {
   const next = snapshotOwnCronRecord(delivery);
   const parsed = parseDeliveryInput(next);
   if (parsed.mode !== undefined) {
@@ -216,6 +220,9 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if (parsed.threadId !== undefined) {
     next.threadId = parsed.threadId;
   } else if ("threadId" in next) {
+    delete next.threadId;
+  }
+  if (!options?.preserveRedundantThreadId && cronDeliveryHasRedundantTelegramThreadId(next)) {
     delete next.threadId;
   }
   if ("accountId" in next && next.accountId === null) {
@@ -530,7 +537,9 @@ export function normalizeCronJobInput(
   }
 
   if (isRecord(base.delivery)) {
-    next.delivery = coerceDelivery(base.delivery);
+    next.delivery = coerceDelivery(base.delivery, {
+      preserveRedundantThreadId: !options.applyDefaults,
+    });
   }
 
   if (options.applyDefaults) {
