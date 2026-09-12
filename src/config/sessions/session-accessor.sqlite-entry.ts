@@ -335,20 +335,21 @@ function listSqliteSessionEntriesFromDatabase(
     latest: scope.readConsistency === "latest",
     projection,
   });
-  return projectSessionEntriesForListing(
-    snapshot,
-    projection === "list" && scope.clone !== false,
-    sessionKeys,
+  return Array.from(
+    iterateSessionEntriesForListing(
+      snapshot,
+      projection === "list" && scope.clone !== false,
+      sessionKeys,
+    ),
   );
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
-export function projectSessionEntriesForListing(
+export function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
   sessionKeys?: ReadonlySet<string>,
-): SessionEntrySummary[] {
-  const entries: SessionEntrySummary[] = [];
+): IterableIterator<SessionEntrySummary> {
   for (const sessionKey of snapshot.keys) {
     if (isInternalSessionEffectsKey(sessionKey)) {
       continue;
@@ -368,12 +369,11 @@ export function projectSessionEntriesForListing(
       continue;
     }
     // Full snapshots own their nested values; list snapshots may share cached entries.
-    entries.push({
+    yield {
       sessionKey,
       entry: cloneEntries ? cloneSessionEntry(entry) : entry,
-    });
+    };
   }
-  return entries;
 }
 
 /** Lists only entries whose normalized session row has one of the requested statuses. */
