@@ -103,6 +103,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             { allowEmbeddingBootstrapFallback: true },
           );
         } catch (err) {
+          if (err instanceof WorkerTaskError && err.code === "overloaded") {
+            throw err;
+          }
           if (this.providerRequirement.mode === "optional" && this.shouldFallbackOnError(err)) {
             const failedProvider = this.provider?.id ?? this.settings.provider;
             await this.retireCurrentProvider().catch((retireErr: unknown) => {
@@ -114,6 +117,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             this.markEmbeddingBootstrapFailure(err, { provider: failedProvider });
             await this.syncAdmitted({ reason: "search", force: true }).catch(
               (fallbackErr: unknown) => {
+                if (fallbackErr instanceof WorkerTaskError && fallbackErr.code === "overloaded") {
+                  throw fallbackErr;
+                }
                 const message = redactSensitiveText(formatErrorMessage(fallbackErr), {
                   mode: "tools",
                 });
@@ -200,6 +206,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           { reason: "search", force: true },
           { allowEmbeddingBootstrapFallback: true },
         ).catch((err: unknown) => {
+          if (err instanceof WorkerTaskError && err.code === "overloaded") {
+            throw err;
+          }
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
         });
       }

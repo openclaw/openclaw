@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
@@ -253,48 +254,65 @@ describe("memory index", () => {
     },
   );
 
-  it.each(["lexical", "hybrid", "vector"] as const)(
+  it.each(["bootstrap", "identity-repair", "lexical", "hybrid", "vector"] as const)(
     "rejects %s retrieval when shared worker admission is full and recovers after drain",
     async (mode) => {
       const cfg = createCfg({ vectorEnabled: false, minScore: 0 });
-      if (mode === "vector") {
-        cfg.memory = {
-          ...cfg.memory,
-          search: {
-            ...cfg.memory?.search,
-            query: { minScore: 0, hybrid: { enabled: false } },
-          },
-        };
-      }
       const manager = await getPersistentManager(cfg);
-      await manager.sync({ reason: "test" });
+      if (mode !== "bootstrap") {
+        await manager.sync({ reason: "test" });
+      }
+      if (mode === "identity-repair") {
+        openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
+          "DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'",
+        );
+        expect(manager.status().chunks).toBeGreaterThan(0);
+        expect(manager.status().custom?.indexIdentity).toMatchObject({ status: "missing" });
+      }
       const capacityOwner = new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
         maxWorkers: 1,
         sharedCompute: true,
       });
       const preparation = createDeferred<never>();
-      const accepted = Promise.allSettled(
-        Array.from({ length: 128 }, () => capacityOwner.run(() => preparation.promise, {})),
-      );
+      let accepted: Promise<PromiseSettledResult<unknown>[]> = Promise.resolve([]);
+      const occupyAdmission = () => {
+        accepted = Promise.allSettled(
+          Array.from({ length: 128 }, () => capacityOwner.run(() => preparation.promise, {})),
+        );
+      };
+      if (mode === "vector") {
+        providerFixture.beforeEmbedQuery = async () => {
+          occupyAdmission();
+        };
+      } else {
+        occupyAdmission();
+      }
+      const vectorSearch = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback");
+      const query = mode === "vector" ? "alpha zebra" : "zebra";
       const embeddingCalls = providerFixture.embedQueryCalls;
       try {
         await expect(
-          manager.search("zebra", { lexicalOnly: mode === "lexical" }),
+          manager.search(query, { lexicalOnly: mode === "lexical" }),
         ).rejects.toMatchObject({
           name: "WorkerTaskError",
           code: "overloaded",
         });
-        if (mode !== "vector") {
+        if (mode === "vector") {
+          expect(providerFixture.embedQueryCalls).toBe(embeddingCalls + 1);
+          expect(vectorSearch).toHaveBeenCalledOnce();
+        } else {
           expect(providerFixture.embedQueryCalls).toBe(embeddingCalls);
         }
       } finally {
+        providerFixture.beforeEmbedQuery = null;
+        vectorSearch.mockRestore();
         const closed = capacityOwner.close();
         preparation.reject(new Error("release test capacity"));
         await closed;
         await accepted;
       }
-      const results = await manager.search("zebra", { lexicalOnly: mode === "lexical" });
+      const results = await manager.search(query, { lexicalOnly: mode === "lexical" });
       expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
     },
   );
