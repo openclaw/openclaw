@@ -185,4 +185,33 @@ describe("runCommand", () => {
       expect(testing.clarifyNodeExecCwdSpawnError(enoent(message), "/unreadable")).toBe(message);
     });
   });
+
+  // Runs the real cmd.exe, so it only reports on a Windows host. The
+  // cross-platform wiring assertions live in invoke.windows-cmd-quoting.test.ts.
+  describe.runIf(process.platform === "win32")("Windows cmd payload quoting", () => {
+    it("delivers a quoted argument to the child without added escapes", async () => {
+      const url = "https://tenant.example.com/";
+      const result = await testing.runCommand(
+        ["cmd.exe", "/d", "/s", "/c", `echo "${url}"`],
+        undefined,
+        undefined,
+        undefined,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.stdout.trim()).toBe(`"${url}"`);
+    });
+
+    it("delivers a payload that itself begins and ends with a quote", async () => {
+      const result = await testing.runCommand(
+        ["cmd.exe", "/d", "/s", "/c", '"C:\\Windows\\System32\\cmd.exe" /c echo "tail"'],
+        undefined,
+        undefined,
+        undefined,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.stdout.trim()).toBe('"tail"');
+    });
+  });
 });

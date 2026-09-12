@@ -341,6 +341,56 @@ function clarifyNodeExecCwdSpawnError(
   return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
 }
 
+const WINDOWS_CMD_SWITCHES = ["/d", "/s", "/c"] as const;
+
+/**
+ * The gateway hands the node host a complete `cmd` command line as a single argv
+ * entry (`["cmd.exe", "/d", "/s", "/c", payload]`). Without
+ * `windowsVerbatimArguments` Node applies its own per-argument quoting to that
+ * payload, which inserts backslashes before every quote it contains, so the
+ * command that runs is not the command that was sent.
+ *
+ * The payload is wrapped in one extra pair of quotes as well: with `/s`, cmd
+ * strips the first and last quote of the whole command line, so a payload that
+ * already begins and ends with a quote loses them when only the verbatim flag
+ * is set. Wrapping gives `/s` a pair to consume and leaves the payload intact.
+ *
+ * Anything that is not the canonical five-element `cmd.exe` invocation keeps its
+ * current behavior: PowerShell, direct executables, other `cmd` paths,
+ * non-canonical argv and non-Windows hosts.
+ */
+function prepareWindowsCmdInvocation(argv: string[]): {
+  argv: string[];
+  windowsVerbatimArguments?: boolean;
+} {
+  if (process.platform !== "win32" || argv.length !== WINDOWS_CMD_SWITCHES.length + 2) {
+    return { argv };
+  }
+  if (!argv.every((entry) => typeof entry === "string")) {
+    return { argv };
+  }
+  const switchesMatch = WINDOWS_CMD_SWITCHES.every(
+    (expected, index) => argv[index + 1]?.toLowerCase() === expected,
+  );
+  if (!switchesMatch) {
+    return { argv };
+  }
+  const executable = argv[0] ?? "";
+  const windowsRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+  const trustedAbsoluteCmd =
+    /^[A-Za-z]:[\\/]/.test(windowsRoot) &&
+    path.win32.normalize(executable).toLowerCase() ===
+      path.win32.join(windowsRoot, "System32", "cmd.exe").toLowerCase();
+  if (executable.toLowerCase() !== "cmd.exe" && !trustedAbsoluteCmd) {
+    return { argv };
+  }
+  const payload = argv[WINDOWS_CMD_SWITCHES.length + 1] ?? "";
+  return {
+    argv: [...argv.slice(0, WINDOWS_CMD_SWITCHES.length + 1), `"${payload}"`],
+    windowsVerbatimArguments: true,
+  };
+}
+
 async function runCommand(
   argv: string[],
   cwd: string | undefined,
@@ -349,7 +399,9 @@ async function runCommand(
   signal?: AbortSignal,
 ): Promise<RunResult> {
   try {
-    const result = await runCommandWithTimeout(argv, {
+    const invocation = prepareWindowsCmdInvocation(argv);
+    const result = await runCommandWithTimeout(invocation.argv, {
+      ...(invocation.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
       baseEnv: env,
       cwd,
       killProcessTree: true,
