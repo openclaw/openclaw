@@ -496,14 +496,16 @@ function writeReport(reports, results) {
       "",
     );
   }
-  reports.forEach(assertReportReservation);
   for (const [reservation, contents] of [
     [reports[0], `${JSON.stringify(report, null, 2)}\n`],
     [reports[1], `${lines.join("\n")}\n`],
   ]) {
+    assertReportReservation(reservation);
     ftruncateSync(reservation.fd, 0);
     writeFileSync(reservation.fd, contents, "utf8");
+    assertReportReservation(reservation);
   }
+  reports.forEach(assertReportReservation);
 }
 function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
   const platform = params.platform ?? process.platform;

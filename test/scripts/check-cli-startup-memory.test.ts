@@ -506,6 +506,95 @@ describe("check-cli-startup-memory", () => {
         },
       );
 
+      it.each([
+        ["summary after the json write", "summary", 1],
+        ["json during the summary write", "json", 2],
+      ] as const)("rejects a replaced %s", (_label, replacedOutput, replacementWrite) => {
+        const tempRoot = tempRoots.make("openclaw-startup-memory-publication-race-");
+        const jsonPath = path.join(tempRoot, "startup-memory.json");
+        const summaryPath = path.join(tempRoot, "summary.md");
+        const replacedPath = replacedOutput === "json" ? jsonPath : summaryPath;
+        const otherPath = replacedOutput === "json" ? summaryPath : jsonPath;
+        const displacedPath = path.join(tempRoot, `reserved-${replacedOutput}`);
+        const replacement = "replacement survives\n";
+        const displacedSeed = "reserved report survives\n";
+        const scriptUrl = pathToFileURL(
+          path.resolve(__dirname, "..", "..", "scripts/check-cli-startup-memory.mjs"),
+        ).href;
+        const result = spawnSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "--eval",
+            `
+              import fs from "node:fs";
+              import { syncBuiltinESMExports } from "node:module";
+              const originalWriteFileSync = fs.writeFileSync;
+              let reportWrites = 0;
+              fs.writeFileSync = function (file, ...args) {
+                const result = originalWriteFileSync.call(this, file, ...args);
+                if (typeof file === "number" && ++reportWrites === ${replacementWrite}) {
+                  ${
+                    replacedOutput === "summary"
+                      ? `originalWriteFileSync(${JSON.stringify(replacedPath)}, ${JSON.stringify(displacedSeed)});`
+                      : ""
+                  }
+                  fs.renameSync(${JSON.stringify(replacedPath)}, ${JSON.stringify(displacedPath)});
+                  originalWriteFileSync(${JSON.stringify(replacedPath)}, ${JSON.stringify(replacement)});
+                }
+                return result;
+              };
+              syncBuiltinESMExports();
+              const { testing } = await import(${JSON.stringify(scriptUrl)});
+              let failure;
+              const originalLog = console.log;
+              console.log = () => {};
+              try {
+                testing.runStartupMemoryCheck(
+                  ["--json", ${JSON.stringify(jsonPath)}, "--summary", ${JSON.stringify(summaryPath)}],
+                  {
+                    platform: process.platform,
+                    spawnSync: () => ({
+                      signal: null,
+                      status: 0,
+                      stderr: "__OPENCLAW_MAX_RSS_KB__=1024\\n",
+                      stdout: "",
+                    }),
+                  },
+                );
+              } catch (error) {
+                failure = error;
+              } finally {
+                console.log = originalLog;
+              }
+              process.stdout.write(JSON.stringify({
+                failure: failure instanceof Error ? failure.message : null,
+                reportWrites,
+                otherExists: fs.existsSync(${JSON.stringify(otherPath)}),
+                replacement: fs.readFileSync(${JSON.stringify(replacedPath)}, "utf8"),
+                displaced: fs.readFileSync(${JSON.stringify(displacedPath)}, "utf8"),
+              }));
+            `,
+          ],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).toBe(0);
+        expect(result.stderr).toBe("");
+        const output = JSON.parse(result.stdout);
+        expect(output).toMatchObject({
+          failure: "--json or --summary changed during startup benchmarks",
+          reportWrites: replacementWrite,
+          otherExists: false,
+          replacement,
+        });
+        if (replacedOutput === "summary") {
+          expect(output.displaced).toBe(displacedSeed);
+        } else {
+          expect(JSON.parse(output.displaced)).toMatchObject({ status: "pass" });
+        }
+      });
+
       it("publishes failure reports before surfacing a benchmark failure", () => {
         const tempRoot = tempRoots.make("openclaw-startup-memory-failure-");
         const jsonPath = path.join(tempRoot, "startup-memory.json");
