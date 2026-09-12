@@ -1,15 +1,17 @@
 import { vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
   ModelsProbeResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
   RuntimeConfigExternalMutationResult,
 } from "../../lib/config/config-gateway-operations.ts";
+import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import type { ModelBehaviorConfig } from "./config-mutation.ts";
 import type { DefaultModelSelection } from "./data.ts";
@@ -35,7 +37,7 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   profileOrders: Record<string, string[]>;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
-  refresh: (opts: { force: boolean }) => Promise<void>;
+  refresh: (reason: "forced") => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
   saveDefaults: () => Promise<void>;
@@ -249,6 +251,17 @@ export function createHarness(initialScopeId: string) {
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
     notifyRuntimeConfig: () => runtimeConfigListener?.(),
+    publishEvent: (event: GatewayEventFrame) => {
+      // The app invalidates shared facts before delivering publication events to pages.
+      if (
+        snapshot.client &&
+        (event.event === "config.changed" || event.event === "chat.metadata.changed")
+      ) {
+        invalidateModelAuthStatusRequests(snapshot.client);
+        invalidateChatMetadataStore(snapshot.client);
+      }
+      gatewaySource.publishEvent(event);
+    },
     request,
     runtimeConfig,
     snapshot,

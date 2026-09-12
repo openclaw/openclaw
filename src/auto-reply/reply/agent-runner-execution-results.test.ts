@@ -282,7 +282,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
           attempt: 1,
           total: 2,
         }),
-      ).toBeNull();
+      ).toBeUndefined();
       return {
         result,
         provider: "openai",
@@ -314,6 +314,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       didStream: vi.fn(() => false),
       isAborted: vi.fn(() => false),
       hasSentPayload: vi.fn(() => false),
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: vi.fn(() => []),
     };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
@@ -330,7 +331,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
           attempt: 1,
           total: 2,
         }),
-      ).toBeNull();
+      ).toBeUndefined();
       return {
         result,
         provider: "openai",

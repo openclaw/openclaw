@@ -13,6 +13,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -64,6 +65,51 @@ beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
+
+  it.each([false, true])(
+    "reports agent refusal before runtime loading (aborted: %s)",
+    async (aborted) => {
+      const refusal = {
+        agentId: "cleaner",
+        paths: ["/synthetic/agents/cleaner/openclaw-agent.cleaner.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch" as const,
+        reason: "Refused agent cleaner: its database belongs to main.",
+        repairHint: "Keep the main copy and quarantine the divergent cleaner copy, then restart.",
+      };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, cleaner: {} } } };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "must not run" }));
+      const abort = new AbortController();
+      if (aborted) {
+        abort.abort();
+      }
+      recordAgentDatabaseAdmissions([refusal]);
+      try {
+        const result = await dispatchReplyFromConfig({
+          ctx: buildTestCtx({ AgentId: "cleaner", SessionKey: "agent:cleaner:main" }),
+          cfg,
+          dispatcher,
+          replyResolver,
+          usePublishedModelRuntime: true,
+          replyOptions: { abortSignal: abort.signal },
+        });
+        expect(result.queuedFinal).toBe(!aborted);
+        if (aborted) {
+          expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        } else {
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+            text: `${refusal.reason}\n${refusal.repairHint}`,
+            isError: true,
+          });
+        }
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+      } finally {
+        recordAgentDatabaseAdmissions([]);
+      }
+    },
+  );
 
   function createActiveSlackThread(userId: string) {
     setNoAbort();

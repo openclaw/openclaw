@@ -1,5 +1,6 @@
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
@@ -7,6 +8,7 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -129,11 +131,14 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
-    await assertUpdateRecoveryAdmission({
-      env: params.ownedManagedUpdateEnv ?? params.opts.run?.env,
-    });
+    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+    // Keep the first target stable if selectors change during admission.
+    const targetPath = resolveOpenClawStateSqlitePath(env);
+    await assertUpdateRecoveryAdmission({ env, path: targetPath });
     if (params.opts.run) {
-      await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+      if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
+        await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+      }
       const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
       if (prior && prior.status !== "running" && settlementFailed) {
         throw new Error("Update history was already finalized by another owner.");
@@ -227,12 +232,12 @@ export async function reportUnreportedUpdateAdmissionOutcome(error: unknown): Pr
   );
 }
 
-export async function reportPreMutationUpdateFailure(
-  params: UpdateAdmissionReportParams,
+export async function reportPreMutationUpdateResult(
+  params: UpdateAdmissionReportParams & { status?: "error" | "skipped" },
 ): Promise<never> {
   const result = await publishPreMutationUpdateOutcome(params, async () => ({
-    status: "error",
-    ...(params.opts.dryRun !== true
+    status: params.status ?? "error",
+    ...(params.opts.dryRun !== true && params.status !== "skipped"
       ? {
           recovery: await (params.installKind === "git"
             ? readCurrentGitUpdateRecovery(params.root)
@@ -242,7 +247,7 @@ export async function reportPreMutationUpdateFailure(
   }));
   throw new UpdateCommandFailure(
     result,
-    resolveManagedServiceUpdateFailureExitCode(result),
+    params.status === "skipped" ? 0 : resolveManagedServiceUpdateFailureExitCode(result),
     params.message,
   );
 }
@@ -261,13 +266,17 @@ async function publishPreMutationUpdateOutcome(
       { env: run.env },
     );
   }
+  const outcome = await prepareOutcome();
   const result = completeUpdateCommandRun(
     {
-      ...(await prepareOutcome()),
+      ...outcome,
       mode: params.installKind === "git" ? "git" : "unknown",
       root: params.root,
       reason: params.reason,
       steps: [],
+      ...(outcome.status === "skipped"
+        ? { before: { version: await readPackageVersion(params.root) } }
+        : {}),
       durationMs: 0,
     },
     params.opts.run,

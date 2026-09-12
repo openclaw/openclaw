@@ -94,7 +94,7 @@ function writeExecCall(response: ServerResponse): void {
   ]);
 }
 
-export function repairIsolationProvider() {
+export function repairIsolationProvider(beforeRepair?: () => Promise<void>) {
   const errors: unknown[] = [];
   let issuedRepair = false;
   let requestCount = 0;
@@ -117,6 +117,7 @@ export function repairIsolationProvider() {
         requestCount += 1;
         if (!issuedRepair && body.tools?.some((tool) => tool.name === "exec")) {
           issuedRepair = true;
+          await beforeRepair?.();
           writeExecCall(response);
           return;
         }
@@ -167,6 +168,9 @@ let doctor;
 if (configChange) {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   config.logging = { ...config.logging, level: 'debug' };
+  config.meta = { ...config.meta, lastTouchedVersion: '2026.9.3' };
+  config.wizard = { ...config.wizard, lastRunCommand: 'doctor' };
+  config.plugins = { ...config.plugins, enabled: false };
   fs.writeFileSync(configPath, JSON.stringify(config));
   const outcome = spawnSync(process.execPath, ['./openclaw.mjs', 'doctor', '--fix', '--non-interactive'], {
     cwd: process.cwd(), env: process.env, encoding: 'utf8', timeout: 90_000,

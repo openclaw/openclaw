@@ -16,6 +16,17 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+An installation without a detected package-manager owner records a **skipped**
+update, exits successfully, and leaves the Gateway running. For Docker/container
+images, pull or build the new image and recreate the container with the same
+state/config mounts. For a standalone or extracted tarball installation, reinstall
+using the original method; Yarn global installations must be updated with Yarn.
+The CLI displays this next action. Existing profiles also record it in update
+history and include it in JSON as `run.origin.nextAction`. With `--json`, a fresh
+profile emits the guidance to stderr and does not create a state database for a
+skipped update. These non-outcomes do not run rollback verification or offer an
+update failure report.
+
 ## Usage
 
 ```bash
@@ -38,6 +49,21 @@ openclaw --update
 
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
+
+Update admission recognizes orphan `task_delivery_state` rows whose parent tasks
+are missing as repairable. When it can acquire Doctor's ownership fences, it runs
+the same [preservation-first recovery](/reference/database-schemas/integrity-and-recovery#doctor-reports-orphan-task-delivery-rows)
+before creating update history. Recovery and its ledger entry commit together;
+the entry records the row count and recovery directory. A live Gateway owner,
+read-only store, or failed preservation prevents repair and reports
+`openclaw doctor --fix` as the next action. Other foreign-key violations and
+structural damage still refuse admission.
+`--dry-run` reports the repairable condition without recovering rows or creating
+an update ledger entry for that refused preview.
+
+The installed 2026.9.4 updater cannot use this recovery before updating itself.
+If it refuses with a database integrity error, install the corrective release
+manually and run `openclaw doctor --fix`.
 
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.

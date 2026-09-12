@@ -50,13 +50,16 @@ export class BrowserPanelNativePresentation {
     this.connected = true;
     // Native responder focus can route back to this panel without DOM events.
     this.hostElement?.setAttribute("data-native-browser-scope", this.scope);
-    this.unsubscribeOcclusion = subscribeNativeOverlayOcclusion((occluded) => {
-      this.occluded = occluded;
-      if (occluded) {
-        this.hide();
-      }
-      this.schedule();
-    });
+    this.unsubscribeOcclusion = subscribeNativeOverlayOcclusion(
+      (occluded) => {
+        this.occluded = occluded;
+        if (occluded) {
+          this.hide();
+        }
+        this.schedule();
+      },
+      () => this.stage?.getBoundingClientRect() ?? null,
+    );
     document.addEventListener("scroll", this.schedule, true);
     window.addEventListener("resize", this.schedule);
     this.update();

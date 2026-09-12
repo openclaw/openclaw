@@ -20,6 +20,7 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
+import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
@@ -40,6 +41,7 @@ import {
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   dismissChatError,
+  initialHistorySubmitState,
   resolveAssistantAttachmentAuthToken,
   resolveChatArtifactDownload,
 } from "./chat-pane-state.ts";
@@ -60,7 +62,7 @@ import {
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
-import { createLinkFaviconFetcher } from "./link-favicon-loader.ts";
+import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -231,13 +233,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const historyHasMore = catalogKey
       ? Boolean(this.catalogCursor)
       : state.chatHistoryPagination.hasMore;
-    const fetchLinkFavicon = state.automaticallyFetchFavicons
-      ? createLinkFaviconFetcher({
-          auth: { hello: state.hello, settings: state.settings, password: state.password },
-          resourceBasePath: state.resourceBasePath,
-          gatewayUrl: state.client?.gatewayUrl ?? state.settings.gatewayUrl,
-        })
-      : undefined;
+    const fetchLinkFavicon = resolveChatLinkFaviconFetcher(state);
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       hasLocalRun: () => Boolean(state.chatRunId),
@@ -293,6 +289,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.githubPublication = this.context.sessions.githubPublication.attach(
           publicationRow,
           () => this.requestUpdate(),
+          GitHubPublicationController,
         );
       }
       const publication = this.githubPublication;
@@ -338,7 +335,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             !restartRecoveryTombstoned &&
             !placementComposer.blocksSend &&
             (!sendHoldReason || initialHistoryUnavailable)),
-      submitDisabledReason: initialHistoryUnavailable ? t("chat.thread.loading") : null,
+      ...initialHistorySubmitState(state, initialHistoryUnavailable),
       modelRequiredReason,
       disabledReason:
         catalogDisabledReason ??
@@ -656,9 +653,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onAgentChange: (agentId) => {
         this.onPaneSessionChange?.(this.paneId, buildAgentMainSessionKey({ agentId }));
       },
-      onSessionSelect: (next) => {
-        this.onPaneSessionChange?.(this.paneId, next);
-      },
+      onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
       onOpenSidebar: state.handleOpenSidebar,

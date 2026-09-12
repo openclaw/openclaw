@@ -10,6 +10,8 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 }));
 
 const {
+  createThinkingCatalogResolver,
+  resolveThinkingProfile,
   listThinkingLevelLabels,
   listThinkingLevelOptions,
   listThinkingLevels,
@@ -26,6 +28,25 @@ beforeEach(() => {
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReset();
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
 });
+
+function mockQwenThinkingCatalog(id: string) {
+  providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
+    context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
+      ? {
+          levels: [{ id: "off" }, { id: "low", label: "on" }],
+          defaultLevel: "off",
+        }
+      : undefined,
+  );
+  return [
+    {
+      provider: "vllm",
+      id,
+      reasoning: true,
+      compat: { thinkingFormat: "qwen-chat-template" },
+    },
+  ];
+}
 
 describe("normalizeThinkLevel", () => {
   it("normalizes the documented none alias to off", () => {
@@ -75,6 +96,40 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
     expect(normalizeThinkLevel("ultrathink")).toBe("high");
   });
+});
+
+describe("prepared thinking catalog identity", () => {
+  it.each([
+    { provider: " demo ", model: " Mixed ", expected: ["high"] },
+    { provider: "demo", model: "demo/Mixed", expected: ["high"] },
+    { provider: "demo", model: "mixed", expected: ["off", "minimal", "low", "medium", "high"] },
+    { provider: "demo-cli", model: "Mixed", expected: ["off", "minimal", "low", "medium", "high"] },
+    { provider: "demo", model: "DEMO/Mixed", expected: ["off"] },
+  ])(
+    "preserves first-match and case rules for $provider/$model",
+    ({ provider, model, expected }) => {
+      const catalog = [
+        {
+          provider: " DEMO ",
+          id: "demo/Mixed",
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null, low: null, medium: null },
+        },
+        { provider: "demo", id: "Mixed", reasoning: false },
+        { provider: "demo", id: "DEMO/Mixed", reasoning: false },
+      ];
+      const catalogResolver = createThinkingCatalogResolver(catalog);
+      for (const prepared of [undefined, catalogResolver]) {
+        const profile = resolveThinkingProfile({
+          provider,
+          model,
+          catalog,
+          catalogResolver: prepared,
+        });
+        expect(profile.levels.map(({ id }) => id)).toEqual(expected);
+      }
+    },
+  );
 });
 
 describe("listThinkingLevels", () => {
@@ -341,32 +396,19 @@ describe("listThinkingLevels", () => {
   });
 
   it("passes catalog compat into provider thinking profiles", () => {
-    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
-      context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
-        ? {
-            levels: [{ id: "off" }, { id: "low", label: "on" }],
-            defaultLevel: "off",
-          }
-        : undefined,
-    );
-    const catalog = [
-      {
-        provider: "vllm",
-        id: "Qwen/Qwen3-8B",
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
-      },
-    ];
+    const catalog = mockQwenThinkingCatalog("Qwen/Qwen3-8B");
 
     expect(listThinkingLevelLabels("vllm", "Qwen/Qwen3-8B", catalog)).toEqual(["off", "on"]);
-    expect(
-      resolveSupportedThinkingLevel({
-        provider: "vllm",
-        model: "Qwen/Qwen3-8B",
-        level: "high",
-        catalog,
-      }),
-    ).toBe("low");
+    for (const level of ["high", "adaptive"] as const) {
+      expect(
+        resolveSupportedThinkingLevel({
+          provider: "vllm",
+          model: "Qwen/Qwen3-8B",
+          level,
+          catalog,
+        }),
+      ).toBe("low");
+    }
   });
 
   it("uses canonical Fable params when no provider thinking profile exists", () => {
@@ -381,10 +423,8 @@ describe("listThinkingLevels", () => {
     ];
 
     expect(listThinkingLevels("microsoft-foundry", "company-fable", catalog)).toEqual([
-      "minimal",
       "low",
       "medium",
-      "adaptive",
       "high",
       "xhigh",
       "max",
@@ -395,7 +435,15 @@ describe("listThinkingLevels", () => {
         model: "company-fable",
         catalog,
       }),
-    ).toBe("high");
+    ).toBe("medium");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "microsoft-foundry",
+        model: "company-fable",
+        level: "adaptive",
+        catalog,
+      }),
+    ).toBe("medium");
   });
 
   it("exposes Claude Opus xhigh on custom anthropic-messages providers without a plugin profile", () => {
@@ -665,22 +713,7 @@ describe("listThinkingLevels", () => {
   });
 
   it("matches provider-qualified catalog ids for provider thinking profiles", () => {
-    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
-      context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
-        ? {
-            levels: [{ id: "off" }, { id: "low", label: "on" }],
-            defaultLevel: "off",
-          }
-        : undefined,
-    );
-    const catalog = [
-      {
-        provider: "vllm",
-        id: "vllm/Qwen/Qwen3-8B",
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
-      },
-    ];
+    const catalog = mockQwenThinkingCatalog("vllm/Qwen/Qwen3-8B");
 
     expect(listThinkingLevelLabels("vllm", "Qwen/Qwen3-8B", catalog)).toEqual(["off", "on"]);
     expect(
@@ -851,6 +884,7 @@ describe("listThinkingLevels", () => {
   it("maps unsupported adaptive to medium and unsupported xhigh to high", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "off",
     });
 
     expect(
@@ -866,6 +900,17 @@ describe("listThinkingLevels", () => {
         model: "gpt-4.1-mini",
         level: "xhigh",
       }),
+    ).toBe("high");
+  });
+
+  it("uses the provider default for a stored adaptive level when adaptive is not selectable", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: ["low", "medium", "high", "xhigh", "max"].map((id) => ({ id })),
+      defaultLevel: "high",
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({ provider: "proxy", model: "reasoner", level: "adaptive" }),
     ).toBe("high");
   });
 

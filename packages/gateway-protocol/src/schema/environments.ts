@@ -258,6 +258,8 @@ export const WorkerDesktopObserveResultSchema = closedObject({
   wsPath: NonEmptyString,
   expiresAtMs: Type.Integer({ minimum: 0 }),
   control: Type.Boolean(),
+  // Permission to request resizing, not proof that the RFB server supports it.
+  canResize: Type.Optional(Type.Boolean()),
   vncPassword: Type.Optional(NonEmptyString),
 });
 

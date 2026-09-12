@@ -560,6 +560,43 @@ openclaw-board-widget-cell {
   }
 }
 
+/* A lone full-width widget becomes the focused dashboard's page. Keep the
+   regular grid sizing, subtracting only the shell removed from auto heights. */
+:is(.sidebar-region--expanded, .sidebar-region:not(.sidebar-region--open), .board-document__content)
+  openclaw-board-view:has(> .board-view--single-full-width) {
+  padding: 0;
+
+  > .board-view {
+    padding: 0;
+  }
+
+  .board-tabs {
+    padding-left: 16px;
+  }
+
+  .board-widget:not(.board-widget--dragging) {
+    --board-widget-height-trim: 2px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+
+    &.board-widget--card {
+      --board-widget-height-trim: calc(2px + var(--widget-frame-inset) * 2);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+
+    .board-widget__body {
+      border-radius: 0;
+      padding: 0;
+    }
+  }
+}
+
 .board-widget__grant,
 .board-widget__error {
   align-content: center;

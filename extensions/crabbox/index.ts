@@ -1,5 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { definePluginEntry, type OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import {
+  CRABBOX_SANDBOX_BACKEND_ID,
+  createCrabboxSandboxBackendFactory,
+  createCrabboxSandboxBackendManager,
+  resolveCrabboxSandboxWorkdir,
+} from "./src/crabbox-sandbox-backend.js";
+import { resolveCrabboxSandboxConfig } from "./src/crabbox-sandbox-config.js";
+import { mintCrabboxSandboxLeaseId } from "./src/crabbox-sandbox-lease.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./src/crabbox-worker-provider.js";
 import { resolveCrabboxWarmImagePolicy } from "./src/crabbox-worker-warm-image-policy.js";
 
@@ -10,7 +19,7 @@ const workerWallpaperPath = fileURLToPath(
 export default definePluginEntry({
   id: "crabbox",
   name: "Crabbox Worker Provider",
-  description: "Cloud worker provider backed by the Crabbox CLI",
+  description: "Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI",
   register(api) {
     api.registerCli(
       async ({ program }) => {
@@ -61,6 +70,32 @@ export default definePluginEntry({
       );
     }
     api.registerWorkerProvider(provider);
+    // Tool-call isolation: the agent loop stays on the Gateway host and only
+    // exec/file tools run on a Crabbox-leased box through the ssh backend.
+    const sandboxConfig = resolveCrabboxSandboxConfig(api.pluginConfig);
+    if (sandboxConfig && api.registrationMode === "full") {
+      const backendDependencies = {
+        openclawRoot: resolveOpenClawRoot(api.rootDir),
+        pluginConfig: sandboxConfig,
+      };
+      const unregister = registerSandboxBackend(CRABBOX_SANDBOX_BACKEND_ID, {
+        factory: createCrabboxSandboxBackendFactory(backendDependencies),
+        reserveRuntimeId: mintCrabboxSandboxLeaseId,
+        manager: createCrabboxSandboxBackendManager(backendDependencies),
+        resolveWorkdir: resolveCrabboxSandboxWorkdir,
+      });
+      api.lifecycle.registerRuntimeLifecycle({
+        id: "crabbox-sandbox-cleanup",
+        cleanup: ({ reason, sessionKey, runId }) => {
+          if (sessionKey !== undefined || runId !== undefined) {
+            return;
+          }
+          if (reason === "disable" || reason === "restart") {
+            unregister();
+          }
+        },
+      });
+    }
     // Worker sidecars stop first; plugin services own generation-wide heartbeat cleanup.
     api.registerService({
       id: "crabbox-worker-cleanup",

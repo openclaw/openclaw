@@ -130,7 +130,7 @@ export function resolveMergedModelProviderModels<T extends { id: string }>(param
   return models;
 }
 
-function createConfiguredProviderModelResolver<T extends { id: string }>(
+export function createConfiguredProviderModelResolver<T extends { id: string }>(
   providerConfig: { models?: readonly T[] } | undefined,
   provider: string,
   canonicalizeModelId?: (modelId: string) => string,

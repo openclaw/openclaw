@@ -8,6 +8,8 @@ libatk-adaptor, xvfb, xauth and dbus-x11 installed:
 Use the unbundled 0.1.0 development build: local setup on a release build
 intentionally starts installation instead of showing the channel chooser.
 --local-start-failure uses a fixture CLI to exercise failed local startup.
+--inline-browser uses a synthetic saved Gateway to exercise native child WebViews
+and requires xdotool for real pointer input.
 """
 
 import argparse
@@ -24,7 +26,7 @@ import time
 START_FAILURE = "Fixture: systemd user service is unavailable."
 
 
-def exercise(app, Atspi, GLib, *, remote_only, local_start_failure):
+def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixture, binary):
     last_headings = set()
 
     def text_content(node):
@@ -76,7 +78,8 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure):
                     if role is None:
                         matches = text_content(node) == label
                     else:
-                        matches = actual_role == role and (
+                        roles = role if isinstance(role, tuple) else (role,)
+                        matches = actual_role in roles and (
                             name.startswith(label) if prefix else name == label
                         )
                     # Application-root state queries can block in GTK; only
@@ -108,6 +111,10 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure):
         node = wait(label, "entry")
         if text_content(node):
             raise RuntimeError(f"Expected an empty {label!r}; refusing a remote connection")
+
+    if inline_fixture is not None:
+        inline_fixture.exercise(app, binary, wait, Atspi)
+        return
 
     wait("Welcome to OpenClaw", "heading")
     if local_start_failure:
@@ -165,7 +172,7 @@ def interrupted(signum, _frame):
     raise RuntimeError(f"Native first-run smoke interrupted by signal {signum}")
 
 
-def drive(binary, *, remote_only, local_start_failure, artifacts_dir):
+def drive(binary, *, remote_only, local_start_failure, inline_browser, artifacts_dir):
     try:
         import gi
 
@@ -182,7 +189,12 @@ def drive(binary, *, remote_only, local_start_failure, artifacts_dir):
     def capture(outcome):
         if artifacts_dir is None:
             return
-        scenario = "local-start-failure" if local_start_failure else "choices"
+        if inline_browser:
+            scenario = "inline-browser"
+        elif local_start_failure:
+            scenario = "local-start-failure"
+        else:
+            scenario = "choices"
         screenshot = artifacts_dir / f"{scenario}-{outcome}.png"
         started = time.monotonic()
         while True:
@@ -204,6 +216,13 @@ def drive(binary, *, remote_only, local_start_failure, artifacts_dir):
                 raise RuntimeError("Native window remained blank while capturing proof")
             time.sleep(0.1)
 
+    inline_fixture = None
+    if inline_browser:
+        from inline_browser import GatewayFixture
+
+        inline_fixture = GatewayFixture(artifacts_dir)
+        inline_fixture.start()
+
     with Path("app.log").open("wb") as log:
         app = subprocess.Popen(
             [str(binary)],
@@ -216,6 +235,8 @@ def drive(binary, *, remote_only, local_start_failure, artifacts_dir):
                 app, Atspi, GLib,
                 remote_only=remote_only,
                 local_start_failure=local_start_failure,
+                inline_fixture=inline_fixture,
+                binary=binary,
             )
         except BaseException:
             try:
@@ -234,6 +255,8 @@ def drive(binary, *, remote_only, local_start_failure, artifacts_dir):
                 app.kill()
                 app.wait(timeout=5)
             Atspi.exit()
+            if inline_fixture is not None:
+                inline_fixture.close()
 
 
 def main():
@@ -255,6 +278,11 @@ def main():
         action="store_true",
         help="Verify failed startup with an installed CLI remains visible and retryable",
     )
+    scenarios.add_argument(
+        "--inline-browser",
+        action="store_true",
+        help="Verify real WebKit child input, snapshots, history and dashboard replacement",
+    )
     args = parser.parse_args()
     if sys.platform != "linux" or os.geteuid() == 0:
         parser.error("Run on Linux as a non-root user; do not disable the WebKit sandbox")
@@ -266,6 +294,8 @@ def main():
         parser.error("The native app binary must be executable")
     if shutil.which("openclaw", path="/usr/bin:/bin"):
         parser.error("The minimal system PATH must not contain an OpenClaw CLI")
+    if args.inline_browser and not os.access("/usr/bin/xdotool", os.X_OK):
+        parser.error("Inline browser pointer proof requires xdotool")
     if args.artifacts_dir:
         args.artifacts_dir = args.artifacts_dir.resolve()
         args.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -277,6 +307,7 @@ def main():
             binary,
             remote_only=args.remote_only,
             local_start_failure=args.local_start_failure,
+            inline_browser=args.inline_browser,
             artifacts_dir=args.artifacts_dir,
         )
         return
@@ -300,6 +331,7 @@ def main():
             XDG_SESSION_TYPE="x11",
             GTK_MODULES="atk-bridge",
             NO_AT_BRIDGE="0",
+            PYTHONDONTWRITEBYTECODE="1",
         )
         for variable, relative in (
             ("XDG_CONFIG_HOME", ".config"),
@@ -339,6 +371,8 @@ def main():
             command.append("--remote-only")
         if args.local_start_failure:
             command.append("--local-start-failure")
+        if args.inline_browser:
+            command.append("--inline-browser")
         if args.artifacts_dir:
             command.extend(["--artifacts-dir", str(args.artifacts_dir)])
         command.append(str(binary))

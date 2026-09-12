@@ -120,7 +120,7 @@ OpenClaw discovers plugins from explicit `plugins.load.paths` entries, the curre
 If two distinct plugin roots share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it. Precedence, highest to lowest:
 
 1. **Config-selected** — a path explicitly selected in `plugins.load.paths`
-2. **Development-source bundled** — a bundled plugin inside the checkout selected by `OPENCLAW_DEV_SOURCE_ROOT`
+2. **Source-checkout bundled** — a compiled bundled plugin inside the running host's source checkout, or a bundled plugin inside the checkout selected by `OPENCLAW_DEV_SOURCE_ROOT`
 3. **Global install matching a tracked install record** — an installed global candidate whose path matches its install record, managed by `openclaw plugins install`/`openclaw plugins update`
 4. **Bundled** — other plugins shipped with OpenClaw
 5. **Workspace** — plugins discovered relative to the current workspace

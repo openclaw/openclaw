@@ -65,6 +65,16 @@ function createRegistration<T extends object>(record: PluginRecord, contribution
   };
 }
 
+function createIdentityRegistration<T extends object>(record: PluginRecord, contribution: T) {
+  return {
+    pluginId: record.id,
+    pluginName: record.name,
+    ...(getPluginInstance(record)?.adopt(contribution) ?? contribution),
+    source: record.source,
+    rootDir: record.rootDir,
+  };
+}
+
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const nativeCatalogGates = new WeakMap<
@@ -116,6 +126,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
     createRegistration,
+    createIdentityRegistration,
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,

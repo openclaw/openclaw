@@ -79,6 +79,7 @@ export async function readSessionPhysicalDiskUsage(
 ): Promise<SessionPhysicalDiskUsage> {
   const sessionsDir = resolveSessionArtifactDirectory(storePath);
   const sessionsDirFiles = await readSessionsDirFiles(sessionsDir);
+  const coldArchiveFiles = await readSessionsDirFiles(path.join(sessionsDir, "cold"));
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
   const databasePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
   const databaseFiles = await readSqliteDatabaseFiles(databasePaths);
@@ -92,7 +93,12 @@ export async function readSessionPhysicalDiskUsage(
     databaseFiles.filter((file) => file.path.endsWith("-wal")).map((file) => file.canonicalPath),
   );
   const uniqueFiles = new Map<string, SessionsDirFileStat>();
-  for (const file of [...sessionsDirFiles, ...promptBlobFiles, ...databaseFiles]) {
+  for (const file of [
+    ...sessionsDirFiles,
+    ...coldArchiveFiles,
+    ...promptBlobFiles,
+    ...databaseFiles,
+  ]) {
     if (!databaseSharedMemoryPaths.has(file.canonicalPath)) {
       uniqueFiles.set(file.canonicalPath, file);
     }

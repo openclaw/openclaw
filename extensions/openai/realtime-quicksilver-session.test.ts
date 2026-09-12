@@ -328,7 +328,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1",
+          model: "gpt-live-1-codex",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         authCase.auth,
@@ -680,7 +680,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1",
+          model: "gpt-live-test-canary",
           voice: "invalid",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
@@ -688,7 +688,7 @@ describe("GPT-Live offer broker", () => {
       );
       expect(reservation).toMatchObject({
         offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
-        model: "gpt-live-1",
+        model: "gpt-live-test-canary",
         voice: "marin",
         expiresAt: expect.any(Number),
       });

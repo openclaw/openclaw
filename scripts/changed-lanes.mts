@@ -6,6 +6,7 @@ import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-fa
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
+import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
@@ -204,8 +205,10 @@ export function detectChangedLanes(
   if (
     !packageJsonIsLiveDockerTooling &&
     !packageJsonIsTooling &&
-    paths.some((changedPath) => RELEASE_METADATA_PATHS.has(changedPath)) &&
-    paths.every((changedPath) => RELEASE_METADATA_PATHS.has(changedPath))
+    paths.every(
+      (changedPath) =>
+        RELEASE_METADATA_PATHS.has(changedPath) || isReleaseChangelogPath(changedPath),
+    )
   ) {
     lanes.releaseMetadata = true;
     lanes.docs = paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "docs");

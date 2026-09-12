@@ -1335,6 +1335,17 @@ describe("config schema", () => {
     expect(baseSchema.uiHints["gateway.reload.mode"]?.advanced).toBe(true);
     expect(baseSchema.uiHints["agents.defaults.workspace"]?.advanced).toBe(false);
     expect(baseSchema.uiHints["agents.defaults.compaction.timeoutSeconds"]?.advanced).toBe(true);
+    for (const path of [
+      "tools.swarm",
+      "tools.swarm.enabled",
+      "tools.swarm.maxConcurrent",
+      "tools.loopDetection.enabled",
+      "gateway.cliAgents.enabled",
+      "logging.audit.messages",
+    ]) {
+      expect(baseSchema.uiHints[path]?.advanced, path).toBe(false);
+    }
+    expect(baseSchema.uiHints["agents.defaults.experimental.localModelLean"]?.advanced).toBe(true);
   });
 
   it("preserves explicit common hints on numeric leaves while defaulting tuning advanced", () => {

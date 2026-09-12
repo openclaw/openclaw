@@ -481,7 +481,7 @@ describe("resolveBundledPluginsDir", () => {
     );
   });
 
-  it("does not let VITEST relax existing override trust checks", () => {
+  it("rechecks changed override trust within one cache owner", () => {
     const overrideRoot = makeRepoRoot("openclaw-bundled-dir-vitest-override-reject-");
     seedBundledPluginTree(overrideRoot, "extensions", "memory-core");
 
@@ -493,11 +493,22 @@ describe("resolveBundledPluginsDir", () => {
     delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
-    const bundledDir = requireBundledDir(resolveBundledPluginsDir());
-
-    expect(fs.realpathSync(bundledDir)).not.toBe(
-      fs.realpathSync(path.join(overrideRoot, "extensions")),
-    );
+    const expectedOverride = fs.realpathSync(path.join(overrideRoot, "extensions"));
+    withPluginCache(createPluginCache(), () => {
+      for (const trust of [false, true, false]) {
+        if (trust) {
+          process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+        } else {
+          delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+        }
+        const bundledDir = fs.realpathSync(requireBundledDir(resolveBundledPluginsDir()));
+        if (trust) {
+          expect(bundledDir).toBe(expectedOverride);
+        } else {
+          expect(bundledDir).not.toBe(expectedOverride);
+        }
+      }
+    });
   });
 
   it("does not let VITEST add cwd to bundled plugin resolution candidates", () => {

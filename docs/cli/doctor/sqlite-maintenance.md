@@ -76,6 +76,21 @@ migration sources. Hot transcript JSONL files are imported and archived after
 successful import; archive-tier JSONL files remain support artifacts, not
 runtime fallbacks.
 
+Doctor also discovers primary conversation transcripts omitted from the legacy
+registry, including timestamp-prefixed filenames. It verifies the session header,
+file identity, and logical owner before importing. Known historical generations
+remain attached to their existing session without changing its current generation
+or settings. History with no registry owner is recovered as an archived session
+only when its agent owner is unambiguous.
+
+Rerunning import can recover primary history swept into protected archives by an
+earlier migration. Doctor uses retained migration manifests and archived registry
+lineage; it does not restore stale settings over live SQLite state. Originals stay
+protected, and completed recovery is recorded so later runs do not resurrect
+history explicitly deleted by the user. Diagnostic trajectory envelopes, deleted
+artifacts, unsupported files, conflicting identities, and ambiguous ownership are
+not converted into conversations. Deferred files remain available for recovery.
+
 The public Doctor migration path stages transcript payloads and performs branch
 and provider repairs in a private, temporary SQLite database instead of retaining
 complete histories in memory. It keeps the raw transcript untouched until archiving it through an

@@ -331,6 +331,9 @@ async function loadCliSessionEntries({
   if (!sessionTarget) {
     return [];
   }
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(sessionTarget);
   await waitForSessionTranscriptProjection(sessionTarget);
   // Normalize bounded cuts with opaque ancestry before rebuilding CLI context.
   return SessionManager.openBounded(sessionTarget, {
@@ -369,6 +372,9 @@ export async function loadCliSessionHistoryMessages({
   if (!sessionTarget) {
     return [];
   }
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(sessionTarget);
   await waitForSessionTranscriptProjection(sessionTarget);
   // Hooks retain history across compactions; only reset closes their history window.
   const page = readSessionTranscriptBoundedMessageTailPage(sessionTarget, {

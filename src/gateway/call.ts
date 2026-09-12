@@ -115,6 +115,8 @@ export type GatewayRequestFunction = <T = Record<string, unknown>>(
 
 type CallGatewayBaseOptions = {
   url?: string;
+  /** Require this resolved endpoint without overriding target selection or authentication. */
+  expectUrl?: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -1160,6 +1162,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const connectionDetails = bootstrap.connectionDetails;
   const url = bootstrap.url;
+  if (opts.expectUrl !== undefined && url !== opts.expectUrl) {
+    throw new Error("Gateway destination changed. Refresh the selected Gateway before retrying.");
+  }
   const deviceAuthScope = bootstrap.deviceAuthScope;
   const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
   const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;

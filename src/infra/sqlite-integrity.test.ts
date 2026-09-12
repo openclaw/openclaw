@@ -102,6 +102,133 @@ describe("assertSqliteIntegrity", () => {
     });
   });
 
+  it("classifies cascade-owned task delivery orphans without admitting writes", () => {
+    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    try {
+      database.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE task_runs (task_id TEXT PRIMARY KEY);
+        CREATE TABLE task_delivery_state (
+          task_id TEXT PRIMARY KEY REFERENCES task_runs(task_id) ON DELETE CASCADE
+        );
+        INSERT INTO task_delivery_state (task_id)
+        VALUES ('missing-1'), ('missing-2'), ('missing-3'), ('missing-4'),
+               ('missing-5'), ('missing-6');
+      `);
+
+      let failure: unknown;
+      try {
+        assertSqliteIntegrity(database, "test database");
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({
+        name: "SqliteRepairableForeignKeyError",
+        repair: {
+          kind: "task-delivery-orphans",
+          relation: "task_delivery_state.task_id",
+          parentTable: "task_runs",
+          orphanCount: 6,
+        },
+        message: expect.stringMatching(/foreign_key_check failed.*openclaw doctor --fix/u),
+      });
+      if (!(failure instanceof Error)) {
+        throw new Error("Expected integrity admission to refuse unrepaired rows");
+      }
+      expect(isTerminalSqliteIntegrityError(failure)).toBe(false);
+      expect(database.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
+        count: 6,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    {
+      label: "non-cascade deletion",
+      parent: "task_id",
+      child: "task_id",
+      action: "NO ACTION",
+      extra: "",
+    },
+    {
+      label: "different parent column",
+      parent: "other_id",
+      child: "task_id",
+      action: "CASCADE",
+      extra: "",
+    },
+    {
+      label: "different child column",
+      parent: "task_id",
+      child: "other_id",
+      action: "CASCADE",
+      extra: "",
+    },
+    {
+      label: "unrelated violation beyond the diagnostic sample",
+      parent: "task_id",
+      child: "task_id",
+      action: "CASCADE",
+      extra: `CREATE TABLE unrelated (id TEXT REFERENCES task_runs(task_id));
+              INSERT INTO unrelated (id) VALUES ('missing');`,
+    },
+    {
+      label: "structural damage alongside otherwise repairable orphans",
+      parent: "task_id",
+      child: "task_id",
+      action: "CASCADE",
+      extra: `CREATE TABLE damaged (id INTEGER CHECK (id > 0));
+              PRAGMA ignore_check_constraints = ON;
+              INSERT INTO damaged (id) VALUES (-1);
+              PRAGMA ignore_check_constraints = OFF;`,
+    },
+  ])("refuses task delivery violations with $label", ({ parent, child, action, extra }) => {
+    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    try {
+      database.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE task_runs (task_id TEXT PRIMARY KEY, other_id TEXT UNIQUE);
+        CREATE TABLE task_delivery_state (
+          ${child} TEXT PRIMARY KEY REFERENCES task_runs(${parent}) ON DELETE ${action}
+        );
+        INSERT INTO task_delivery_state (${child})
+        VALUES ('missing-1'), ('missing-2'), ('missing-3'), ('missing-4'),
+               ('missing-5'), ('missing-6');
+        ${extra}
+      `);
+
+      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+        expect.objectContaining({ name: "SqliteIntegrityError" }),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not classify a component of a composite foreign key as repairable", () => {
+    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    try {
+      database.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE task_runs (task_id TEXT, revision INTEGER, PRIMARY KEY (task_id, revision));
+        CREATE TABLE task_delivery_state (
+          task_id TEXT PRIMARY KEY,
+          revision INTEGER,
+          FOREIGN KEY (task_id, revision) REFERENCES task_runs(task_id, revision) ON DELETE CASCADE
+        );
+        INSERT INTO task_delivery_state (task_id, revision) VALUES ('missing', 1);
+      `);
+
+      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+        expect.objectContaining({ name: "SqliteIntegrityError" }),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   it("reports violations deterministically without truncating 64-bit rowids", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");

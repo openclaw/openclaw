@@ -1,5 +1,10 @@
 import { html, nothing } from "lit";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   normalizeChatModelProviderId,
@@ -15,13 +20,22 @@ import {
   resolveChatThinkingSelectState,
   type ChatThinkingTarget,
 } from "../../../lib/chat/thinking.ts";
+import {
+  canonicalModelAuthProviderId,
+  listEffectiveModelAuthProviders,
+} from "../../../lib/model-auth.ts";
+import { describeModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import type {
   ChatModelPickerOption,
   ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import { renderChatModelPicker, type ChatModelCatalogState } from "./chat-model-picker.ts";
+import {
+  renderChatModelPicker,
+  type ChatModelCatalogState,
+  type ChatModelProviderAuth,
+} from "./chat-model-picker.ts";
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
@@ -31,6 +45,8 @@ type ChatContextWindowTarget = Pick<
 >;
 
 type ChatModelControlsProps = {
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+  accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
   activeRunId: string | null;
   agentDefaultModel?: string;
@@ -199,6 +215,27 @@ function resolveCatalogTriggerStatus(
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalog = prepareChatModelCatalog(props.modelCatalog);
+  const providerAuth = new Map<string, ChatModelProviderAuth>();
+  const headingKey = (id: string) =>
+    normalizeChatModelProviderGroupId(
+      canonicalModelAuthProviderId(normalizeChatModelProviderId(id)),
+    );
+  // Alias records (e.g. google and google-gemini-cli) share one heading, so merge
+  // them under that key first; iterating raw records let the later one overwrite it.
+  for (const provider of listEffectiveModelAuthProviders(
+    (props.modelAuthStatusResult?.providers ?? []).map((record) =>
+      Object.assign({}, record, { provider: headingKey(record.provider) }),
+    ),
+  )) {
+    const selectedId =
+      props.accountSelection?.kind === "automatic"
+        ? undefined
+        : props.accountSelection?.authProfileId;
+    const auth = describeModelProviderAuth(provider, { authProfileId: selectedId });
+    if (auth) {
+      providerAuth.set(headingKey(provider.provider), auth);
+    }
+  }
   const {
     currentOverride,
     defaultModel,
@@ -440,6 +477,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1

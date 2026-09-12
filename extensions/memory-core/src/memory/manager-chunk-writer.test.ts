@@ -11,10 +11,12 @@ const CHUNK_WRITE_TABLES = [
   "memory_index_chunk_provenance",
 ];
 
+const PREPARED_WRITE_TABLES = [...CHUNK_WRITE_TABLES, "memory_index_chunks_fts"];
+
 function chunkWriteTables(sqls: string[]): string[] {
   return sqls.flatMap((sql) => {
     const table = /^\s*INSERT INTO "?(\w+)"?\s*\(/i.exec(sql)?.[1];
-    return table && CHUNK_WRITE_TABLES.includes(table) ? [table] : [];
+    return table && PREPARED_WRITE_TABLES.includes(table) ? [table] : [];
   });
 }
 
@@ -82,7 +84,7 @@ describe("memory chunk publication", () => {
         const nonemptyFiles = db
           .prepare("SELECT DISTINCT path, source FROM memory_index_chunks")
           .all().length;
-        for (const table of CHUNK_WRITE_TABLES) {
+        for (const table of PREPARED_WRITE_TABLES) {
           expect(
             preparedTables.filter((prepared) => prepared === table),
             table,

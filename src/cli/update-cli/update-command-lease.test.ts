@@ -60,11 +60,12 @@ vi.mock("../../infra/update-triage.js", () => ({
 
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
-const pluginResult: PostCorePluginUpdateResult = {
+const pluginResult: ProducedPluginUpdateResult = {
+  assessment: { kind: "no-payload-repair" },
   status: "ok",
   changed: true,
   sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
@@ -513,7 +514,7 @@ describe("update orchestration lifecycle ownership", () => {
 
   it("repair reconciles captured runs before publishing successful convergence with warnings", async () => {
     const recovery = seedInterruptedPostCoreRun();
-    const warning: PostCorePluginUpdateResult = {
+    const warning: ProducedPluginUpdateResult = {
       ...pluginResult,
       status: "warning",
       changed: false,

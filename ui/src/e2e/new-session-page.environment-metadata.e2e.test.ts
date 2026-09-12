@@ -9,6 +9,7 @@ import {
   captureEnvironmentMetadataUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  openEnvironmentPicker,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -153,9 +154,7 @@ suite.define(() => {
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
-      expect(await device.locator(".session-menu__description").textContent()).toContain(
-        "This runtime does not support paired devices",
-      );
+      expect(await device.locator(".session-menu__description").count()).toBe(0);
       await expect
         .poll(() => tooltipTitleText(device))
         .toBe("This runtime does not support paired devices");
@@ -251,58 +250,34 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      const openPicker = async () => {
-        const afterShow = place.evaluate(
-          (element) =>
-            new Promise<void>((resolve) => {
-              element.addEventListener("wa-after-show", () => resolve(), { once: true });
-            }),
-        );
-        await page.locator("#new-session-where-trigger").click();
-        await afterShow;
-      };
-      await openPicker();
+      await openEnvironmentPicker(page);
       const row = (id: string) => place.locator(`[data-value="device:${id}"]`);
       await row("alpha-device").waitFor();
       await captureEnvironmentMetadataUiProof(suite, page);
 
       expect(await row("alpha-device").isEnabled()).toBe(true);
-      await expect
-        .poll(() => row("alpha-device").locator(".session-menu__description").textContent())
-        .toBe(" · alpha-de · macOS");
-      await expect
-        .poll(() => row("alpha-device").locator(".capacity-meter-pips").getAttribute("aria-label"))
-        .toBe("2 of 4 slots busy");
-      expect(await row("beta-device").locator(".session-menu__description").textContent()).toBe(
-        " · beta-dev",
-      );
+      const details = (id: string) =>
+        row(id).locator("xpath=ancestor::openclaw-tooltip[1]").locator('[slot="content"]');
+      await row("alpha-device").hover();
+      await expect.poll(() => details("alpha-device").textContent()).toContain("macOS");
+      expect(await details("alpha-device").textContent()).toContain("2 of 4 session slots in use");
+      expect(await row("alpha-device").locator(".session-menu__description").count()).toBe(0);
       expect(await row("saturated").isDisabled()).toBe(true);
+      await row("saturated").hover();
       await expect
-        .poll(() => tooltipTitleText(row("saturated")))
-        .toBe("No worker slots are available. Wait for a slot or pick another device.");
-      await expect
-        .poll(() => row("saturated").locator(".capacity-meter-pips").getAttribute("aria-label"))
-        .toBe("Slot utilization unavailable");
+        .poll(() => details("saturated").textContent())
+        .toContain("No worker slots are available. Wait for a slot or pick another device.");
+      expect(
+        await details("saturated").locator(".new-session-page__capacity-caption").count(),
+      ).toBe(0);
       expect(await row("missing-capacity").isDisabled()).toBe(true);
       expect(await row("offline").isDisabled()).toBe(true);
-      expect(await row("offline").locator(".session-menu__description").textContent()).toMatch(
-        /^ · Offline for .+ · Device unavailable\. Reconnect it and try again\.$/,
-      );
-      expect(await tooltipTitleText(row("offline"))).toBe(
-        "Device unavailable. Reconnect it and try again.",
-      );
-      expect(await row("offline").locator(".session-menu__description").isVisible()).toBe(true);
-      expect(
-        await row("offline").evaluate((element) => element.getBoundingClientRect().height),
-      ).toBe(32);
+      expect(await row("offline").locator(".session-menu__description").count()).toBe(0);
       expect(
         await row("offline")
-          .locator(".session-menu__text")
-          .evaluate((element) => ({
-            truncated: element.scrollWidth > element.clientWidth,
-            overflow: getComputedStyle(element).textOverflow,
-          })),
-      ).toEqual({ truncated: true, overflow: "ellipsis" });
+          .locator("..")
+          .evaluate((element) => element.tagName),
+      ).not.toBe("OPENCLAW-TOOLTIP");
       expect(await row("disabled").isDisabled()).toBe(true);
       expect(await row("outdated").isDisabled()).toBe(true);
 
@@ -311,15 +286,13 @@ suite.define(() => {
         selectedRow.evaluate((element) =>
           [
             element,
-            ...[".session-menu__text", ".capacity-meter-pips", ".session-menu__check"].map(
-              (selector) => {
-                const part = element.querySelector(selector);
-                if (!part) {
-                  throw new Error(`Missing environment row part: ${selector}`);
-                }
-                return part;
-              },
-            ),
+            ...[".session-menu__text", ".session-menu__check"].map((selector) => {
+              const part = element.querySelector(selector);
+              if (!part) {
+                throw new Error(`Missing environment row part: ${selector}`);
+              }
+              return part;
+            }),
           ].map((part) => {
             const { x, width } = part.getBoundingClientRect();
             return { x, width };
@@ -331,12 +304,10 @@ suite.define(() => {
       expect(await selectedRow.locator(".session-menu__check svg").count()).toBe(0);
       await selectedRow.click();
       await selectedRow.waitFor({ state: "hidden" });
-      await openPicker();
+      await openEnvironmentPicker(page);
       await selectedRow.hover();
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
-      expect(await selectedRow.locator(".capacity-meter-pips").getAttribute("aria-label")).toBe(
-        "2 of 4 slots busy",
-      );
+      expect(await details("alpha-device").textContent()).toContain("2 of 4 session slots in use");
       expect(await selectedRow.locator(".session-menu__check svg").isVisible()).toBe(true);
       expect(await selectionLayout()).toEqual(beforeSelection);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);

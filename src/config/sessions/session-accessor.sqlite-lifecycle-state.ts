@@ -48,6 +48,10 @@ import {
   parseSessionEntryJson as parseSessionEntryRow,
   sessionEntryMetadataJson,
 } from "./session-accessor.sqlite-status.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
@@ -93,7 +97,7 @@ export function shouldRemoveSessionEntry(
 
 /** Session ids protected by live node state. */
 export function readReferencedSessionIds(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   excludedSessionKeys: ReadonlySet<string> = new Set(),
   candidateSessionIds?: readonly string[],
   diskBudget?: { preserveRecentMs?: number | null },
@@ -165,7 +169,10 @@ export function planSessionStateDeleteIfUnreferenced(params: {
   referencedSessionIds: ReadonlySet<string>;
   sessionId: string;
 }): SessionStateDeletePlan | null {
-  if (params.referencedSessionIds.has(params.sessionId)) {
+  if (
+    params.referencedSessionIds.has(params.sessionId) ||
+    readSessionColdTranscript(params.database.db, params.sessionId)
+  ) {
     return null;
   }
   return {
@@ -203,7 +210,10 @@ export function deleteMaterializedSessionStatePlans(
     referencedSessionIds.add(sessionId);
   }
   for (const plan of plans) {
-    if (referencedSessionIds.has(plan.sessionId)) {
+    if (
+      referencedSessionIds.has(plan.sessionId) ||
+      readSessionColdTranscript(database.db, plan.sessionId)
+    ) {
       continue;
     }
     const currentSnapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
@@ -450,6 +460,7 @@ export function collectProjectedReferencedSessionIds(params: {
 export { collectSessionStateIdsForEntry };
 
 function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): boolean {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   // The window row cascades canonical transcript tables, but FTS is virtual;
   // clear its projection before dropping the owner row.

@@ -16,8 +16,12 @@ function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
     );
 }
 
+function isSelectableModelRow(row: HTMLButtonElement): boolean {
+  return !row.disabled && row.getAttribute("aria-disabled") !== "true";
+}
+
 function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
-  return visibleModelRows(root).filter((row) => !row.disabled);
+  return visibleModelRows(root).filter(isSelectableModelRow);
 }
 
 function ensureModelPickerIds(menu: HTMLElement): void {
@@ -121,7 +125,7 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
     .forEach(({ row }, rank) => {
       row.dataset.chatModelRank = String(rank);
       row.style.setProperty("--chat-model-rank", String(rank));
-      if (!row.disabled) {
+      if (isSelectableModelRow(row)) {
         selectableRows.push(row);
       }
     });

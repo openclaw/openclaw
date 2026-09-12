@@ -384,6 +384,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       baseline = await repository.bindPreparedRepository(
         { ...identity, commit: source.baseCommit },
         source.prepared,
+        request.gitAuthor,
       );
     } else {
       const prepared = await repository.prepareRepository(identity);
@@ -398,7 +399,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       baseline.mode === "repository" ? baseline.baseManifestRef : baseline.manifestRef;
     const baseCommit = baseline.baseCommit;
     const remoteWorkspaceDir = baseline.remoteWorkspaceDir;
-    if (request.gitAuthor) {
+    if (request.gitAuthor && !source.prepared) {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
     await params.workspaceTransfer.prepareRepository({

@@ -13,7 +13,10 @@ import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
+import {
+  createModelCatalogIdentityKeyResolver,
+  resolveModelCatalogIdentityKey,
+} from "./openai-model-routes.js";
 import {
   getPreparedModelFullCatalogAuth,
   hasSamePreparedModelCatalogAuth,
@@ -269,15 +272,16 @@ export function materializePreparedModelCatalog(
   // Preserve inventory reads before capability preparation when the snapshot has accessors.
   const materialized = { ...snapshot };
   const sourceEntries = snapshot.entries;
+  const identityKey = createModelCatalogIdentityKeyResolver();
   const runtimeByKey = new Map(
     runtimeCapabilityModels.map(({ provider, modelId, model }) => [
-      resolveModelCatalogIdentityKey({ provider, id: modelId }),
+      identityKey({ provider, id: modelId }),
       modelCatalogRowToEntry(model),
     ]),
   );
   const project = (entries: ModelCatalogSnapshot["entries"]) =>
     entries.map((entry) => {
-      const runtime = runtimeByKey.get(resolveModelCatalogIdentityKey(entry));
+      const runtime = runtimeByKey.get(identityKey(entry));
       if (!runtime) {
         return entry;
       }
@@ -301,10 +305,7 @@ export function materializePreparedModelCatalog(
   materialized.routeVariants = project(snapshot.routeVariants);
   if (snapshot.staticEntries || configuredStaticEntries.length > 0) {
     materialized.staticEntries = project(
-      dedupeByKey(
-        [...configuredStaticEntries, ...(snapshot.staticEntries ?? [])],
-        resolveModelCatalogIdentityKey,
-      ),
+      dedupeByKey([...configuredStaticEntries, ...(snapshot.staticEntries ?? [])], identityKey),
     );
   }
   if (isPreparedModelCatalogFull(snapshot)) {

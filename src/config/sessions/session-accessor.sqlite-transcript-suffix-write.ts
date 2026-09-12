@@ -21,6 +21,7 @@ import {
   prepareSqliteTranscriptSuffixMutation,
   replaceSqliteTranscriptSuffixInTransaction,
 } from "./session-accessor.sqlite-transcript-suffix.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -41,6 +42,7 @@ export function replaceTranscriptSuffixEventsSync(
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
   const owner = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  assertSessionTranscriptHot(owner.db, resolved.sessionId);
   const plan = prepareSqliteTranscriptSuffixMutation(
     owner,
     resolved,
@@ -54,6 +56,7 @@ export function replaceTranscriptSuffixEventsSync(
   let replaced = false;
   runOpenClawAgentWriteTransaction((database) => {
     assertOwnedTranscriptWriteCommit(fencedScope);
+    assertSessionTranscriptHot(database.db, resolved.sessionId);
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
       return;

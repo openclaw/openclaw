@@ -12,7 +12,9 @@ import {
   createGatewayClient,
   createPanel,
   desktopEnvironment,
+  selectSizing,
   settleTasks,
+  sizingMenu,
 } from "./desktop-panel.test-support.ts";
 
 describe("embedded desktop panel presentation", () => {
@@ -666,7 +668,7 @@ describe("embedded desktop panel presentation", () => {
         if (params?.control !== initialControl) {
           return observe.promise;
         }
-        return { transport: "rfb", wsPath: "/view", control: initialControl };
+        return { transport: "rfb", wsPath: "/view", control: initialControl, canResize: true };
       });
       const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
         if (options.viewOnly !== !initialControl) {
@@ -690,6 +692,10 @@ describe("embedded desktop panel presentation", () => {
       try {
         await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
         await settleTasks();
+        if (initialControl) {
+          selectSizing(panel, "match");
+          await panel.updateComplete;
+        }
         const inventoryReads = request.mock.calls.filter(
           ([method]) => method === "environments.list",
         ).length;
@@ -707,18 +713,33 @@ describe("embedded desktop panel presentation", () => {
         );
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(previous.disableInput).toHaveBeenCalledOnce();
+        const pendingMatch =
+          sizingMenu(panel).querySelector<HTMLOptionElement>('option[value="match"]');
+        expect(sizingMenu(panel).value).toBe(initialControl ? "match" : "fit");
+        if (initialControl) {
+          expect(pendingMatch?.selected).toBe(true);
+          expect(pendingMatch?.disabled).toBe(true);
+        } else {
+          expect(pendingMatch).toBeNull();
+        }
         gateway.emit("presence", { presence: [] });
         await settleTasks();
         expect(
           request.mock.calls.filter(([method]) => method === "environments.list"),
         ).toHaveLength(inventoryReads);
-        observe.resolve({ transport: "rfb", wsPath: "/control", control: !initialControl });
+        observe.resolve({
+          transport: "rfb",
+          wsPath: "/control",
+          control: !initialControl,
+          canResize: true,
+        });
         await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
         if (handleTiming === "before") {
           replacement.resolve(next);
           await settleTasks();
         }
         expect(previous.disconnect).not.toHaveBeenCalled();
+        expect(sizingMenu(panel).querySelector('option[value="match"]')).toBeNull();
         const input =
           panel.renderRoot.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
         if (!input) {
@@ -741,6 +762,10 @@ describe("embedded desktop panel presentation", () => {
         gateway.emit("presence", { presence: [] });
         await settleTasks();
         expect(pending.isCurrent()).toBe(true);
+        expect(sizingMenu(panel).value).toBe("fit");
+        expect(Boolean(sizingMenu(panel).querySelector('option[value="match"]'))).toBe(
+          !initialControl,
+        );
         expect(next.disconnect).not.toHaveBeenCalled();
         sendKey();
         expect(next.sendKeyboardEvent).toHaveBeenCalledTimes(initialControl ? 0 : 1);
@@ -987,6 +1012,7 @@ describe("embedded desktop panel presentation", () => {
       wsPath: "/desktop/observe?token=stale",
       expiresAtMs: 60_000,
       control: false,
+      canResize: true,
     });
     await settleTasks();
 

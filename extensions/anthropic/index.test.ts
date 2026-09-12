@@ -71,6 +71,7 @@ function levelIds(profile: unknown): Array<unknown> {
 }
 
 type Claude5ContractCase = {
+  defaultLevel?: "medium" | "high";
   name: string;
   modelId: string;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -672,6 +673,7 @@ describe("anthropic provider replay hooks", () => {
     })),
     {
       name: "resolves Claude Fable 5 with its always-adaptive model contract",
+      defaultLevel: "medium",
       modelId: "claude-fable-5",
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
       thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
@@ -680,6 +682,7 @@ describe("anthropic provider replay hooks", () => {
     },
     {
       name: "resolves Claude Fable 5.1 with its always-adaptive model contract",
+      defaultLevel: "medium",
       modelId: "claude-fable-5-1",
       cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
       thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
@@ -700,6 +703,7 @@ describe("anthropic provider replay hooks", () => {
     "$name",
     async ({
       modelId,
+      defaultLevel = "high",
       cost,
       thinkingLevelMap,
       checksMedia,
@@ -735,10 +739,10 @@ describe("anthropic provider replay hooks", () => {
       } as never);
       expect(levelIds(profile)).toStrictEqual(
         checksCliPolicy
-          ? ["minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+          ? ["low", "medium", "high", "xhigh", "max"]
           : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
       );
-      expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe("high");
+      expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe(defaultLevel);
       const normalized = provider.normalizeResolvedModel?.({
         provider: "anthropic",
         modelId,

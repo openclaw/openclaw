@@ -11,6 +11,7 @@ import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
+  compareOpenClawReleaseVersions,
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
   isPrereleaseSemverVersion,
@@ -22,12 +23,15 @@ import {
 } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
+  resolveDefaultNpmSpec,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import * as officialInstallRecords from "./official-external-install-records.js";
 import {
@@ -88,6 +92,29 @@ export type PluginUpdateIntegrityDriftParams = {
   resolvedSpec?: string;
   resolvedVersion?: string;
   dryRun: boolean;
+};
+
+export type UpdateInstalledPluginsParams = {
+  config: OpenClawConfig;
+  logger?: PluginUpdateLogger;
+  pluginIds?: string[];
+  skipIds?: Set<string>;
+  skipDisabledPlugins?: boolean;
+  syncOfficialPluginInstalls?: boolean;
+  disableOnFailure?: boolean;
+  retainOnUnavailable?: boolean;
+  timeoutMs?: number;
+  dryRun?: boolean;
+  updateChannel?: UpdateChannel;
+  officialPluginUpdateChannel?: UpdateChannel;
+  coreVersion?: string;
+  versionBoundPluginIds?: ReadonlySet<string>;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  specOverrides?: Record<string, string>;
+  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
+  packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 };
 
 export type UpdatablePluginInstallRecord = PluginInstallRecord & {
@@ -469,6 +496,29 @@ export function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
+/** Older managed releases resume the catalog's update policy after a successful update. */
+function resolveUnpinnedOfficialReleaseSpec(params: {
+  spec?: string;
+  officialSpec?: string;
+  coreVersion?: string;
+}): string | undefined {
+  const recorded = params.spec ? parseRegistryNpmSpec(params.spec) : null;
+  const official = params.officialSpec ? resolveDefaultNpmSpec(params.officialSpec) : null;
+  const pinnedVersion = normalizeExactSemverVersion(recorded?.selector);
+  const coreVersion = normalizeExactSemverVersion(params.coreVersion);
+  if (
+    recorded?.selectorKind !== "exact-version" ||
+    !pinnedVersion ||
+    !official?.name.startsWith("@openclaw/") ||
+    recorded.name !== official.name ||
+    !coreVersion
+  ) {
+    return undefined;
+  }
+  const order = compareOpenClawReleaseVersions(pinnedVersion, coreVersion);
+  return order !== null && order <= 0 ? official.raw : undefined;
+}
+
 /** Shares recorded target and catalog replacement precedence with update admission. */
 export function resolveNpmUpdateTarget(params: {
   record: PluginInstallRecord;
@@ -485,7 +535,12 @@ export function resolveNpmUpdateTarget(params: {
   const official = params.trustedOfficialInstall;
   const specOverride =
     params.specOverride ??
-    (official?.replacementPluginId || official?.replaceNpmPackage ? official.npmSpec : undefined);
+    (official?.replacementPluginId || official?.replaceNpmPackage ? official.npmSpec : undefined) ??
+    resolveUnpinnedOfficialReleaseSpec({
+      spec: params.record.spec,
+      officialSpec: official?.npmSpec,
+      coreVersion: params.coreVersion,
+    });
   const spec =
     specOverride ??
     params.record.spec ??
@@ -507,6 +562,7 @@ export function resolveNpmUpdateTarget(params: {
 
 export function resolveClawHubUpdateSpecs(params: {
   record: PluginInstallRecord;
+  officialSpec?: string;
   officialSpecOverride?: string;
   updateChannel?: UpdateChannel;
   officialPackageName?: string;
@@ -530,8 +586,18 @@ export function resolveClawHubUpdateSpecs(params: {
     params.officialSpecOverride ??
     params.record.resolvedSpec ??
     `clawhub:${clawhubPackage}`;
+  const recorded = parseClawHubPluginSpec(recordSpec);
+  const official = params.officialSpec ? parseClawHubPluginSpec(params.officialSpec) : null;
+  const unpinnedSpec =
+    recorded && official
+      ? resolveUnpinnedOfficialReleaseSpec({
+          spec: `${recorded.name}${recorded.version ? `@${recorded.version}` : ""}`,
+          officialSpec: `${official.name}${official.version ? `@${official.version}` : ""}`,
+          coreVersion: params.coreVersion,
+        })
+      : undefined;
   return resolveClawHubInstallSpecsForUpdateChannel({
-    spec: recordSpec,
+    spec: unpinnedSpec ? `clawhub:${unpinnedSpec}` : recordSpec,
     updateChannel: params.updateChannel,
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion,

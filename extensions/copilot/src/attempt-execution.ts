@@ -625,7 +625,11 @@ export async function runCopilotExecution(context: {
     } else {
       await bridge?.awaitCompactionChain();
       await bridge?.awaitAgentEventChain();
-      nativeSubagentTaskMirror?.finalizeActiveRuns();
+      try {
+        nativeSubagentTaskMirror?.finalizeActiveRuns();
+      } catch (error) {
+        promptError ??= toCopilotError(error);
+      }
       cleanupToolBridge?.();
       await cleanupByokProxy?.();
       bridge?.detach();

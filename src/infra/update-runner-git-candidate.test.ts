@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
+import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -242,6 +244,60 @@ describe("Git candidate activation", () => {
     ).toEqual([]);
   }
 
+  it.each([
+    ["success", undefined],
+    ["config-refused", "repair-requires-config-change"],
+    ["requester-revoked", "requester-revoked"],
+    ["doctor-error", "doctor-failed"],
+    ["missing", "doctor-entry-missing"],
+  ] as const)(
+    "uses the CLI activation Doctor and preserves its outcome: %s",
+    async (outcome, reason) => {
+      const targetSha = await advanceRemote();
+      const configChanges: UpdateDoctorConfigChange[] = [{ kind: "key", key: "agents" }];
+      const runGitDoctor = vi.fn(async (doctorRoot: string) => {
+        expect(stopped).toBe(true);
+        await expectRuntime(doctorRoot, targetSha);
+        events.push("owned-doctor");
+        if (outcome === "requester-revoked") {
+          throw new UpdateRequesterRevokedError();
+        }
+        if (outcome === "missing") {
+          return null;
+        }
+        return {
+          name: "openclaw doctor",
+          command: "candidate doctor",
+          cwd: doctorRoot,
+          durationMs: 1,
+          exitCode: outcome === "success" ? 0 : 1,
+          configChanges,
+          ...(outcome === "config-refused"
+            ? {
+                configWriteRefusal: {
+                  reason: "include-ownership",
+                  message: "An included file owns the pending config change.",
+                  keys: ["agents"],
+                },
+              }
+            : {}),
+        };
+      });
+
+      const result = await update({ runGitDoctor });
+
+      expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root);
+      expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
+      expect(result.status).toBe(outcome === "success" ? "ok" : "error");
+      expect(result.reason).toBe(reason);
+      if (outcome !== "requester-revoked" && outcome !== "missing") {
+        expect(result.steps.find((step) => step.name === "openclaw doctor")?.configChanges).toEqual(
+          configChanges,
+        );
+      }
+    },
+  );
+
   it.each(["dev", "stable", "beta"] as const)(
     "does not stop or build an already-current %s checkout",
     async (channel) => {
@@ -253,6 +309,30 @@ describe("Git candidate activation", () => {
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
     },
   );
+
+  it("keeps build and exposure source selection in the admitted candidate", async () => {
+    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
+    await advanceRemote();
+    const execute = runCommand;
+    let built = false;
+    let exposed = false;
+    runCommand = async (argv, options) => {
+      if (argv[0] === "pnpm" && argv[1] === "build") {
+        built = true;
+        expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
+      }
+      return execute(argv, options);
+    };
+    const result = await update({
+      prepareGitExposure: async (candidateRoot, _sha, env) => {
+        exposed = true;
+        expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+      },
+    });
+    expect(result.status).toBe("ok");
+    expect(built && exposed).toBe(true);
+    expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+  });
 
   it("falls back when only the latest dev candidate requires an incompatible Node runtime", async () => {
     const requiredMajor = Number.parseInt(process.versions.node.split(".")[0]!, 10) + 1;

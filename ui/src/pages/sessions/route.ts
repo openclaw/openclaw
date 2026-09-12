@@ -3,26 +3,11 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  type SessionArchivedFilter,
-  type SessionListOptions,
-} from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 
 export type SessionsRouteData = {
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
-};
-
-type SessionsPageListFilters = {
-  activeMinutes?: number;
-  limit?: number;
-  includeGlobal: boolean;
-  includeUnknown: boolean;
-  statusFilter: SessionArchivedFilter;
-  deepLinkSessionKey?: string | null;
-  search?: string;
 };
 
 function routeOptions(location: RouteLocation) {
@@ -34,31 +19,6 @@ function routeOptions(location: RouteLocation) {
   const statusFilter: SessionArchivedFilter =
     requestedStatus === "archived" ? "archived" : requestedStatus === "all" ? "all" : "active";
   return { expandedSessionKey, statusFilter };
-}
-
-export function sessionsPageListQuery(
-  context: Pick<ApplicationContext, "agentSelection">,
-  filters: SessionsPageListFilters,
-): SessionListOptions {
-  const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;
-  const scopeAgentId =
-    parseAgentSessionKey(deepLinkSessionKey)?.agentId ??
-    context.agentSelection.state.scopeId?.trim();
-  const activeMinutes =
-    !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
-  return {
-    limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
-    ...(activeMinutes ? { activeMinutes } : {}),
-    ...(deepLinkSessionKey || filters.search?.trim()
-      ? { search: deepLinkSessionKey ?? filters.search!.trim() }
-      : {}),
-    includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
-    includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
-    includeDerivedTitles: false,
-    includeLastMessage: false,
-    archivedFilter: filters.statusFilter,
-    ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
-  };
 }
 
 async function loadSessionsRoute(

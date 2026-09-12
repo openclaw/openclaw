@@ -23,6 +23,7 @@ function renderStrip(options: {
   onNew?: () => void;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
   onSelect?: (id: string) => void;
+  separateTabs?: boolean;
   container?: HTMLDivElement;
 }) {
   const container = options.container ?? document.createElement("div");
@@ -35,6 +36,7 @@ function renderStrip(options: {
       onClose: options.onClose ?? vi.fn(),
       onNew: options.onNew ?? vi.fn(),
       onReorder: options.onReorder,
+      separateTabs: options.separateTabs,
       newLabel: "New tab",
     }),
     container,
@@ -71,6 +73,28 @@ describe("renderPanelTabStrip", () => {
 
     expect(container.querySelector("wa-tab-group")).not.toBeNull();
     expect(container.querySelector(".tabstrip-new")?.getAttribute("slot")).toBe("nav");
+  });
+
+  it.each([
+    { groups: [undefined, undefined, undefined, undefined], before: [2, 3, 4] },
+    { groups: ["files", "browser", "browser", "terminal"], before: [2, 4] },
+    { groups: ["browser", "browser", "browser", "browser"], before: [] },
+  ])("keeps separators only outside adjacent groups ($groups)", ({ groups, before }) => {
+    const tabs = groups.map((group, index) => ({
+      ...TAB,
+      id: `tab-${index + 1}`,
+      domId: `test-tab-${index + 1}`,
+      group,
+    }));
+    const container = renderStrip({ tabs, separateTabs: true });
+    const separatorTargets = () =>
+      [...container.querySelectorAll(".tabstrip-separator")].map(
+        (separator) => separator.nextElementSibling?.id,
+      );
+
+    expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
+    renderStrip({ tabs, separateTabs: true, activeId: "tab-2", container });
+    expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
   });
 
   it("reports user selection without echoing controlled selection changes", () => {
@@ -201,47 +225,87 @@ describe("renderPanelTabStrip", () => {
   // "before"/"after" are array order, so the physical half that means "before"
   // flips with the writing direction. Both rows exercise the same pointer x.
   it.each([
-    { dir: "ltr", placement: "before" },
-    { dir: "rtl", placement: "after" },
-  ])("reorders draggable tabs at the requested edge ($dir)", ({ dir, placement }) => {
-    document.documentElement.setAttribute("dir", dir);
+    { dir: "ltr", placement: "before", reorderIds: undefined },
+    { dir: "rtl", placement: "after", reorderIds: undefined },
+    { dir: "ltr", placement: "before", reorderIds: ["files", "browser"] },
+  ])(
+    "reorders draggable tabs at the requested edge ($dir, $reorderIds)",
+    ({ dir, placement, reorderIds }) => {
+      document.documentElement.setAttribute("dir", dir);
+      const onReorder = vi.fn();
+      // Direction is inherited, so the strip has to be in the document for
+      // getComputedStyle to report the writing direction under test.
+      const host = document.createElement("div");
+      document.body.append(host);
+      const container = renderStrip({
+        tabs: [
+          { ...TAB, reorderId: reorderIds?.[0] },
+          {
+            ...TAB,
+            id: "tab-2",
+            domId: "test-tab-2",
+            label: "Second tab",
+            reorderId: reorderIds?.[1],
+            draggable: reorderIds ? false : undefined,
+          },
+        ],
+        onReorder,
+        container: host,
+      });
+      const [source, target] = [...container.querySelectorAll<HTMLElement>("wa-tab")];
+      const values = new Map<string, string>();
+      const dataTransfer = {
+        dropEffect: "none",
+        effectAllowed: "none",
+        getData: (type: string) => values.get(type) ?? "",
+        setData: (type: string, value: string) => values.set(type, value),
+      };
+      const dispatchDrag = (element: HTMLElement, type: string, clientX: number) => {
+        const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
+        Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+        element.dispatchEvent(event);
+      };
+      vi.spyOn(target!, "getBoundingClientRect").mockReturnValue({
+        left: 100,
+        width: 80,
+      } as DOMRect);
+
+      dispatchDrag(source!, "dragstart", 0);
+      const sourceId = reorderIds?.[0] ?? "tab-1";
+      expect(container.querySelector<HTMLElement>("wa-tab-group")?.dataset.draggedPanelTab).toBe(
+        sourceId,
+      );
+      expect(dataTransfer.getData("application/x-openclaw-panel-tab")).toBe(sourceId);
+      dispatchDrag(target!, "dragover", 110);
+      // The indicator must preview the same edge the drop will use; `drop` clears
+      // it, so the class is read while the drag is still over the target.
+      const previewed = target?.classList.contains(`is-drop-${placement}`);
+      dispatchDrag(target!, "drop", 110);
+
+      expect(source?.draggable).toBe(true);
+      expect(previewed).toBe(true);
+      expect(onReorder).toHaveBeenCalledWith(sourceId, reorderIds?.[1] ?? "tab-2", placement);
+    },
+  );
+
+  it("omits dragging and ignores dragstart for a tab with draggable false", () => {
     const onReorder = vi.fn();
-    // Direction is inherited, so the strip has to be in the document for
-    // getComputedStyle to report the writing direction under test.
-    const host = document.createElement("div");
-    document.body.append(host);
     const container = renderStrip({
-      tabs: [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" }],
+      tabs: [{ ...TAB, draggable: false }],
       onReorder,
-      container: host,
     });
-    const [source, target] = [...container.querySelectorAll<HTMLElement>("wa-tab")];
-    const values = new Map<string, string>();
-    const dataTransfer = {
-      dropEffect: "none",
-      effectAllowed: "none",
-      getData: (type: string) => values.get(type) ?? "",
-      setData: (type: string, value: string) => values.set(type, value),
-    };
-    const dispatchDrag = (element: HTMLElement, type: string, clientX: number) => {
-      const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
-      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-      element.dispatchEvent(event);
-    };
-    vi.spyOn(target!, "getBoundingClientRect").mockReturnValue({
-      left: 100,
-      width: 80,
-    } as DOMRect);
+    const tab = container.querySelector("wa-tab")!;
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "none" };
+    const event = new MouseEvent("dragstart", { bubbles: true });
+    Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
 
-    dispatchDrag(source!, "dragstart", 0);
-    dispatchDrag(target!, "dragover", 110);
-    // The indicator must preview the same edge the drop will use; `drop` clears
-    // it, so the class is read while the drag is still over the target.
-    const previewed = target?.classList.contains(`is-drop-${placement}`);
-    dispatchDrag(target!, "drop", 110);
-
-    expect(source?.draggable).toBe(true);
-    expect(previewed).toBe(true);
-    expect(onReorder).toHaveBeenCalledWith("tab-1", "tab-2", placement);
+    expect(tab.hasAttribute("draggable")).toBe(false);
+    tab.dispatchEvent(event);
+    expect(dataTransfer.setData).not.toHaveBeenCalled();
+    expect(dataTransfer.effectAllowed).toBe("none");
+    expect(container.querySelector("wa-tab-group")?.hasAttribute("data-dragged-panel-tab")).toBe(
+      false,
+    );
+    expect(onReorder).not.toHaveBeenCalled();
   });
 });

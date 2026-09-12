@@ -236,14 +236,10 @@ function resolvePluginNpmRuntimePackageFiles(plan: {
       : [],
   );
   merged.add("dist/**");
-  if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
-    merged.add("openclaw.plugin.json");
-  }
-  if (packageRelativePathExists(plan.packageDir, "README.md")) {
-    merged.add("README.md");
-  }
-  if (packageRelativePathExists(plan.packageDir, "SKILL.md")) {
-    merged.add("SKILL.md");
+  for (const file of ["openclaw.plugin.json", "README.md", "SKILL.md", "assets/icon.png"]) {
+    if (packageRelativePathExists(plan.packageDir, file)) {
+      merged.add(file);
+    }
   }
   if (packageRelativePathExists(plan.packageDir, "skills")) {
     merged.add("skills/**");

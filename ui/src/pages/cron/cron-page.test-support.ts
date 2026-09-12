@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type { CronState } from "../../lib/cron/index.ts";
 
 type CronTestPage = HTMLElement & {
@@ -25,6 +26,7 @@ type TestGateway = ApplicationContext["gateway"] & {
 };
 
 export function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
+  invalidateChatMetadataStore(client);
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "stopped",
@@ -52,12 +54,21 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
       return () => eventListeners.delete(listener);
     },
     emitSnapshot(patch: Partial<ApplicationGatewaySnapshot>) {
+      if (snapshot.phase === "connected" && patch.phase && patch.phase !== "connected") {
+        invalidateChatMetadataStore(client);
+      }
       Object.assign(snapshot, patch);
       for (const listener of snapshotListeners) {
         listener(snapshot);
       }
     },
     emitRetiredEvent(event: Parameters<GatewayEventListener>[0]) {
+      if (
+        eventListeners.size > 0 &&
+        (event.event === "config.changed" || event.event === "chat.metadata.changed")
+      ) {
+        invalidateChatMetadataStore(client);
+      }
       for (const listener of allEventListeners) {
         listener(event);
       }

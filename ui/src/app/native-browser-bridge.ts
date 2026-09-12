@@ -1,5 +1,5 @@
 /**
- * Canonical macOS Browser bridge (DashboardBrowserMessageHandler mirrors these keys).
+ * Canonical native browser bridge (macOS and Tauri hosts mirror these keys).
  * Handler: window.webkit.messageHandlers.openclawBrowser, Promise reply {ok:true,...}
  * or {ok:false,error}. Requests use type: open {tabId,url,sessionKey,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot/download {tabId}, inspect {tabId,x,y},
@@ -18,7 +18,7 @@
  * Keep this bridge transition until supported app/UI releases all carry session keys.
  * Tabs are in creation order; openedBy is web|native. Snapshot adds dataUrl (PNG),
  * cssWidth,cssHeight; inspect adds node (BrowserInspectedNode|null).
- * Download saves the current tab through macOS, preserving its browser session;
+ * Download saves the current tab through its native host, preserving its browser session;
  * its reply adds cancelled (true when the save panel was dismissed).
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

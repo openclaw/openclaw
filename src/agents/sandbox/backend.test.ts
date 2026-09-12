@@ -7,6 +7,8 @@ import {
   getSandboxBackendWorkdirResolver,
   registerSandboxBackend,
 } from "./backend.js";
+import type { ReservedSandboxBackendFactoryV1 } from "./backend.types.js";
+import { resolveSandboxConfigForAgent as resolveTestSandboxConfig } from "./config.js";
 
 function createGenerationRegistration(label: string) {
   return {
@@ -22,6 +24,54 @@ function createGenerationRegistration(label: string) {
 }
 
 describe("sandbox backend registry", () => {
+  it("checks reserved-runtime authority before invoking an opted-in factory", async () => {
+    const factory = vi.fn<ReservedSandboxBackendFactoryV1>(async () => {
+      throw new Error("provider factory reached");
+    });
+    const restore = registerSandboxBackend("reserved-authority", {
+      factory,
+      reserveRuntimeId: () => "reserved-runtime",
+    });
+    try {
+      const invoke = getSandboxBackendFactory("reserved-authority");
+      if (!invoke) {
+        throw new Error("Expected the registered backend factory.");
+      }
+      const params = {
+        cfg: resolveTestSandboxConfig(),
+        sessionKey: "test",
+        scopeKey: "test",
+        workspaceDir: "/workspace",
+        agentWorkspaceDir: "/workspace",
+      };
+      const assertRuntimeCurrent = vi.fn(() => {});
+      for (const incomplete of [
+        params,
+        { ...params, runtimeId: "reserved-runtime" },
+        { ...params, assertRuntimeCurrent },
+      ]) {
+        await expect(invoke(incomplete)).rejects.toThrow("registry-reserved runtime");
+      }
+      await expect(
+        invoke({
+          ...params,
+          runtimeId: "reserved-runtime",
+          assertRuntimeCurrent: () => {
+            throw new Error("runtime removed");
+          },
+        }),
+      ).rejects.toThrow("runtime removed");
+      expect(factory).not.toHaveBeenCalled();
+      await expect(
+        invoke({ ...params, runtimeId: "reserved-runtime", assertRuntimeCurrent }),
+      ).rejects.toThrow("provider factory reached");
+      expect(assertRuntimeCurrent).toHaveBeenCalledOnce();
+      expect(factory).toHaveBeenCalledOnce();
+    } finally {
+      restore();
+    }
+  });
+
   it("registers Podman as a built-in backend", () => {
     expect(getSandboxBackendFactory("podman")).not.toBeNull();
     expect(getSandboxBackendManager("podman")).not.toBeNull();

@@ -11,6 +11,7 @@ import {
   resolveMigrationProviderPublicArtifacts,
   type MigrationProviderArtifactPlugin,
 } from "./migration-provider-public-artifacts.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
 type MigrationProviderPluginResolution = {
@@ -139,11 +140,13 @@ export async function withPluginMigrationProviders<T>(
     ...(compatConfig === undefined ? {} : { config: compatConfig }),
     onlyPluginIds: resolution.pluginIds,
   });
+  const providers = mergeMigrationProviders(
+    activeProviders,
+    acquisition.registry.migrationProviders,
+  ).map((provider) => getPluginValueInstance(provider)?.wrap(provider) ?? provider);
   let result: T;
   try {
-    result = await run(
-      mergeMigrationProviders(activeProviders, acquisition.registry.migrationProviders),
-    );
+    result = await run(providers);
   } catch (error) {
     const failures = [error];
     try {

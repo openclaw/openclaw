@@ -30,8 +30,10 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
+  sidebarMainPanel,
   isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
@@ -123,6 +125,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         state.requestUpdate?.();
       }}
     ></openclaw-chat-outbox-recovery>`;
+    const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const chat = renderChat({
       ...chatProps,
       pluginToolIcons: this.toolIcons.icons,
@@ -131,7 +134,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         this.presented &&
         this.visuallyPresented &&
         isSidebarSlotVisible(sidebarLayout, "conversation"),
-      browserTabPreviewsActive: this.active && this.presented,
+      latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
       header: nothing,
     });
@@ -143,6 +146,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
+    const browserTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "browser";
     // Another pane can own keyboard focus while this desktop remains visible.
     const desktopPresented =
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "desktop");
@@ -171,10 +175,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
+      browserTabsInHeader,
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
-      preferredBrowserTab: [
-        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
-      ].at(-1),
+      preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
@@ -251,6 +254,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
+      fetchFavicon: resolveChatLinkFaviconFetcher(state),
       availableSlots,
       callbacks: sidebarRegionCallbacks({
         state,

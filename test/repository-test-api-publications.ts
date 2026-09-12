@@ -33,7 +33,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),
-  "src/agents/embedded-agent-runner/extra-params.ts": Symbol.for("openclaw.extraParamsTestApi"),
   "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
   "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
@@ -80,9 +79,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/commands/doctor-sandbox.ts": Symbol.for("openclaw.doctorSandboxTestApi"),
   "src/commands/doctor-session-snapshots.ts": Symbol.for("openclaw.doctorSessionSnapshotsTestApi"),
-  "src/commands/doctor-whatsapp-responsiveness.ts": Symbol.for(
-    "openclaw.doctorWhatsappResponsivenessTestApi",
-  ),
   "src/commands/doctor/shared/codex-native-assets.ts": Symbol.for(
     "openclaw.codexNativeAssetsTestApi",
   ),
@@ -107,7 +103,6 @@ const publications: Record<string, string | symbol> = {
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
   "src/logging/diagnostic.ts": Symbol.for("openclaw.diagnosticTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
-  "src/media-understanding/runner.ts": Symbol.for("openclaw.mediaUnderstandingRunnerTestApi"),
   "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
   "src/media/store.ts": Symbol.for("openclaw.mediaStoreTestApi"),
   "src/model-catalog/remote-overlay.ts": Symbol.for("openclaw.remoteModelCatalogOverlayTestApi"),

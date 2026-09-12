@@ -1452,6 +1452,17 @@ describe("config cli", () => {
   });
 
   describe("config get", () => {
+    it.each([
+      { args: ["gateway.port", ""], code: "commander.excessArguments" },
+      { args: ["gateway.port", "", "--json"], code: "commander.excessArguments" },
+      { args: ["gateway.port", "", "--unknown"], code: "commander.unknownOption" },
+    ])("rejects malformed getter argv $args before reading config", async ({ args, code }) => {
+      await expect(runConfigCommand(["config", "get", ...args])).rejects.toMatchObject({ code });
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
     it("reads the valid configuration without observing persistent health state", async () => {
       setGatewaySnapshot();
 

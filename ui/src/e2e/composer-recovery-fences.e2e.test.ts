@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -17,6 +18,115 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("reopens composer storage after the browser forcibly closes its database", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+      await page.route("**/composer-storage-reopen", (route) =>
+        route.fulfill({ contentType: "text/html", body: "Composer storage recovery" }),
+      );
+      await page.goto(`${suite.server.baseUrl}composer-storage-reopen`);
+      const draftStore = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const scope = {
+        gatewayOwner: "reopen-gateway",
+        recoveryScope: "reopen-owner",
+        scopeKey: "chat:v3:agent:main:reopen\u0000agent:main",
+      };
+      expect(
+        await draftStore.evaluate(
+          (store, destination) => store.prepareDurableComposerRecovery(destination),
+          scope,
+        ),
+      ).toEqual({ status: "ready", entries: [] });
+      const database = await page.evaluateHandle<
+        typeof import("../lib/chat/control-ui-database.runtime.ts")
+      >('import("/src/lib/chat/control-ui-database.runtime.ts")');
+      const lifecycle = await database.evaluateHandle(async (store) => {
+        const connection = await store.openControlUiDatabase();
+        return {
+          closed: new Promise<void>((resolve) => {
+            connection.addEventListener("close", () => resolve(), { once: true });
+          }),
+        };
+      });
+      const protocol = await context.newCDPSession(page);
+      try {
+        await protocol.send("Storage.clearDataForOrigin", {
+          origin: new URL(suite.server.baseUrl).origin,
+          storageTypes: "indexeddb",
+        });
+        await lifecycle.evaluate((state) => state.closed);
+      } finally {
+        await protocol.detach();
+      }
+      const result = await draftStore.evaluate(async (store, destination) => {
+        const recovered = await store.prepareDurableComposerRecovery(destination);
+        const written = await store.writeDurableComposerDraft(
+          destination,
+          { revision: 1, text: "Draft after browser storage recovery", attachments: [] },
+          { expectedRevision: 0, writeId: "after-reopen" },
+        );
+        return { recovered, written, read: await store.readDurableComposerDraft(destination) };
+      }, scope);
+      expect(result).toMatchObject({
+        recovered: { status: "ready", entries: [] },
+        written: { status: "persisted" },
+        read: { status: "found", draft: { text: "Draft after browser storage recovery" } },
+      });
+    });
+  });
+
+  it("shows a storage failure without claiming there are messages missing destinations", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 700 } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}settings`);
+        await page.evaluate(() => {
+          IDBFactory.prototype.open = () => {
+            throw new DOMException("Storage unavailable", "UnknownError");
+          };
+        });
+        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
+        await page.evaluate(() => {
+          const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
+            host: {
+              settings: { gatewayUrl: "ws://recovery-error.test" },
+              connected: true,
+              client: { recoveryScopeReady: true, recoveryScope: "owner" },
+              sessionKey: "agent:main:main",
+              chatMessage: "",
+              chatAttachments: [],
+              chatQueue: [],
+            },
+            identity: "storage-error",
+          });
+          const stage = document.createElement("main");
+          stage.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--bg)";
+          stage.append(component);
+          document.body.append(stage);
+        });
+        const notice = page.locator(".chat-outbox-recovery");
+        await notice.locator("summary").click();
+        await notice.getByRole("alert").waitFor();
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+          const artifacts = createControlUiE2eArtifactDir("recovery-error");
+          await page.screenshot({ path: `${artifacts}/expanded.png`, animations: "disabled" });
+          await page.setViewportSize({ width: 390, height: 700 });
+          await page.screenshot({ path: `${artifacts}/mobile.png`, animations: "disabled" });
+        }
+        expect((await notice.locator("summary").textContent())?.trim()).toBe(
+          "Saved messages could not be loaded",
+        );
+        expect(await notice.textContent()).not.toContain("older browser");
+        expect(await notice.textContent()).not.toContain("Free browser storage");
+        expect(await notice.getByRole("button", { name: "Restore here for review" }).count()).toBe(
+          0,
+        );
+      },
+    );
+  });
+
   it("commits an independent offline split-pane draft after submit, remove and reorder", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },

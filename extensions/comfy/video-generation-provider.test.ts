@@ -3,6 +3,7 @@ import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/p
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildComfyConfig,
+  fetchGuardJson,
   mockComfyCloudJobResponses,
   mockComfyProviderApiKey,
   parseComfyJsonBody,
@@ -39,27 +40,14 @@ function mockLocalVideoResponses(params: {
   };
 }) {
   fetchWithSsrFGuardMock
-    .mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ prompt_id: params.promptId }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      release: vi.fn(async () => {}),
-    })
-    .mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          [params.promptId]: {
-            outputs: params.outputs,
-          },
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
+    .mockResolvedValueOnce(fetchGuardJson({ prompt_id: params.promptId }))
+    .mockResolvedValueOnce(
+      fetchGuardJson({
+        [params.promptId]: {
+          outputs: params.outputs,
         },
-      ),
-      release: vi.fn(async () => {}),
-    });
+      }),
+    );
 
   if (params.download) {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -124,31 +112,18 @@ describe("comfy video-generation provider", () => {
 
   it("submits a local workflow, waits for history, and downloads videos", async () => {
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "local-video-1": {
-              outputs: {
-                "9": {
-                  gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
-                },
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-video-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-video-1": {
+            outputs: {
+              "9": {
+                gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
               },
             },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
           },
-        ),
-        release: vi.fn(async () => {}),
-      })
+        }),
+      )
       .mockResolvedValueOnce({
         response: new Response(Buffer.from("mp4-data"), {
           status: 200,
@@ -319,31 +294,18 @@ describe("comfy video-generation provider", () => {
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "local-video-1": {
-              outputs: {
-                "9": {
-                  gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
-                },
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-video-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-video-1": {
+            outputs: {
+              "9": {
+                gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
               },
             },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
           },
-        ),
-        release: vi.fn(async () => {}),
-      })
+        }),
+      )
       .mockResolvedValueOnce({
         response: new Response(Buffer.from("too-large"), {
           status: 200,
