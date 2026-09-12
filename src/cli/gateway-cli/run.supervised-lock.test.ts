@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayRuntimeConfig } from "../../gateway/server-runtime-config.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
 import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
@@ -23,6 +24,66 @@ function createLogger() {
 }
 
 describe("supervised gateway lock recovery", () => {
+  it("retries lifecycle contention without treating a healthy port as ownership", async () => {
+    const error = new GatewayLockError(
+      "failed to acquire gateway state ownership",
+      new StateDatabaseCoordinatorContentionError("gateway-lifecycle"),
+    );
+    const startLoop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce();
+    const probeHealth = vi.fn(async () => true);
+    let elapsedMs = 0;
+    await testing.runGatewayLoopWithSupervisedLockRecovery({
+      startLoop,
+      supervisor: "systemd",
+      port: 18789,
+      healthHost: "127.0.0.1",
+      log: createLogger(),
+      probeHealth,
+      now: () => elapsedMs,
+      sleep: async (ms) => {
+        elapsedMs += ms;
+      },
+    });
+    expect(startLoop).toHaveBeenCalledTimes(2);
+    expect(probeHealth).not.toHaveBeenCalled();
+  });
+
+  it("spends one budget across supervised retries and lifecycle acquisition", async () => {
+    let elapsedMs = 0;
+    const error = new GatewayLockError(
+      "failed to acquire gateway state ownership; waited 295000ms for gateway-lifecycle ownership",
+      new StateDatabaseCoordinatorContentionError("gateway-lifecycle"),
+    );
+    const budgets: Array<number | undefined> = [];
+    const startLoop = vi.fn(async (deadlineMs?: number) => {
+      budgets.push(deadlineMs === undefined ? undefined : deadlineMs - elapsedMs);
+      if (budgets.length > 1) {
+        elapsedMs = deadlineMs ?? elapsedMs;
+      }
+      throw error;
+    });
+    const sleep = vi.fn(async (ms: number) => {
+      elapsedMs += ms;
+    });
+    await expect(
+      testing.runGatewayLoopWithSupervisedLockRecovery({
+        startLoop,
+        supervisor: "systemd",
+        port: 18789,
+        healthHost: "127.0.0.1",
+        log: createLogger(),
+        now: () => elapsedMs,
+        sleep,
+      }),
+    ).rejects.toBe(error);
+    expect(budgets).toEqual([300_000, 295_000]);
+    expect(elapsedMs).toBe(300_000);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
   it("uses exit 78 for an ambiguous persistent Tailscale route", () => {
     expect(
       testing.resolveGatewayStartupFailureExitCode(new TailscaleRouteOwnershipConflictError()),

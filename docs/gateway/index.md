@@ -249,8 +249,8 @@ Manual user-unit example when you need a custom install path:
 Description=OpenClaw Gateway
 After=network-online.target
 Wants=network-online.target
-StartLimitBurst=5
-StartLimitIntervalSec=60
+StartLimitBurst=10
+StartLimitIntervalSec=300
 
 [Service]
 ExecStart=/usr/local/bin/openclaw gateway --port 18789
