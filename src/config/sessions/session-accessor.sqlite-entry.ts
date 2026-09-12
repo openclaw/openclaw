@@ -257,11 +257,20 @@ export function listSessionEntryRows(scope: SessionEntryListScope = {}): Session
  * acceptable degradation (health snapshots) or hides real state (migration detection).
  */
 export function listSessionEntriesReadOnly(
-  scope: SessionEntryListScope = {},
+  scope: SessionEntryListScope & {
+    /** Select exact persisted keys after validating the complete listing snapshot. */
+    sessionKeys?: readonly string[];
+  } = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database, resolved, scope),
+    (database) =>
+      listSqliteSessionEntriesFromDatabase(
+        database,
+        resolved,
+        scope,
+        scope.sessionKeys ? new Set(scope.sessionKeys) : undefined,
+      ),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
@@ -316,6 +325,7 @@ function listSqliteSessionEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedSqliteScope,
   scope: SessionEntryListScope,
+  sessionKeys?: ReadonlySet<string>,
 ): SessionEntrySummary[] {
   const projection = scope.projection ?? "full";
   const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
@@ -327,21 +337,27 @@ function listSqliteSessionEntriesFromDatabase(
     latest: scope.readConsistency === "latest",
     projection,
   });
-  return projectSessionEntriesForListing(snapshot, projection === "list" && scope.clone !== false);
+  return projectSessionEntriesForListing(
+    snapshot,
+    projection === "list" && scope.clone !== false,
+    sessionKeys,
+  );
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
 export function projectSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
+  sessionKeys?: ReadonlySet<string>,
 ): SessionEntrySummary[] {
-  return snapshot.keys.flatMap((sessionKey) => {
+  const entries: SessionEntrySummary[] = [];
+  for (const sessionKey of snapshot.keys) {
     if (isInternalSessionEffectsKey(sessionKey)) {
-      return [];
+      continue;
     }
     const entry = snapshot.entries.get(sessionKey);
     if (!entry) {
-      return [];
+      continue;
     }
     const deliveryCanonicalKey = resolveDeliveryProvenCanonicalSessionKey(sessionKey, entry);
     if (deliveryCanonicalKey !== sessionKey) {
@@ -349,14 +365,17 @@ export function projectSessionEntriesForListing(
         `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
       );
     }
+    // Selection cannot hide a non-canonical row elsewhere in the same snapshot.
+    if (sessionKeys && !sessionKeys.has(sessionKey)) {
+      continue;
+    }
     // Full snapshots own their nested values; list snapshots may share cached entries.
-    return [
-      {
-        sessionKey,
-        entry: cloneEntries ? cloneSessionEntry(entry) : entry,
-      },
-    ];
-  });
+    entries.push({
+      sessionKey,
+      entry: cloneEntries ? cloneSessionEntry(entry) : entry,
+    });
+  }
+  return entries;
 }
 
 /** Lists only entries whose normalized session row has one of the requested statuses. */
