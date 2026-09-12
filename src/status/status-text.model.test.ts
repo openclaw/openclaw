@@ -146,12 +146,50 @@ describe("buildStatusText prepared context windows", () => {
 
   it.each([
     ["stale runtime telemetry", {}],
-    ["stale resolved context", { contextTokensSource: "resolved-v1" }],
-    ["absent runtime model", { modelProvider: undefined, model: undefined }],
-  ] satisfies Array<[string, Partial<InternalSessionEntry>]>)(
+    ["stale resolved context", { entry: { contextTokensSource: "resolved-v1" } }],
+    ["absent runtime model", { entry: { modelProvider: undefined, model: undefined } }],
+    [
+      "padded selected notice",
+      {
+        entry: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "  deepseek/deepseek-v4-flash  ",
+            activeModel: "fallback/small-model",
+          },
+        },
+      },
+    ],
+    [
+      "literal provider-local model",
+      {
+        status: { provider: "MiXeD", model: "Vendor/Model:opaque" },
+        entry: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "mixed/Vendor/Model:opaque",
+            activeModel: "fallback/small-model",
+          },
+        },
+      },
+    ],
+    [
+      "legacy embedded provider",
+      {
+        entry: {
+          modelOverride: "MiXeD/Model:Case",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "MiXeD/Model:Case",
+            activeModel: "fallback/small-model",
+          },
+        },
+      },
+    ],
+  ] satisfies Array<[string, Parameters<typeof renderTerminalFallback>[0]]>)(
     "projects a settled terminal fallback over %s without relabeling the entry",
-    async (_name, entry) => {
-      const parts = await renderTerminalFallback({ entry });
+    async (_name, params) => {
+      const parts = await renderTerminalFallback(params);
       expect(parts.text).toContain("Fallback: fallback/small-model");
       expect(parts.text).toContain("Context: 45k/128k");
       expect(parts.text).not.toContain("45k/1.0m");
@@ -192,18 +230,6 @@ describe("buildStatusText prepared context windows", () => {
       },
     ],
     [
-      "stale selected notice",
-      {
-        entry: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/older-model",
-            activeModel: "fallback/small-model",
-          },
-        },
-      },
-    ],
-    [
       "unmatched active notice",
       {
         entry: {
@@ -223,6 +249,26 @@ describe("buildStatusText prepared context windows", () => {
       expect(parts.text).toContain("Context: 45k/1.0m");
     },
   );
+
+  it("skips terminal transcript access for a stale selected notice", async () => {
+    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage");
+    try {
+      const parts = await renderTerminalFallback({
+        entry: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "deepseek/older-model",
+            activeModel: "fallback/small-model",
+          },
+        },
+      });
+      expect(parts.text).not.toContain("Fallback: fallback/small-model");
+      expect(parts.text).toContain("Context: 45k/1.0m");
+      expect(readTail).not.toHaveBeenCalled();
+    } finally {
+      readTail.mockRestore();
+    }
+  });
 
   it("retains the incoming prepared cap when it already belongs to the terminal pair", async () => {
     const parts = await renderTerminalFallback({
