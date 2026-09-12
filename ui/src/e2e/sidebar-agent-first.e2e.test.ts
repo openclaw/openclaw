@@ -9,6 +9,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent-first sidebar geometry" });
+const imageAvatar =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";
 const agentsList: AgentsListResult = {
   defaultId: "main",
   mainKey: "main",
@@ -16,14 +18,14 @@ const agentsList: AgentsListResult = {
   agents: [
     { id: "main", name: "Engineering" },
     { id: "research", name: "Research", identity: { emoji: "🔬" } },
-    { id: "writing", name: "Writing", identity: { avatarUrl: "/favicon.svg" } },
+    { id: "writing", name: "Writing", identity: { avatarUrl: imageAvatar } },
   ],
 };
 const row = (
   id: string,
   label: string,
-  extra: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow => ({
+  extra: Partial<GatewaySessionRow & { updatedAt: number }> = {},
+): GatewaySessionRow & { updatedAt: number } => ({
   key: `agent:main:${id}`,
   kind: "direct",
   agentId: "main",
@@ -32,7 +34,9 @@ const row = (
   ...extra,
 });
 const rows = [
-  row("parent", "Implement the navigation sidebar without losing independent outcomes"),
+  row("parent", "Implement the navigation sidebar without losing independent outcomes", {
+    lastMessagePreview: "A preview must not create a second line in team mode.",
+  }),
   row("child", "Check rendering", { spawnedBy: "agent:main:parent" }),
   row("grandchild", "Compare deeply nested layouts with long labels", {
     spawnedBy: "agent:main:child",
@@ -79,6 +83,7 @@ suite.define(() => {
           await page.addInitScript(
             ({ key, prefs }) => {
               localStorage.setItem(key, JSON.stringify(prefs));
+              localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
               localStorage.setItem(
                 "openclaw:control-ui:community-invite",
                 JSON.stringify({ dismissedAtMs: Date.now() }),
@@ -86,7 +91,11 @@ suite.define(() => {
             },
             {
               key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-              prefs: { sidebarAgentsMode: "roster", navWidth: width, themeMode: mode },
+              prefs: {
+                sidebarAgentsMode: "roster",
+                navWidth: width,
+                themeMode: mode,
+              },
             },
           );
           await installMockGateway(page, {
@@ -136,7 +145,7 @@ suite.define(() => {
             await sidebar
               .locator('[data-agent-group="writing"] .sidebar-agent-roster__avatar img')
               .getAttribute("src"),
-          ).toBe("/favicon.svg");
+          ).toBe(imageAvatar);
           const geometry = () =>
             group.evaluate((element) => {
               const avatar = element

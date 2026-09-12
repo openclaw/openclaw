@@ -166,8 +166,8 @@ export function visibleSessionChildren(params: {
       );
 }
 
-/** Main headers and session rows share all independently owned state and context indicators. */
-export function renderSidebarSessionIndicators(
+/** Compose independently owned session state and context indicators. */
+function renderSidebarSessionIndicators(
   host: SessionListHost,
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
@@ -357,7 +357,7 @@ export function renderRecentSession(params: {
   const ownAttention = session.ownAttention ?? session.attention;
   const label = session.label;
   const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
-    session: team ? { ...session, attention: ownAttention } : session,
+    session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
     sidebarLiveActivity: host.sidebarLiveActivity,
@@ -386,7 +386,7 @@ export function renderRecentSession(params: {
     team ? "sidebar-recent-session--team" : "",
     color ? "sidebar-recent-session--colored" : "",
     session.isChild ? "sidebar-recent-session--child" : "",
-    !subtitle ? "sidebar-recent-session--single-line" : "",
+    team || !subtitle ? "sidebar-recent-session--single-line" : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
@@ -474,7 +474,7 @@ export function renderRecentSession(params: {
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
-            ${team && ownAttention.kind !== "none" ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
+            ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
             ${indicators.content}
           </span>
         </span>
@@ -483,9 +483,9 @@ export function renderRecentSession(params: {
         session.childSessionKeys.length > 0
           ? html`<button
               class="sidebar-child-session-toggle ${
-                session.runningChildCount > 0
+                !team && session.runningChildCount > 0
                   ? "sidebar-child-session-toggle--running"
-                  : session.failedChildCount > 0
+                  : !team && session.failedChildCount > 0
                     ? "sidebar-child-session-toggle--failed"
                     : ""
               }"
@@ -499,7 +499,7 @@ export function renderRecentSession(params: {
                 { count: String(session.childSessionKeys.length), session: label },
               )}
               aria-description=${
-                !childrenExpanded && session.runningChildCount > 0
+                !team && !childrenExpanded && session.runningChildCount > 0
                   ? t("sessionsView.activeRun")
                   : nothing
               }

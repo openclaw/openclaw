@@ -53,42 +53,7 @@ describe("AppSidebar agent roster", () => {
     },
   );
 
-  it("keeps main-session viewers visible without a main row in the activity window", async () => {
-    const { sidebar, gatewayHarness } = await mountRoster(roster, []);
-    sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "viewer-tab",
-          user: { id: "viewer", identity: { type: "profile", id: "viewer" }, name: "Viewer" },
-          watchedSessions: ["agent:working:main"],
-        },
-      ],
-    });
-    await vi.waitFor(() =>
-      expect(
-        sidebar.querySelector(
-          '[data-agent-group="working"] .sidebar-agent-roster__signals [data-viewer-id="viewer"]',
-        ),
-      ).not.toBeNull(),
-    );
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group="main"] .sidebar-agent-roster__signals [data-viewer-id="viewer"]',
-      ),
-    ).toBeNull();
-    gatewayHarness.publishEvent("presence", { presence: [] });
-    await vi.waitFor(() =>
-      expect(
-        sidebar.querySelector(
-          '[data-agent-group="working"] .sidebar-agent-roster__signals [data-viewer-id="viewer"]',
-        ),
-      ).toBeNull(),
-    );
-  });
-
-  it("keeps the main session's queued state, human owner and PR context in its header", async () => {
+  it("keeps main-session activity on its row and summarizes only collapsed groups", async () => {
     const mainKey = "agent:working:main";
     const { sidebar, sessions } = await mountRoster(roster, [
       session("working", 10, {
@@ -102,12 +67,20 @@ describe("AppSidebar agent roster", () => {
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     const signals = sidebar.querySelector(
-      '[data-agent-group="working"] .sidebar-agent-roster__signals',
+      '[data-session-key="agent:working:main"] .sidebar-recent-session__details-endcap',
     );
     expect(signals?.querySelector(".session-glyph__ring--queued")).not.toBeNull();
     expect(signals?.querySelector(".session-owner-chip")).not.toBeNull();
     expect(signals?.querySelector('[data-pull-request-state="open"]')).not.toBeNull();
     expect(signals?.querySelector(".session-row-badge--incognito")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-roster__signals .session-glyph__ring")).toBeNull();
+    sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
+    await vi.waitFor(() =>
+      expect(sidebar.querySelector(`[data-session-key="${mainKey}"]`)).toBeNull(),
+    );
+    expect(
+      sidebar.querySelectorAll(".sidebar-agent-roster__signals .session-glyph__ring--queued"),
+    ).toHaveLength(1);
   });
 
   it.each([undefined, "Saved work"])(
@@ -223,7 +196,7 @@ describe("AppSidebar agent roster", () => {
     ).not.toBeNull();
   });
 
-  it("keeps the directly opened main session's header state outside the shared window", async () => {
+  it("keeps the directly opened main session visible outside the shared window", async () => {
     const mainKey = "agent:working:main";
     const { sidebar, context } = await mountRoster(roster, [], undefined, [
       session("working", 10, { key: mainKey, hasActiveRun: true, status: "running", unread: true }),
@@ -236,16 +209,75 @@ describe("AppSidebar agent roster", () => {
     await vi.waitFor(() =>
       expect(
         sidebar.querySelector(
-          '[data-agent-group="working"] .sidebar-agent-roster__signals .session-glyph__ring',
+          '[data-session-key="agent:working:main"] .sidebar-session-team-state .session-glyph__ring',
         ),
       ).not.toBeNull(),
     );
     expect(
       sidebar.querySelector(
-        '[data-agent-group="working"] .sidebar-agent-roster__signals [aria-label="Unread"]',
+        '[data-session-key="agent:working:main"] .sidebar-session-team-state [aria-label="Unread"]',
       ),
     ).not.toBeNull();
-    expect(sidebar.querySelector(`[data-session-key="${mainKey}"]`)).toBeNull();
+    expect(sidebar.querySelector(`[data-session-key="${mainKey}"]`)).not.toBeNull();
+  });
+
+  it("does not reinsert a main row rejected by the normal session visibility filter", async () => {
+    const { sidebar } = await mountRoster(roster, [session("working", 10, { kind: "unknown" })]);
+    sidebar.sidebarAgentsMode = "roster";
+    await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+    expect(sessionKeys(sidebar)).toEqual([]);
+  });
+
+  it("keeps the global main stream visible in its configured agent group", async () => {
+    const { sidebar } = await mountRoster(
+      { ...roster, scope: "global", agents: [{ id: "main", name: "Harbor" }] },
+      [
+        {
+          key: "global",
+          kind: "global",
+          label: "Shared conversation",
+          hasActiveRun: true,
+          status: "running",
+        },
+      ],
+    );
+    sidebar.sessionKey = "global";
+    sidebar.sidebarAgentsMode = "roster";
+    await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(["global"]));
+    expect(
+      sidebar.querySelector(
+        '[data-agent-group="main"] [data-session-key="global"] .session-glyph__ring',
+      ),
+    ).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-roster__signals .session-glyph__ring")).toBeNull();
+  });
+
+  it("starts Online collapsed in team mode and keeps it expandable", async () => {
+    const { sidebar, gatewayHarness } = await mountRoster();
+    sidebar.sidebarAgentsMode = "roster";
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "viewer-tab",
+          user: { id: "viewer", identity: { type: "profile", id: "viewer" }, name: "Viewer" },
+        },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(sidebar.querySelector('.sidebar-online button[aria-label="Online"]')).not.toBeNull(),
+    );
+    const toggle = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-online button[aria-label="Online"]',
+    )!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
+    toggle.click();
+    await sidebar.updateComplete;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(sidebar.querySelector('[data-online-user-id="viewer"]')).not.toBeNull();
+    toggle.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
   });
 
   it("suspends all mounted sidebar consumers while hidden, retaining a visible Agents home", async () => {

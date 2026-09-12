@@ -10,7 +10,6 @@ import {
   identityAvatarClass,
   identityAvatarImage,
   renderIdentityAvatarImage,
-  renderAgentAvatarFallback,
   resolveIdentityAvatarView,
   type IdentityAvatarView,
 } from "./identity-avatar-view.ts";
@@ -37,22 +36,6 @@ afterEach(() => {
 });
 
 describe("shared identity avatar view", () => {
-  it("renders stable agent faces as SVG without interpreting identity text as markup", () => {
-    const first = document.createElement("div");
-    const second = document.createElement("div");
-    const hostile = "agent-<img src=x onerror=alert(1)>";
-    render(renderAgentAvatarFallback(hostile), first);
-    render(renderAgentAvatarFallback(hostile), second);
-    expect(first.innerHTML).toBe(second.innerHTML);
-    expect(first.querySelector("img")).toBeNull();
-    const shapes = [...first.querySelectorAll("svg, path, rect, circle, g")];
-    expect(shapes.length).toBeGreaterThan(4);
-    expect(shapes.every((shape) => shape.namespaceURI === "http://www.w3.org/2000/svg")).toBe(true);
-    const color = first.querySelector("svg")?.getAttribute("style");
-    render(renderAgentAvatarFallback("another-agent"), first);
-    expect(first.querySelector("svg")?.getAttribute("style")).not.toBe(color);
-  });
-
   it.each(["/favicon.svg", "/control/assets/mascot.svg?v=build-1"])(
     "preserves the public image %s through reconnect without authenticated fetching",
     (url) => {

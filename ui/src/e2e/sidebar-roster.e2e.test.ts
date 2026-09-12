@@ -158,19 +158,20 @@ suite.define(() => {
           .poll(() =>
             headers.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-id"))),
           )
-          .toEqual(["forge", "main", "scout", "bloom"]);
-        await expect.poll(() => sessionRows.count()).toBe(8);
+          .toEqual(["main", "forge", "scout", "bloom"]);
+        await expect.poll(() => sessionRows.count()).toBe(12);
         expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(0);
         await expectWorkspace();
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
           expect(await group.locator(".sidebar-recent-session").allTextContents()).toEqual([
             expect.stringContaining(`${agent.name} project`),
+            expect.stringContaining(agent.name!),
             expect.stringContaining(`${agent.name} notes`),
           ]);
           expect(
             await group
-              .getByRole("link", { name: `New session: ${agent.name}`, exact: true })
+              .getByRole("link", { name: `New conversation: ${agent.name}`, exact: true })
               .getAttribute("href"),
           ).toBe(`/new?agent=${agent.id}`);
           expect(await group.locator(".sidebar-agent-roster__row").getAttribute("href")).toBe(
@@ -184,7 +185,7 @@ suite.define(() => {
         ).toBe(1);
         expect(
           (await headers.first().locator(".sidebar-agent-roster__copy").textContent())?.trim(),
-        ).toBe("Forge");
+        ).toBe("Harbor");
         await captureSidebarUiProof(suite, page, "sidebar-roster-after.png");
 
         await workspace.focus();
@@ -234,7 +235,7 @@ suite.define(() => {
           await newMenu
             .locator("wa-dropdown-item a")
             .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-        ).toEqual(["forge", "main", "scout", "bloom"].map((id) => `/new?agent=${id}`));
+        ).toEqual(["main", "forge", "scout", "bloom"].map((id) => `/new?agent=${id}`));
         await newMenu.locator('wa-dropdown-item[value="scout"]').click();
         await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
         expect(new URL(page.url()).searchParams.get("agent")).toBe("scout");
@@ -256,7 +257,7 @@ suite.define(() => {
           .click();
         await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/forge/notes" });
         await expectWorkspace();
-        await expect.poll(() => sessionRows.count()).toBe(8);
+        await expect.poll(() => sessionRows.count()).toBe(12);
         await sidebar.locator(".sidebar-session-sort").click();
         expect(
           await sidebar.locator('.sidebar-session-sort-menu [value^="grouping:"]').count(),
@@ -268,17 +269,17 @@ suite.define(() => {
         await sidebar.locator('.sidebar-session-sort-menu [value="owner:profile-riley"]').click();
         await expect.poll(() => sessionRows.count()).toBe(4);
         expect(await sessionRows.allTextContents()).toEqual([
-          expect.stringContaining("Forge project"),
           expect.stringContaining("Harbor project"),
+          expect.stringContaining("Forge project"),
           expect.stringContaining("Scout project"),
           expect.stringContaining("Bloom project"),
         ]);
         await sidebar.locator(".sidebar-session-sort").click();
         await sidebar.locator('.sidebar-session-sort-menu [value="owner:"]').click();
-        await expect.poll(() => sessionRows.count()).toBe(8);
+        await expect.poll(() => sessionRows.count()).toBe(12);
 
         await sidebar.locator('[data-agent-collapse="bloom"]').click();
-        await expect.poll(() => sessionRows.count()).toBe(6);
+        await expect.poll(() => sessionRows.count()).toBe(9);
         expect(new URL(page.url()).pathname).toBe("/chat/forge/notes");
         await page.reload();
         await expect.poll(() => headers.count()).toBe(4);
@@ -287,7 +288,7 @@ suite.define(() => {
             sidebar.locator('[data-agent-collapse="bloom"]').getAttribute("aria-expanded"),
           )
           .toBe("false");
-        await expect.poll(() => sessionRows.count()).toBe(6);
+        await expect.poll(() => sessionRows.count()).toBe(9);
         await expectWorkspace();
         await sidebar.getByRole("link", { name: "See all", exact: true }).click();
         await waitForControlUiRoute(page, { routeId: "agents-home", pathname: "/agents" });

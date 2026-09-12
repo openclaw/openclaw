@@ -357,32 +357,6 @@ describe("SidebarSessionProjection child expansion", () => {
 });
 
 describe("SidebarSessionProjection running subtitle hold", () => {
-  it.each([false, true])(
-    "keeps held parent previews scoped to their own attention in team mode %s",
-    (teamMode) => {
-      const projection = new SidebarSessionProjection();
-      const parent = sessionRow("parent", {
-        hasActiveRun: true,
-        attention: { kind: "approval" },
-        ownAttention: { kind: "none" },
-      });
-      projection.project(
-        projectionInput([parent], {
-          subtitle: {
-            teamMode,
-            sidebarLiveActivity: true,
-            showPreview: true,
-            narrationLines: new Map([[parent.key, "Checking the layout"]]),
-            observerDigests: new Map(),
-          },
-        }),
-      );
-      expect(projection.resolveSubtitle(subtitleParams(parent)).subtitle).toBe(
-        teamMode ? "Checking the layout" : "Waiting for approval",
-      );
-    },
-  );
-
   it("holds the latest narration across an empty running update without losing its remount key", () => {
     const projection = new SidebarSessionProjection();
     const running = sessionRow("running", { hasActiveRun: true, activeRunIds: ["run-one"] });

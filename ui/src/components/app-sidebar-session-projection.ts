@@ -40,7 +40,6 @@ type SidebarProjectionInput = {
   connectionIdentity: object | null;
   listSource: object | null;
   subtitle: {
-    teamMode?: boolean;
     sidebarLiveActivity: boolean;
     showPreview: boolean;
     narrationLines: ReadonlyMap<string, string>;
@@ -345,12 +344,8 @@ export class SidebarSessionProjection {
     if (!environment.sidebarLiveActivity && this.heldSubtitles.get(session.key)?.value.narration) {
       this.heldSubtitles.delete(session.key);
     }
-    const subtitleSession =
-      environment.teamMode && session.ownAttention
-        ? { ...session, attention: session.ownAttention }
-        : session;
     const params = {
-      session: subtitleSession,
+      session,
       hasDisplay: false,
       displaySubtitle: undefined,
       sidebarLiveActivity: environment.sidebarLiveActivity,
@@ -360,7 +355,7 @@ export class SidebarSessionProjection {
     } satisfies SidebarSubtitleParams;
     const value = resolveSidebarSessionSubtitle(params);
     if (!value.subtitle) {
-      if (subtitleSession.attention.kind === "question") {
+      if (session.attention.kind === "question") {
         this.heldSubtitles.delete(session.key);
       }
       // Transient gaps between event updates keep the last shown line; the
@@ -373,7 +368,7 @@ export class SidebarSessionProjection {
     if (
       replacing &&
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
-      !isOperatorCriticalSubtitle(subtitleSession)
+      !isOperatorCriticalSubtitle(session)
     ) {
       return;
     }

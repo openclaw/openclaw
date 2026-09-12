@@ -181,8 +181,8 @@ describe("roster activity lifecycle", () => {
     try {
       await vi.waitFor(() => expect(store.snapshot.result?.sessions).toEqual(rows));
       expect(load).toHaveBeenCalledTimes(1);
-      expect(store.snapshot.cards[0]?.id).toBe("ember");
-      expect(store.snapshot.cards[0]?.lastActiveAt).toBe(2);
+      expect(store.snapshot.cards[1]?.id).toBe("ember");
+      expect(store.snapshot.cards[1]?.lastActiveAt).toBe(2);
       emit({
         type: "event",
         event: "session.message",
@@ -191,7 +191,7 @@ describe("roster activity lifecycle", () => {
           session: { key: "agent:ember:task", updatedAt: 4, hasActiveRun: true },
         },
       });
-      expect(store.snapshot.cards[0]?.activeNow).toBe(true);
+      expect(store.snapshot.cards[1]?.activeNow).toBe(true);
       emit({
         type: "event",
         event: "session.message",

@@ -596,7 +596,7 @@ function renderSessionListToolbar(host: SidebarSessionListHost, extra: unknown =
               basePath: host.basePath,
               agentId: host.expandedAgentId(),
               className: "sidebar-session-toolbar__button sidebar-new-session",
-              label: t("chat.runControls.newSession"),
+              label: t("agentChip.newConversation"),
               disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
               onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
             })

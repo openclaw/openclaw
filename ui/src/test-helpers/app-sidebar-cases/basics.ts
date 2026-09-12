@@ -94,12 +94,12 @@ describe("AppSidebar new session navigation", () => {
       Array.from(actions?.querySelectorAll("[aria-label]") ?? [], (action) =>
         action.getAttribute("aria-label"),
       ),
-    ).toEqual(["Collapse sidebar", "Open command palette", "New session"]);
+    ).toEqual(["Collapse sidebar", "Open command palette", "New conversation"]);
     sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__collapse")?.click();
     sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(brandLink?.getAttribute("aria-label")).toBe("New session");
+    expect(brandLink?.getAttribute("aria-label")).toBe("New conversation");
     expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
     expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
     expect(brandLink?.hasAttribute("href")).toBe(false);
@@ -114,7 +114,7 @@ describe("AppSidebar new session navigation", () => {
       ".sidebar-session-toolbar .sidebar-new-session",
     ]) {
       const link = sidebar.querySelector<HTMLAnchorElement>(selector)!;
-      expect(link.getAttribute("aria-label")).toBe("New session");
+      expect(link.getAttribute("aria-label")).toBe("New conversation");
       expect(link.getAttribute("href")).toBe("/control/new?agent=research");
       expect(link.hasAttribute("aria-disabled")).toBe(false);
       for (const modifiers of [

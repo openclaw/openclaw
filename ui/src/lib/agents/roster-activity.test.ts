@@ -51,8 +51,8 @@ describe("agent roster activity", () => {
     const cards = agentRosterCards(roster, rows, (id) =>
       id === "ember" ? { agentId: id, name: "Ember", emoji: "🔥", avatar: "" } : null,
     );
-    expect(cards.map((card) => card.id)).toEqual(["ember", "harbor", "empty"]);
-    expect(cards[0]).toMatchObject({
+    expect(cards.map((card) => card.id)).toEqual(["harbor", "ember", "empty"]);
+    expect(cards[1]).toMatchObject({
       name: "Ember",
       fallback: "🔥",
       activeNow: true,
@@ -60,7 +60,7 @@ describe("agent roster activity", () => {
       preview: "Main summary",
       mainKey: "agent:ember:team",
     });
-    expect(cards[1]).toMatchObject({
+    expect(cards[0]).toMatchObject({
       activeNow: false,
       lastActiveAt: 9,
       preview: "Recent fallback",
@@ -85,8 +85,8 @@ describe("agent roster activity", () => {
       },
       { key: "agent:beta:recent", kind: "direct", updatedAt: 2, lastMessagePreview: "Other" },
     ]);
-    expect(cards.map((card) => card.id)).toEqual(["beta", "alpha"]);
+    expect(cards.map((card) => card.id)).toEqual(["alpha", "beta"]);
     expect(cards.every((card) => !card.activeNow)).toBe(true);
-    expect(cards[0]?.preview).toBe("Flagged main");
+    expect(cards[1]?.preview).toBe("Flagged main");
   });
 });

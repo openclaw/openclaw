@@ -1421,9 +1421,8 @@ async function createChatPickerScenario(
       id: "forge",
       name: "Forge",
       theme: "Builds and maintains your projects",
-      emoji: "🛠️",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGMInfMAK2IgIPH1xx80BiEJfEbBEXE6MBEAgkh9AfK4IAAAAAAASUVORK5CYII=",
+      emoji: "",
+      avatar: "",
       preview: "The sample dashboard is ready for your review.",
       sessionLabels: ["Sample dashboard", "Build notes"],
     },
@@ -1432,8 +1431,7 @@ async function createChatPickerScenario(
       name: "Scout",
       theme: "Finds answers and connects ideas",
       emoji: "🔭",
-      avatar:
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4vc0NK2IgIPH1xx80BiEJfEbBEXE6MBEAqnKB0ZTY3IwAAAAASUVORK5CYII=",
+      avatar: "",
       preview: "I found three useful approaches for the research outline.",
       sessionLabels: ["Research outline", "Source notes"],
     },
@@ -1835,6 +1833,22 @@ async function createChatPickerScenario(
       );
     }),
   ]);
+  if (fixture === "sidebar-roster") {
+    rosterSessions.push(
+      sessionRow("agent:forge:subagent:layout", "Check sidebar layout", rosterTime - 20_000, {
+        agentId: "forge",
+        spawnedBy: "agent:forge:sample-1",
+        status: "done",
+      }),
+      sessionRow("agent:forge:subagent:contrast", "Check nested contrast", rosterTime - 10_000, {
+        agentId: "forge",
+        spawnedBy: "agent:forge:subagent:layout",
+        hasActiveRun: true,
+        status: "running",
+        unread: true,
+      }),
+    );
+  }
   const gallerySessions = [
     ...rosterSessions.filter((row) => !row.key.startsWith("agent:main:")),
     ...activitySessions,

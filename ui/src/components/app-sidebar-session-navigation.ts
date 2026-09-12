@@ -421,7 +421,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
           : null,
       listSource: this.context?.sessions ?? null,
       subtitle: {
-        teamMode: this.sidebarAgentsMode === "roster",
         sidebarLiveActivity: this.sidebarLiveActivity,
         showPreview: this.sessionsShowPreview,
         narrationLines: this.sidebarNarrationLines,
@@ -687,12 +686,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       (normalized === normalizeAgentId(this.sessionData.sessionsAgentId ?? "")
         ? (this.sessionData.sessionsResult?.sessions ?? [])
         : (this.sessionData.sessionResultsByAgent[normalized]?.sessions ?? []));
-    return (
-      findSidebarMainSessionRow(rows, mainKey) ??
-      (this.groupedSessionSource
-        ? (findActiveSidebarLineageRow(this.sessionData, mainKey) ?? null)
-        : null)
-    );
+    return findSidebarMainSessionRow(rows, mainKey);
   }
 
   /** Identity-card click: the agent's rolling main session, or Settings offline. */

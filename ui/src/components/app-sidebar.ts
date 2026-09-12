@@ -79,6 +79,7 @@ import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 const lobsterPetImport = createIdleImport(() => import("./lobster-pet.runtime.ts"));
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
+  @state() teamOnlineExpanded = false;
   @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 

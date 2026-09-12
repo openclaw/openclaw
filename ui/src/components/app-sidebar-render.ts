@@ -60,6 +60,7 @@ import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   offline: boolean;
+  teamOnlineExpanded: boolean;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
   toggleSection(sectionId: string): void;
@@ -245,7 +246,7 @@ export function renderAppSidebarBrand(
                 agentId: host.expandedAgentId(),
                 className:
                   "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
-                label: t("chat.runControls.newSession"),
+                label: t("agentChip.newConversation"),
                 disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
                 onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
               })
@@ -355,7 +356,8 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
 
 export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   const sectionId = "online";
-  const collapsed = host.collapsedSessionSections.has(sectionId);
+  const team = host.sidebarAgentsMode === "roster";
+  const collapsed = team ? !host.teamOnlineExpanded : host.collapsedSessionSections.has(sectionId);
   const label = t("presence.rosterTitle");
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
@@ -383,7 +385,13 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
             class="sidebar-session-group-toggle"
             aria-expanded=${String(!collapsed)}
             aria-label=${label}
-            @click=${() => host.toggleSection(sectionId)}
+            @click=${() => {
+              if (team) {
+                host.teamOnlineExpanded = collapsed;
+              } else {
+                host.toggleSection(sectionId);
+              }
+            }}
           >
             <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
               <span class="sidebar-session-group-toggle__icon"
