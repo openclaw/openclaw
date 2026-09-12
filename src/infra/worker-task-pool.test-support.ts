@@ -10,12 +10,14 @@ export type PoolFixtureInput = {
   wait?: boolean;
   exitCode?: number;
   buffer?: ArrayBuffer;
+  relayBuffer?: boolean;
 };
 export type PoolFixtureResult = {
   label: string;
   threadId: number;
   buffer?: ArrayBuffer;
   previousBufferBytes?: number;
+  relayedBufferBytes?: number;
 };
 
 let previousBuffer: ArrayBuffer | undefined;
@@ -35,17 +37,36 @@ serveWorkerTasks<PoolFixtureResult>(
         Atomics.wait(counters, 1, 0);
       }
     }
+    let relayedBufferBytes: number | undefined;
     if (input.exchanges && channel) {
       channel.consumeInput();
       for (let index = 0; index < Number(input.exchanges); index++) {
-        const response = await channel.request({ label: input.label });
+        const buffer =
+          input.relayBuffer && input.buffer instanceof ArrayBuffer ? input.buffer : undefined;
+        const response = await channel.request(
+          { label: input.label, buffer },
+          buffer ? [buffer] : undefined,
+        );
+        if (buffer) {
+          relayedBufferBytes = buffer.byteLength;
+          input.buffer = undefined;
+        }
+        if (response.input instanceof ArrayBuffer) {
+          input.buffer = response.input;
+        }
         response.consumed();
       }
     }
     const previousBufferBytes = previousBuffer?.byteLength;
     assert.ok(input.buffer === undefined || input.buffer instanceof ArrayBuffer);
     previousBuffer = input.buffer;
-    return { label: input.label, threadId, buffer: input.buffer, previousBufferBytes };
+    return {
+      label: input.label,
+      threadId,
+      buffer: input.buffer,
+      previousBufferBytes,
+      relayedBufferBytes,
+    };
   },
   { transferList: (value) => (value.buffer ? [value.buffer] : []) },
 );

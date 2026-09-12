@@ -10,7 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
@@ -83,13 +83,11 @@ export async function loadSessionDiff(
       sessionKey: params.sessionKey,
     });
   }
-  return await applySessionDiffBaseline({
+  return await loadCheckoutDiff({
+    cwd,
+    scope: params.scope ?? "all",
+    sessionKey: params.sessionKey,
     baseline: entry.sessionDiffBaseline,
-    diff: await loadCheckoutDiff({
-      cwd,
-      scope: params.scope ?? "all",
-      sessionKey: params.sessionKey,
-    }),
     sessionId: entry.sessionId,
   });
 }

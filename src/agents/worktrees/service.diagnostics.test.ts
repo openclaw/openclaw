@@ -20,8 +20,10 @@ import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logge
 import * as commandExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -54,6 +56,17 @@ async function failureMessage(operation: Promise<unknown>): Promise<string> {
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args]);
   return stdout.trim();
+}
+
+function gitCommandArgs(argv: readonly string[]): readonly string[] {
+  if (argv[0] !== "git") {
+    return [];
+  }
+  let command = 1;
+  while (argv[command] === "-c" || argv[command] === "-C") {
+    command += 2;
+  }
+  return argv.slice(command);
 }
 
 const terminationCases: Array<{
@@ -202,9 +215,13 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       const registryBefore = service.listRegistryRecords();
       const fatal = "fatal: branch deletion denied";
       let cleanupPath: string | undefined;
+      let restoreFailed = false;
+      let removalFailed = false;
+      let branchDeletionFailed = false;
       vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-        const args = argv[0] === "git" ? argv.slice(3) : [];
+        const args = gitCommandArgs(argv);
         if (phase === "restore" && args[0] === "reset") {
+          restoreFailed = true;
           return { ...emptyFailure, code: 45, stderr: "fatal: restore index failed" };
         }
         if (args[0] === "worktree" && args[1] === "remove") {
@@ -213,9 +230,11 @@ describe("ManagedWorktreeService failure diagnostics", () => {
           expect(removed.code).toBe(0);
           // A child can fail after applying its filesystem effects. Later branch
           // deletion output must not mask this removal failure.
+          removalFailed = removeFails;
           return removeFails ? emptyFailure : { ...removed, stdout: "worktree removal complete" };
         }
         if (args[0] === "branch" && args[1] === "-D" && branchFails) {
+          branchDeletionFailed = true;
           return {
             ...emptyFailure,
             stderr: `${"Deleting branch\r".repeat(200)}\n${"x".repeat(8_000)}${fatal}`,
@@ -230,6 +249,9 @@ describe("ManagedWorktreeService failure diagnostics", () => {
           : service.create({ repoRoot: repo, name, baseRef: "HEAD" }),
       );
 
+      expect(restoreFailed).toBe(phase === "restore");
+      expect(removalFailed).toBe(removeFails);
+      expect(branchDeletionFailed).toBe(branchFails);
       expect(cleanupPath).toBeDefined();
       await expect(fs.stat(cleanupPath!)).rejects.toMatchObject({ code: "ENOENT" });
       expect(service.listRegistryRecords()).toEqual(registryBefore);
@@ -259,6 +281,68 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     },
   );
 
+  it("lets admitted deletion settle after cancellation and keeps its complete recovery snapshot", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "cancel-removal",
+      baseRef: "HEAD",
+    });
+    await fs.writeFile(path.join(created.path, "README.md"), "complete recoverable edit\n");
+    const marker = path.join(root, "removal-child.pid");
+    const release = path.join(root, "release-removal");
+    let removalStarted = false;
+    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      const args = gitCommandArgs(argv);
+      if (args[0] === "worktree" && args[1] === "remove") {
+        removalStarted = true;
+        // A real held child models Git after it has removed the first tracked file.
+        const partial = await realRunCommand(
+          [
+            process.execPath,
+            "-e",
+            'const fs = require("node:fs"); fs.unlinkSync(process.argv[1]); fs.writeFileSync(process.argv[2], String(process.pid)); const timer = setInterval(() => { if (fs.existsSync(process.argv[3])) clearInterval(timer); }, 10);',
+            path.join(created.path, "README.md"),
+            marker,
+            release,
+          ],
+          options,
+        );
+        if (partial.code !== 0) {
+          return partial;
+        }
+      }
+      return await realRunCommand(argv, options);
+    });
+    const abort = new AbortController();
+    const pending = service.remove({ id: created.id, reason: "test", signal: abort.signal }).then(
+      () => false,
+      () => true,
+    );
+    let pid: number | undefined;
+    try {
+      pid = await waitForPidFile(marker);
+      expect(removalStarted).toBe(true);
+      expect(isPidAlive(pid)).toBe(true);
+      const snapshotRef = service
+        .listRegistryRecords()
+        .find((record) => record.id === created.id)?.snapshotRef;
+      expect(snapshotRef).toBeDefined();
+      const snapshot = await git(repo, "rev-parse", snapshotRef!);
+      abort.abort(new Error("fixture cancellation during deletion"));
+      await fs.writeFile(release, "release");
+      expect(await pending).toBe(true);
+      expect(isPidAlive(pid)).toBe(false);
+      await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await git(repo, "rev-parse", snapshotRef!)).toBe(snapshot);
+      expect(await git(repo, "show", `${snapshotRef}:README.md`)).toBe("complete recoverable edit");
+    } finally {
+      abort.abort();
+      await fs.writeFile(release, "release");
+      killPidIfAlive(pid);
+      await pending;
+    }
+  });
+
   it.each([
     { name: "long evidence inside the existing window", oldEvidenceVisible: true },
     { name: "evidence outside the existing newline window", oldEvidenceVisible: false },
@@ -268,12 +352,12 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     const name = "retry-evidence";
     const branch = `openclaw/${name}`;
     let allocatedPath: string | undefined;
-    let firstAdd = true;
+    let checkoutFailed = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const result = await realRunCommand(argv, options);
-      const args = argv[0] === "git" ? argv.slice(3) : [];
-      if (firstAdd && args[0] === "worktree" && args[1] === "add") {
-        firstAdd = false;
+      const args = gitCommandArgs(argv);
+      if (!checkoutFailed && args[0] === "worktree" && args[1] === "add") {
+        checkoutFailed = true;
         allocatedPath = args.at(-2);
         expect(result.code).toBe(0);
         const separator = oldEvidenceVisible ? "\r" : "\n";
@@ -288,11 +372,13 @@ describe("ManagedWorktreeService failure diagnostics", () => {
 
     if (oldEvidenceVisible) {
       const created = await service.create({ repoRoot: repo, name });
+      expect(checkoutFailed).toBe(true);
       expect(created.baseRef).toBe("HEAD");
       expect(await git(created.path, "branch", "--show-current")).toBe(branch);
       expect(service.listRegistryRecords()).toEqual([created]);
     } else {
       await expect(service.create({ repoRoot: repo, name })).rejects.toThrow("checkout failed");
+      expect(checkoutFailed).toBe(true);
       expect(service.listRegistryRecords()).toEqual([]);
     }
     expect(allocatedPath).toBeDefined();

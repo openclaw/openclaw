@@ -4,14 +4,25 @@ import os from "node:os";
 import path from "node:path";
 import {
   createGitCommandError,
+  GIT_TIMEOUT_MS,
   enqueueGitRefMutation,
   executeGitCommand,
+  executeGitCommandBytes,
   normalizeGitPathForFilesystem,
-  requireGitCommandBuffer,
   requireGitCommandOutput,
-  requireGitCommandRaw,
+  withForegroundGitMaintenance,
 } from "../../infra/git-exec.js";
+import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
+import {
+  decodeWindowsOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../../infra/windows-encoding.js";
+import {
+  runCommandBuffered,
+  type BufferedCommandOptions,
+  type BufferedCommandResult,
+} from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -78,35 +89,138 @@ export async function runGit(
     maxOutputBytes?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
+    baseEnv?: NodeJS.ProcessEnv;
+    /** Recheck caller authority at execution, after any shared-ref queue wait. */
+    beforeRun?: () => void;
+    killProcessTree?: boolean;
+    terminateOnOutputLimit?: boolean;
   } = {},
 ): Promise<GitResult> {
-  const baseEnv = { ...process.env };
+  if (hasGitWorkerContext()) {
+    const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
+    const result = await requestGitWorkerCommand({
+      type: "git.text",
+      input: { cwd, args, options: forwarded },
+    });
+    const { stdout, stderr, windowsEncoding, ...metadata } = result;
+    return {
+      ...metadata,
+      stdout: decodeWindowsOutputBuffer({
+        buffer: Buffer.from(stdout.buffer, stdout.byteOffset, stdout.byteLength),
+        windowsEncoding,
+      }),
+      stderr: decodeWindowsOutputBuffer({
+        buffer: Buffer.from(stderr.buffer, stderr.byteOffset, stderr.byteLength),
+        windowsEncoding,
+      }),
+    };
+  }
+  const baseEnv = options.baseEnv ?? { ...process.env };
   const env = gitEnvironment(options.env, args, process.platform, baseEnv);
   // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
   const fetchesRefs = args[0] === "fetch";
-  const run = (gitArgs: string[]) =>
-    executeGitCommand(cwd, gitArgs, {
+  const run = (gitArgs: string[]) => {
+    if (gitArgs === args) {
+      options.beforeRun?.();
+    }
+    return executeGitCommand(cwd, gitArgs, {
       ...options,
       baseEnv,
       env,
       input: gitArgs === args ? options.input : undefined,
-      killProcessTree: fetchesRefs && gitArgs === args,
+      killProcessTree: options.killProcessTree ?? (fetchesRefs && gitArgs === args),
     });
+  };
+  return await withGitRefAdmission(cwd, args, run);
+}
+
+/** Parent-only command execution for text consumers whose decoding runs in a worker. */
+export async function runGitBytes(
+  cwd: string,
+  args: string[],
+  options: Parameters<typeof runGit>[2] = {},
+) {
+  const baseEnv = options.baseEnv ?? { ...process.env };
+  const env = gitEnvironment(options.env, args, process.platform, baseEnv);
+  return await withGitRefAdmission(cwd, args, (gitArgs) => {
+    if (gitArgs === args) {
+      options.beforeRun?.();
+    }
+    return executeGitCommandBytes(cwd, gitArgs, {
+      ...options,
+      baseEnv,
+      env,
+      input: gitArgs === args ? options.input : undefined,
+      killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
+    });
+  });
+}
+
+async function withGitRefAdmission<
+  T extends { termination: string; code: number | null; stdout: string | Uint8Array },
+>(cwd: string, args: string[], run: (args: string[]) => Promise<T>): Promise<T> {
   const mutatesRefs =
-    fetchesRefs ||
+    args[0] === "fetch" ||
     args[0] === "update-ref" ||
     (args[0] === "branch" &&
       args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));
   if (!mutatesRefs) {
     return await run(args);
   }
-  // Discovery and the queued mutation share one captured environment. The
-  // executor still checks cancellation when the queued command actually starts.
   const resolved = await run(["rev-parse", "--git-common-dir"]);
   if (resolved.termination !== "exit" || resolved.code !== 0) {
     return resolved;
   }
-  return await enqueueGitRefMutation(cwd, resolved.stdout.trim(), () => run(args));
+  const commonDir =
+    typeof resolved.stdout === "string"
+      ? resolved.stdout
+      : decodeWindowsOutputBuffer({
+          buffer: Buffer.from(
+            resolved.stdout.buffer,
+            resolved.stdout.byteOffset,
+            resolved.stdout.byteLength,
+          ),
+          windowsEncoding: resolveWindowsConsoleEncoding(),
+        });
+  return await enqueueGitRefMutation(cwd, commonDir.trim(), () => run(args));
+}
+
+/** Byte-preserving Git transport shared by worker inventories and ordinary callers. */
+export async function runGitBuffered(
+  cwd: string,
+  args: string[],
+  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+): Promise<BufferedCommandResult> {
+  if (hasGitWorkerContext()) {
+    const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
+    const result = await requestGitWorkerCommand({
+      type: "git.buffer",
+      input: { cwd, args, options: forwarded },
+    });
+    return {
+      ...result,
+      stdout: Buffer.from(result.stdout.buffer, result.stdout.byteOffset, result.stdout.byteLength),
+      stderr: Buffer.from(result.stderr.buffer, result.stderr.byteOffset, result.stderr.byteLength),
+    };
+  }
+  const baseEnv = options.baseEnv ?? { ...process.env };
+  const env = gitEnvironment(options.env, args, process.platform, baseEnv);
+  return await withGitRefAdmission(cwd, args, (gitArgs) => {
+    if (gitArgs === args) {
+      options.beforeRun?.();
+    }
+    const argv = ["git", "-C", cwd, ...gitArgs];
+    return runCommandBuffered(
+      options.killProcessTree === false ? argv : withForegroundGitMaintenance(argv),
+      {
+        ...options,
+        timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
+        input: gitArgs === args ? options.input : undefined,
+        baseEnv,
+        env,
+      },
+    );
+  });
 }
 
 export function commandError(command: string, result: GitResult): Error {
@@ -122,19 +236,16 @@ export async function requireGit(
   return requireGitCommandOutput(`git ${args.join(" ")}`, result).trim();
 }
 
-export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
-  return await requireGitCommandRaw(cwd, args, { env: gitEnvironment(undefined, args) });
-}
-
 export async function requireGitBuffer(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
+  options: Parameters<typeof runGitBuffered>[2] = {},
 ): Promise<Buffer> {
-  return await requireGitCommandBuffer(cwd, args, {
-    ...options,
-    env: gitEnvironment(options.env, args),
-  });
+  const result = await runGitBuffered(cwd, args, options);
+  if (result.termination !== "exit" || result.code !== 0) {
+    throw createGitCommandError(`git ${args.join(" ")}`, result);
+  }
+  return result.stdout;
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {

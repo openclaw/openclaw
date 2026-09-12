@@ -134,9 +134,14 @@ describe("ManagedWorktreeService branch discovery", () => {
     expect(result.branches.length).toBeLessThanOrEqual(202);
     expect(result.defaultBranch).toBe("origin/z-default");
     expect(result.headBranch).toBe("z-current");
-    expect(result.branches.slice(0, 2)).toEqual([
+    expect(result.branches).toEqual([
       { name: "origin/z-default", kind: "remote" },
       { name: "z-current", kind: "local" },
+      { name: "main", kind: "local" },
+      ...Array.from({ length: 99 }, (_, index) => ({
+        name: `overflow-${String(index).padStart(80, "0")}`,
+        kind: "local",
+      })),
     ]);
     const baseRef = `origin/overflow-${String(2_999).padStart(80, "0")}`;
     expect(result.branches.some((branch) => branch.name === baseRef)).toBe(false);
@@ -148,25 +153,52 @@ describe("ManagedWorktreeService branch discovery", () => {
     ).rejects.toThrow(/base ref|resolve|revision/i);
   });
 
-  it("retains Git availability without parsing suggestions that exceed the byte guard", async () => {
-    const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
-    const prefix = "segment/".repeat(400);
-    const refs = Array.from(
-      { length: 100 },
-      (_, index) =>
-        `${stdout.trim()} refs/remotes/origin/${prefix}${String(index).padStart(3, "0")}`,
-    );
-    await fs.writeFile(path.join(repo, ".git", "packed-refs"), `${refs.join("\n")}\n`);
-
-    await expect(
-      service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
-    ).resolves.toEqual({
-      repositoryStatus: "git",
-      branchesUnavailable: true,
-      branches: [{ name: "main", kind: "local" }],
-      headBranch: "main",
-    });
-  });
+  it.each([
+    { label: "fits the original byte guard", segments: 161, width: 8, available: true },
+    { label: "exceeds the original byte guard", segments: 400, width: 3, available: false },
+  ])(
+    "retains Git availability when the bounded inventory $label",
+    async ({ segments, width, available }) => {
+      const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
+      const prefix = "segment/".repeat(segments);
+      const names = Array.from(
+        { length: 100 },
+        (_, index) => `${prefix}${String(index).padStart(width, "0")}`,
+      );
+      const refs = names.map((name) => `${stdout.trim()} refs/remotes/origin/${name}`);
+      await fs.writeFile(path.join(repo, ".git", "packed-refs"), `${refs.join("\n")}\n`);
+      if (available) {
+        // Combined-probe metadata must not shrink the original fallback's byte budget.
+        const legacy = await execFileAsync("git", [
+          "-C",
+          repo,
+          "for-each-ref",
+          "--format=%(refname)%00%(refname:short)",
+          "refs/remotes/",
+        ]);
+        const expanded = await execFileAsync("git", [
+          "-C",
+          repo,
+          "for-each-ref",
+          "--format=%(refname)%00%(refname:short)%00%(symref)%00%(HEAD)",
+          "refs/remotes/",
+        ]);
+        expect(Buffer.byteLength(legacy.stdout)).toBe(262_100);
+        expect(Buffer.byteLength(expanded.stdout)).toBe(262_400);
+      }
+      await expect(
+        service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
+      ).resolves.toEqual({
+        repositoryStatus: "git",
+        ...(available ? {} : { branchesUnavailable: true }),
+        branches: [
+          { name: "main", kind: "local" },
+          ...(available ? names.map((name) => ({ name: `origin/${name}`, kind: "remote" })) : []),
+        ],
+        headBranch: "main",
+      });
+    },
+  );
 
   it.each(["local", "current", "default", "remote"] as const)(
     "keeps ambiguous %s branch suggestions usable even when Git warnings are disabled",

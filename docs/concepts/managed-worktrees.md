@@ -54,6 +54,10 @@ For partial clones, OpenClaw inventories missing objects before estimating check
 
 Creation, restore, and snapshot removal share one allocation lease across repositories and processes using the same state directory. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.
 
+Git inventories and directory-size calculations run on bounded background workers. The Gateway keeps ownership of Git subprocesses, cancellation, allocation leases, and registry writes. Canceling an operation waits for its subprocesses and temporary-index cleanup to settle before releasing that ownership. Preparation is cancellable; once destructive checkout deletion starts, it finishes before cancellation returns so a partial checkout cannot replace the complete recovery snapshot on retry.
+
+A snapshot reuses its operation's path inventories and pins the source HEAD while constructing its temporary index. Publication verifies HEAD atomically after waiting for other ref mutations. If HEAD changes during preparation, cleanup preserves the checkout and asks you to retry. Provisioned-file membership is checked again at capture time because ignore rules and the source index can change independently. Moving inventory work to a worker does not allow concurrent allocations or weaken snapshot protection.
+
 Snapshot removal uses a smaller reserve of 128 MiB plus estimated snapshot writes, so safe cleanup remains possible below the operational reserve. If a snapshot cannot fit, removal preserves the checkout and asks you to free space first.
 
 ## Provision ignored files

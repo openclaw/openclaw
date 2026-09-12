@@ -136,7 +136,7 @@ export async function runExec(
   }
 }
 
-type BufferedCommandOptions = {
+export type BufferedCommandOptions = {
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
@@ -152,7 +152,7 @@ type BufferedCommandOptions = {
   killGraceMs?: number;
 };
 
-type BufferedCommandResult = {
+export type BufferedCommandResult = {
   stdout: Buffer;
   stderr: Buffer;
   code: number | null;

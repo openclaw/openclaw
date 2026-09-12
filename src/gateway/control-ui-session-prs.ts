@@ -1,7 +1,5 @@
 // Detects GitHub pull requests for a session's working branch so the Control
 // UI chat view can pin PR status chips above the composer.
-import fs from "node:fs/promises";
-import nodePath from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -9,7 +7,12 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { runGit } from "../agents/worktrees/git.js";
+import { releaseGitReadCache, runGitReadOperation } from "../infra/git-read-cache.js";
+import type {
+  GitCheckoutContext,
+  GitMergedPullHead as MergedPullHead,
+} from "../infra/git-read-operations.js";
+import { createRetainedCache } from "../infra/retained-cache.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type {
@@ -23,20 +26,6 @@ import {
   GITHUB_API_ORIGIN,
   resolveGitHubApiCredentialScope,
 } from "./control-ui-github-api.js";
-import { createSessionPullRequestCache } from "./control-ui-session-pr-cache.js";
-import {
-  gitOutput,
-  resolveBranchLanding,
-  type MergedPullHead,
-} from "./control-ui-session-prs-landing.js";
-import {
-  releaseSessionPullRequestBranchFacts,
-  releaseSessionPullRequestLocalGitCache,
-  resolveCachedGitContext,
-  resolveCachedSessionBranchFacts,
-  type SessionPullRequestGitContext,
-  type SessionPullRequestLocalGitDeps,
-} from "./control-ui-session-prs-local-git.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -87,20 +76,26 @@ type CacheEntry = {
   lastGood?: Pick<BranchPullRequestsSnapshot, "pullRequests" | "mergedHeads" | "repository">;
 };
 
-const branchCache = createSessionPullRequestCache<CacheEntry>();
+const branchCache = createRetainedCache<CacheEntry>();
 
-type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
+type LoadSessionPullRequestDeps = {
+  cacheSignal?: AbortSignal;
   fetchImpl?: typeof fetch;
   resolveGitRoot?: (params: ControlUiSessionPullRequestsParams) => Promise<string | null>;
   resolveGitContext?: (
     params: ControlUiSessionPullRequestsParams,
-  ) => Promise<SessionPullRequestGitContext | null>;
+  ) => Promise<GitCheckoutContext | null>;
 };
+
+function releaseSessionPullRequestLocalGitCache(signal?: AbortSignal): void {
+  releaseGitReadCache("checkout.context", signal);
+  releaseGitReadCache("pull-request.branch-facts", signal);
+}
 
 /** Resolve the recorded source before considering a Gateway workspace default. */
 function resolveSessionPullRequestSource(
   params: ControlUiSessionPullRequestsParams,
-): string | SessionPullRequestGitContext | null {
+): string | GitCheckoutContext | null {
   const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
     params.sessionKey,
     {
@@ -144,7 +139,7 @@ function resolveSessionPullRequestSource(
 async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
-): Promise<SessionPullRequestGitContext | null> {
+): Promise<GitCheckoutContext | null> {
   const source = deps.resolveGitRoot
     ? await deps.resolveGitRoot(params)
     : resolveSessionPullRequestSource(params);
@@ -152,137 +147,23 @@ async function resolveSessionPullRequestGitContext(
     releaseSessionPullRequestLocalGitCache(deps.cacheSignal);
     return source;
   }
-  return resolveCachedGitContext(source, deps, params.refresh === true);
+  return runGitReadOperation(
+    { type: "checkout.context", input: { root: source } },
+    { refresh: params.refresh === true, cacheSignal: deps.cacheSignal },
+  );
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
 // branch (including fork -> parent) so no API call is needed to build it.
-function branchCreateUrl(context: SessionPullRequestGitContext): string {
+function branchCreateUrl(context: GitCheckoutContext): string {
   const owner = encodeURIComponent(context.owner);
   const repo = encodeURIComponent(context.repo);
   const branch = context.branch.split("/").map(encodeURIComponent).join("/");
   return `https://github.com/${owner}/${repo}/pull/new/${branch}`;
 }
 
-const SHORTSTAT_FILES = /(\d+) files? changed/;
-const SHORTSTAT_INSERTIONS = /(\d+) insertion/;
-const SHORTSTAT_DELETIONS = /(\d+) deletion/;
-// Matches sessions-diff's untracked scan bound; stats degrade to an
-// undercount past it instead of stalling the request.
-const MAX_UNTRACKED_STAT_FILES = 100;
-// Oversized untracked files count 0 lines instead of being read; the row's
-// stats are an approximation, not a patch surface.
-const MAX_UNTRACKED_STAT_BYTES = 512 * 1024;
-
-/**
- * Line count for one untracked file, computed in-process: this runs on the
- * chat view's poll, so it must not spawn one git subprocess per path. lstat
- * gates on regular files so FIFOs/sockets can never block the RPC and symlinks
- * never resolve outside the checkout; only a line count is exposed, so
- * sessions-diff's hardlink content guard is unnecessary here.
- */
-async function untrackedFileAdditions(root: string, filePath: string): Promise<number> {
-  try {
-    const abs = nodePath.resolve(root, filePath);
-    const info = await fs.lstat(abs);
-    if (!info.isFile() || info.size === 0 || info.size > MAX_UNTRACKED_STAT_BYTES) {
-      return 0;
-    }
-    const body = await fs.readFile(abs);
-    // Binary files count 0 lines, mirroring git's shortstat behavior.
-    if (body.subarray(0, 8192).includes(0)) {
-      return 0;
-    }
-    let lines = 0;
-    for (const byte of body) {
-      if (byte === 10) {
-        lines += 1;
-      }
-    }
-    // A trailing fragment without a newline is still a line git would add.
-    return body[body.length - 1] === 10 ? lines : lines + 1;
-  } catch {
-    // Unreadable paths just do not count toward the size.
-    return 0;
-  }
-}
-
-async function untrackedStats(
-  root: string,
-  output: typeof gitOutput,
-): Promise<{ additions: number; files: number }> {
-  const listing = await output(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  const paths = (listing ?? "").split("\0").filter(Boolean);
-  let additions = 0;
-  for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
-    additions += await untrackedFileAdditions(root, filePath);
-  }
-  return { additions, files: paths.length };
-}
-
-/**
- * Working-tree diff counts vs an explicit base, untracked files included:
- * the size the PR would have if the current work were committed and pushed;
- * changedFiles decides row visibility for unpushed branches. Unlike bare
- * `git diff`, this also counts unmerged (conflict) paths.
- */
-async function diffStatsAgainst(
-  root: string,
-  base: string,
-  deps: LoadSessionPullRequestDeps,
-): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
-  try {
-    // Checkout-configurable diff drivers must never execute in the Gateway
-    // process (same guard as sessions-diff).
-    const result = await (deps.runGit ?? runGit)(root, [
-      "diff",
-      "--shortstat",
-      "--no-ext-diff",
-      "--no-textconv",
-      base,
-    ]);
-    if (result.code !== 0) {
-      return null;
-    }
-    // Empty output means an empty diff, not a failure.
-    const summary = result.stdout.trim();
-    const untracked = await untrackedStats(root, deps.gitOutput ?? gitOutput);
-    return {
-      additions: Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + untracked.additions,
-      deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
-      changedFiles: Number(SHORTSTAT_FILES.exec(summary)?.[1] ?? 0) + untracked.files,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * GitHub's pull/new page only has something to offer once the pushed branch
- * carries commits the default branch lacks. Rename-only commits still count:
- * this gate keys on commits, not line counts.
- */
-async function branchHasCreatablePullRequest(
-  root: string,
-  context: SessionPullRequestGitContext,
-  pushedSha: string | null,
-  output: typeof gitOutput,
-): Promise<boolean> {
-  // Fail closed when origin/HEAD is missing or the branch is not pushed.
-  if (!context.defaultBranch || !pushedSha) {
-    return false;
-  }
-  const ahead = await output(root, [
-    "rev-list",
-    "--count",
-    `refs/remotes/origin/${context.defaultBranch}..refs/remotes/origin/${context.branch}`,
-  ]);
-  // A failed count keeps the row: rev-list errors must not hide a valid branch.
-  return ahead === null || Number(ahead) > 0;
-}
-
 async function resolveSessionBranch(
-  context: SessionPullRequestGitContext,
+  context: GitCheckoutContext,
   mergedHeads: readonly MergedPullHead[],
   deps: LoadSessionPullRequestDeps,
   refresh: boolean,
@@ -298,31 +179,12 @@ async function resolveSessionBranch(
       createUrl: branchCreateUrl(context),
     };
   }
-  const facts = await resolveCachedSessionBranchFacts(
-    { ...context, root },
-    mergedHeads,
-    async () => {
-      const landing = await (deps.resolveBranchLanding ?? resolveBranchLanding)(root, {
-        branch: context.branch,
-        defaultBranch: context.defaultBranch,
-        mergedHeads,
-      });
-      const creatable =
-        (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
-        (await branchHasCreatablePullRequest(
-          root,
-          context,
-          landing.pushedSha,
-          deps.gitOutput ?? gitOutput,
-        ));
-      const stats = landing.statsBase
-        ? await diffStatsAgainst(root, landing.statsBase, deps)
-        : null;
-      // No createUrl until GitHub can compare, but local changes still get a row.
-      return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
+  const facts = await runGitReadOperation(
+    {
+      type: "pull-request.branch-facts",
+      input: { root, branch: context.branch, defaultBranch: context.defaultBranch, mergedHeads },
     },
-    refresh,
-    deps.cacheSignal,
+    { refresh, cacheSignal: deps.cacheSignal },
   );
   if (!facts) {
     return undefined;
@@ -538,7 +400,7 @@ function mergedHeadsOf(items: readonly PullListItem[]): MergedPullHead[] {
 }
 
 async function fetchBranchPullRequests(
-  context: SessionPullRequestGitContext,
+  context: GitCheckoutContext,
   fetchImpl: typeof fetch,
   token: string | undefined,
 ): Promise<BranchPullRequestsSnapshot> {
@@ -582,7 +444,7 @@ async function fetchBranchPullRequests(
 }
 
 async function refreshBranchPullRequests(
-  context: SessionPullRequestGitContext,
+  context: GitCheckoutContext,
   fetchImpl: typeof fetch,
   entry: CacheEntry,
   token: string | undefined,
@@ -626,7 +488,7 @@ export async function loadControlUiSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps = {},
 ): Promise<ControlUiSessionPullRequests> {
-  let context: SessionPullRequestGitContext | null;
+  let context: GitCheckoutContext | null;
   try {
     context = deps.resolveGitContext
       ? await deps.resolveGitContext(params)
@@ -637,12 +499,12 @@ export async function loadControlUiSessionPullRequests(
     throw error;
   }
   if (!context) {
-    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+    releaseGitReadCache("pull-request.branch-facts", deps.cacheSignal);
     branchCache.release(deps.cacheSignal);
     return { pullRequests: [], rateLimited: false };
   }
   if (context.branch === context.defaultBranch) {
-    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+    releaseGitReadCache("pull-request.branch-facts", deps.cacheSignal);
     branchCache.release(deps.cacheSignal);
     return {
       pullRequests: [],
@@ -654,7 +516,7 @@ export async function loadControlUiSessionPullRequests(
   // structural refreshes observe the replacement checkout immediately.
   const result = await cachedBranchPullRequests(context, deps, params.refresh === true).catch(
     () => {
-      releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+      releaseGitReadCache("pull-request.branch-facts", deps.cacheSignal);
       return null;
     },
   );
@@ -693,7 +555,7 @@ function trackBranchRefresh(
 }
 
 async function cachedBranchPullRequests(
-  context: SessionPullRequestGitContext,
+  context: GitCheckoutContext,
   deps: LoadSessionPullRequestDeps,
   refresh: boolean,
 ): Promise<BranchPullRequestsSnapshot> {

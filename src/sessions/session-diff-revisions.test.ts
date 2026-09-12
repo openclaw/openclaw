@@ -1,9 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runGit, type GitResult } from "../agents/worktrees/git.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { resolveSessionDiffBase, resolveSessionDiffEmptyTree } from "./session-diff-revisions.js";
+import {
+  loadSessionDiffBranchMetadata,
+  resolveSessionDiffBase,
+  resolveSessionDiffEmptyTree,
+} from "./session-diff-revisions.js";
 
 vi.mock("../agents/worktrees/git.js", () => ({ runGit: vi.fn() }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function gitResult(stdout: string, code = 0): GitResult {
   return {
@@ -18,56 +27,16 @@ function gitResult(stdout: string, code = 0): GitResult {
 }
 
 describe("empty-tree preparation", () => {
-  beforeEach(() => {
-    vi.mocked(runGit).mockReset();
-  });
+  beforeEach(() => vi.mocked(runGit).mockReset());
 
-  it("shares concurrent Git work per repository without retaining settled results", async () => {
-    const first = createDeferredCore<GitResult>();
-    const other = createDeferredCore<GitResult>();
-    vi.mocked(runGit).mockImplementation((root) =>
-      root === "first" ? first.promise : other.promise,
-    );
-
-    const pending = Array.from({ length: 32 }, () => resolveSessionDiffEmptyTree("first"));
-    const otherPending = resolveSessionDiffEmptyTree("other");
-    first.resolve(gitResult("first-tree\n"));
-    other.resolve(gitResult("other-tree\n"));
-
-    expect(await Promise.all(pending)).toEqual(
-      Array.from({ length: 32 }, () => ({ base: "first-tree" })),
-    );
-    await expect(otherPending).resolves.toEqual({ base: "other-tree" });
-    expect(runGit).toHaveBeenCalledTimes(2);
-
-    vi.mocked(runGit).mockResolvedValue(gitResult("replacement-tree\n"));
-    await expect(resolveSessionDiffEmptyTree("first")).resolves.toEqual({
-      base: "replacement-tree",
+  it("reads the repository's current object format without retaining failures", async () => {
+    vi.mocked(runGit).mockResolvedValueOnce(gitResult("", 128));
+    await expect(resolveSessionDiffEmptyTree("repo")).resolves.toBeNull();
+    vi.mocked(runGit).mockResolvedValueOnce(gitResult("format-specific-empty-tree\n"));
+    await expect(resolveSessionDiffEmptyTree("repo")).resolves.toEqual({
+      base: "format-specific-empty-tree",
     });
-    expect(runGit).toHaveBeenCalledTimes(3);
   });
-
-  it.each(["exit", "reject"])(
-    "releases shared %s failures before a later request",
-    async (failure) => {
-      const command = createDeferredCore<GitResult>();
-      vi.mocked(runGit).mockReturnValue(command.promise);
-      const pending = Array.from({ length: 8 }, () => resolveSessionDiffEmptyTree("failed"));
-      if (failure === "reject") {
-        command.reject(new Error("Git unavailable"));
-      } else {
-        command.resolve(gitResult("", 128));
-      }
-      expect(await Promise.all(pending)).toEqual(Array.from({ length: 8 }, () => null));
-      expect(runGit).toHaveBeenCalledOnce();
-
-      vi.mocked(runGit).mockResolvedValue(gitResult("recovered-tree\n"));
-      await expect(resolveSessionDiffEmptyTree("failed")).resolves.toEqual({
-        base: "recovered-tree",
-      });
-      expect(runGit).toHaveBeenCalledTimes(2);
-    },
-  );
 });
 
 describe("branch base resolution", () => {
@@ -102,7 +71,7 @@ describe("branch base resolution", () => {
       if (args[0] === "symbolic-ref") {
         return symbolicDefault;
       }
-      const ref = args[0] === "rev-parse" ? args.at(-1) : args[1];
+      const ref = (args[0] === "rev-parse" ? args.at(-1) : args[1])?.replace(/-sha$/, "");
       const mergeBase = ref ? mergeBases.get(ref) : undefined;
       if (!mergeBase) {
         return null;
@@ -111,7 +80,7 @@ describe("branch base resolution", () => {
     };
 
     await expect(
-      resolveSessionDiffBase({ branch: "feature", gitOut, root: "/repo" }),
+      resolveSessionDiffBase({ branch: "feature", gitOut, head: "captured-head", root: "/repo" }),
     ).resolves.toEqual(expected);
   });
 
@@ -131,8 +100,10 @@ describe("branch base resolution", () => {
         return null;
       };
 
-      await expect(resolveSessionDiffBase({ branch, gitOut, root: "/repo" })).resolves.toEqual({
-        base: "HEAD",
+      await expect(
+        resolveSessionDiffBase({ branch, gitOut, head: "captured-head", root: "/repo" }),
+      ).resolves.toEqual({
+        base: "captured-head",
         baseRef: "HEAD",
       });
     },
@@ -140,7 +111,53 @@ describe("branch base resolution", () => {
 
   it("keeps HEAD when no default ref resolves", async () => {
     await expect(
-      resolveSessionDiffBase({ branch: "feature", gitOut: async () => null, root: "/repo" }),
-    ).resolves.toEqual({ base: "HEAD", baseRef: "HEAD" });
+      resolveSessionDiffBase({
+        branch: "feature",
+        gitOut: async () => null,
+        head: "captured-head",
+        root: "/repo",
+      }),
+    ).resolves.toEqual({ base: "captured-head", baseRef: "HEAD" });
+  });
+});
+
+describe("captured session history", () => {
+  it("does not admit commits added after the checkout revision was captured", async () => {
+    const root = tempDirs.make("openclaw-captured-history-");
+    const execute = promisify(execFile);
+    const git = async (...args: string[]) =>
+      (
+        await execute("git", [
+          "-C",
+          root,
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ])
+      ).stdout;
+    await git("init", "-b", "main");
+    await fs.writeFile(path.join(root, "file.txt"), "base\n");
+    await git("add", "file.txt");
+    await git("commit", "-m", "base");
+    const base = (await git("rev-parse", "HEAD")).trim();
+    await git("checkout", "-b", "feature");
+    await fs.appendFile(path.join(root, "file.txt"), "captured\n");
+    await git("commit", "-am", "captured change");
+    const head = (await git("rev-parse", "HEAD")).trim();
+    await fs.appendFile(path.join(root, "file.txt"), "later\n");
+    await git("commit", "-am", "later change");
+    const metadata = await loadSessionDiffBranchMetadata({
+      root,
+      base,
+      head,
+      gitOut: async (_root, args) => git(...args),
+    });
+    expect(metadata.aheadCount).toBe(1);
+    expect(metadata.commits?.map((commit) => commit.subject)).toEqual(["captured change"]);
+    expect(metadata.mergeBase?.subject).toBe("base");
   });
 });

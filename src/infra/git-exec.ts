@@ -6,7 +6,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
 import type { SpawnResult } from "../process/exec-result.js";
-import { runCommandBuffered, runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
+import { runCommandBuffersWithTimeout } from "../process/exec-runner.js";
+import {
+  runCommandWithTimeout,
+  type BufferedCommandResult,
+  type CommandOptions,
+} from "../process/exec.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { areDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import {
@@ -156,7 +161,14 @@ export async function executeGitCommand(
   args: string[],
   options: Pick<
     CommandOptions,
-    "baseEnv" | "env" | "input" | "timeoutMs" | "signal" | "killProcessTree" | "maxOutputBytes"
+    | "baseEnv"
+    | "env"
+    | "input"
+    | "timeoutMs"
+    | "signal"
+    | "killProcessTree"
+    | "maxOutputBytes"
+    | "terminateOnOutputLimit"
   > = {},
 ): Promise<GitCommandResult> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
@@ -168,9 +180,24 @@ export async function executeGitCommand(
   return { ...result, timeoutMs };
 }
 
+/** The same command/timeout contract, with output bytes owned by a worker consumer. */
+export async function executeGitCommandBytes(
+  cwd: string,
+  args: string[],
+  options: Parameters<typeof executeGitCommand>[2] = {},
+) {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const argv = ["git", "-C", cwd, ...args];
+  const result = await runCommandBuffersWithTimeout(
+    options.killProcessTree ? withForegroundGitMaintenance(argv) : argv,
+    { ...options, timeoutMs },
+  );
+  return { ...result, timeoutMs };
+}
+
 export function createGitCommandError(
   command: string,
-  result: (SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>) & { timeoutMs?: number },
+  result: (SpawnResult | BufferedCommandResult) & { timeoutMs?: number },
 ): Error {
   // Buffered Git uses the fixed default; text results carry their applied budget.
   const timeoutMs = result.timeoutMs ?? GIT_TIMEOUT_MS;
@@ -188,18 +215,10 @@ export async function requireGitCommand(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
 ): Promise<string> {
-  return (await requireGitCommandRaw(cwd, args, options)).trim();
-}
-
-export async function requireGitCommandRaw(
-  cwd: string,
-  args: string[],
-  options: Parameters<typeof requireGitCommand>[2] = {},
-): Promise<string> {
   return requireGitCommandOutput(
     `git ${args.join(" ")}`,
     await executeGitCommand(cwd, args, options),
-  );
+  ).trim();
 }
 
 export function requireGitCommandOutput(
@@ -213,23 +232,6 @@ export function requireGitCommandOutput(
   // Required stdout is data, not a diagnostic tail; a clean exit cannot make it complete.
   if (result.stdoutTruncatedBytes) {
     throw createError(command, { ...result, code: null, outputLimitExceeded: true });
-  }
-  return result.stdout;
-}
-
-export async function requireGitCommandBuffer(
-  cwd: string,
-  args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: Uint8Array; maxOutputBytes?: number } = {},
-): Promise<Buffer> {
-  const result = await runCommandBuffered(["git", "-C", cwd, ...args], {
-    timeoutMs: GIT_TIMEOUT_MS,
-    env: options.env,
-    input: options.input,
-    ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw createGitCommandError(`git ${args.join(" ")}`, result);
   }
   return result.stdout;
 }
