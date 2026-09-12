@@ -75,7 +75,8 @@ describe("sidebar session layout settings", () => {
         openSlot({ columns: [] }, "discussion"),
       );
     }
-    layouts = normalizeSidebarSessionLayouts(JSON.parse(JSON.stringify(layouts)));
+    const storedLayouts = JSON.stringify(layouts);
+    layouts = normalizeSidebarSessionLayouts(JSON.parse(storedLayouts));
     expect(Object.keys(layouts)).toHaveLength(500);
     expect(layouts["session-4"]).toBeUndefined();
     expect(layouts["session-5"]).toBeDefined();
@@ -103,7 +104,8 @@ describe("sidebar session layout settings", () => {
         `panel-${index}`,
       );
     }
-    selections = normalizeSidebarSessionActivePanels(JSON.parse(JSON.stringify(selections)));
+    const storedSelections = JSON.stringify(selections);
+    selections = normalizeSidebarSessionActivePanels(JSON.parse(storedSelections));
     expect(Object.keys(selections)).toHaveLength(500);
     expect(selections["session-4"]).toBeUndefined();
     expect(selections["session-5"]).toBe("panel-5");

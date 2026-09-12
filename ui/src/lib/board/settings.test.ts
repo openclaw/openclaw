@@ -11,7 +11,8 @@ describe("board session view settings", () => {
     for (let index = 0; index < 505; index += 1) {
       views = updateBoardSessionView(views, `session-${index}`, { activeTabId: `tab-${index}` });
     }
-    views = normalizeBoardSessionViews(JSON.parse(JSON.stringify(views)));
+    const storedViews = JSON.stringify(views);
+    views = normalizeBoardSessionViews(JSON.parse(storedViews));
     expect(Object.keys(views)).toHaveLength(500);
     expect(views["session-4"]).toBeUndefined();
     expect(views["session-5"]?.activeTabId).toBe("tab-5");
