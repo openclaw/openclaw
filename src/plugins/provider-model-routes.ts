@@ -52,11 +52,7 @@ export function resolveProviderModelPolicySurface(
       allowScopedSnapshot: true,
       allowWorkspaceScopedSnapshot: true,
     });
-  return metadata
-    ? resolveProviderPolicySurface(provider, {
-        manifestRegistry: { plugins: [...metadata.plugins] },
-      })
-    : null;
+  return metadata ? resolveProviderPolicySurface(provider, { manifestRegistry: metadata }) : null;
 }
 
 /** Binds one provider's identity facts for an authored-row lookup. */

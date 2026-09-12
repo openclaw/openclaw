@@ -1767,13 +1767,21 @@ describe("resolvePluginProviders", () => {
   });
 
   it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {
-    setManifestPlugin({
-      id: "lmstudio",
-      providerIds: ["lmstudio"],
-      modelSupport: {
-        modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"],
-      },
-    });
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "lmstudio",
+        providerIds: ["lmstudio"],
+        modelSupport: {
+          modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"],
+        },
+      }),
+      createManifestProviderPlugin({
+        id: "workspace-prefix",
+        providerIds: ["workspace-prefix"],
+        origin: "workspace",
+        modelSupport: { modelPrefixes: ["qwen3.6-27b@"] },
+      }),
+    ]);
     const provider: ProviderPlugin = {
       id: "lmstudio",
       label: "LM Studio",
@@ -1805,14 +1813,23 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("auto-loads a model-owned provider plugin from shorthand model refs", () => {
-    setManifestPlugin({
-      id: "openai",
-      providerIds: ["openai", "openai"],
-      modelSupport: {
-        modelPrefixes: ["gpt-", "o1", "o3", "o4"],
-      },
-    });
+  it("auto-loads a same-id prefix record after ambiguous pattern matches", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai", "openai"],
+        modelSupport: {
+          modelPrefixes: ["gpt-", "o1", "o3", "o4"],
+        },
+      }),
+      ...["openai", "second-pattern"].map((id) =>
+        createManifestProviderPlugin({
+          id,
+          providerIds: [id],
+          modelSupport: { modelPatterns: ["^gpt-"], modelPrefixes: ["gpt-"] },
+        }),
+      ),
+    ]);
     const provider: ProviderPlugin = {
       id: "openai",
       label: "OpenAI",

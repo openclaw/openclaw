@@ -44,3 +44,10 @@ export type Actor = {
   initialized: boolean;
   closing?: Promise<void>;
 };
+
+export type SqliteWorkerStoreOptions = {
+  moduleUrl: URL;
+  databasePath: string;
+  input: unknown;
+  existingOnly?: boolean;
+};

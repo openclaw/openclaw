@@ -124,6 +124,7 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /** Most recent quota probe or successful provider use. */
   lastProbeAt?: number;
 };
 

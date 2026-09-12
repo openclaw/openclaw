@@ -26,6 +26,7 @@ import {
 } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
   fingerprintAuthProfileCredential,
@@ -189,6 +190,7 @@ export async function prepareSimpleCompletionModel(
   params: PrepareSimpleCompletionModelParams & {
     preparedModelRuntime: PreparedModelRuntimeSnapshot;
   },
+  assertCurrent?: () => void,
 ): Promise<PreparedSimpleCompletionModel> {
   params.signal?.throwIfAborted();
   const config = params.cfg ?? {};
@@ -206,6 +208,7 @@ export async function prepareSimpleCompletionModel(
     prepareSimpleCompletionModelCore(
       { ...params, agentDir: preparedModelRuntime.agentDir },
       context,
+      assertCurrent,
     ),
   );
   params.signal?.throwIfAborted();
@@ -215,6 +218,7 @@ export async function prepareSimpleCompletionModel(
 async function prepareSimpleCompletionModelCore(
   params: PrepareSimpleCompletionModelParams,
   context: PreparedSimpleCompletionResolverContext,
+  assertCurrent?: () => void,
 ): Promise<PreparedSimpleCompletionModel> {
   const { modelResolver, workspaceDir } = context;
   const resolved = await modelResolver(
@@ -238,6 +242,8 @@ async function prepareSimpleCompletionModelCore(
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
     };
   }
+  assertCurrent?.();
+  params.signal?.throwIfAborted();
   const initialModel = resolved.model;
   let resolvedModel = initialModel;
   let authStore: AuthProfileStore | undefined;
@@ -252,6 +258,25 @@ async function prepareSimpleCompletionModelCore(
             profileId: params.profileId,
           })
         : undefined;
+
+    const authParams = {
+      provider: initialModel.provider,
+      modelId: initialModel.id,
+      modelApi: initialModel.api,
+      modelBaseUrl: initialModel.baseUrl,
+      config: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir,
+      authProfileStore: authStore,
+      metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
+      sessionAuthProfileId: params.profileId ?? params.preferredProfile,
+      sessionAuthProfileSource: params.profileId ? "user" : "auto",
+      ...(params.bindAuthOwner && params.profileId ? { allowAuthProfileFallback: false } : {}),
+    } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
+    await reconcileAuthProfileQuotaBlocks(authParams);
+    assertCurrent?.();
+    params.signal?.throwIfAborted();
 
     const primaryModel = params.cfg
       ? resolveDefaultModelForAgent({
@@ -288,24 +313,7 @@ async function prepareSimpleCompletionModelCore(
     });
     const preparedAuth =
       routeResolution?.kind === "routes"
-        ? prepareAgentRuntimeAuth({
-            provider: initialModel.provider,
-            modelId: initialModel.id,
-            modelApi: initialModel.api,
-            modelBaseUrl: initialModel.baseUrl,
-            config: params.cfg,
-            agentId: params.agentId,
-            routeIntent,
-            agentDir: params.agentDir,
-            workspaceDir,
-            authProfileStore: authStore,
-            metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
-            sessionAuthProfileId: params.profileId ?? params.preferredProfile,
-            sessionAuthProfileSource: params.profileId ? "user" : "auto",
-            ...(params.bindAuthOwner && params.profileId
-              ? { allowAuthProfileFallback: false }
-              : {}),
-          })
+        ? prepareAgentRuntimeAuth({ ...authParams, routeIntent })
         : undefined;
     const materializeModel = async ({
       plan,
@@ -645,6 +653,7 @@ export async function acquireSimpleCompletionModelWithSelection(
             : {}),
           skipAgentDiscovery: params.skipAgentDiscovery,
           bindAuthOwner: params.bindAuthOwner,
+          signal: params.signal,
         },
         context,
       ),

@@ -44,3 +44,13 @@ export const SQLITE_WORKER_MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 // Larger complete results use bounded frames; this remains the inline reply budget.
 export const SQLITE_WORKER_MAX_RESULT_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_TRANSFER_FRAME_BYTES = 8 * 1024 * 1024;
+
+export class SqliteWorkerError extends Error {
+  constructor(
+    message: string,
+    readonly code: "closed" | "overloaded" | "unavailable" | "outcome-unknown",
+  ) {
+    super(message);
+    this.name = "SqliteWorkerError";
+  }
+}

@@ -49,7 +49,6 @@ export async function discoverAllSessions(params: {
   agentId: string;
   startMs?: number;
   endMs?: number;
-  includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
   const files = await listUsageCountedTranscriptStats(params.agentId, {
     minMtimeMs: params.startMs,
@@ -59,49 +58,12 @@ export async function discoverAllSessions(params: {
 
   for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
-    const { filePath, sourcePath: sessionFile, sessionId } = file;
+    const { sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
       continue;
     }
     const isPrimaryTranscript =
       file.kind === "sqlite" || isPrimarySessionTranscriptFileName(path.basename(sessionFile));
-
-    // Try to read first user message for label extraction
-    let firstUserMessage: string | undefined;
-    if (params.includeFirstUserMessage !== false) {
-      try {
-        for await (const parsed of readTranscriptRecords(filePath)) {
-          try {
-            const message = parsed.message as Record<string, unknown> | undefined;
-            if (message?.role === "user") {
-              const content = message.content;
-              if (typeof content === "string") {
-                firstUserMessage = truncateUtf16Safe(content, 100);
-              } else if (Array.isArray(content)) {
-                for (const block of content) {
-                  if (
-                    typeof block === "object" &&
-                    block &&
-                    (block as Record<string, unknown>).type === "text"
-                  ) {
-                    const text = (block as Record<string, unknown>).text;
-                    if (typeof text === "string") {
-                      firstUserMessage = truncateUtf16Safe(text, 100);
-                    }
-                    break;
-                  }
-                }
-              }
-              break; // Found first user message
-            }
-          } catch {
-            // Skip malformed lines
-          }
-        }
-      } catch {
-        // Ignore read errors
-      }
-    }
 
     const existing = discovered.get(sessionId);
     const existingIsPrimary = existing
@@ -117,19 +79,14 @@ export async function discoverAllSessions(params: {
         sessionId,
         sessionFile,
         mtime: file.mtimeMs,
-        firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
-      continue;
-    }
-
-    if (!existing.firstUserMessage && firstUserMessage) {
-      existing.firstUserMessage = firstUserMessage;
-      discovered.set(sessionId, existing);
     }
   }
 
   // Sort by mtime descending (most recent first)
-  return Array.from(discovered.values()).toSorted((a, b) => b.mtime - a.mtime);
+  const sessions = Array.from(discovered.values());
+  sessions.sort((a, b) => b.mtime - a.mtime);
+  return sessions;
 }
 
 export async function loadSessionCostSummary(params: {

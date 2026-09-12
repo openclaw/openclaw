@@ -51,7 +51,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
             sessionId: "s-main",
             sessionFile: "/tmp/agents/main/sessions/s-main.jsonl",
             mtime: 100,
-            firstUserMessage: "hello",
           },
         ];
       }
@@ -61,7 +60,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
             sessionId: "s-opus",
             sessionFile: "/tmp/agents/opus/sessions/s-opus.jsonl",
             mtime: 200,
-            firstUserMessage: "hi",
           },
         ];
       }
@@ -71,7 +69,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
             sessionId: "s-codex",
             sessionFile: "/tmp/agents/codex/sessions/s-codex.jsonl",
             mtime: 300,
-            firstUserMessage: "disk",
           },
         ];
       }
