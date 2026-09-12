@@ -2,16 +2,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { discoverStaticExtensionAssets } from "./static-extension-assets.mts";
+import { resolvePackageStaticAssetEntries } from "./static-extension-assets.mts";
 
 type PluginRuntimeAssetPlan = {
   packageDir: string;
-  packageJson: { openclaw?: { assetScripts?: { build?: unknown } } };
+  packageJson: Record<string, unknown> & { openclaw?: { assetScripts?: { build?: unknown } } };
   pluginDir: string;
-};
-
-type PluginStaticAssetPlan = Pick<PluginRuntimeAssetPlan, "pluginDir"> & {
-  repoRoot: string;
 };
 
 function resolvePackageAssetBuildCommand(packageJson: PluginRuntimeAssetPlan["packageJson"]) {
@@ -19,8 +15,7 @@ function resolvePackageAssetBuildCommand(packageJson: PluginRuntimeAssetPlan["pa
   return typeof command === "string" && command.trim() ? command.trim() : null;
 }
 
-/** Run a package-local static asset build command when the plugin declares one. */
-export function runPackageAssetBuild(plan: PluginRuntimeAssetPlan) {
+function runPackageAssetBuild(plan: PluginRuntimeAssetPlan) {
   const command = resolvePackageAssetBuildCommand(plan.packageJson);
   if (!command) {
     return null;
@@ -38,12 +33,25 @@ export function runPackageAssetBuild(plan: PluginRuntimeAssetPlan) {
   return command;
 }
 
-/** List static asset source paths referenced by a package but missing from disk. */
-export function listMissingPackageStaticAssetSources(plan: PluginStaticAssetPlan) {
-  const packagePrefix = `extensions/${plan.pluginDir}/`;
-  return discoverStaticExtensionAssets({ rootDir: plan.repoRoot, includeExternalPlugins: true })
-    .filter((asset) => asset.src.replaceAll("\\", "/").startsWith(packagePrefix))
-    .map((asset) => asset.src)
-    .filter((src) => !fs.existsSync(path.join(plan.repoRoot, src)))
+/** Uses the selected manifest so private source packages need no Git discovery. */
+export function preparePackageRuntimeAssets(plan: PluginRuntimeAssetPlan) {
+  const assetBuildCommand = runPackageAssetBuild(plan);
+  const assets = resolvePackageStaticAssetEntries(plan.packageJson);
+  const missing = assets
+    .filter(({ source }) => !fs.existsSync(path.join(plan.packageDir, source)))
+    .map(({ source }) => path.posix.join("extensions", plan.pluginDir, source))
     .toSorted((left, right) => left.localeCompare(right));
+  if (missing.length > 0) {
+    throw new Error(`${plan.pluginDir} missing static asset source(s): ${missing.join(", ")}`);
+  }
+  const copiedStaticAssets = assets.map(({ source, output }) => {
+    const destination = path.join(plan.packageDir, "dist", output);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(path.join(plan.packageDir, source), destination);
+    return path.posix.join("dist", output);
+  });
+  return {
+    assetBuildCommand,
+    copiedStaticAssets: copiedStaticAssets.toSorted((left, right) => left.localeCompare(right)),
+  };
 }

@@ -36,8 +36,8 @@ openclaw gateway restart
   </Step>
   <Step title="Set the API key">
     ```bash
-export GROQ_API_KEY=gsk_...
-```
+    export GROQ_API_KEY=gsk_...
+    ```
   </Step>
   <Step title="Set a default model">
     ```json5
@@ -83,7 +83,7 @@ OpenClaw ships a manifest-backed Groq catalog with both reasoning and non-reason
 | `groq/groq/compound`                | Compound           | no        | text         | 131,072 |
 | `groq/groq/compound-mini`           | Compound Mini      | no        | text         | 131,072 |
 
-The manifest also retains `groq/llama-3.1-8b-instant` and `groq/llama-3.3-70b-versatile` as hidden deprecated compatibility rows until Groq's August 16, 2026 shutdown. Use `groq/openai/gpt-oss-20b` and `groq/openai/gpt-oss-120b`, respectively, for new configurations.
+The manifest also retains `groq/llama-3.1-8b-instant` and `groq/llama-3.3-70b-versatile` as hidden deprecated compatibility rows after Groq's August 16, 2026 shutdown. Use `groq/openai/gpt-oss-20b` and `groq/openai/gpt-oss-120b`, respectively, for new configurations.
 
 <Tip>
   The catalog evolves with each OpenClaw release. `openclaw models list --provider groq` shows the rows known to your installed version; cross-check with [console.groq.com/docs/models](https://console.groq.com/docs/models) for newly-added or deprecated models.

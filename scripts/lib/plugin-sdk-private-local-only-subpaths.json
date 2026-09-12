@@ -35,6 +35,7 @@
   "chat-channel-ids",
   "claude-model-runtime",
   "cli-backend",
+  "claude-agent-sdk-runtime",
   "cli-runtime",
   "codex-mcp-projection",
   "native-hook-relay-runtime",
@@ -79,6 +80,7 @@
   "memory-core-host-engine-curated",
   "memory-core-host-engine-embeddings",
   "memory-core-host-engine-fs",
+  "memory-core-host-engine-knn",
   "memory-core-host-engine-sessions",
   "memory-core-host-engine-schema",
   "memory-core-host-engine-storage",
@@ -207,5 +209,6 @@
   "video-generation-runtime",
   "web-content-extractor",
   "webhook-targets",
+  "websocket-runtime",
   "windows-spawn"
 ]

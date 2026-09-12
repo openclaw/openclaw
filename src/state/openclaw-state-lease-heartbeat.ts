@@ -1,39 +1,82 @@
 import { Worker } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  acquireStateDatabaseHandleLease,
+  retainHeldStateDatabaseCoordinator,
+} from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   leaseHeartbeatState as state,
+  LEASE_HEARTBEAT_START_TIMEOUT_MS,
   type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
 
-const WORKER_START_TIMEOUT_MS = 5_000;
 const WORKER_RESPONSE_TIMEOUT_MS = 1_000;
 
 export function startOpenClawStateLeaseHeartbeat(
-  params: Omit<LeaseHeartbeatWorkerData, "shared"> & {
+  params: Omit<LeaseHeartbeatWorkerData, "shared" | "parentCoordinatorRetained"> & {
     expiresAt: number;
     onLost: (error: Error) => void;
   },
 ) {
+  const startedAt = performance.now();
   const shared = new BigInt64Array(new SharedArrayBuffer(3 * BigInt64Array.BYTES_PER_ELEMENT));
   const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
-  const worker = new Worker(url, {
-    workerData: {
-      path: params.path,
-      identity: {
-        scope: params.identity.scope,
-        key: params.identity.key,
-        owner: params.identity.owner,
-      },
-      leaseMs: params.leaseMs,
-      heartbeatMs: params.heartbeatMs,
-      shared: shared.buffer,
-    } satisfies LeaseHeartbeatWorkerData,
-    env: {},
-    execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
-    stdout: true,
-    stderr: true,
+  // Retain a parent-owned physical lease through native worker teardown. A forced
+  // Worker.terminate() need not run JS cleanup; the exit event does attest that
+  // native source handles have settled before this last guard is released.
+  const coordinator = retainHeldStateDatabaseCoordinator(params.path);
+  let handle: ReturnType<typeof acquireStateDatabaseHandleLease>;
+  try {
+    handle = acquireStateDatabaseHandleLease({ databasePath: params.path, busyTimeoutMs: 0 });
+  } catch (error) {
+    coordinator?.release();
+    throw error;
+  }
+  const release = () => {
+    try {
+      handle.release();
+    } finally {
+      coordinator?.release();
+    }
+  };
+  let worker: Worker;
+  try {
+    worker = new Worker(url, {
+      workerData: {
+        path: params.path,
+        existingOnly: params.existingOnly,
+        ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
+        identity: {
+          scope: params.identity.scope,
+          key: params.identity.key,
+          owner: params.identity.owner,
+        },
+        leaseMs: params.leaseMs,
+        expiresAt: params.expiresAt,
+        heartbeatMs: params.heartbeatMs,
+        shared: shared.buffer,
+      } satisfies LeaseHeartbeatWorkerData,
+      env: {},
+      execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
+      stdout: true,
+      stderr: true,
+    });
+  } catch (error) {
+    release();
+    throw error;
+  }
+  let handleReleaseError: Error | undefined;
+  worker.once("exit", () => {
+    try {
+      release();
+    } catch (error) {
+      handleReleaseError = new Error("state lease heartbeat handle release failed", {
+        cause: error,
+      });
+      params.onLost(handleReleaseError);
+    }
   });
   // Worker stdio uses parent message delivery, which maintenance can block.
   // The heartbeat emits no normal output; drain runtime bootstrap diagnostics.
@@ -50,23 +93,41 @@ export function startOpenClawStateLeaseHeartbeat(
     ready.reject(error);
     params.onLost(error);
   };
-  const settleStartup = () => {
+  const settleStartup = (trigger: "timeout" | "message") => {
     clearTimeout(startTimer);
     // Readiness precedes notification delivery. A delayed parent must not
     // overwrite ready; callback entry still requires a fresh acknowledgement.
-    if (Atomics.compareExchange(shared, state.status, state.starting, state.lost) === state.ready) {
+    const observedStatus = Atomics.compareExchange(
+      shared,
+      state.status,
+      state.starting,
+      state.lost,
+    );
+    if (observedStatus === state.ready) {
       ready.resolve();
     } else {
-      fail(new Error("state lease heartbeat did not become ready"));
+      // Report the status before our transition, not the lost state it writes.
+      const status =
+        observedStatus === state.starting
+          ? "starting"
+          : observedStatus === state.lost
+            ? "lost"
+            : "closed";
+      fail(
+        new Error(
+          `state lease heartbeat did not become ready (phase=startup, trigger=${trigger}, status=${status}, elapsedMs=${Math.round(performance.now() - startedAt)}, timeoutMs=${startupTimeoutMs})`,
+        ),
+      );
     }
   };
-  const startTimer = setTimeout(
-    settleStartup,
-    Math.max(1, Math.min(WORKER_START_TIMEOUT_MS, params.expiresAt - Date.now())),
+  const startupTimeoutMs = Math.max(
+    1,
+    Math.min(LEASE_HEARTBEAT_START_TIMEOUT_MS, params.expiresAt - Date.now()),
   );
+  const startTimer = setTimeout(() => settleStartup("timeout"), startupTimeoutMs);
   worker.once("error", fail);
   worker.once("exit", () => fail(new Error("state lease heartbeat exited")));
-  worker.once("message", settleStartup);
+  worker.once("message", () => settleStartup("message"));
   let stopping: Promise<number> | undefined;
   const close = () => {
     Atomics.store(shared, state.status, state.closed);
@@ -79,7 +140,12 @@ export function startOpenClawStateLeaseHeartbeat(
     close,
     stop() {
       close();
-      return (stopping ??= worker.terminate());
+      return (stopping ??= worker.terminate().then((code) => {
+        if (handleReleaseError) {
+          throw handleReleaseError;
+        }
+        return code;
+      }));
     },
     assertResponsive(expiresAt: number) {
       const deadline =

@@ -8,6 +8,8 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { pt_BR } from "../../../i18n/locales/pt-BR.ts";
 import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import { sessionsResult } from "../../../lib/sessions/session-capability.test-support.ts";
+import { createSessionRowProvenance } from "../../../lib/sessions/session-row-provenance.ts";
 import { SwarmRosterHydrator } from "../../../lib/sessions/swarm-roster.ts";
 import { renderChatSwarmProgress } from "./chat-swarm-progress.ts";
 
@@ -176,8 +178,9 @@ describe("chat Swarm progress", () => {
     const params = {
       sessions: {
         canonicalListRevision: 1,
-        list: vi.fn(async () => ({ sessions: [hydrated], hasMore: false })),
-      } as unknown as SessionCapability,
+        list: vi.fn(async () => ({ ...sessionsResult([hydrated], 2), hasMore: false })),
+        inheritRow: createSessionRowProvenance().inheritRow,
+      } satisfies Pick<SessionCapability, "canonicalListRevision" | "list" | "inheritRow">,
       parentKey: parentSessionKey,
       readParent: async () => ({ key: parentSessionKey, kind: "direct" as const }),
       sourceEpoch: 1,
@@ -386,7 +389,10 @@ describe("chat Swarm progress", () => {
         { sessionKey: `agent:main:${raw}`, agentId: "main", count: 3 },
       ]) {
         render(renderChatSwarmProgress({ ...target, sessions }), container);
-        expect(container.textContent).toContain(`${target.count} of ${target.count}`);
+        expect(container.querySelector("summary")?.textContent).toContain(
+          `${target.count} completed`,
+        );
+        expect(container.textContent).toContain("Child details are unavailable");
       }
       render(renderChatSwarmProgress({ sessionKey: raw, sessions }), container);
       expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();

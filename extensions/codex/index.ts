@@ -16,6 +16,7 @@ import {
   createCodexAppServerNativeCompaction,
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import codexProviderDiscovery from "./provider-discovery.js";
 import { createCodexAuthProfileSelection } from "./src/app-server/auth-profile-selection.js";
 import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
 import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
@@ -35,7 +36,7 @@ import {
 } from "./src/app-server/session-binding-store.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client-lifecycle.js";
 import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
-import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
+import type { CodexPluginsConfigBlock } from "./src/command-plugin-config.js";
 import { createCodexCommand } from "./src/commands.js";
 import {
   handleCodexConversationBindingResolved,
@@ -80,6 +81,7 @@ export default definePluginEntry({
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
     setManagedCodexPluginRoot(api.rootDir);
+    api.registerProvider(codexProviderDiscovery);
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {

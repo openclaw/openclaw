@@ -15,8 +15,8 @@ OpenClaw assembles its own system prompt on every run. It includes:
 
 - Tool list + short descriptions
 - Skills list (metadata only; instructions load on demand with `read`). Native
-  Codex turns get the compact skills block as turn-scoped collaboration
-  developer instructions; other harnesses get it in the normal prompt surface.
+  Codex turns on the managed bundled app-server get the compact skills block
+  in parent-local model request instructions; other harnesses get it in the normal prompt surface.
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
@@ -28,7 +28,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   `60000`).
   - Native Codex turns do not paste raw `MEMORY.md` when memory tools are
     available for that workspace; they get a small memory pointer in
-    turn-scoped collaboration developer instructions instead and use memory
+    parent-local request instructions instead and use memory
     tools on demand. If tools are disabled, memory search is unavailable, or
     the active workspace differs from the agent memory workspace, `MEMORY.md`
     falls back to the normal bounded turn-context path.
@@ -89,7 +89,7 @@ publish a `1050000` token total window, but OpenClaw defaults their active
 runtime budget to `272000` tokens. The opt-in `922000` input budget reserves the
 full `128000` output allowance, and OpenAI applies higher long-context pricing
 to the entire request once input exceeds `272000` tokens. See
-[OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
+[OpenAI context window defaults](/providers/openai/setup#context-window-defaults-and-long-context-opt-in).
 
 For images, OpenClaw downscales transcript/tool image payloads before
 provider calls. Tune with `agents.defaults.imageMaxDimensionPx` (default:
@@ -130,8 +130,10 @@ Other surfaces:
 - **TUI/Web TUI:** `/status` and `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).
-  Current usage-window providers: Claude (Anthropic), ClawRouter, Copilot
-  (GitHub), DeepSeek, MiniMax, OpenAI, Xiaomi, Xiaomi Token Plan, and z.ai.
+  Usage-window providers, checked against 2026.9.3: Claude (Anthropic),
+  ClawRouter, Copilot (GitHub), DeepSeek, MiniMax, OpenAI, OpenRouter, Venice,
+  xAI, Xiaomi, Xiaomi Token Plan, and z.ai. Provider plugins supply these
+  snapshots, so an installed plugin can add one.
 
 Usage surfaces normalize common provider-native field aliases before
 display. For OpenAI-family Responses traffic, that includes both
@@ -206,6 +208,9 @@ the summed tokens as one large request. Provider-billed totals, including zero,
 take precedence over catalog estimates and remain visible even when token counts
 are unavailable. Unknown token counts are not inferred from a billed amount.
 
+Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs or unknown-price zero placeholders.
+Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
+
 Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
 Explicit flat or all-zero model prices do not inherit a catalog tier schedule.
 Omitted flat-rate fields can still inherit catalog defaults. An explicit
@@ -221,6 +226,11 @@ hosted catalog traffic on offline or restricted networks; bundled pricing still
 works. Agent-local `models.json` prices take precedence over explicit
 `models.providers.*.models[].cost` entries, and both override catalog estimates,
 including explicit flat and zero rates.
+
+OpenRouter `:nitro` and `:floor` routing shortcuts use the base model's catalog
+estimate when the exact shortcut has no price. Recorded costs and explicit
+prices keep their precedence. Private endpoints and other model variants do not
+use this fallback. Priority and flex billing can differ from the base estimate.
 
 ## Cache TTL and pruning impact
 

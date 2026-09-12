@@ -250,6 +250,9 @@ function enrichAgentEvent(
   }
   let data = event.data;
   if (context && event.stream === "lifecycle") {
+    if (context.completionSource) {
+      data = { ...data, completionSource: context.completionSource };
+    }
     if (data.phase === "start") {
       context.lifecycleStartedAt = data.startedAt as number;
     } else if (

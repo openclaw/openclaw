@@ -59,6 +59,7 @@ export function registerModelsCli(program: Command) {
   models
     .command("list")
     .description("List models (configured by default)")
+    .option("--refresh", "Refresh provider discovery before listing", false)
     .option("--all", "Show full model catalog", false)
     .option("--local", "Filter to local models", false)
     .option("--provider <id>", "Filter by provider id")
@@ -86,7 +87,7 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain output", false)
     .option(
       "--check",
-      "Exit non-zero if auth is expiring/expired (1=expired/missing, 2=expiring)",
+      "Check auth/runtime readiness (1=missing/expired/unavailable/incompatible/indeterminate, 2=expiring)",
       false,
     )
     .option("--probe", "Probe configured provider auth (live)", false)

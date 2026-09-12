@@ -40,9 +40,10 @@ const resolveEffectiveToolInventory = vi.fn<
   modelId: params.modelId,
 }));
 
-type RuntimeModelContext = Awaited<
-  ReturnType<ToolsEffectiveDependencies["resolveEffectiveToolInventoryRuntimeModelContextAsync"]>
+type AcquiredRuntimeModelContext = Awaited<
+  ReturnType<ToolsEffectiveDependencies["acquireEffectiveToolInventoryRuntimeModelContext"]>
 >;
+type RuntimeModelContext = Parameters<Parameters<AcquiredRuntimeModelContext["run"]>[0]>[0];
 
 const resolveEffectiveToolInventoryRuntimeModelContext = vi.fn(
   (_params?: unknown): RuntimeModelContext => ({
@@ -55,11 +56,13 @@ export const toolsEffectiveInventoryMocks = {
   resolveEffectiveToolInventoryRuntimeModelContext,
 };
 
-const resolveEffectiveToolInventoryRuntimeModelContextAsync = vi.fn<
-  ToolsEffectiveDependencies["resolveEffectiveToolInventoryRuntimeModelContextAsync"]
->(async (params) =>
-  toolsEffectiveInventoryMocks.resolveEffectiveToolInventoryRuntimeModelContext(params),
-);
+const acquireEffectiveToolInventoryRuntimeModelContext = vi.fn<
+  ToolsEffectiveDependencies["acquireEffectiveToolInventoryRuntimeModelContext"]
+>(async (params) => {
+  const context =
+    toolsEffectiveInventoryMocks.resolveEffectiveToolInventoryRuntimeModelContext(params);
+  return { run: (project) => project(context), release: () => {} };
+});
 
 export const toolsEffectiveTestDependencies: ToolsEffectiveDependencies = {
   applyFinalEffectiveToolPolicy: vi.fn<ToolsEffectiveDependencies["applyFinalEffectiveToolPolicy"]>(
@@ -79,7 +82,7 @@ export const toolsEffectiveTestDependencies: ToolsEffectiveDependencies = {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveEffectiveToolInventory: toolsEffectiveInventoryMocks.resolveEffectiveToolInventory,
-  resolveEffectiveToolInventoryRuntimeModelContextAsync,
+  acquireEffectiveToolInventoryRuntimeModelContext,
   resolveReplyToMode,
   resolveRuntimeConfigCacheKey,
   resolveSessionAgentId,

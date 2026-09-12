@@ -49,6 +49,12 @@ type MonitorTransportParams = {
 
 const FEISHU_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const FEISHU_WEBHOOK_ACCEPTED_VALUE = "durable";
+// Feishu signs each delivery at send time, so a captured signed callback stays
+// validly signed forever. Reject deliveries whose signed timestamp is too far
+// from the local clock: generous enough for provider retries and host clock
+// skew, far shorter than the 24h persistent dedup TTL that otherwise guards
+// synthetic card-action replay.
+const FEISHU_WEBHOOK_TIMESTAMP_MAX_SKEW_MS = 60 * 60_000;
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
 const FEISHU_WS_RECONNECT_MAX_DELAY_MS = 30_000;
 const FEISHU_WS_LOG_ERROR_MAX_LENGTH = 500;
@@ -91,6 +97,16 @@ function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | n
   }
 }
 
+function isFeishuWebhookTimestampFresh(timestamp: string): boolean {
+  const parsed = Number.parseInt(timestamp, 10);
+  if (!Number.isFinite(parsed)) {
+    return false;
+  }
+  // Feishu signs with second-level timestamps; tolerate millisecond values too.
+  const timestampMs = parsed < 1e12 ? parsed * 1000 : parsed;
+  return Math.abs(Date.now() - timestampMs) <= FEISHU_WEBHOOK_TIMESTAMP_MAX_SKEW_MS;
+}
+
 function isFeishuWebhookSignatureValid(params: {
   headers: http.IncomingHttpHeaders;
   rawBody: string;
@@ -108,6 +124,10 @@ function isFeishuWebhookSignatureValid(params: {
   const nonce = Array.isArray(nonceHeader) ? nonceHeader[0] : nonceHeader;
   const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
   if (!timestamp || !nonce || !signature) {
+    return false;
+  }
+
+  if (!isFeishuWebhookTimestampFresh(timestamp)) {
     return false;
   }
 

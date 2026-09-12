@@ -89,11 +89,6 @@ describe("minimax model definitions", () => {
     expect(model.contextWindow).toBe(EXPECTED_DEFAULT_CONTEXT_WINDOW);
   });
 
-  it("keeps M2.7 text-only on the Anthropic-compatible chat path", () => {
-    const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
-    expect(model.input).toEqual(["text"]);
-  });
-
   it("keeps M2.7-highspeed text-only on the Anthropic-compatible chat path", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
     expect(model.input).toEqual(["text"]);

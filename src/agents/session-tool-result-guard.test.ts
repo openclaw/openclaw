@@ -10,6 +10,7 @@ import { createAssistantErrorTranscript } from "./assistant-error-transcript.js"
 import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -254,15 +255,7 @@ describe("installSessionToolResultGuard", () => {
     installSessionToolResultGuard(sm);
 
     sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "   ",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      }),
-    );
+    sm.appendMessage(asAppendMessage(textToolResult("call_1", "   ", "ok", { isError: false })));
 
     const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]) as Array<{
       role: string;
@@ -292,12 +285,7 @@ describe("installSessionToolResultGuard", () => {
         isError: false,
       }),
     );
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "after tools" }],
-      }),
-    );
+    sm.appendMessage(asAppendMessage(textAssistant("after tools")));
 
     const messages = expectPersistedRoles(sm, [
       "assistant", // tool calls
@@ -437,13 +425,7 @@ describe("installSessionToolResultGuard", () => {
     appendAssistantToolCall(sm, { id: "call_1", name: "read" });
     appendAssistantToolCall(sm, { id: "call_2", name: "exec" });
     sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "real output" }],
-        isError: false,
-      }),
+      asAppendMessage(textToolResult("call_1", "read", "real output", { isError: false })),
     );
 
     const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
@@ -730,13 +712,7 @@ describe("installSessionToolResultGuard", () => {
       sm.appendMessage(toolCallMessage);
       if (blocked) {
         sm.appendMessage(
-          asAppendMessage({
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "read",
-            content: [{ type: "text", text: "blocked" }],
-            isError: false,
-          }),
+          asAppendMessage(textToolResult("call_1", "read", "blocked", { isError: false })),
         );
       }
       guard.flushPendingToolResults();
@@ -772,13 +748,7 @@ describe("installSessionToolResultGuard", () => {
     });
     sm.appendMessage(toolCallMessage);
     sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "   ",
-        content: [{ type: "text", text: "original" }],
-        isError: false,
-      }),
+      asAppendMessage(textToolResult("call_1", "   ", "original", { isError: false })),
     );
     expect(observed).toEqual(["read", "read"]);
     expect(getToolResultText(getPersistedMessages(sm))).toBe("hook applied");

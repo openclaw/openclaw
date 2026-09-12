@@ -37,7 +37,13 @@ function spawnClaudeCliProcess(
   using secretDelivery = prepareSecretInputStdio(stdio, descriptorInput);
   const env =
     secretInput?.envName && credential
-      ? { ...options.env, [secretInput.envName]: credential.toString("utf8") }
+      ? {
+          ...options.env,
+          [secretInput.envName]: credential.toString("utf8"),
+          // Claude keeps host-managed credentials out of native tool and MCP children.
+          CLAUDE_CODE_HOST_AUTH_ENV_VAR: secretInput.envName,
+          CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+        }
       : options.env;
   const child = spawn(options.command, options.args, {
     argv0: options.argv0,

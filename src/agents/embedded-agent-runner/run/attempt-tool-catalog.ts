@@ -45,7 +45,7 @@ import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type PreparedToolBase = ReturnType<typeof prepareEmbeddedAttemptToolBase>;
+type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
 
 export function prepareEmbeddedAttemptToolCatalog(input: {
@@ -186,6 +186,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     const toolSearchRunPlan = buildToolSearchRunPlan({
       visibleTools: effectiveTools,
       uncompactedTools: uncompactedEffectiveTools,
+      catalogCapabilityTools: toolSearch.catalogRegistered ? uncompactedEffectiveTools : undefined,
       clientTools,
       clientToolsCataloged:
         toolSearch.catalogRegistered &&

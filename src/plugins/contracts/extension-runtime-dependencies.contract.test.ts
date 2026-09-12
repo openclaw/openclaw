@@ -70,6 +70,8 @@ const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
 ]);
 
 type PackageManifest = {
+  name?: string;
+  private?: boolean;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -357,6 +359,21 @@ describe("extension runtime dependency manifests", () => {
       expect(manifests.length).toBeGreaterThan(0);
       expect(runtimeFiles.length).toBeGreaterThan(0);
     });
+  });
+
+  it("keeps published plugins independent of private workspace packages", () => {
+    const manifests = listPackageManifests(EXTENSION_ROOT).map(readPackageManifest);
+    const privatePackages = new Set(
+      manifests.filter((manifest) => manifest.private === true).map((manifest) => manifest.name),
+    );
+    for (const manifest of manifests.filter((entry) => entry.private !== true)) {
+      const unavailable = Object.keys(manifest.dependencies ?? {}).filter((name) =>
+        privatePackages.has(name),
+      );
+      expect(unavailable, `${manifest.name} must have installable runtime dependencies`).toEqual(
+        [],
+      );
+    }
   });
 
   it("keeps json5 in memory-core for packaged runtime config parsing", () => {

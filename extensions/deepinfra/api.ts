@@ -1,7 +1,10 @@
 // Deepinfra API module exposes the plugin public contract.
-export { buildDeepInfraProvider, buildStaticDeepInfraProvider } from "./provider-catalog.js";
+export { buildDeepInfraProvider } from "./provider-catalog.js";
 export { applyDeepInfraConfig } from "./onboard.js";
-export { DEEPINFRA_DEFAULT_MODEL_REF } from "./provider-models.js";
+export {
+  DEEPINFRA_DEFAULT_MODEL_REF,
+  buildStaticDeepInfraProvider,
+} from "./provider-static-catalog.js";
 export { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
 export { deepinfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 export { deepinfraEmbeddingProviderAdapter } from "./embedding-adapter.js";

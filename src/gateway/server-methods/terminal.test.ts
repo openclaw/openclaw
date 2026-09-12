@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  type TerminalUploadResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -41,14 +45,6 @@ const sessionMocks = vi.hoisted(() => ({
     }),
   ),
 }));
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 vi.mock("../node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: policyMocks.resolveNodeCommandAllowlist,
@@ -96,7 +92,10 @@ function makeOpts(
     })),
     snapshot: vi.fn(() => "10%\r100%"),
     list: vi.fn((): TerminalSessionSummary[] => []),
-    upload: vi.fn(async () => ({ path: "/tmp/upload/report.pdf", size: 4 })),
+    upload: vi.fn(async (): Promise<TerminalUploadResult> => ({
+      path: "/tmp/upload/report.pdf",
+      size: 4,
+    })),
   };
   const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
   const policy = createTerminalLaunchPolicy(runtimeConfig);
@@ -481,7 +480,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("does not create a terminal after the owning connection closes during catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -514,7 +513,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("closes a terminal whose owning connection disappears during PTY creation", async () => {
-    const created = deferred<{
+    const created = createDeferred<{
       ok: true;
       sessionId: string;
       agentId: string;
@@ -550,7 +549,7 @@ describe("terminal gateway policy", () => {
   it("times out one terminal open with request-scoped cancellation", async () => {
     vi.useFakeTimers();
     try {
-      const created = deferred<{
+      const created = createDeferred<{
         ok: true;
         sessionId: string;
         agentId: string;
@@ -591,7 +590,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("does not create a terminal when disabled during catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -624,7 +623,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("uses the refreshed launch plan after catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -800,7 +799,7 @@ describe("terminal gateway policy", () => {
     "rejects a changed node admission: %s",
     async (change) => {
       const command = "anthropic.claude.terminal.resume.v1";
-      const policy = deferred<null>();
+      const policy = createDeferred<null>();
       policyMocks.applyPluginNodeInvokePolicy.mockImplementationOnce(() => policy.promise);
       installCatalog({
         id: "claude",
@@ -982,59 +981,103 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it("binds paired-node uploads to the catalog terminal host", async () => {
-    const command = "codex.terminal.resume.v1";
-    const uploadCommand = "terminal.upload";
-    installCatalog({
-      id: "codex",
-      label: "Codex",
-      list: async () => [],
-      read: async (request) => ({ ...request, items: [] }),
-      openTerminal: async () => ({
-        kind: "node",
+  it.each([
+    { caps: [] },
+    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA] },
+    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] },
+  ])(
+    "only returns insertion metadata to clients advertising its capability: $caps",
+    async ({ caps }: { caps: string[] }) => {
+      const { opts, sessions, respond } = makeOpts(
+        { sessionId: "s1", name: "report.pdf", contentBase64: "dGVzdA==" },
+        { enabled: true },
+      );
+      expectDefined(opts.client, "authenticated upload client").connect.caps = caps;
+      sessions.upload.mockResolvedValue({
+        path: "/tmp/upload/report.pdf",
+        size: 4,
+        uploadPathStyle: "native",
+      });
+
+      await expectDefined(terminalHandlers["terminal.upload"], "terminal.upload")(opts);
+
+      expect(respond).toHaveBeenCalledWith(true, {
+        path: "/tmp/upload/report.pdf",
+        size: 4,
+        ...(caps.includes(GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE)
+          ? { uploadPathStyle: "native" }
+          : {}),
+      });
+    },
+  );
+
+  it.each([undefined, "native"] as const)(
+    "binds paired-node uploads and insertion style to the admitted plan: %s",
+    async (uploadPathStyle) => {
+      const command = "codex.terminal.resume.v1";
+      const uploadCommand = "terminal.upload";
+      const plan = {
+        kind: "node" as const,
         nodeId: "node-1",
         command,
         paramsJSON: JSON.stringify({ threadId: "thread" }),
-      }),
-    });
-    const node = {
-      nodeId: "node-1",
-      connId: "conn-node",
-      pairingGeneration: "generation-node",
-      commands: [command, uploadCommand],
-    };
-    const invoke = vi.fn(async () => ({
-      ok: true,
-      payloadJSON: JSON.stringify({ path: "/tmp/node/report.pdf", size: 4 }),
-    }));
-    const { opts, sessions } = makeOpts(
-      {
-        cols: 80,
-        rows: 24,
-        catalog: { catalogId: "codex", hostId: "node:node-1", threadId: "thread" },
-      },
-      { enabled: true },
-      undefined,
-      { get: () => node, invoke },
-    );
+        uploadPathStyle,
+      };
+      installCatalog({
+        id: "codex",
+        label: "Codex",
+        list: async () => [],
+        read: async (request) => ({ ...request, items: [] }),
+        openTerminal: async () => plan,
+      });
+      const node = {
+        nodeId: "node-1",
+        connId: "conn-node",
+        pairingGeneration: "generation-node",
+        commands: [command, uploadCommand],
+      };
+      const nodePayload = {
+        path: "/tmp/node/report.pdf",
+        size: 4,
+        // A remote reply cannot opt an undeclared receiver into native insertion.
+        ...(uploadPathStyle === undefined ? { uploadPathStyle: "native" } : {}),
+      };
+      const invoke = vi.fn(async () => ({ ok: true, payloadJSON: JSON.stringify(nodePayload) }));
+      const { opts, sessions } = makeOpts(
+        {
+          cols: 80,
+          rows: 24,
+          catalog: { catalogId: "codex", hostId: "node:node-1", threadId: "thread" },
+        },
+        { enabled: true },
+        undefined,
+        { get: () => node, invoke },
+      );
 
-    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    const openRequest = sessions.open.mock.calls[0]?.[0] as
-      | { stageUpload?: (file: { name: string; contentBase64: string }) => Promise<unknown> }
-      | undefined;
-    const result = await openRequest?.stageUpload?.({
-      name: "report.pdf",
-      contentBase64: "dGVzdA==",
-    });
+      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+      plan.nodeId = "node-2";
+      plan.uploadPathStyle = uploadPathStyle === undefined ? "native" : undefined;
+      const openRequest = sessions.open.mock.calls[0]?.[0] as
+        | { stageUpload?: (file: { name: string; contentBase64: string }) => Promise<unknown> }
+        | undefined;
+      const result = await openRequest?.stageUpload?.({
+        name: "report.pdf",
+        contentBase64: "dGVzdA==",
+      });
 
-    expect(invoke).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      expectedConnId: "conn-node",
-      expectedPairingGeneration: "generation-node",
-      command: uploadCommand,
-      params: { name: "report.pdf", contentBase64: "dGVzdA==" },
-      timeoutMs: 120_000,
-    });
-    expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
-  });
+      expect(invoke).toHaveBeenCalledWith({
+        nodeId: "node-1",
+        expectedConnId: "conn-node",
+        expectedPairingGeneration: "generation-node",
+        command: uploadCommand,
+        params: { name: "report.pdf", contentBase64: "dGVzdA==" },
+        timeoutMs: 120_000,
+      });
+      expect(result).toEqual({
+        path: "/tmp/node/report.pdf",
+        size: 4,
+        ...(uploadPathStyle ? { uploadPathStyle } : {}),
+      });
+    },
+  );
 });

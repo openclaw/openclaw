@@ -7,7 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -33,12 +34,15 @@ it("keeps the published install generation across ledger writes until restart", 
     writeChannelPlugin(rootDir, "managed-channel");
   }
   const install = (rootDir: string, installEnv = env) => {
-    databasePaths.add(
-      writePersistedInstalledPluginIndexInstallRecordsSync(
-        { "managed-channel": { source: "path", sourcePath: rootDir, installPath: rootDir } },
-        { config, env: installEnv },
-      ),
-    );
+    refreshPersistedInstalledPluginIndex({
+      config,
+      env: installEnv,
+      reason: "source-changed",
+      installRecords: {
+        "managed-channel": { source: "path", sourcePath: rootDir, installPath: rootDir },
+      },
+    });
+    databasePaths.add(resolveInstalledPluginIndexStorePath({ env: installEnv }));
   };
   install(initialRoot);
   const snapshot = resolveConfigWidePluginMetadataSnapshot({ config, env });

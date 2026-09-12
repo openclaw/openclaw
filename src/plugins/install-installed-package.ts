@@ -49,7 +49,6 @@ export async function validatePackagePluginInstallSource(params: {
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   trustedSourceLinkedOfficialInstall?: boolean;
   config?: OpenClawConfig;
@@ -165,7 +164,6 @@ export async function validatePackagePluginInstallSource(params: {
     ),
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
@@ -292,7 +290,6 @@ async function installPluginFromInstalledPackageDirInternal(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,

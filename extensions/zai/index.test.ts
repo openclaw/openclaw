@@ -83,7 +83,12 @@ describe("zai provider plugin", () => {
         command: "claude",
         jsonlDialect: "claude-stream-json",
         liveSession: "claude-stdio",
-        clearEnv: expect.arrayContaining(["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"]),
+        clearEnv: expect.arrayContaining([
+          "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_AUTH_TOKEN",
+          "ZAI_API_KEY",
+          "Z_AI_API_KEY",
+        ]),
       },
     });
     const prepared = backend.prepareExecution?.({

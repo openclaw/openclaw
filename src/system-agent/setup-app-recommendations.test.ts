@@ -51,6 +51,7 @@ describe("setup app recommendation candidates", () => {
         listProviders: () => [],
         searchSkills: async ({ query }) => [
           {
+            registry: "https://clawhub.ai",
             score: 1,
             slug: `${query.toLocaleLowerCase("en-US")}-tools`,
             installRef: `@demo-owner/${query.toLocaleLowerCase("en-US")}-tools`,
@@ -100,6 +101,7 @@ describe("setup app recommendation candidates", () => {
         listProviders: () => [],
         searchSkills: async () => [
           {
+            registry: "https://clawhub.ai",
             score: 1,
             slug: "notes-tools",
             installRef: "@demo-owner/notes-tools",
@@ -107,6 +109,7 @@ describe("setup app recommendation candidates", () => {
             displayName: "Notes Tools",
           },
           {
+            registry: "https://clawhub.ai",
             score: 0.9,
             slug: "notes-tools",
             installRef: "@other-owner/notes-tools",
@@ -114,6 +117,7 @@ describe("setup app recommendation candidates", () => {
             displayName: "Other Notes Tools",
           },
           {
+            registry: "https://clawhub.ai",
             score: 0.8,
             slug: "legacy-notes-tools",
             installRef: "legacy-notes-tools",
@@ -148,6 +152,7 @@ describe("setup app recommendation candidates", () => {
     });
     const searchSkills = vi.fn(async () => [
       {
+        registry: "https://clawhub.ai",
         score: 2,
         slug: "notes-tools",
         installRef: "@demo-owner/notes-tools",
@@ -155,6 +160,7 @@ describe("setup app recommendation candidates", () => {
         displayName: "Duplicate notes",
       },
       {
+        registry: "https://clawhub.ai",
         score: 1,
         slug: "notes-tools",
         installRef: "@demo-owner/notes-tools",
@@ -195,6 +201,7 @@ describe("setup app recommendation candidates", () => {
       }
       return [
         {
+          registry: "https://clawhub.ai",
           score: 1,
           slug: "working",
           installRef: "@demo-owner/working",
@@ -261,6 +268,7 @@ describe("setup app recommendation matcher", () => {
     listProviders: () => [],
     searchSkills: async () => [
       {
+        registry: "https://clawhub.ai",
         score: 1,
         slug: "notes-tools",
         installRef: "@demo-owner/notes-tools",

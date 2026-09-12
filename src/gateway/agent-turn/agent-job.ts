@@ -516,6 +516,17 @@ export function setGatewayDedupeEntry(params: {
     return;
   }
   if (incomingObservation.state === "terminal") {
+    const lifecycle = agentJobs.get(key.runId)?.snapshotsBySource.get("lifecycle");
+    if (
+      key.source === "chat" &&
+      incomingObservation.snapshot.status === "ok" &&
+      lifecycle?.status === "ok" &&
+      lifecycle.yielded === true
+    ) {
+      // Chat completion closes delivery, not the runtime's yielded execution.
+      incomingObservation.snapshot.yielded = true;
+      incomingObservation.snapshot.livenessState = lifecycle.livenessState;
+    }
     recordAgentRunSnapshot({
       ...incomingObservation.snapshot,
       runId: key.runId,

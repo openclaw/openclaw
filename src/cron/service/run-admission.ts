@@ -17,6 +17,7 @@ import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import { recomputeJobNextRunAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { runWithCronAdmission } from "./run-admission-capacity.js";
+import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import {
   activateServiceCronRunReceiptInDatabase,
   claimServiceCronRunReceiptInDatabase,
@@ -227,8 +228,24 @@ export async function persistQueuedCronRunReservations(params: {
   candidates: readonly CronJob[];
   immediateJobIds?: ReadonlySet<string>;
   reservedAtMs: number;
+  scheduleMode?: "advance" | "preserve";
+  manualRun?: {
+    runId?: string;
+    terminalTracker?: { emitted: boolean };
+    scheduleOwnershipAtMs?: number;
+  };
 }): Promise<Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>> {
-  const pendingJobs = new Map(params.candidates.map((job) => [job.id, structuredClone(job)]));
+  // Manual runs reach reservations without the scheduler's earlier owner filter.
+  const candidates = skipCronJobsWithoutOwners(
+    params.state,
+    [...params.candidates],
+    params.reservedAtMs,
+    {
+      ...(params.scheduleMode ? { scheduleMode: params.scheduleMode } : {}),
+      ...(params.manualRun ? { manualRun: params.manualRun } : {}),
+    },
+  );
+  const pendingJobs = new Map(candidates.map((job) => [job.id, structuredClone(job)]));
   const preparedClaims = new Map(
     [...pendingJobs].map(([jobId, job]) => [
       jobId,
@@ -383,54 +400,51 @@ export async function activateQueuedCronRun(params: {
   if (!reservation || reservation.identity !== reservationIdentity || !runReceipt) {
     return { kind: "fenced" };
   }
-  let previousLastError: string | undefined;
-  let activatedJob: CronJob | undefined;
-  let activatedReceipt: CronRunReceiptHandle | undefined;
-  try {
-    activatedJob = commitCronRuntimeRows({
-      state,
-      jobIds: [job.id],
-      operationLabel: "cron.run-activation",
-      mutate: ({ database, jobs }) => {
-        const current = jobs.get(job.id);
-        const markerAtMs = state.queuedRunReservationsByJobId.get(job.id)?.markerAtMs;
-        if (!current || markerAtMs === undefined || current.state.queuedAtMs !== markerAtMs) {
-          return { value: undefined, runHooks: false };
-        }
-        previousLastError = current.state.lastError;
-        activatedReceipt = activateServiceCronRunReceiptInDatabase(
-          state,
-          database,
-          runReceipt,
-          startedAt,
-        );
-        delete current.state.queuedAtMs;
-        current.state.runningAtMs = startedAt;
-        current.state.lastError = undefined;
-        return { value: current, upsertJobIds: [current.id] };
-      },
-    });
-  } catch (error) {
-    if (error instanceof CronRunReceiptConflictError) {
-      enrollForeignReceipt(state, error.candidate);
-      return { kind: "fenced" };
+  const activation = (() => {
+    try {
+      return commitCronRuntimeRows({
+        state,
+        jobIds: [job.id],
+        operationLabel: "cron.run-activation",
+        mutate: ({ database, jobs }) => {
+          const current = jobs.get(job.id);
+          const markerAtMs = state.queuedRunReservationsByJobId.get(job.id)?.markerAtMs;
+          if (!current || markerAtMs === undefined || current.state.queuedAtMs !== markerAtMs) {
+            return { value: undefined, runHooks: false };
+          }
+          const previousLastError = current.state.lastError;
+          const value = [
+            current,
+            activateServiceCronRunReceiptInDatabase(state, database, runReceipt, startedAt),
+            previousLastError,
+          ] as const;
+          delete current.state.queuedAtMs;
+          current.state.runningAtMs = startedAt;
+          current.state.lastError = undefined;
+          return { value, upsertJobIds: [current.id] };
+        },
+      });
+    } catch (error) {
+      if (error instanceof CronRunReceiptConflictError) {
+        enrollForeignReceipt(state, error.candidate);
+      } else if (!(error instanceof CronRunReceiptRevisionError)) {
+        throw error;
+      }
+      return undefined;
     }
-    if (error instanceof CronRunReceiptRevisionError) {
-      return { kind: "fenced" };
-    }
-    throw error;
-  }
-  if (!activatedJob) {
+  })();
+  if (!activation) {
     return { kind: "fenced" };
   }
+  const [activatedJob, activatedReceipt, previousLastError] = activation;
   applyCronRuntimeRowsToState(state, [activatedJob]);
   if (reservation?.identity === reservationIdentity) {
     reservation.markerAtMs = startedAt;
-    reservation.runReceipt = activatedReceipt!;
+    reservation.runReceipt = activatedReceipt;
     reservation.activationPreviousLastError = { value: previousLastError };
   }
   if (!state.stopped && reservation.lifecycleGeneration === state.lifecycleGeneration) {
-    return { kind: "activated", job: activatedJob, startedAt, runReceipt: activatedReceipt! };
+    return { kind: "activated", job: activatedJob, startedAt, runReceipt: activatedReceipt };
   }
 
   params.onUnavailable?.();
@@ -441,7 +455,7 @@ export async function activateQueuedCronRun(params: {
       operationLabel: "cron.run-activation-unavailable",
       transactionHooks: cronRunReceiptPersistHooks({
         state,
-        handle: activatedReceipt!,
+        handle: activatedReceipt,
         terminal: {
           status: "skipped",
           finishedAtMs: state.deps.nowMs(),
@@ -465,7 +479,7 @@ export async function activateQueuedCronRun(params: {
     await params.onUnavailableRollbackError?.();
     throw error;
   } finally {
-    releaseLocalCronRunReceiptOwnership(activatedReceipt!);
+    releaseLocalCronRunReceiptOwnership(activatedReceipt);
   }
   releaseQueuedCronRun(state, job.id, reservationIdentity);
   return { kind: "unavailable", reason: "stopped" };

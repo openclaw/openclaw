@@ -1,10 +1,16 @@
+import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as execRunner from "../process/exec-runner.js";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createGitCommandError,
   executeGitCommand,
+  gitNullConfigPath,
   normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
@@ -76,7 +82,11 @@ it.each([
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs });
   const label = `timed out after ${seconds} seconds`;
-  expect(createGitCommandError("git worktree add", result).message).toContain(label);
+  const message = createGitCommandError("git worktree add", result).message;
+  expect(message).toContain(label);
+  expect(message).toContain(
+    `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
+  );
   await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
   expect(
     commandSpy.mock.calls.map(([, options]) =>
@@ -168,6 +178,13 @@ describe.each([
     },
     {
       termination: "signal",
+      signal: null,
+      code: 0,
+      killed: false,
+      expected: "terminated",
+    },
+    {
+      termination: "signal",
       signal: "SIGKILL",
       outputLimitExceeded: true,
       code: null,
@@ -182,7 +199,9 @@ describe.each([
       expect(message.length).toBeLessThan(400);
       expect(message).toContain("Updating files: 999/1000");
       if (metadata.termination === "timeout") {
-        expect(message).toContain("Check repository access and disk space.");
+        expect(message).toContain(
+          "Git did not finish within its 120s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).",
+        );
       } else {
         expect(message).not.toMatch(/timed out|timeout/i);
       }
@@ -216,6 +235,17 @@ describe("required Git output", () => {
       await expect(requireGitCommandRaw(root, args)).resolves.toBe(stdout);
       await expect(requireGitCommand(root, args)).resolves.toBe(stdout.trim());
     });
+  });
+
+  it("rejects buffered I/O failures after a zero exit", async () => {
+    const error = Object.assign(new Error("stdout read failed"), {
+      exitCode: 0,
+      outputErrorStream: "stdout",
+    });
+    vi.spyOn(execRunner, "runCommandWithTimeout").mockRejectedValueOnce(error);
+    await expect(
+      requireGitCommandBuffer("/repo", ["cat-file", "blob", "HEAD:file"]),
+    ).rejects.toThrow("git cat-file blob HEAD:file failed");
   });
 
   it("keeps binary output including invalid UTF-8 and terminal control bytes", async () => {
@@ -263,4 +293,67 @@ describe("required Git output", () => {
     await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe("complete\n");
     await expect(requireGitCommand("/repo", ["status"])).resolves.toBe("complete");
   });
+});
+
+describe("gitNullConfigPath", () => {
+  it("returns the Git-openable null path for the execution host", () => {
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      // Git for Windows cannot open the device-namespace path that
+      // os.devNull returns; "NUL" is the path it understands.
+      expect(gitNullConfigPath()).toBe("NUL");
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      expect(gitNullConfigPath()).toBe("/dev/null");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("is accepted by the real git binary as GIT_CONFIG_GLOBAL on this host", () => {
+    const repo = fsSync.mkdtempSync(path.join(os.tmpdir(), "git-null-config-"));
+    try {
+      fsSync.writeFileSync(path.join(repo, "file.txt"), "x");
+      const baseEnv = {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_COUNT: "0",
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      };
+      const init = spawnSync("git", ["init", "-q", repo], { env: baseEnv, encoding: "utf8" });
+      expect(init.status).toBe(0);
+      const log = spawnSync("git", ["-C", repo, "log", "--oneline", "-1"], {
+        env: baseEnv,
+        encoding: "utf8",
+      });
+      // Empty repo: git may exit non-zero for "no commits", but config parsing
+      // must not fail with the device-namespace access error (exit 128).
+      expect(log.stderr).not.toContain("unable to access");
+    } finally {
+      fsSync.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "documents the defect: os.devNull as GIT_CONFIG_GLOBAL exits 128 on Windows",
+    () => {
+      const repo = fsSync.mkdtempSync(path.join(os.tmpdir(), "git-null-config-"));
+      try {
+        const result = spawnSync("git", ["-C", repo, "log", "--oneline", "-1"], {
+          env: {
+            ...process.env,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_COUNT: "0",
+            GIT_CONFIG_GLOBAL: os.devNull,
+          },
+          encoding: "utf8",
+        });
+        // Red evidence for issue #141279: the device-namespace path that
+        // os.devNull returns is rejected by Git for Windows.
+        expect(result.stderr).toContain("unable to access");
+      } finally {
+        fsSync.rmSync(repo, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -779,6 +779,128 @@ describe("title tooltips", () => {
     },
   );
 
+  it.each(["link", "subtree"])(
+    "claims preview ownership when an active %s moves into a provider",
+    async (moved) => {
+      const provider = document.createElement("openclaw-github-link-hovercard-provider");
+      const wrapper = document.createElement("div");
+      const link = document.createElement("a");
+      link.href = "https://github.com/openclaw/openclaw/pull/99816";
+      link.title = "Pull request details";
+      link.textContent = "#99816";
+      wrapper.append(link);
+      document.body.append(provider, wrapper);
+      dispatchMousePointer(link, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      expectOpenCount(1);
+      provider.append(moved === "link" ? link : wrapper);
+      await vi.advanceTimersByTimeAsync(0);
+      expectOpenCount(0);
+      expect(link.title).toBe("");
+      expect(link.hasAttribute("aria-expanded")).toBe(false);
+      document.body.append(moved === "link" ? link : wrapper);
+      await vi.advanceTimersByTimeAsync(200);
+      expectOpenCount(0);
+      dispatchMousePointer(link, "pointerleave");
+      expect(link.title).toBe("Pull request details");
+      dispatchMousePointer(link, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      expectOpenCount(1);
+      expect(link.href).toBe("https://github.com/openclaw/openclaw/pull/99816");
+    },
+  );
+
+  it("keeps an inherited ordinary hint open while moving between ordinary links", async () => {
+    const parent = document.createElement("div");
+    parent.title = "Ordinary shared hint";
+    const first = document.createElement("a");
+    first.href = "https://example.com/first";
+    first.textContent = "First";
+    const second = document.createElement("a");
+    second.href = "https://example.com/second";
+    second.textContent = "Second";
+    parent.append(first, second);
+    document.body.append(parent);
+    dispatchMousePointer(first, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
+    const mounts: Node[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        mounts.push(
+          ...[...record.addedNodes].filter(
+            (node) => node instanceof Element && node.matches("openclaw-tooltip"),
+          ),
+        );
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      dispatchMousePointer(second, "pointerover");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mounts).toEqual([]);
+      expectOpenCount(1);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
+  it("keeps inherited titles scoped when moving between a GitHub link and an ordinary control", async () => {
+    const parent = document.createElement("div");
+    parent.title = "Shared context hint";
+    const provider = document.createElement("openclaw-github-link-hovercard-provider");
+    const link = document.createElement("a");
+    link.href = "https://github.com/openclaw/openclaw/pull/99816";
+    link.textContent = "#99816";
+    const control = document.createElement("button");
+    control.textContent = "Ordinary control";
+    provider.append(link);
+    parent.append(provider, control);
+    document.body.append(parent);
+    dispatchMousePointer(link, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(0);
+    expect(parent.title).toBe("");
+    expect(link.hasAttribute("aria-expanded")).toBe(false);
+    dispatchMousePointer(control, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
+    expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
+      "Shared context hint",
+    );
+    dispatchMousePointer(parent, "pointerleave");
+    expect(parent.title).toBe("Shared context hint");
+  });
+
+  it("yields a nested title when its link becomes preview eligible and restores ordinary hints on reentry", async () => {
+    const provider = document.createElement("openclaw-github-link-hovercard-provider");
+    const link = document.createElement("a");
+    link.href = "https://example.com/item";
+    const label = document.createElement("span");
+    label.textContent = "Details";
+    label.title = "Detailed hint";
+    link.append(label);
+    provider.append(link);
+    document.body.append(provider);
+    dispatchMousePointer(label, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
+    link.href = "https://github.com/openclaw/openclaw/pull/99816?plain=1#issuecomment-7";
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(0);
+    expect(label.title).toBe("");
+    expect(link.hasAttribute("aria-expanded")).toBe(false);
+    expect(link.href).toBe(
+      "https://github.com/openclaw/openclaw/pull/99816?plain=1#issuecomment-7",
+    );
+    link.href = "https://example.com/item";
+    dispatchMousePointer(label, "pointerleave");
+    expect(label.title).toBe("Detailed hint");
+    dispatchMousePointer(label, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
+  });
+
   it("tracks dynamic titles and restores the latest title and accessible name", async () => {
     const trigger = document.createElement("button");
     trigger.title = "Pin widget";

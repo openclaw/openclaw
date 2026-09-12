@@ -3,6 +3,7 @@
  * MCP bundling, session handling, and credential transport.
  */
 import { createHmac, randomBytes } from "node:crypto";
+import type { ClaudeAgentSdkCliBackendOptions } from "openclaw/plugin-sdk/claude-agent-sdk-runtime";
 import type {
   CliBackendExecuteContext,
   CliBackendPlugin,
@@ -20,6 +21,8 @@ import {
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+
+export type { ClaudeAgentSdkCliBackendOptions } from "openclaw/plugin-sdk/claude-agent-sdk-runtime";
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -185,27 +188,6 @@ function resolveClaudeCliAuthInput(
   return undefined;
 }
 
-export type ClaudeAgentSdkCliBackendOptions = {
-  /** Stable runtime id; the default is the bundled Anthropic runtime. */
-  backendId?: string;
-  /** Canonical provider whose configured models this runtime executes. */
-  modelProvider?: string;
-  /** Model used by the optional live CLI smoke contract. */
-  defaultModelRef?: string;
-  /** Explicit provider-owned endpoint, applied after inherited routing is cleared. */
-  endpoint?: string;
-  /** Z.AI's Anthropic-compatible endpoint requires bearer-token authentication. */
-  apiKeyAsAuthToken?: boolean;
-  /** Z.AI model ids are already literal Claude Code model ids. */
-  modelAliases?: Record<string, string>;
-  /** Only Anthropic's Claude catalog uses the `[1m]` model selector. */
-  supportsOneMillionModelSuffix?: boolean;
-  /** Whether subscription credentials must dispatch through this backend. */
-  subscriptionAuthDispatch?: boolean;
-  ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
-  supportsDynamicSystemPromptSections?: () => boolean;
-};
-
 /**
  * Build a Claude Agent SDK CLI backend for an Anthropic-protocol provider.
  *
@@ -240,6 +222,7 @@ export function buildClaudeAgentSdkCliBackend(
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "execution-args",
+    isolatesInstructionsWithExactTools: true,
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
@@ -328,7 +311,7 @@ export function buildClaudeAgentSdkCliBackend(
         });
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
         const cliExecution =
-          !isolatedCompletion && context.executionMode === "agent"
+          options.apiKeyAsAuthToken || (!isolatedCompletion && context.executionMode === "agent")
             ? {
                 async *execute(executionContext: CliBackendExecuteContext) {
                   const { executeClaudeCli } = await import("./cli.runtime.js");
@@ -338,24 +321,26 @@ export function buildClaudeAgentSdkCliBackend(
               }
             : undefined;
         const env = {
+          // Claude rebuilds the startup Git snapshot on process resume, rewriting
+          // the conversation prefix after workspace edits or commits. OpenClaw
+          // supplies workspace instructions; Git state can be read with tools.
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...(options.endpoint ? { ANTHROPIC_BASE_URL: options.endpoint } : {}),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion || cliExecution
-          ? {
-              env,
-              // The paired side-question argv projection disables settings, memory,
-              // hooks, session persistence, and tools before process launch.
-              ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
-              ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
-              ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
-              ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-              ...cliExecution,
-            }
-          : undefined;
+        return {
+          env,
+          // The paired side-question argv projection disables settings, memory,
+          // hooks, session persistence, and tools before process launch.
+          ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
+          ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+          ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+          ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+          ...cliExecution,
+        };
       };
       const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
       return supportProbe ? supportProbe.then(prepare) : prepare();

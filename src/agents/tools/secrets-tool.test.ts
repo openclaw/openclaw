@@ -4,6 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SecretRefSchema } from "../../config/zod-schema.core.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../infra/embedded-mode.js";
+import {
+  EmbeddedQuestionBroker,
+  clearEmbeddedQuestionBroker,
+  setEmbeddedQuestionBroker,
+} from "../../infra/embedded-question-broker.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
 import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
@@ -140,6 +146,31 @@ describe("secrets request normalization", () => {
 });
 
 describe("secrets tool", () => {
+  it("returns a clear local store blocker without publishing a credential prompt", async () => {
+    const previousMode = isEmbeddedMode();
+    const broker = new EmbeddedQuestionBroker();
+    const events: string[] = [];
+    broker.subscribe((event) => events.push(event.event));
+    setEmbeddedMode(true);
+    setEmbeddedQuestionBroker(broker);
+    try {
+      await expect(
+        createSecretsTool({ sessionKey: "agent:main:main" }).execute("local-secret", {
+          action: "request",
+          name: "SERVICE_API_KEY",
+        }),
+      ).rejects.toThrow(
+        "Secret store requests need a running Gateway; ask the operator to run `openclaw secrets store` or use the Control UI.",
+      );
+      expect(events).toEqual([]);
+      expect(broker.list().questions).toEqual([]);
+    } finally {
+      clearEmbeddedQuestionBroker(broker);
+      broker.stop();
+      setEmbeddedMode(previousMode);
+    }
+  });
+
   it.each<{ label: string; config: OpenClawConfig }>([
     { label: "built-in store", config: {} },
     { label: "renamed store default", config: { secrets: { defaults: { store: "teamstore" } } } },

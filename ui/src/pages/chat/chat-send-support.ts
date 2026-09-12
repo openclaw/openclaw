@@ -14,6 +14,7 @@ import {
   normalizeAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
@@ -83,6 +84,15 @@ function preserveDeliveredUserTurn(
       !state.currentSessionId ||
       submission.sessionId === state.currentSessionId
     ) {
+      // Custody may already own this source before its first delivery retention.
+      if (
+        getChatPendingInputs(state)?.page.items.some(
+          (input) => input.runId === submission.pendingRunId,
+        )
+      ) {
+        submission.pending = false;
+        return;
+      }
       admitChatSubmission(state, submission);
     }
     return;

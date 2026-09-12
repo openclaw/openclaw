@@ -1,8 +1,17 @@
 // Gateway multi E2E tests validate multi-gateway runtime behavior.
 import { spawnSync } from "node:child_process";
+import { watch } from "node:fs";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
+import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
+import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
   type GatewayInstance,
   connectNode,
@@ -16,6 +25,27 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const E2E_TIMEOUT_MS = 120_000;
+
+const CLOCK_SHIFT_PRELOAD = `
+import { existsSync, writeFileSync } from "node:fs";
+
+const shiftPath = process.env.NODE_INVOKE_CLOCK_SHIFT_PATH;
+const shiftReadyPath = process.env.NODE_INVOKE_CLOCK_SHIFT_READY_PATH;
+const offsetMs = Number(process.env.NODE_INVOKE_CLOCK_SHIFT_MS ?? "0");
+const originalNow = Date.now.bind(Date);
+const timer = setInterval(() => {
+  if (!shiftPath || !existsSync(shiftPath)) {
+    return;
+  }
+  clearInterval(timer);
+  Date.now = () => originalNow() + offsetMs;
+  if (shiftReadyPath) {
+    writeFileSync(shiftReadyPath, "ready\\n");
+  }
+  process.stdout.write("[clock-shift] offsetMs=" + offsetMs + String.fromCharCode(10));
+}, 10);
+timer.unref();
+`;
 
 async function settleGatewayCleanups(cleanups: Array<() => unknown>) {
   const results = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
@@ -203,4 +233,157 @@ try {
       );
     },
   );
+  it(
+    "keeps a real node.invoke timeout stable across a gateway wall-clock change",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      const proofRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-invoke-proof-"));
+      const shiftPath = path.join(proofRoot, "shift");
+      const shiftReadyPath = path.join(proofRoot, "shift-ready");
+      const preloadPath = path.join(proofRoot, "clock-shift.mjs");
+      let node: GatewayClient | undefined;
+      let operator: GatewayClient | undefined;
+      let instance: GatewayInstance | undefined;
+      let responseWork = Promise.resolve();
+      await runQaGatewayFixture(
+        async () => {
+          await writeFile(preloadPath, CLOCK_SHIFT_PRELOAD, "utf8");
+          instance = await createOpenClawTestInstance({
+            name: "node-invoke-clock",
+            env: {
+              NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+              NODE_INVOKE_CLOCK_SHIFT_PATH: shiftPath,
+              NODE_INVOKE_CLOCK_SHIFT_READY_PATH: shiftReadyPath,
+              NODE_INVOKE_CLOCK_SHIFT_MS: "1000",
+            },
+          });
+          await instance.startGateway();
+          const nodeIdentity = loadOrCreateDeviceIdentity({
+            path: path.join(instance.homeDir, "proof-node-device.sqlite"),
+          });
+          node = await connectGatewayClient({
+            url: instance.url,
+            token: instance.gatewayToken,
+            clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+            clientDisplayName: "real-node-proof",
+            clientVersion: "1.0.0",
+            platform: "ios",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+            role: "node",
+            scopes: [],
+            caps: ["system"],
+            commands: ["system.notify"],
+            deviceIdentity: nodeIdentity,
+            onEvent: (event) => {
+              if (event.event !== "node.invoke.request") {
+                return;
+              }
+              const payload = requireGatewayRecord(event.payload, "node invoke request");
+              expect(payload.id).toEqual(expect.any(String));
+              expect(payload.nodeId).toBe(nodeIdentity.deviceId);
+              responseWork = responseWork.then(async () => {
+                await writeFile(shiftPath, "shift\n");
+                await waitForFile(shiftReadyPath);
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, 50);
+                });
+                await expectDefined(node, "connected proof node").request("node.invoke.result", {
+                  id: payload.id,
+                  nodeId: payload.nodeId,
+                  ok: true,
+                  payloadJSON: JSON.stringify({ captured: true }),
+                });
+              });
+              void responseWork.catch(() => {});
+            },
+          });
+          operator = await connectGatewayClient({
+            url: instance.url,
+            token: instance.gatewayToken,
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            role: "operator",
+            scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
+            deviceIdentity: loadOrCreateDeviceIdentity({
+              path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
+            }),
+          });
+          await approveNodePairingForProof(operator, nodeIdentity.deviceId);
+          await waitForNodeStatus(instance, nodeIdentity.deviceId);
+          const startedAt = performance.now();
+          const result = await operator.request<{ payload?: { captured?: boolean } }>(
+            "node.invoke",
+            {
+              nodeId: nodeIdentity.deviceId,
+              command: "system.notify",
+              params: { quality: "low" },
+              timeoutMs: 500,
+              idempotencyKey: "real-node-invoke-clock-proof",
+            },
+            { timeoutMs: 5_000 },
+          );
+          const elapsedMs = Math.round(performance.now() - startedAt);
+          expect(result.payload?.captured).toBe(true);
+          expect(elapsedMs).toBeGreaterThanOrEqual(50);
+          expect(elapsedMs).toBeLessThan(500);
+          await responseWork;
+          expect(instance.logs()).toContain("[clock-shift] offsetMs=1000");
+          console.log(
+            `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=1000 result=SUCCESS elapsedMs=${elapsedMs}`,
+          );
+        },
+        async () => {
+          await runQaGatewayFixture(
+            async () => await responseWork,
+            async () => {
+              await cleanupGateways(
+                instance ? [instance] : [],
+                [operator, node].filter((client): client is GatewayClient => client !== undefined),
+              );
+              await rm(proofRoot, { recursive: true, force: true });
+            },
+          );
+        },
+      );
+    },
+  );
 });
+
+async function waitForFile(filePath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const watcher = watch(path.dirname(filePath), (_event, name) => {
+      if (String(name) === path.basename(filePath)) {
+        clearTimeout(timer);
+        watcher.close();
+        resolve();
+      }
+    });
+    const timer = setTimeout(() => {
+      watcher.close();
+      reject(new Error(`Timed out waiting for ${filePath}`));
+    }, 5_000);
+    void access(filePath).then(
+      () => {
+        clearTimeout(timer);
+        watcher.close();
+        resolve();
+      },
+      () => {},
+    );
+  });
+}
+
+async function approveNodePairingForProof(operator: GatewayClient, nodeId: string): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const pairing = await operator.request<{
+        pending?: Array<{ nodeId?: string; requestId?: string; commands?: string[] }>;
+      }>("node.pair.list", {});
+      const pending = pairing.pending?.find((entry) => entry.nodeId === nodeId);
+      expect(pending?.commands).toEqual(["system.notify"]);
+      expect(pending?.requestId).toEqual(expect.any(String));
+      await operator.request("node.pair.approve", { requestId: pending?.requestId });
+    },
+    { timeout: 15_000, interval: 100 },
+  );
+}

@@ -5,7 +5,6 @@ import {
   attachAgentCommandRecoveryAdmissionFacts,
 } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -386,13 +385,6 @@ export function startAgentRunExecution(params: {
               modelRun: params.request.modelRun === true,
               promptMode: params.request.promptMode,
               extraSystemPrompt: params.request.extraSystemPrompt,
-              gitCoauthorAttribution: prepareGitCoauthorAttribution({
-                agentId: params.activeSessionAgentId,
-                config: params.cfgForAgent ?? params.cfg,
-                currentProfileId: params.client?.authenticatedUserProfile?.profileId,
-                sessionKey: params.resolvedSessionKey,
-                storePath: params.storePath,
-              }),
               bootstrapContextMode: params.request.bootstrapContextMode,
               bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
               toolsAllow: pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
@@ -414,6 +406,7 @@ export function startAgentRunExecution(params: {
               cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
               acpTurnSource: params.request.acpTurnSource,
               internalEvents: params.request.internalEvents,
+              runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
               inputProvenance: params.inputProvenance,
               senderIsOwner,
               sessionEffects: params.sessionEffects,

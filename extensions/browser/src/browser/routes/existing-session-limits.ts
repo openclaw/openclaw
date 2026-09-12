@@ -1,3 +1,5 @@
+import type { BrowserActRequest } from "../client-actions.types.js";
+
 /**
  * Existing-session browser capability-limit messages.
  *
@@ -57,3 +59,69 @@ export const EXISTING_SESSION_LIMITS = {
   emulation:
     "emulate is not supported for existing-session profiles; use a managed browser profile for device, media, timezone, or locale settings.",
 } as const;
+
+/** Explain unsupported action shapes before existing-session dispatch. */
+export function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string | null {
+  switch (action.kind) {
+    case "click":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.clickSelector;
+      }
+      if (
+        (action.button && action.button !== "left") ||
+        (Array.isArray(action.modifiers) && action.modifiers.length > 0)
+      ) {
+        return EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers;
+      }
+      return null;
+    case "clickCoords":
+      return null;
+    case "type":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.typeSelector;
+      }
+      if (action.slowly) {
+        return EXISTING_SESSION_LIMITS.act.typeSlowly;
+      }
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.typeTimeout : null;
+    case "press":
+      return action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : null;
+    case "hover":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.hoverSelector;
+      }
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : null;
+    case "scrollIntoView":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.scrollSelector;
+      }
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : null;
+    case "drag":
+      if (action.startSelector || action.endSelector) {
+        return EXISTING_SESSION_LIMITS.act.dragSelector;
+      }
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.dragTimeout : null;
+    case "select":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.selectSelector;
+      }
+      if (action.values.length !== 1) {
+        return EXISTING_SESSION_LIMITS.act.selectSingleValue;
+      }
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.selectTimeout : null;
+    case "fill":
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.fillTimeout : null;
+    case "wait":
+      return action.loadState === "networkidle"
+        ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
+        : null;
+    case "evaluate":
+      return null;
+    case "batch":
+      return EXISTING_SESSION_LIMITS.act.batch;
+    case "resize":
+    case "close":
+      return null;
+  }
+  throw new Error("Unsupported browser act kind");
+}

@@ -157,6 +157,76 @@ describe("A2A channel inbound dispatch", () => {
     fixture.store.stop();
   });
 
+  it("routes a stable peer binding before account fallback while preserving exact context overrides", async () => {
+    const fixture = createA2aInboundFixture();
+    const exactTask = fixture.store.create("ctx-exact", "hermes");
+    fixture.store.start(exactTask.id);
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.route.sessionKey,
+      dispatchResult: createA2aDispatchResult(false),
+    }));
+    const config = {
+      agents: {
+        entries: {
+          main: {},
+          a2a_restricted: {},
+          a2a_context: {},
+        },
+      },
+      bindings: [
+        {
+          type: "route" as const,
+          agentId: "a2a_context",
+          match: {
+            channel: "a2a",
+            accountId: "default",
+            peer: { kind: "direct" as const, id: "hermes:ctx-exact" },
+          },
+        },
+        {
+          type: "route" as const,
+          agentId: "a2a_restricted",
+          match: {
+            channel: "a2a",
+            accountId: "default",
+            peer: { kind: "direct" as const, id: "hermes" },
+          },
+        },
+        {
+          type: "route" as const,
+          agentId: "main",
+          match: { channel: "a2a", accountId: "default" },
+        },
+      ],
+    };
+
+    try {
+      await dispatchA2aInbound({ ...fixture.params, config });
+      await dispatchA2aInbound({
+        ...fixture.params,
+        config,
+        taskId: exactTask.id,
+        contextId: exactTask.contextId,
+        messageId: "exact-message",
+      });
+
+      const dispatches = vi.mocked(fixture.runtime.channel.inbound.dispatch).mock.calls;
+      expect(dispatches.map(([turn]) => turn.route.agentId)).toEqual([
+        "a2a_restricted",
+        "a2a_context",
+      ]);
+      expect(dispatches.map(([turn]) => turn.route.sessionKey)).toEqual([
+        "agent:a2a_restricted:a2a:default:direct:hermes:ctx-inbound",
+        "agent:a2a_context:a2a:default:direct:hermes:ctx-exact",
+      ]);
+    } finally {
+      fixture.store.stop();
+    }
+  });
+
   it("rejects a sender missing from the configured peer allowlist before dispatch", async () => {
     const fixture = createA2aInboundFixture("unknown-peer");
 
