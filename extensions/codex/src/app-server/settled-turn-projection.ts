@@ -1,5 +1,8 @@
 import { Buffer } from "node:buffer";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  type AgentMessage,
+  isOpenClawRuntimeContextCustomMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CodexHistoryRejection } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
@@ -286,6 +289,17 @@ class HistoryProjection {
       projectAssistantMessage(message, this);
     } else if (message.role === "toolResult") {
       projectToolResult(message, this);
+    } else if (message.role === "custom") {
+      // Transient runtime-context carriers (e.g. the heartbeat prompt) and
+      // context-excluded customs are current-turn only, not part of the
+      // replayable transcript, so skip them (matching how context-engine
+      // projection excludes them via isCodexDurableCustomMessage). Durable
+      // custom notes carry meaningful context and stay fail-closed rather than
+      // being silently dropped.
+      if (message.excludeFromContext === true || isOpenClawRuntimeContextCustomMessage(message)) {
+        return;
+      }
+      throw new CodexHistoryRejection("unsupported_content");
     } else {
       throw new CodexHistoryRejection("unsupported_content");
     }
