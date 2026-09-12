@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isMissingPathError } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
+import { hashConfigIncludeRaw } from "./includes.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
@@ -56,11 +58,28 @@ export function assertBaseSnapshotStillCurrent(
   snapshot: ConfigFileSnapshot,
   configPath: string,
   ioFs: typeof fs,
+  includeGraph?: { hashes: Record<string, string>; targets: Record<string, string> },
 ): void {
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
       retryable: false,
     });
+  }
+  for (const [includePath, expectedHash] of Object.entries(includeGraph?.hashes ?? {})) {
+    try {
+      const expectedTarget = includeGraph?.targets[includePath];
+      if (!expectedTarget || path.normalize(ioFs.realpathSync(includePath)) !== expectedTarget) {
+        throw new ConfigMutationConflictError("included config target changed since last load");
+      }
+      if (hashConfigIncludeRaw(ioFs.readFileSync(expectedTarget, "utf-8")) !== expectedHash) {
+        throw new ConfigMutationConflictError("included config changed since last load");
+      }
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+      throw new ConfigMutationConflictError("included config disappeared since last load");
+    }
   }
   // Unreadable snapshots cannot be re-read; destructive guards reject them later.
   if (snapshot.readError) {

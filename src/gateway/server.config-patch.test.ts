@@ -521,6 +521,76 @@ describe("gateway config methods", () => {
     },
   );
 
+  it.each(["content", "target", "missing"] as const)(
+    "config.set rejects include %s changes during runtime preflight before committing",
+    async (change) => {
+      const configFactory = await import("../config/io.factory.js");
+      const original = await getCurrentConfigObject();
+      const directory = path.dirname(original.path);
+      const first = path.join(directory, "logging-first");
+      const second = path.join(directory, "logging-second");
+      const current = path.join(directory, "logging-current");
+      await fs.mkdir(first);
+      await fs.mkdir(second);
+      await writeJsonFile(path.join(first, "logging.json"), { level: "info" });
+      await writeJsonFile(path.join(second, "logging.json"), { level: "info" });
+      await fs.symlink(first, current, "junction");
+      await writeJsonFile(original.path, {
+        ...original.config,
+        logging: { $include: "logging-current/logging.json" },
+        gateway: { reload: { mode: "off" } },
+      });
+      invalidateConfigGetResponseCache();
+      const draft = await getCurrentConfigObject();
+      const rootBefore = await fs.readFile(original.path, "utf8");
+      const createIO = configFactory.createConfigIO;
+      vi.spyOn(configFactory, "createConfigIO").mockImplementation((options) => {
+        const io = createIO(options);
+        return {
+          ...io,
+          writeConfigFile: (config, writeOptions) =>
+            io.writeConfigFile(config, {
+              ...writeOptions,
+              preCommitRuntimePreflight: async (source) => {
+                await writeOptions?.preCommitRuntimePreflight?.(source);
+                if (change === "content") {
+                  await writeJsonFile(path.join(first, "logging.json"), { level: "debug" });
+                } else if (change === "missing") {
+                  await fs.unlink(path.join(first, "logging.json"));
+                } else {
+                  await fs.unlink(current);
+                  await fs.symlink(second, current, "junction");
+                }
+              },
+            }),
+        };
+      });
+
+      const result = await rpcReq(requireClient(), "config.set", {
+        raw: JSON.stringify({ ...draft.config, ui: { prefs: { locale: "fr" } } }),
+        baseHash: draft.hash,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error?.message).toContain("included config");
+      expect(await fs.readFile(original.path, "utf8")).toBe(rootBefore);
+      if (change === "missing") {
+        await expect(fs.readFile(path.join(current, "logging.json"), "utf8")).rejects.toMatchObject(
+          {
+            code: "ENOENT",
+          },
+        );
+      } else {
+        expect(JSON.parse(await fs.readFile(path.join(current, "logging.json"), "utf8"))).toEqual({
+          level: change === "content" ? "debug" : "info",
+        });
+      }
+      expect(await fs.realpath(current)).toBe(
+        await fs.realpath(change === "target" ? second : first),
+      );
+    },
+  );
+
   it("config.set acknowledges an include config when an external edit invalidates the reread", async () => {
     const configFactory = await import("../config/io.factory.js");
     const original = await getCurrentConfigObject();
