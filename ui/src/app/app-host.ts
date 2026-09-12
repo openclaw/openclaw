@@ -20,7 +20,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";

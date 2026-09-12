@@ -74,6 +74,10 @@ export function peekModelCatalog(
   const cache = modelCatalogCache.get(client);
   const key = modelCatalogKey(modelCatalogParams(options));
   const entry = cache?.get(key);
+  if (entry?.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+    cache?.delete(key);
+    return undefined;
+  }
   if (cache && entry?.result) {
     cache.delete(key);
     cache.set(key, entry);
@@ -127,6 +131,11 @@ export async function loadModelCatalog(
             cache.set(key, entry);
           }
           entry.result = result;
+          // Cooldown expiry changes readiness without publishing a new Gateway generation.
+          entry.expiresAt = result.models.reduce(
+            (expiresAt, model) => Math.min(expiresAt, model.unavailableUntil ?? Infinity),
+            Infinity,
+          );
         }
         return result;
       })

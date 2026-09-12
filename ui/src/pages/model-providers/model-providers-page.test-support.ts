@@ -6,7 +6,7 @@ import type {
   ModelsProbeResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
   RuntimeConfigExternalMutationResult,

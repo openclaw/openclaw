@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../api/types.ts";
@@ -13,6 +13,38 @@ const prepared = { id: "prepared", name: "Prepared", provider: "example" };
 const published = { id: "published", name: "Published", provider: "example" };
 
 describe("model catalog display cache", () => {
+  it("rereads readiness when the earliest Gateway cooldown expires without a publication", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const cooling = {
+      ...prepared,
+      available: false,
+      unavailableReason: "cooldown" as const,
+      unavailableUntil: 12_000,
+    };
+    const recovered = { ...prepared, available: true };
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce({
+        models: [{ ...cooling, id: "later", unavailableUntil: 20_000 }, cooling],
+      })
+      .mockResolvedValueOnce({ models: [recovered] });
+    const client = createTestGatewayClient(request);
+    try {
+      await loadModelCatalog(client, { agentId: "writer" });
+      clock.mockReturnValue(11_999);
+      expect(peekModelCatalog(client, { agentId: "writer" })?.models).toContainEqual(cooling);
+      await loadModelCatalog(client, { agentId: "writer" });
+      expect(request).toHaveBeenCalledTimes(1);
+      clock.mockReturnValue(12_000);
+      expect(peekModelCatalog(client, { agentId: "writer" })).toBeUndefined();
+      expect((await loadModelCatalog(client, { agentId: "writer" })).models).toEqual([recovered]);
+      expect(request).toHaveBeenCalledTimes(2);
+      clock.mockReturnValue(100_000);
+      expect(peekModelCatalog(client, { agentId: "writer" })?.models).toEqual([recovered]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("reuses a published snapshot synchronously until its Gateway generation changes", async () => {
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce({ models: [prepared] })

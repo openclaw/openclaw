@@ -4,11 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult, ModelCatalogResult } from "../api/types.ts";
-import {
-  invalidateChatMetadataStore,
-  peekChatMetadata,
-  beginChatMetadataPublication,
-} from "../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
+import { peekChatMetadata, beginChatMetadataPublication } from "../lib/chat/chat-metadata-store.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { loadModelCatalog, peekModelCatalog } from "../lib/model-catalog-store.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";

@@ -16,6 +16,7 @@ export type ModelCatalogRequest = {
 export type ModelCatalogEntry = {
   scope: ModelCatalogReadScope;
   result?: ModelCatalogResult;
+  expiresAt?: number;
   pending?: ModelCatalogRequest;
 };
 

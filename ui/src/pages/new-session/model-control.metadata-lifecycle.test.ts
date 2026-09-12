@@ -81,6 +81,43 @@ function retainedAccountDraft() {
 }
 
 describe("new-session model metadata lifecycle", () => {
+  it("enables a cooled-down model on reopen without a catalog event", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const model: ModelCatalogEntry = {
+      id: "model",
+      name: "Model",
+      provider: "example",
+      available: false,
+      unavailableReason: "cooldown",
+      unavailableUntil: 12_000,
+    };
+    const agent = { id: "main", model: { primary: "example/model" } };
+    const { context, request } = contextWith([model]);
+    const control = new NewSessionModelControl(() => undefined);
+    const option = () =>
+      renderControl(control, context, "main", agent).querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="example/model"]',
+      );
+    try {
+      control.load(context, "main", true, { agent });
+      await vi.waitFor(() => expect(option()?.disabled).toBe(true));
+      request.mockResolvedValueOnce({
+        models: [
+          { ...model, available: true, unavailableReason: undefined, unavailableUntil: undefined },
+        ],
+      });
+      clock.mockReturnValue(12_000);
+      renderControl(control, context, "main", agent)
+        .querySelector<HTMLElement>('[data-chat-model-select="true"]')!
+        .click();
+      await vi.waitFor(() => expect(option()?.disabled).toBe(false));
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      control.reset();
+      clock.mockRestore();
+    }
+  });
+
   it.each([false, true])(
     "selects a usable retained account with refresh failure %s without changing saved preferences",
     async (refreshFailed) => {

@@ -7,7 +7,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
-import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
