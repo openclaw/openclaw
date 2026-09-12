@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createZeroUsage } from "../usage.test-support.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   type CapturedStreamEvent,
@@ -149,16 +148,7 @@ describe("openai completions stream", () => {
       contextWindow: 128000,
       maxTokens: 4096,
     });
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: createZeroUsage(),
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
     const stream: { push(event: unknown): void } = { push() {} };
 
     async function* mockStream() {
@@ -368,16 +358,7 @@ describe("openai completions stream", () => {
       contextWindow: 128000,
       maxTokens: 4096,
     });
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: createZeroUsage(),
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
     const stream: { push(event: unknown): void } = { push() {} };
 
     async function* mockStream() {

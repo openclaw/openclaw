@@ -13,7 +13,6 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -27,6 +26,7 @@ import {
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
 } from "./update-run-activity.js";
+import { runUpdateRunAdmission } from "./update-run-admission.js";
 import {
   decodeRun,
   encodeRun,
@@ -77,44 +77,10 @@ if (schemaStart < 0 || schemaEnd < 0) {
   throw new Error("Update run schema markers are missing");
 }
 const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(schemaStart, schemaEnd + schemaEndMarker.length);
-const readyDatabases = new WeakSet<DatabaseSync>();
 
 /** Canonical additive history table. */
 export function ensureUpdateRunLedgerSchema(db: DatabaseSync): void {
   db.exec(schema); // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
-}
-
-function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateDatabaseOptions): T {
-  if (options.database) {
-    throw new Error("Update run admission requires its own writable connection");
-  }
-  // Admission precedes managed shutdown. An older serving Gateway must not
-  // force diagnostic writes through this candidate's runtime migrations.
-  // Once a file exists, failures remain failures; never retry via bootstrap.
-  if (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(() => true, options)) {
-    return runExistingOpenClawStateWriteTransaction(({ db }) => operation(db), options, {
-      schemaSql: schema,
-      operationLabel: "update.run",
-      initializeAdditiveSchema: true,
-    });
-  }
-  let committedDatabase: DatabaseSync | undefined;
-  const result = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // Feature-local, idempotent DDL shares the write transaction; a failed write also rolls back first use.
-      if (!readyDatabases.has(db)) {
-        ensureUpdateRunLedgerSchema(db);
-      }
-      committedDatabase = db;
-      return operation(db);
-    },
-    options,
-    { operationLabel: "update.run" },
-  );
-  if (committedDatabase && !committedDatabase.isTransaction) {
-    readyDatabases.add(committedDatabase);
-  }
-  return result;
 }
 
 function persistRun(
@@ -168,6 +134,8 @@ export function createUpdateRun(
     runId?: string;
     trigger: UpdateRunRecord["trigger"];
     supersedeStaleIdentityless?: boolean;
+    /** Preview history must not repair canonical task data. */
+    preview?: boolean;
   },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
@@ -194,44 +162,67 @@ export function createUpdateRun(
     },
     options,
   );
-  return writeRun((db) => {
-    const existing = readRun(db, row.run_id);
-    if (existing) {
-      return existing;
-    }
-    // Only an explicit new CLI invocation may supersede the single legacy run.
-    // Selection, activity recheck, terminalization, and admission share this transaction.
-    if (input.supersedeStaleIdentityless && !input.runId && input.trigger === "cli") {
-      const active = executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<LedgerDatabase>(db)
-          .selectFrom("update_runs")
-          .selectAll()
-          .where("status", "=", "running")
-          .limit(2),
-      ).rows;
-      const previous = active.length === 1 && active[0] ? decodeRun(active[0]) : undefined;
-      if (
-        previous &&
-        !hasStoredUpdateRecovery(db, previous.runId) &&
-        isStaleIdentitylessUpdateRun(previous)
-      ) {
-        upsertStep(previous, {
-          step: "reconcile:superseded",
-          status: "failed",
-          endedAtMs: now,
-          detail: "operator-started-update-supersedes-inactive-identityless-run",
-        });
-        finishUpdateRunRecord(previous, { status: "failed", reason: "superseded" });
-        persistRun(db, previous, options);
+  return runUpdateRunAdmission(
+    (db, recoveryChanges) => {
+      const recordRecovery = (record: UpdateRunRecord) => {
+        if (recoveryChanges.length > 0) {
+          upsertStep(record, {
+            step: "task-delivery-recovery",
+            status: "completed",
+            startedAtMs: now,
+            endedAtMs: Date.now(),
+            detail: recoveryChanges.join("\n"),
+          });
+        }
+        return record;
+      };
+      const existing = readRun(db, row.run_id);
+      if (existing) {
+        return recoveryChanges.length > 0
+          ? persistRun(db, recordRecovery(existing), options)
+          : existing;
       }
-    }
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<LedgerDatabase>(db).insertInto("update_runs").values(row),
-    );
-    return decodeRun(row);
-  }, options);
+      // Only an explicit new CLI invocation may supersede the single legacy run.
+      // Selection, activity recheck, terminalization, and admission share this transaction.
+      if (input.supersedeStaleIdentityless && !input.runId && input.trigger === "cli") {
+        const active = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<LedgerDatabase>(db)
+            .selectFrom("update_runs")
+            .selectAll()
+            .where("status", "=", "running")
+            .limit(2),
+        ).rows;
+        const previous = active.length === 1 && active[0] ? decodeRun(active[0]) : undefined;
+        if (
+          previous &&
+          !hasStoredUpdateRecovery(db, previous.runId) &&
+          isStaleIdentitylessUpdateRun(previous)
+        ) {
+          upsertStep(previous, {
+            step: "reconcile:superseded",
+            status: "failed",
+            endedAtMs: now,
+            detail: "operator-started-update-supersedes-inactive-identityless-run",
+          });
+          finishUpdateRunRecord(previous, { status: "failed", reason: "superseded" });
+          persistRun(db, previous, options);
+        }
+      }
+      const admittedRow = encodeRun(recordRecovery(decodeRun(row)), options);
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<LedgerDatabase>(db).insertInto("update_runs").values(admittedRow),
+      );
+      return decodeRun(admittedRow);
+    },
+    options,
+    {
+      schemaSql: schema,
+      initializeSchema: ensureUpdateRunLedgerSchema,
+      recoverTaskDeliveryOrphans: !input.preview,
+    },
+  );
 }
 
 function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {

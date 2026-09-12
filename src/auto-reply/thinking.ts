@@ -392,6 +392,9 @@ function resolveSupportedThinkingLevelFromProfile(
   if (profile.levels.some((entry) => entry.id === level)) {
     return level;
   }
+  if (level === "adaptive" && profile.defaultLevel && profile.defaultLevel !== "off") {
+    return profile.defaultLevel;
+  }
   const requestedRank = THINKING_LEVEL_RANKS[level];
   const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
   return (

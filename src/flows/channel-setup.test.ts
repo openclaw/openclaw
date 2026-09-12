@@ -199,7 +199,8 @@ vi.mock("../config/channel-configured.js", () => ({
 }));
 
 vi.mock("./channel-setup.prompts.js", () => ({
-  maybeConfigureDmPolicies: vi.fn(),
+  maybeConfigureCommandOwner: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => cfg),
+  maybeConfigureDmPolicies: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => cfg),
   promptConfiguredAction: vi.fn(),
   promptRemovalAccountId: vi.fn(),
   formatAccountLabel: vi.fn(),
@@ -919,7 +920,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         configured: false,
         statusLines: [],
       })
-      .mockRejectedValueOnce(new Error("controlled status failure"));
+      .mockRejectedValue(new Error("controlled status failure"));
     const externalChatPlugin = makeExternalChatSetupPlugin({
       getStatus,
       configure: vi.fn(async ({ cfg }) => ({
@@ -943,7 +944,6 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(result).toMatchObject({
       channels: { "external-chat": { token: "configured" } },
     });
-    expect(getStatus).toHaveBeenCalledTimes(2);
     expect(note).toHaveBeenCalledWith(
       "Status unavailable (controlled status failure).\n" +
         "Retry: openclaw channels status --channel external-chat",

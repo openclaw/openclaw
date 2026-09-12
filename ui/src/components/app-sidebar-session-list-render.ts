@@ -15,6 +15,7 @@ import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.t
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
+import { renderSessionFilterSummary } from "./app-sidebar-session-filter-summary.ts";
 import {
   renderChildSessionLoadError,
   renderRecentSession,
@@ -116,6 +117,11 @@ function renderSessionSection(params: {
           : group
             ? "category"
             : "threads";
+  const personFilterActive =
+    host.sessionOwnerFilterActive && host.sessionOwnerFilterId === personOwner?.id;
+  const personFilterLabel = personFilterActive
+    ? t("chat.sidebar.showEveryone")
+    : t("chat.sidebar.showOnlyPerson", { name: label });
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -283,6 +289,27 @@ function renderSessionSection(params: {
                       >
                         ${chevron}${ownerAvatar}${labelText}${headerStatus}
                       </button>`
+                }
+                ${
+                  personOwner &&
+                  host.sessionOwnershipVisible &&
+                  host.sessionOwnerOptions.some((owner) => owner.id === personOwner.id)
+                    ? html`<button
+                        type="button"
+                        class="sidebar-session-group-actions sidebar-session-person-filter ${
+                          personFilterActive ? "sidebar-session-sort--filtered" : ""
+                        }"
+                        aria-pressed=${personFilterActive}
+                        title=${personFilterLabel}
+                        aria-label=${personFilterLabel}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          host.setSessionOwnerFilter(personFilterActive ? null : personOwner.id);
+                        }}
+                      >
+                        ${icons.listFilter}
+                      </button>`
+                    : nothing
                 }
                 ${
                   group || section.id === "ungrouped"
@@ -577,10 +604,12 @@ function renderSessionListBody(params: {
 
 function renderSessionListToolbar(host: SidebarSessionListHost) {
   const newSessionAccess = host.readNewSessionAccess();
-  const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
+  const ownerFiltered = host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive;
+  const filtered = ownerFiltered || host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
       <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
+      ${filtered ? renderSessionFilterSummary(host) : nothing}
       <button
         type="button"
         class="sidebar-session-toolbar__button sidebar-session-sort ${

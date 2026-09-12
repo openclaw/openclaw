@@ -65,7 +65,7 @@ describe("CommandPalette lifecycle", () => {
       ),
     );
     const changes = vi.fn();
-    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
     try {
       palette.openPalette();
       await palette.updateComplete;

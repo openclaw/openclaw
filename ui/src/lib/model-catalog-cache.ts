@@ -1,3 +1,4 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
@@ -9,6 +10,7 @@ export type ModelCatalogReadScope = Pick<
 
 export type ModelCatalogClient = Pick<GatewayBrowserClient, "request">;
 export type ModelCatalogRequest = {
+  refresh: boolean;
   controller?: AbortController;
   promise: Promise<ModelCatalogResult>;
   subscribers: Set<object>;
@@ -17,7 +19,7 @@ export type ModelCatalogEntry = {
   scope: ModelCatalogReadScope;
   result?: ModelCatalogResult;
   expiresAt?: number;
-  pending?: ModelCatalogRequest;
+  pending: Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequest>;
 };
 
 // Application lifecycle invalidation must not eagerly load catalog readers or presentation.

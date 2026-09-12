@@ -1,3 +1,4 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
@@ -52,6 +53,17 @@ export function modelCatalogRefreshError(
 
 const MAX_CACHED_MODEL_CATALOGS = 64;
 
+function trimModelCatalogCache(cache: Map<string, ModelCatalogEntry>): void {
+  for (const [key, entry] of cache) {
+    if (cache.size <= MAX_CACHED_MODEL_CATALOGS) {
+      return;
+    }
+    if (entry.pending.size === 0) {
+      cache.delete(key);
+    }
+  }
+}
+
 function modelCatalogParams(options: ModelsListParams): ModelsListParams {
   const { agentId, view = "configured", ...params } = options;
   return { view, ...params, ...(agentId === undefined ? {} : { agentId: agentId.trim() }) };
@@ -75,7 +87,11 @@ export function peekModelCatalog(
   const key = modelCatalogKey(modelCatalogParams(options));
   const entry = cache?.get(key);
   if (entry?.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
-    cache?.delete(key);
+    entry.result = undefined;
+    entry.expiresAt = undefined;
+    if (entry.pending.size === 0) {
+      cache?.delete(key);
+    }
     return undefined;
   }
   if (cache && entry?.result) {
@@ -88,9 +104,9 @@ export function peekModelCatalog(
 /** Cache exact Gateway projections for this connection until its lifecycle invalidates them. */
 export async function loadModelCatalog(
   client: ModelCatalogClient,
-  options: ModelsListParams & { signal?: AbortSignal },
+  options: ModelsListParams & Pick<GatewayProtocolRequestOptions, "signal" | "timeoutMs">,
 ): Promise<ModelCatalogResult> {
-  const { signal, ...requestOptions } = options;
+  const { signal, timeoutMs, ...requestOptions } = options;
   signal?.throwIfAborted();
   const params = modelCatalogParams(requestOptions);
   if (params.refresh) {
@@ -104,18 +120,22 @@ export async function loadModelCatalog(
   const cache = modelCatalogCache.get(client) ?? new Map<string, ModelCatalogEntry>();
   modelCatalogCache.set(client, cache);
   const key = modelCatalogKey(params);
-  const existing = cache.get(key)?.pending;
+  const entry: ModelCatalogEntry = cache.get(key) ?? { scope: params, pending: new Map() };
+  const existing = entry.pending.get(timeoutMs);
   if (existing && !existing.controller?.signal.aborted) {
     return await subscribeToSharedRequest(existing, {}, signal);
   }
 
   const controller = signal ? new AbortController() : undefined;
-  const entry: ModelCatalogEntry = { scope: params };
   const pending: ModelCatalogRequest = {
+    refresh: params.refresh === true,
     controller,
     subscribers: new Set(),
-    promise: (controller
-      ? client.request<ModelCatalogResult>("models.list", params, { signal: controller.signal })
+    promise: (controller || timeoutMs !== undefined
+      ? client.request<ModelCatalogResult>("models.list", params, {
+          ...(controller ? { signal: controller.signal } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        })
       : client.request<ModelCatalogResult>("models.list", params)
     )
       .then((result) => {
@@ -123,8 +143,15 @@ export async function loadModelCatalog(
           !controller?.signal.aborted &&
           !result.refreshFailed &&
           modelCatalogCache.get(client) === cache &&
-          cache.get(key) === entry
+          cache.get(key) === entry &&
+          entry.pending.get(timeoutMs) === pending
         ) {
+          // Ordinary winners retire competing readers, but cannot retire explicit discovery.
+          for (const [budget, request] of entry.pending) {
+            if (pending.refresh || !request.refresh) {
+              entry.pending.delete(budget);
+            }
+          }
           // Reads in other views during explicit discovery may still describe its old generation.
           if (params.refresh) {
             cache.clear();
@@ -136,27 +163,28 @@ export async function loadModelCatalog(
             (expiresAt, model) => Math.min(expiresAt, model.unavailableUntil ?? Infinity),
             Infinity,
           );
+          trimModelCatalogCache(cache);
         }
         return result;
       })
       .finally(() => {
-        if (cache.get(key) === entry) {
-          entry.pending = undefined;
-          if (!entry.result) {
+        if (
+          modelCatalogCache.get(client) === cache &&
+          cache.get(key) === entry &&
+          entry.pending.get(timeoutMs) === pending
+        ) {
+          entry.pending.delete(timeoutMs);
+          if (!entry.result && entry.pending.size === 0) {
             cache.delete(key);
           }
+          trimModelCatalogCache(cache);
         }
       }),
   };
-  entry.pending = pending;
+  entry.pending.set(timeoutMs, pending);
   cache.delete(key);
   cache.set(key, entry);
-  while (cache.size > MAX_CACHED_MODEL_CATALOGS) {
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) {
-      cache.delete(oldest);
-    }
-  }
+  trimModelCatalogCache(cache);
   return await subscribeToSharedRequest(pending, {}, signal);
 }
 

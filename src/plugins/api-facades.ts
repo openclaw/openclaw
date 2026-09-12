@@ -25,6 +25,22 @@ type PluginApiFacadeSource = Pick<
   | "unscheduleSessionTurnsByTag"
 >;
 
+const identitySensitiveRegistrations = new Set([
+  "registerCompactionProvider",
+  "registerHttpRoute",
+  "registerImageGenerationProvider",
+  "registerMediaUnderstandingProvider",
+  "registerMigrationProvider",
+  "registerMusicGenerationProvider",
+  "registerRealtimeTranscriptionProvider",
+  "registerRealtimeVoiceProvider",
+  "registerSpeechProvider",
+  "registerTranscriptSourceProvider",
+  "registerVideoGenerationProvider",
+  "registerWebFetchProvider",
+  "registerWebSearchProvider",
+]);
+
 /** Attaches nested facade namespaces to the flat plugin API implementation. */
 export function attachPluginApiFacades<T extends object>(
   api: T & PluginApiFacadeSource & Partial<PluginApiFacadeFields>,
@@ -88,7 +104,9 @@ export function instrumentPluginInstanceApi(
             Reflect.apply(
               value,
               target,
-              args.map((arg) => instance.wrap(arg)),
+              args.map((arg) =>
+                identitySensitiveRegistrations.has(key) ? instance.adopt(arg) : instance.wrap(arg),
+              ),
             ),
           );
       },

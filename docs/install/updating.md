@@ -184,10 +184,21 @@ starting the Gateway.
 
 ### From chat
 
-The OpenClaw owner can say "update" (the agent uses the `gateway` action
-`update.run`) or send `/update`. The candidate validates while the old Gateway
-serves, and an already-current update restarts it only when plugins change. Update runs can send
-these notices in that chat as the Gateway observes the recorded milestones:
+Send `/update` to update OpenClaw from Discord or another connected chat. This
+owner-only command works with the default tool profiles; it does not require
+adding the `gateway` tool to an allowlist.
+
+A direct request such as "update OpenClaw" offers an **Update now** button where
+the channel supports buttons, with `/update` as the text fallback. Offering the
+button does not start an update. Clicking it runs the same command under the
+clicking user's current permissions. A rejected click does not invalidate the
+button; every click is a fresh owner-checked command. For other wording, the agent can guide you
+to `/update`; agents explicitly granted the `gateway` tool can also use
+`update.run` for a user-requested update.
+
+The candidate validates while the old Gateway serves, and an already-current
+update restarts it only when plugins change. Update runs can send these notices
+in that chat as the Gateway observes the recorded milestones:
 
 1. An acknowledgement when the update is accepted.
 2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
@@ -218,9 +229,16 @@ restart; `--json` exposes the `activeRun` and `lastRun` records. See
 queries.
 
 The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
-`/update` also requires `commands.restart` (enabled by default).
+Being allowed to chat does not grant owner permissions. If your account is not
+an owner, the reply explains how the Gateway operator can connect it. Channel
+setup and [pairing](/channels/pairing) distinguish owner access from chat access;
+existing allowed users are not automatically promoted.
+`/update` also requires `commands.restart` (enabled by default), and command
+access restrictions still apply. Chat updates use the hosting installation's
+configured update channel and install method.
 Agents must never run `npm install -g openclaw` or stop the Gateway service
-from a chat shell; use the update action so restart and notification stay coordinated.
+from a chat shell; use `/update` or the update action so restart and notification
+stay coordinated.
 
 ## Stale update history
 

@@ -94,6 +94,7 @@ describe("chat pane warm reload", () => {
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "chat.startup",
         expect.objectContaining({ sessionKey, cursor: "warm-reload-cursor" }),
+        { signal: expect.any(AbortSignal) },
       );
       expect(pane.state.chatMessages).toEqual(messages);
     } finally {
