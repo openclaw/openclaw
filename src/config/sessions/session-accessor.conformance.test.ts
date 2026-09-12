@@ -24,6 +24,7 @@ import {
   readSessionArchiveContentSync,
 } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
+import { getCliSessionBinding } from "./cli-session-binding.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -62,6 +63,7 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import type { InternalSessionEntry, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
@@ -2698,6 +2700,236 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({ id: "pre-msg", type: "message" }),
     ]);
     expect(fs.existsSync(path.join(paths.tempDir, `${result.entry.sessionId}.jsonl`))).toBe(false);
+  });
+
+  it("clears CLI session bindings when branching and restoring a checkpoint", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const sourceScope = {
+      agentId: "main",
+      env,
+      sessionId: "source-session",
+      sessionKey: "agent:main:main",
+      storePath: paths.sqlitePath,
+    };
+    const preCompactionScope = {
+      ...sourceScope,
+      sessionId: "pre-compaction-session",
+    };
+    const sourceEntryScope = {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:main",
+      storePath: paths.sqlitePath,
+    };
+    const checkpoint: SessionCompactionCheckpoint = {
+      checkpointId: "checkpoint-cli-binding",
+      sessionKey: sourceEntryScope.sessionKey,
+      sessionId: "source-session",
+      createdAt: Date.parse("2026-01-01T00:00:00.000Z"),
+      reason: "manual",
+      tokensBefore: 12,
+      tokensAfter: 24,
+      tokensVersion: 1,
+      preCompaction: {
+        sessionId: "pre-compaction-session",
+        leafId: "pre-msg",
+      },
+      postCompaction: {
+        sessionId: "source-session",
+        entryId: "post-msg-1",
+      },
+    };
+
+    await replaceTranscriptEvents(preCompactionScope, [
+      { type: "session", id: "pre-compaction-session", cwd: paths.tempDir },
+      { type: "message", id: "pre-msg", parentId: null, message: { content: "pre" } },
+    ]);
+    await replaceTranscriptEvents(sourceScope, [
+      { type: "session", id: "source-session", cwd: paths.tempDir },
+      { type: "message", id: "post-msg-1", parentId: null, message: { content: "post" } },
+    ]);
+    const sourceEntry: InternalSessionEntry = {
+      label: "Source",
+      sessionId: "source-session",
+      updatedAt: 10,
+      compactionCheckpoints: [checkpoint],
+      claudeCliSessionId: "native-post-compaction",
+      cliSessionIds: { "claude-cli": "native-post-compaction" },
+      cliSessionBindings: { "claude-cli": { sessionId: "native-post-compaction" } },
+    };
+    await upsertSessionEntryCore(sourceEntryScope, sourceEntry);
+
+    const branched = await branchCompactionCheckpointSession({
+      agentId: "main",
+      env,
+      expectedState: sourceEntry,
+      storePath: paths.sqlitePath,
+      sourceKey: sourceEntryScope.sessionKey,
+      nextKey: "agent:main:checkpoint-cli-binding",
+      checkpointId: checkpoint.checkpointId,
+    });
+    if (branched.status !== "created") {
+      throw new Error(`expected branch creation, got ${branched.status}`);
+    }
+    const branchedEntry = branched.entry as InternalSessionEntry;
+    expect(branchedEntry.sessionId).not.toBe("source-session");
+    expect(branchedEntry.claudeCliSessionId).toBeUndefined();
+    expect(branchedEntry.cliSessionIds).toBeUndefined();
+    expect(branchedEntry.cliSessionBindings).toBeUndefined();
+    expect(branchedEntry.compactionCheckpoints).toBeUndefined();
+    expect(getCliSessionBinding(branchedEntry, "claude-cli")).toBeUndefined();
+
+    const restored = await restoreCompactionCheckpointSession({
+      agentId: "main",
+      env,
+      expectedState: sourceEntry,
+      storePath: paths.sqlitePath,
+      sessionKey: sourceEntryScope.sessionKey,
+      checkpointId: checkpoint.checkpointId,
+    });
+    if (restored.status !== "created") {
+      throw new Error(`expected restore creation, got ${restored.status}`);
+    }
+    const restoredEntry = restored.entry as InternalSessionEntry;
+    expect(restoredEntry.sessionId).not.toBe("source-session");
+    expect(restoredEntry.claudeCliSessionId).toBeUndefined();
+    expect(restoredEntry.cliSessionIds).toBeUndefined();
+    expect(restoredEntry.cliSessionBindings).toBeUndefined();
+    expect(restoredEntry.compactionCheckpoints).toEqual([checkpoint]);
+    expect(getCliSessionBinding(restoredEntry, "claude-cli")).toBeUndefined();
+    expect(branchedEntry.cliHistoryBoundary).toBeUndefined();
+    expect(restoredEntry.cliHistoryBoundary).toBeUndefined();
+    expect(loadSessionEntry(sourceEntryScope)).toEqual(restored.entry);
+  });
+
+  const CHECKPOINT_HISTORY_FINGERPRINT = "b".repeat(64);
+
+  async function seedCheckpointHistoryOwner(boundaryMaxSeq?: number) {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const sourceScope = {
+      agentId: "main",
+      env,
+      sessionId: "owned-source",
+      sessionKey: "agent:main:main",
+      storePath: paths.sqlitePath,
+    };
+    const sourceEntryScope = {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:main",
+      storePath: paths.sqlitePath,
+    };
+    await replaceTranscriptEvents(sourceScope, [
+      { type: "session", id: "owned-source", cwd: paths.tempDir },
+      { type: "message", id: "owned-1", parentId: null, message: { content: "first" } },
+      { type: "message", id: "owned-2", parentId: "owned-1", message: { content: "second" } },
+    ]);
+    const sourceWatermark = readSessionTranscriptWatermark(sourceScope);
+    const checkpoint: SessionCompactionCheckpoint = {
+      checkpointId: "checkpoint-owned-history",
+      sessionKey: sourceEntryScope.sessionKey,
+      sessionId: "owned-source",
+      createdAt: Date.parse("2026-01-01T00:00:00.000Z"),
+      reason: "manual",
+      tokensBefore: 12,
+      tokensAfter: 24,
+      tokensVersion: 1,
+      preCompaction: { sessionId: "owned-source", leafId: "owned-2" },
+      postCompaction: { sessionId: "owned-source", entryId: "owned-2" },
+    };
+    const sourceEntry: InternalSessionEntry = {
+      label: "Owned",
+      sessionId: "owned-source",
+      updatedAt: 10,
+      compactionCheckpoints: [checkpoint],
+      claudeCliSessionId: "native-pre-checkpoint",
+      cliSessionIds: { "claude-cli": "native-pre-checkpoint" },
+      cliSessionBindings: { "claude-cli": { sessionId: "native-pre-checkpoint" } },
+      cliHistoryBoundary: {
+        version: 1,
+        sessionId: "owned-source",
+        state: "known",
+        authFingerprint: CHECKPOINT_HISTORY_FINGERPRINT,
+        generation: sourceWatermark.generation,
+        maxSeq: boundaryMaxSeq ?? sourceWatermark.maxSeq,
+        writerRunId: "owner-run",
+      },
+    };
+    await upsertSessionEntryCore(sourceEntryScope, sourceEntry);
+    return { checkpoint, env, sourceEntry, sourceEntryScope };
+  }
+
+  it("re-owns the copied CLI history boundary on both checkpoint successors", async () => {
+    const { checkpoint, env, sourceEntry, sourceEntryScope } = await seedCheckpointHistoryOwner();
+
+    const branched = await branchCompactionCheckpointSession({
+      agentId: "main",
+      env,
+      expectedState: sourceEntry,
+      storePath: paths.sqlitePath,
+      sourceKey: sourceEntryScope.sessionKey,
+      nextKey: "agent:main:checkpoint-owned-history",
+      checkpointId: checkpoint.checkpointId,
+    });
+    if (branched.status !== "created") {
+      throw new Error(`expected branch creation, got ${branched.status}`);
+    }
+    const restored = await restoreCompactionCheckpointSession({
+      agentId: "main",
+      env,
+      expectedState: sourceEntry,
+      storePath: paths.sqlitePath,
+      sessionKey: sourceEntryScope.sessionKey,
+      checkpointId: checkpoint.checkpointId,
+    });
+    if (restored.status !== "created") {
+      throw new Error(`expected restore creation, got ${restored.status}`);
+    }
+
+    for (const [successor, sessionKey] of [
+      [branched.entry as InternalSessionEntry, "agent:main:checkpoint-owned-history"],
+      [restored.entry as InternalSessionEntry, sourceEntryScope.sessionKey],
+    ] as const) {
+      const watermark = readSessionTranscriptWatermark({
+        agentId: "main",
+        env,
+        sessionId: successor.sessionId,
+        sessionKey,
+        storePath: paths.sqlitePath,
+      });
+      expect(successor.sessionId).not.toBe("owned-source");
+      expect(successor.cliSessionBindings).toBeUndefined();
+      expect(successor.cliHistoryBoundary).toEqual({
+        version: 1,
+        sessionId: successor.sessionId,
+        state: "known",
+        authFingerprint: CHECKPOINT_HISTORY_FINGERPRINT,
+        generation: watermark.generation,
+        maxSeq: watermark.maxSeq,
+        writerRunId: "owner-run",
+      });
+    }
+  });
+
+  it("leaves the checkpoint successor unowned when the source boundary stops short of the fork", async () => {
+    const { checkpoint, env, sourceEntry, sourceEntryScope } = await seedCheckpointHistoryOwner(0);
+
+    const branched = await branchCompactionCheckpointSession({
+      agentId: "main",
+      env,
+      expectedState: sourceEntry,
+      storePath: paths.sqlitePath,
+      sourceKey: sourceEntryScope.sessionKey,
+      nextKey: "agent:main:checkpoint-partial-history",
+      checkpointId: checkpoint.checkpointId,
+    });
+    if (branched.status !== "created") {
+      throw new Error(`expected branch creation, got ${branched.status}`);
+    }
+    const branchedEntry = branched.entry as InternalSessionEntry;
+    expect(branchedEntry.sessionId).not.toBe("owned-source");
+    expect(branchedEntry.cliSessionBindings).toBeUndefined();
+    expect(branchedEntry.cliHistoryBoundary).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
