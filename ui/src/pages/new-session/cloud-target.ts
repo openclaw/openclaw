@@ -2,7 +2,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import "../../components/tooltip.ts";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { toolIcons } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -175,7 +174,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
                 ${params.platform ? detailRow(icons.layers, params.platform) : nothing}
                 ${params.sub ? detailRow(icons.info, params.sub) : nothing}
                 ${params.capabilityLabels?.length
-                  ? detailRow(toolIcons.puzzle, params.capabilityLabels.join(", "))
+                  ? detailRow(icons.info, params.capabilityLabels.join(", "))
                   : nothing}
                 ${params.trust
                   ? detailRow(
@@ -188,7 +187,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
                     )
                   : nothing}
                 ${params.provider ? detailRow(icons.server, params.provider) : nothing}
-                ${params.hardware ? detailRow(toolIcons.cpu, params.hardware) : nothing}
+                ${params.hardware ? detailRow(icons.info, params.hardware) : nothing}
                 ${[
                   ...new Set(
                     [
