@@ -1,3 +1,4 @@
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
   SystemAgentSession,
@@ -342,14 +343,20 @@ export class ChatTurnRouter {
         : text
     }`;
     // The runtime already owns recovery; a terminal failure must not start another inference turn.
-    const loopReply = await agentTurn({
-      input: loopInput,
-      overview,
-      surface: this.options.surface ?? "cli",
-      approvalArmed,
-      ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
-      session: this.agentSession,
-    });
+    const runTurn = () =>
+      agentTurn({
+        input: loopInput,
+        overview,
+        surface: this.options.surface ?? "cli",
+        approvalArmed,
+        ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
+        session: this.agentSession,
+      });
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    const loopReply =
+      requesterAgentId && requesterAgentId !== this.agentSession.verifiedInference.execution.agentId
+        ? await runOutsidePreparedModelRuntimePluginGenerationScope(runTurn)
+        : await runTurn();
     if (!loopReply?.text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
