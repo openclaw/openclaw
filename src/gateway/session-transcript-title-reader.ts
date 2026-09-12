@@ -11,6 +11,7 @@ import {
   type SessionTranscriptReadScope,
   type SessionTranscriptTitleProbe,
 } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
@@ -31,7 +32,7 @@ const EMPTY_SESSION_TITLE_FIELDS: SessionTitleFields = {
   lastMessagePreview: null,
 };
 // Degraded nulls advance the sessions.list cache fence so the completed result cannot
-// outlive the projection rebuild that made those title fields temporarily unavailable.
+// outlive the projection rebuild or cold restoration that makes title fields available again.
 let sessionTitleProjectionUnavailableVersion = 0;
 
 export function readSessionTitleProjectionUnavailableVersion(): number {
@@ -189,10 +190,14 @@ function hydrateSqliteTitleFields(
     });
     return { ...fields };
   } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+    if (
+      !isSessionTranscriptProjectionUnavailableError(error) &&
+      !(error instanceof SessionTranscriptColdError)
+    ) {
       throw error;
     }
-    // Do not cache degraded nulls: the completed-list fence must advance until reconciliation.
+    // Optional titles must not restore cold payloads. Do not cache nulls under the preserved
+    // watermark: restoration and projection reconciliation can make these fields available again.
     sessionTitleProjectionUnavailableVersion += 1;
     return { ...EMPTY_SESSION_TITLE_FIELDS };
   }

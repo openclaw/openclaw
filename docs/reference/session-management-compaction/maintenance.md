@@ -115,6 +115,9 @@ disk-budget cleanup. Disable `coldStorage.enabled` to stop future extraction.
 Opening chat, requesting history, and channel writes restore cold history
 asynchronously before use. Bulk `sessions.preview` requests keep payloads archived
 and return an explicit `cold` status so menu prewarming cannot refill the database.
+Session lists also keep cold payloads archived. When transcript title fields are
+not already cached, lists use session metadata and omit last-message previews
+until the history is restored.
 Low-level synchronous transcript APIs instead return a
 restore-required error while a transcript is cold; their callers must await
 asynchronous restoration first. Storage and usage inventory can count cold

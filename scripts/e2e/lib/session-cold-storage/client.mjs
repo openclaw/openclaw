@@ -204,10 +204,44 @@ if (phase === "seed") {
     } else {
       assert.equal(readColdArchives(stateDir).length, 1);
     }
+    const archivesBeforeListing = readColdArchives(stateDir);
+    const listingParams = {
+      agentId: "main",
+      archived: "all",
+      limit: 100,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    };
+    const listing = await gatewayCall(context, "sessions.list", listingParams);
+    for (const session of sessions) {
+      const listed = listing.sessions.find((row) => row.key === session.sessionKey);
+      assert.equal(
+        listed?.sessionId,
+        session.sessionId,
+        "Activity must list cold histories after restart",
+      );
+      assert.equal(listed?.label, session.label);
+    }
+    assert.deepEqual(
+      readColdArchives(stateDir),
+      archivesBeforeListing,
+      "listing must leave cold payloads archived",
+    );
+    for (const archive of archivesBeforeListing) {
+      assert.deepEqual(readTranscriptRows(stateDir, archive.session_id), []);
+    }
     for (const session of sessions) {
       await assertHistory(session);
     }
     assert.deepEqual(readColdArchives(stateDir), []);
+    const restoredListing = await gatewayCall(context, "sessions.list", listingParams);
+    for (const session of sessions) {
+      assert.equal(
+        restoredListing.sessions.find((row) => row.key === session.sessionKey)?.lastMessagePreview,
+        "I will remember it.",
+        "Activity must refresh omitted previews after restoration",
+      );
+    }
     console.log(`${phase}: all transcript bytes survived, with cold storage disabled`);
   } else {
     throw new Error(`Unknown phase: ${phase}`);
