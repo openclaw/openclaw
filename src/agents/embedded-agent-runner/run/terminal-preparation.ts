@@ -30,9 +30,13 @@ import {
   isEmbeddedRunTimeoutFinal,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
+import {
+  mergeAttemptToolMediaPayloads,
+  type createPendingToolMediaCarry,
+} from "./tool-media-payloads.js";
 
 export function prepareEmbeddedRunTerminal(input: {
+  mergeToolMedia?: ReturnType<typeof createPendingToolMediaCarry>["merge"];
   runParams: RunEmbeddedAgentParams;
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
   currentAttemptCompletedAssistant?: AssistantMessage;
@@ -216,21 +220,25 @@ export function prepareEmbeddedRunTerminal(input: {
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
     heartbeatToolResponse: attempt.heartbeatToolResponse,
   });
-  const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
-    payloads,
-    toolMediaUrls: attempt.toolMediaUrls,
-    // Preserve harness provenance through terminal delivery. Without it,
-    // message-tool-only routes silently drop native runtime artifacts.
-    hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
-    toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
-      attempt,
-      attempt.toolMediaUrls,
-      runParams.admittedRunContext?.operationalRunInstance,
-    ),
-    toolAudioAsVoice: attempt.toolAudioAsVoice,
-    toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
-    sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-  });
+  const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
+  const payloadsWithToolMedia = mergeToolMedia(
+    {
+      payloads,
+      toolMediaUrls: attempt.toolMediaUrls,
+      // Preserve harness provenance through terminal delivery. Without it,
+      // message-tool-only routes silently drop native runtime artifacts.
+      hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
+      toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
+        attempt,
+        attempt.toolMediaUrls,
+        runParams.admittedRunContext?.operationalRunInstance,
+      ),
+      toolAudioAsVoice: attempt.toolAudioAsVoice,
+      toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+      sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+    },
+    runParams.admittedRunContext?.operationalRunInstance,
+  );
   const recoveredFinalAssistantTextAfterPromptTimeout =
     timedOutDuringPrompt &&
     !timeoutFinal &&

@@ -1,4 +1,3 @@
-/** Prepared embedded-agent loop. */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
@@ -66,7 +65,7 @@ import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 export async function runPreparedEmbeddedLoop(
-  continueAfterPluginRuntimeRefresh: EmbeddedPluginRuntimeRefresh["continueAfterAttempt"],
+  refresh: EmbeddedPluginRuntimeRefresh,
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
   let { runParams: params, provider, modelId } = input;
@@ -79,7 +78,6 @@ export async function runPreparedEmbeddedLoop(
     fallbackConfigured,
     isProbeSession,
     resolvedSessionKey,
-    resolvedToolResultFormat,
     startedAtMs: started,
     startupStages,
     lifecycleGeneration,
@@ -413,7 +411,7 @@ export async function runPreparedEmbeddedLoop(
       failoverRetryController.setTransientRetryBudget(
         dispatchedAttempt.rawAttempt.providerRetryMaxRetries,
       );
-      attemptCarryover.apply(dispatchedAttempt.rawAttempt);
+      attemptCarryover.apply(refresh.applyDeliveryState(dispatchedAttempt.rawAttempt));
       const normalization = {
         runInput: admittedRunInput,
         preparedRuntime,
@@ -431,7 +429,7 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason,
       };
       const normalizedAttempt = await normalizeEmbeddedRunAttempt(normalization);
-      const continuation = continueAfterPluginRuntimeRefresh(
+      const continuation = refresh.continueAfterAttempt(
         normalization,
         assertAdmittedActive,
         turnTaintState.isTainted,
@@ -575,6 +573,7 @@ export async function runPreparedEmbeddedLoop(
             attemptCompactionCount,
           },
           terminalBase: {
+            mergeToolMedia: refresh.mergeToolMedia,
             runParams: params,
             provider,
             providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
@@ -585,7 +584,7 @@ export async function runPreparedEmbeddedLoop(
             outerContextTokenMeta,
             usageAccumulator,
             contextRecoveryState,
-            resolvedToolResultFormat,
+            resolvedToolResultFormat: input.resolvedToolResultFormat,
           },
           lastRunPromptUsage,
           finalization: {

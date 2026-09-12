@@ -247,7 +247,7 @@ async function runEmbeddedAgentInternal(
     throwIfAborted();
     return enqueueGlobal(async () => {
       const started = Date.now();
-      const refresh = createEmbeddedAgentPluginRuntimeRefresh();
+      const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
       const usage = createUsageAccumulator();
       let refreshed = false;
       let generationCleanup = Promise.resolve();
@@ -414,6 +414,7 @@ async function runEmbeddedAgentInternal(
               activeProjectKeys,
             });
             const runPrepared = async () => {
+              params = refresh.withDeliveryCallbacks(params);
               const preparedAgentId = workspaceResolution.agentId;
               const resolvedWorkspace = workspaceResolution.workspaceDir;
               const agentDir = preparedModelRuntime.agentDir;
@@ -538,7 +539,7 @@ async function runEmbeddedAgentInternal(
                         }),
                     });
               const runTerminal = terminal;
-              return await runPreparedEmbeddedLoop(refresh.continueAfterAttempt, {
+              return await runPreparedEmbeddedLoop(refresh, {
                 runParams: {
                   ...params,
                   assistantErrorTranscript,

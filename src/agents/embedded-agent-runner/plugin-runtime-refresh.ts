@@ -2,9 +2,18 @@ import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
 } from "../plugin-runtime-refresh.js";
+import { createInheritedDeliveryCallbacks } from "./plugin-runtime-refresh-delivery.js";
+import {
+  copyAttemptDeliveryState,
+  type AttemptDeliveryState,
+} from "./run/attempt-delivery-state.js";
 import type { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./run/internal-params.js";
-import { resolveSuccessfulToolNames } from "./run/run-attempt-result.js";
+import {
+  normalizeEmbeddedRunAttemptResult,
+  resolveSuccessfulToolNames,
+} from "./run/run-attempt-result.js";
+import { createPendingToolMediaCarry } from "./run/tool-media-payloads.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import { toNormalizedUsage } from "./usage-accumulator.js";
 
@@ -13,11 +22,15 @@ export type EmbeddedPluginRuntimeRefresh = ReturnType<
 >;
 
 /** The embedded runner owns continuation data; tool controls never import its graph. */
-export function createEmbeddedAgentPluginRuntimeRefresh() {
+export function createEmbeddedAgentPluginRuntimeRefresh(
+  callbacks: RunEmbeddedAgentParamsWithSessionFile,
+) {
   const refresh = createAgentPluginRuntimeRefresh();
+  const pendingToolMedia = createPendingToolMediaCarry();
   const successfulToolNames = new Set<string>();
+  let delivered: AttemptDeliveryState | undefined;
   let continuation: RunEmbeddedAgentParamsWithSessionFile | undefined;
-  const close = () => {
+  const closeGeneration = () => {
     continuation = undefined;
     refresh.close();
   };
@@ -35,10 +48,13 @@ export function createEmbeddedAgentPluginRuntimeRefresh() {
       return undefined;
     }
     assertActive();
+    const attempt = normalizeEmbeddedRunAttemptResult(input.dispatchedAttempt.rawAttempt);
     // Refresh ends before terminal preparation; keep settled successes with the logical run.
-    for (const name of resolveSuccessfulToolNames(input.dispatchedAttempt.rawAttempt)) {
+    for (const name of resolveSuccessfulToolNames(attempt)) {
       successfulToolNames.add(name);
     }
+    delivered = copyAttemptDeliveryState(attempt);
+    pendingToolMedia.capture(attempt);
     const { runInput, sessionPromptState: session, usageAccumulator: usage } = input;
     const params = runInput.runParams;
     continuation = {
@@ -79,10 +95,24 @@ export function createEmbeddedAgentPluginRuntimeRefresh() {
 
   return {
     run: <T>(run: () => T): T => {
-      close();
+      closeGeneration();
       return refresh.run(run);
     },
     continueAfterAttempt,
+    mergeToolMedia: pendingToolMedia.merge,
+    applyDeliveryState: <T extends Parameters<typeof copyAttemptDeliveryState>[0]>(
+      attempt: T,
+    ): T =>
+      delivered
+        ? Object.assign(
+            attempt,
+            copyAttemptDeliveryState(normalizeEmbeddedRunAttemptResult(attempt), delivered),
+          )
+        : attempt,
+    withDeliveryCallbacks: (params: RunEmbeddedAgentParamsWithSessionFile) =>
+      delivered
+        ? { ...params, ...createInheritedDeliveryCallbacks(params, callbacks, delivered) }
+        : params,
     mergeTerminalReceipt: (result: EmbeddedAgentRunResult) => {
       const receipt = result.meta.agentMeta?.terminalReceipt;
       if (receipt && successfulToolNames.size > 0) {
@@ -93,9 +123,14 @@ export function createEmbeddedAgentPluginRuntimeRefresh() {
     },
     takeContinuation: () => {
       const next = continuation;
-      close();
+      closeGeneration();
       return next;
     },
-    close,
+    close: () => {
+      closeGeneration();
+      delivered = undefined;
+      pendingToolMedia.clear();
+      successfulToolNames.clear();
+    },
   };
 }
