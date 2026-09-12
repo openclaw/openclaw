@@ -41,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +65,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -296,28 +298,30 @@ internal fun OpenClawWearScreens(
     ) { page ->
       when (homePages.getOrNull(page)) {
         WearHomePage.Chat -> {
-          ChatPage(
-            snapshot = snapshot,
-            interaction = interaction,
-            speaking = speaking,
-            actionBusy = actionBusy,
-            inputEnabled = inputEnabled,
-            canAbort = canAbort,
-            onTalk = onTalk,
-            onType = onType,
-            onAbort = onAbort,
-            onSelectAgent = onSelectAgent,
-            onSelectSession = onSelectSession,
-            onSelectModel = onSelectModel,
-            onSearchSessions = onSearchSessions,
-            onLoadMoreSessionSearch = onLoadMoreSessionSearch,
-            onClearSessionSearch = onClearSessionSearch,
-            onSearchModels = onSearchModels,
-            onClearModelSearch = onClearModelSearch,
-            speechFailed = speechFailed,
-            onSpeakLatest = onSpeakLatest,
-            onStopSpeaking = onStopSpeaking,
-          )
+          key(snapshot.phoneNodeId, snapshot.activeSessionId, snapshot.conversationAgentId) {
+            ChatPage(
+              snapshot = snapshot,
+              interaction = interaction,
+              speaking = speaking,
+              actionBusy = actionBusy,
+              inputEnabled = inputEnabled,
+              canAbort = canAbort,
+              onTalk = onTalk,
+              onType = onType,
+              onAbort = onAbort,
+              onSelectAgent = onSelectAgent,
+              onSelectSession = onSelectSession,
+              onSelectModel = onSelectModel,
+              onSearchSessions = onSearchSessions,
+              onLoadMoreSessionSearch = onLoadMoreSessionSearch,
+              onClearSessionSearch = onClearSessionSearch,
+              onSearchModels = onSearchModels,
+              onClearModelSearch = onClearModelSearch,
+              speechFailed = speechFailed,
+              onSpeakLatest = onSpeakLatest,
+              onStopSpeaking = onStopSpeaking,
+            )
+          }
         }
 
         WearHomePage.Voice -> {
@@ -411,24 +415,34 @@ private fun ChatPage(
 ) {
   val listState = rememberTransformingLazyColumnState()
   val coroutineScope = rememberCoroutineScope()
-  val visibleMessages = snapshot.messages.takeLast(VISIBLE_MESSAGE_COUNT)
+  var showLoadedHistory by remember { mutableStateOf(false) }
+  var expandedMessageKeys by remember { mutableStateOf(emptySet<String>()) }
+  val visibleMessages = if (showLoadedHistory) snapshot.messages else snapshot.messages.takeLast(VISIBLE_MESSAGE_COUNT)
+  val hasHiddenMessages = !showLoadedHistory && snapshot.messages.size > VISIBLE_MESSAGE_COUNT
   val streamingText = snapshot.streamingAssistantText?.takeIf(String::isNotBlank)
+  // Disclosure is presentation-only, not arriving content for autofollow.
+  val contentAnchorIndex =
+    wearChatLatestAnchorIndex(snapshot.messages.size, streamingText != null, canAbort)
   val hasAssistant = snapshot.messages.any { message -> message.chatRole == WearChatRole.ASSISTANT }
   val latestAnchorIndex =
     wearChatLatestAnchorIndex(
       visibleMessageCount = visibleMessages.size,
       hasStreaming = streamingText != null,
       canAbort = canAbort,
-    )
+    ) + if (hasHiddenMessages) 1 else 0
   val contentRevision =
     wearChatContentRevision(
       sessionId = snapshot.activeSessionId,
-      messages = visibleMessages,
+      messages = snapshot.messages,
       streamingText = streamingText,
-      latestAnchorIndex = latestAnchorIndex,
+      latestAnchorIndex = contentAnchorIndex,
     )
   var followState by remember(snapshot.activeSessionId) { mutableStateOf(WearThreadFollowState()) }
   var contextPicker by remember { mutableStateOf<WearContextPicker?>(null) }
+  LaunchedEffect(snapshot.messages) {
+    val loadedKeys = snapshot.messages.map { it.id ?: "${it.role}:${it.timestamp}:${it.text.hashCode()}" }.toSet()
+    expandedMessageKeys = expandedMessageKeys.intersect(loadedKeys)
+  }
 
   fun clearContextPickerSearch() {
     when (contextPicker) {
@@ -497,14 +511,49 @@ private fun ChatPage(
           )
         }
       }
+      if (hasHiddenMessages) {
+        item(key = "chat-loaded-history") {
+          SecondaryButton(
+            label = stringResource(R.string.show_more),
+            enabled = true,
+            onClick = {
+              val historyIndex = CHAT_FIXED_ITEM_COUNT + if (canAbort) 1 else 0
+              val layoutInfo = listState.layoutInfo
+              // The history row has no surviving key. Anchor a retained message,
+              // using its actual center-relative offset, not the removed row's height.
+              val retainedMessage =
+                layoutInfo.visibleItems.firstOrNull {
+                  it.index > historyIndex && it.index <= historyIndex + visibleMessages.size
+                }
+              showLoadedHistory = true
+              retainedMessage?.let { item ->
+                val offset = layoutInfo.viewportSize.height / 2 - item.transformedHeight / 2 - item.offset
+                val messageIndex =
+                  snapshot.messages.indexOfFirst { message ->
+                    (message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") == item.key
+                  }
+                if (messageIndex >= 0) listState.requestScrollToItem(historyIndex + messageIndex, offset)
+              }
+            },
+          )
+        }
+      }
       if (visibleMessages.isEmpty() && streamingText == null) {
         item {
           EmptyConversation()
         }
       } else {
         visibleMessages.forEach { message ->
-          item(key = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") {
-            MessageBubble(message = message)
+          val messageKey = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}"
+          item(key = messageKey) {
+            MessageBubble(
+              message = message,
+              expanded = messageKey in expandedMessageKeys,
+              onToggleExpanded = {
+                expandedMessageKeys =
+                  if (messageKey in expandedMessageKeys) expandedMessageKeys - messageKey else expandedMessageKeys + messageKey
+              },
+            )
           }
         }
         streamingText?.let { streaming ->
@@ -2029,6 +2078,7 @@ private fun ConversationContextPicker(
     enabled = !actionBusy,
     onClick = onOpenContextPicker,
     modifier = Modifier.padding(horizontal = 12.dp),
+    role = Role.Button,
   )
 }
 
@@ -2233,6 +2283,7 @@ private fun ContextPickerOption(
   enabled: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  role: Role = Role.RadioButton,
 ) {
   val colors = OpenClawWearTheme.colors
   Column(
@@ -2240,8 +2291,13 @@ private fun ContextPickerOption(
       modifier
         .fillMaxWidth()
         .padding(horizontal = 12.dp)
-        .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
         .then(
+          if (role == Role.Button) {
+            Modifier.clickable(enabled = enabled, role = role, onClick = onClick)
+          } else {
+            Modifier.selectable(selected = selected, enabled = enabled, role = role, onClick = onClick)
+          },
+        ).then(
           Modifier.border(
             width = 1.dp,
             color = if (selected) colors.primary else colors.border,
@@ -2399,7 +2455,11 @@ private fun ConversationStatus(
 }
 
 @Composable
-private fun MessageBubble(message: WearChatMessage) {
+private fun MessageBubble(
+  message: WearChatMessage,
+  expanded: Boolean,
+  onToggleExpanded: () -> Unit,
+) {
   val colors = OpenClawWearTheme.colors
   val isUser = message.chatRole == WearChatRole.USER
   val background =
@@ -2439,19 +2499,48 @@ private fun MessageBubble(message: WearChatMessage) {
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
-    Text(
+    ExpandableChatText(
       text = message.text,
       color = foreground,
-      fontSize = 13.sp,
-      lineHeight = 17.sp,
-      maxLines = 8,
-      overflow = TextOverflow.Ellipsis,
+      expanded = expanded,
+      onToggleExpanded = onToggleExpanded,
+    )
+  }
+}
+
+@Composable
+private fun ExpandableChatText(
+  text: String,
+  color: Color,
+  expanded: Boolean,
+  onToggleExpanded: () -> Unit,
+) {
+  var overflows by remember(text) { mutableStateOf(false) }
+  Text(
+    text = text,
+    color = color,
+    fontSize = 13.sp,
+    lineHeight = 17.sp,
+    maxLines = if (expanded) Int.MAX_VALUE else 8,
+    overflow = TextOverflow.Ellipsis,
+    onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow },
+  )
+  if (expanded || overflows) {
+    Text(
+      text = stringResource(if (expanded) R.string.show_less else R.string.show_more),
+      color = OpenClawWearTheme.colors.primary,
+      fontSize = 12.sp,
+      modifier =
+        Modifier
+          .minimumInteractiveComponentSize()
+          .clickable(role = Role.Button, onClick = onToggleExpanded),
     )
   }
 }
 
 @Composable
 private fun StreamingBubble(text: String) {
+  var expanded by remember { mutableStateOf(false) }
   val colors = OpenClawWearTheme.colors
   Column(
     modifier =
@@ -2469,13 +2558,11 @@ private fun StreamingBubble(text: String) {
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
-    Text(
+    ExpandableChatText(
       text = text,
       color = colors.text,
-      fontSize = 13.sp,
-      lineHeight = 17.sp,
-      maxLines = 8,
-      overflow = TextOverflow.Ellipsis,
+      expanded = expanded,
+      onToggleExpanded = { expanded = !expanded },
     )
   }
 }
@@ -2662,6 +2749,7 @@ private fun SelectionButton(
     modifier =
       Modifier
         .fillMaxWidth()
+        .semantics { this.selected = selected }
         .padding(horizontal = 12.dp)
         .border(
           width = 1.dp,

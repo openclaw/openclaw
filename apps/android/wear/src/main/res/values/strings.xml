@@ -22,6 +22,8 @@
     <string name="show_new_messages" tools:ignore="MissingTranslation">Show new messages</string>
     <string name="no_live_conversation">Start Live to see the conversation here.</string>
     <string name="new_messages">New</string>
+    <string name="show_more" tools:ignore="MissingTranslation">Show more</string>
+    <string name="show_less" tools:ignore="MissingTranslation">Show less</string>
     <string name="type">Type</string>
     <string name="message">Message</string>
     <string name="message_agent">Message agent</string>

@@ -3,6 +3,7 @@
 The watch is a paired-phone companion. It never asks for, receives, or stores Gateway credentials, TLS pins, or device-signing identity.
 
 - Given a reachable paired phone and connected Gateway, opening the watch app lists recent non-global sessions. Selecting one shows the latest bounded text transcript.
+- Given long received chat text, Show more and Show less disclose the full received text locally. Show more above the latest eight messages reveals the rest of the already-loaded bounded transcript (at most twenty); it never requests older history. Disclosure preserves message identity and manual reading position and is not new incoming content. Phone, agent-owner, or session changes reset disclosure and picker state; the existing New action and incoming-content autofollow remain available. Selection controls expose their real selected state to accessibility services.
 - Given multiple reachable phones, RPC responses and events are accepted only from the currently preferred phone. A preferred-phone change reloads canonical state before replaying live events.
 - Given an unavailable phone or offline Gateway, the app shows one clear recovery state and a refresh action. It does not fall back to direct Gateway access.
 - Given a paired phone that advertises agent and Gateway controls, the watch can select the phone's active agent and connect or disconnect its Gateway. Older phones omit those controls and continue serving the original companion surface.
