@@ -195,8 +195,9 @@ type MarkdownInlineSource = {
   offsets: number[];
 };
 
-type MarkdownCodeOptions = {
+type MarkdownOwnershipOptions = {
   includeSource?: boolean;
+  includeText?: boolean;
   syntax?: "commonmark" | "gfm";
 };
 
@@ -262,9 +263,9 @@ function captureInlineSources(text: string, sources: Map<number, MarkdownInlineS
   };
 }
 
-export function parseMarkdownOwnership(text: string, options?: MarkdownCodeOptions) {
+export function parseMarkdownOwnership(text: string, options?: MarkdownOwnershipOptions) {
   if (!text) {
-    return { regions: [], codeSpans: [], retainStart: 0 };
+    return { regions: [], codeSpans: [], textSpans: [], retainStart: 0 };
   }
   const sources = new Map<number, MarkdownInlineSource>();
   const tables = options?.syntax !== "commonmark";
@@ -276,11 +277,15 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownCodeOptio
     ],
   }) as PositionedNode;
   const regions: MarkdownCodeRegion[] = [];
+  const textSpans: Array<[number, number]> = [];
   const pending: PositionedNode[] = [tree];
   while (pending.length > 0) {
     const node = expectDefined(pending.pop(), "Markdown ownership node");
     const start = node.position?.start?.offset;
     const end = node.position?.end?.offset;
+    if (options?.includeText && node.type === "text" && start !== undefined && end !== undefined) {
+      textSpans.push([start, end]);
+    }
     if (
       (node.type === "code" || node.type === "inlineCode") &&
       start !== undefined &&
@@ -302,6 +307,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownCodeOptio
   return {
     regions,
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
+    textSpans,
     retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
   };
 }
@@ -309,7 +315,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownCodeOptio
 /** Returns parser-owned CommonMark/GFM code ranges with block ownership. */
 export function findMarkdownCodeRegions(
   text: string,
-  options?: MarkdownCodeOptions,
+  options?: MarkdownOwnershipOptions,
 ): MarkdownCodeRegion[] {
   return /[`~\t]| {4}/u.test(text) ? parseMarkdownOwnership(text, options).regions : [];
 }

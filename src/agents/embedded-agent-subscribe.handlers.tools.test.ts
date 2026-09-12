@@ -351,7 +351,7 @@ describe("progress_card compatibility plan events", () => {
         phase: "update",
         title: "Plan updated",
         source: "openclaw",
-        explanation: "Progress updated",
+        explanation: "Checking safe candidates.",
         steps: [],
       },
     });

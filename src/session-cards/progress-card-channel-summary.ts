@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { normalizeProgressCardInput, ProgressCardInputError } from "./progress-card-input.js";
 
 const PLAN_PROGRESS_TOOL_NAMES = new Set(["progress_card", "update_plan"]);
@@ -7,7 +8,7 @@ export function isAgentPlanProgressToolName(name: string | undefined): boolean {
   return PLAN_PROGRESS_TOOL_NAMES.has(name?.trim().toLowerCase() ?? "");
 }
 
-/** Projects durable card state without interpreting renderer-owned Markdown or HTML. */
+/** Projects checklist counts or readable notes through the shared Markdown owner. */
 export function projectProgressCardChannelUpdate(input: unknown) {
   const record = asOptionalRecord(input);
   if (!record) {
@@ -20,7 +21,9 @@ export function projectProgressCardChannelUpdate(input: unknown) {
     const explanation = steps.length
       ? `${completed}/${steps.length} complete`
       : normalized.markdown
-        ? "Progress updated"
+        ? stripMarkdown(normalized.markdown, { linkStyle: "label", stripHtml: true })
+            .replace(/\s+/g, " ")
+            .trim() || "Progress updated"
         : undefined;
     return { steps, ...(explanation ? { explanation } : {}) };
   } catch (error) {

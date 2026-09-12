@@ -3229,7 +3229,7 @@ describe("runCodexAppServerAttempt", () => {
         phase: "update",
         title: "Plan updated",
         source: "openclaw",
-        explanation: "Progress updated",
+        explanation: "Working",
         steps: [],
       },
     });

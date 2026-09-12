@@ -13,7 +13,7 @@ import {
   readTagToken,
   skipHtmlComment,
   startsLikeHtmlTag,
-} from "./web-fetch-html-tag.js";
+} from "../../../packages/markdown-core/src/html-scanner.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
