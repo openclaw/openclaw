@@ -7,10 +7,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT, SANDBOX_MATERIALIZED_SKILLS_DIRNAME } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { normalizeContainerPathCore } from "./path-utils.js";
-import type { SandboxWorkspaceAccess } from "./types.js";
+import type { SandboxSkillsMountLayout, SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
 const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -72,6 +72,20 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   skillsWorkspaceDir?: string;
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
+  /**
+   * Backend whose container layout the mounts target. Docker and Podman select
+   * the direct mount; every other backend — including an omitted backendId, the
+   * context shape shipped with plugin-sdk v2026.9.3 and earlier — keeps the
+   * nested remote layout.
+   */
+  backendId?: string;
+  /**
+   * Skills mount layout of the container being mapped. Only mapping consumers
+   * (prompt/file path translation) pass this: retained hot containers created
+   * before the direct layout must keep being mapped through the nested layout.
+   * Container creation always uses the current direct layout for Docker/Podman.
+   */
+  skillsMountLayout?: SandboxSkillsMountLayout;
 }): ReadOnlyWorkspaceSkillMount[] {
   if (params.workspaceAccess === "ro") {
     return [];
@@ -96,15 +110,37 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   if (params.workspaceAccess === "rw") {
     const materializedSkillsWorkspaceDir =
       params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(rootDir);
-    mounts.push({
-      hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
-      containerPath: containerJoin(
-        params.workdir,
-        ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
-        "skills",
-      ),
-      rootDir: materializedSkillsWorkspaceDir,
-    });
+    // Remote backends keep the existing remote workspace layout, and retained
+    // hot containers that predate the direct layout must stay mapped as nested.
+    // An omitted backendId is the context shape shipped with plugin-sdk
+    // v2026.9.3 and earlier: unchanged remote SDK callers must keep the nested
+    // layout, so only an explicit docker/podman backend selects the direct
+    // mount when no skillsMountLayout is given.
+    const usesNestedLayout =
+      params.skillsMountLayout === "nested" ||
+      (params.skillsMountLayout !== "direct" &&
+        (params.backendId === undefined ||
+          (params.backendId !== "docker" && params.backendId !== "podman")));
+    if (!usesNestedLayout) {
+      mounts.push({
+        // Mount the generated workspace directly. A nested target under the
+        // writable workspace lets Docker create an inaccessible host ancestor.
+        hostPath: materializedSkillsWorkspaceDir,
+        containerPath: containerJoin(params.workdir, SANDBOX_MATERIALIZED_SKILLS_DIRNAME),
+        rootDir: path.dirname(materializedSkillsWorkspaceDir),
+      });
+    } else {
+      // Remote backends keep the existing remote workspace layout.
+      mounts.push({
+        hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
+        containerPath: containerJoin(
+          params.workdir,
+          ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
+          "skills",
+        ),
+        rootDir: materializedSkillsWorkspaceDir,
+      });
+    }
   }
 
   return mounts
@@ -193,6 +229,7 @@ export function appendWorkspaceMountArgs(params: {
   workspaceAccess: SandboxWorkspaceAccess;
   readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
   includeReadOnlyWorkspaceSkillMounts?: boolean;
+  backendId?: string;
 }) {
   const { args, workspaceDir, agentWorkspaceDir, workdir, workspaceAccess } = params;
 
@@ -227,6 +264,7 @@ export function appendWorkspaceMountArgs(params: {
           skillsWorkspaceDir: params.skillsWorkspaceDir,
           workdir,
           workspaceAccess,
+          backendId: params.backendId,
         }),
     });
   }

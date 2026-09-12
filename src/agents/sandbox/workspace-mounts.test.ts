@@ -8,6 +8,7 @@ import {
   appendWorkspaceMountArgs,
   filterBindsConflictingWithProtectedMounts,
   resolveProtectedSkillMountContainerPaths,
+  resolveReadOnlyWorkspaceSkillMounts,
   type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
 
@@ -179,7 +180,37 @@ describe("appendWorkspaceMountArgs", () => {
     ]);
   });
 
-  it("overlays materialized sandbox skills read-only when workspaceAccess is rw", () => {
+  it.each(["/workspace", "/openclaw-skills"])(
+    "overlays materialized sandbox skills below workdir %s",
+    (workdir) => {
+      const agentWorkspaceDir = makeTempWorkspace();
+      const skillsWorkspaceDir = makeTempWorkspace();
+      const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
+      fs.mkdirSync(path.join(materializedSkillsDir, "demo"), { recursive: true });
+      fs.writeFileSync(path.join(materializedSkillsDir, "demo", "SKILL.md"), "# Demo\n");
+
+      const args: string[] = [];
+      appendWorkspaceMountArgs({
+        args,
+        workspaceDir: agentWorkspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        workdir,
+        workspaceAccess: "rw",
+        backendId: "docker",
+      });
+
+      const mounts = args.filter(
+        (arg) => arg.startsWith(agentWorkspaceDir) || arg.startsWith(skillsWorkspaceDir),
+      );
+      expect(mounts).toEqual([
+        `${agentWorkspaceDir}:${workdir}:z`,
+        `${skillsWorkspaceDir}:${workdir}/.openclaw-skills:ro,z`,
+      ]);
+    },
+  );
+
+  it("keeps the remote materialized skills layout for remote backends", () => {
     const agentWorkspaceDir = makeTempWorkspace();
     const skillsWorkspaceDir = makeTempWorkspace();
     const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
@@ -194,6 +225,7 @@ describe("appendWorkspaceMountArgs", () => {
       skillsWorkspaceDir,
       workdir: "/workspace",
       workspaceAccess: "rw",
+      backendId: "ssh",
     });
 
     const mounts = args.filter(
@@ -203,6 +235,84 @@ describe("appendWorkspaceMountArgs", () => {
       `${agentWorkspaceDir}:/workspace:z`,
       `${materializedSkillsDir}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
     ]);
+  });
+
+  it("maps retained hot containers through the nested layout", () => {
+    const agentWorkspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = makeTempWorkspace();
+    const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
+    fs.mkdirSync(path.join(materializedSkillsDir, "demo"), { recursive: true });
+    fs.writeFileSync(path.join(materializedSkillsDir, "demo", "SKILL.md"), "# Demo\n");
+
+    // A retained hot Docker container predating the direct layout must keep
+    // being mapped through the nested destination until its safe recreation.
+    const mounts = resolveReadOnlyWorkspaceSkillMounts({
+      workspaceDir: agentWorkspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+      backendId: "docker",
+      skillsMountLayout: "nested",
+    });
+
+    expect(mounts).toEqual([
+      {
+        hostPath: materializedSkillsDir,
+        containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+      },
+    ]);
+  });
+
+  it("keeps the nested layout for the shipped SDK context shape", () => {
+    // plugin-sdk v2026.9.3 and earlier exported resolveReadOnlyWorkspaceSkillMounts
+    // (and the remote bridge context) without backendId or skillsMountLayout.
+    // Unchanged remote SDK callers omit both fields and must keep the nested
+    // materialized-skills layout, never the Docker direct mount.
+    const agentWorkspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = makeTempWorkspace();
+    const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
+    fs.mkdirSync(path.join(materializedSkillsDir, "demo"), { recursive: true });
+    fs.writeFileSync(path.join(materializedSkillsDir, "demo", "SKILL.md"), "# Demo\n");
+
+    const mounts = resolveReadOnlyWorkspaceSkillMounts({
+      workspaceDir: agentWorkspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+    });
+
+    expect(mounts).toEqual([
+      {
+        hostPath: materializedSkillsDir,
+        containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+      },
+    ]);
+  });
+
+  it("selects the direct layout for explicit docker and podman backends", () => {
+    for (const backendId of ["docker", "podman"] as const) {
+      const agentWorkspaceDir = makeTempWorkspace();
+      const skillsWorkspaceDir = makeTempWorkspace();
+      fs.mkdirSync(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
+
+      const mounts = resolveReadOnlyWorkspaceSkillMounts({
+        workspaceDir: agentWorkspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        workdir: "/workspace",
+        workspaceAccess: "rw",
+        backendId,
+      });
+
+      expect(mounts).toEqual([
+        {
+          hostPath: skillsWorkspaceDir,
+          containerPath: "/workspace/.openclaw-skills",
+        },
+      ]);
+    }
   });
 
   it("does not add a separate synced skill overlay when workspaceAccess is ro", () => {

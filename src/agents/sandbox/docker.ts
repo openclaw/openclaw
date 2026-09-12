@@ -34,7 +34,13 @@ import {
   sanitizeExplicitSandboxEnvVars,
 } from "./sanitize-env-vars.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import { readContainerSkillsMountLayout } from "./skills-mount-layout.js";
+import type {
+  SandboxConfig,
+  SandboxDockerConfig,
+  SandboxSkillsMountLayout,
+  SandboxWorkspaceAccess,
+} from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
   appendReadOnlyWorkspaceSkillMountArgs,
@@ -502,6 +508,7 @@ async function createSandboxContainer(params: {
     workspaceAccess: params.workspaceAccess,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
     includeReadOnlyWorkspaceSkillMounts: false,
+    backendId: engine.id,
   });
   // Protected skill overlays are authoritative. Remove exact destination
   // collisions before Docker or Podman sees duplicate mount arguments.
@@ -552,7 +559,16 @@ type EnsureSandboxContainerParams = {
   requireCurrentConfig?: boolean;
 };
 
-export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
+/** Result of ensuring a sandbox container exists and is running. */
+export type EnsureSandboxContainerResult = {
+  containerName: string;
+  /** Skills mount layout the ensured container actually has. */
+  skillsMountLayout: SandboxSkillsMountLayout;
+};
+
+export async function ensureSandboxContainer(
+  params: EnsureSandboxContainerParams,
+): Promise<EnsureSandboxContainerResult> {
   const engine = params.engine ?? DOCKER_SANDBOX_ENGINE;
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const prefix =
@@ -571,7 +587,7 @@ export async function ensureSandboxContainer(params: EnsureSandboxContainerParam
 async function ensureSandboxContainerLifecycle(
   params: EnsureSandboxContainerParams,
   containerName: string,
-) {
+): Promise<EnsureSandboxContainerResult> {
   const configuredEngine = params.engine ?? DOCKER_SANDBOX_ENGINE;
   const podmanRuntimeInfo =
     configuredEngine.id === "podman" ? await resolvePodmanSandboxRuntimeInfo() : undefined;
@@ -614,6 +630,7 @@ async function ensureSandboxContainerLifecycle(
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
+    backendId: engine.id,
   });
   const genericConfigHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
@@ -641,6 +658,9 @@ async function ensureSandboxContainerLifecycle(
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
+  // Freshly created containers and hash-matching containers use the current
+  // direct layout; only retained hot containers may carry the nested one.
+  let skillsMountLayout: SandboxSkillsMountLayout = "direct";
   const registryEntry = existingRegistryEntry ?? undefined;
   if (hasContainer) {
     currentHash = await readContainerConfigHash(engine, containerName);
@@ -662,6 +682,21 @@ async function ensureSandboxContainerLifecycle(
             ? { requireCurrentConfig: params.requireCurrentConfig }
             : {}),
         });
+        // The retained container keeps the layout it was created with. Map
+        // prompt and file paths through that layout until the normal safe
+        // recreation installs the current one.
+        const retainedLayout = await readContainerSkillsMountLayout({
+          engine,
+          containerName,
+          workdir: params.cfg.docker.workdir,
+        });
+        if (retainedLayout) {
+          skillsMountLayout = retainedLayout;
+        } else {
+          log.warn(
+            `sandbox: unable to inspect the skills mount layout of retained container ${containerName}; assuming the current layout`,
+          );
+        }
       } else {
         await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
         hasContainer = false;
@@ -699,5 +734,5 @@ async function ensureSandboxContainerLifecycle(
     configLabelKind: "Image",
     configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
   });
-  return containerName;
+  return { containerName, skillsMountLayout };
 }

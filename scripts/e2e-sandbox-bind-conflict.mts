@@ -69,6 +69,7 @@ const protectedMounts = resolveReadOnlyWorkspaceSkillMounts({
   agentWorkspaceDir: workspaceDir,
   workdir: "/workspace",
   workspaceAccess: "rw",
+  backendId: engine,
 });
 console.log(
   "Protected:",

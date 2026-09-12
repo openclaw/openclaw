@@ -10,6 +10,16 @@ import type { SandboxFsBridge } from "./fs-bridge.types.js";
  */
 export type SandboxBackendId = string;
 
+/**
+ * Layout of the generated read-only skills mount inside a sandbox container.
+ *
+ * `direct` mounts the materialized skills workspace at `<workdir>/.openclaw-skills`
+ * (Docker/Podman containers created by the current code). `nested` keeps the
+ * pre-existing `<workdir>/.openclaw/sandbox-skills` layout used by remote
+ * backends and by retained hot containers that predate the direct mount.
+ */
+export type SandboxSkillsMountLayout = "direct" | "nested";
+
 /** Shell exec specification prepared by a sandbox backend for process launch. */
 export type SandboxBackendExecSpec = {
   argv: string[];
@@ -52,6 +62,10 @@ export type SandboxFsBridgeContext = {
   workspaceAccess: "none" | "ro" | "rw";
   containerName: string;
   containerWorkdir: string;
+  /** Backend whose container layout the bridge maps. Remote backends keep the nested skills layout. */
+  backendId?: SandboxBackendId;
+  /** Skills mount layout the live container actually has; retained hot containers may stay nested. */
+  skillsMountLayout?: SandboxSkillsMountLayout;
   docker: {
     binds?: string[];
   };
@@ -66,6 +80,8 @@ export type SandboxBackendHandle = {
   runtimeId: string;
   runtimeLabel: string;
   workdir: string;
+  /** Skills mount layout the runtime container actually has; undefined keeps the backend default. */
+  skillsMountLayout?: SandboxSkillsMountLayout;
   env?: Record<string, string>;
   configLabel?: string;
   configLabelKind?: string;

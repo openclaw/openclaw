@@ -298,8 +298,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       ensureSandboxContainer(params),
     ]);
 
-    expect(first).toBe("oc-test-shared");
-    expect(second).toBe(first);
+    expect(first.containerName).toBe("oc-test-shared");
+    expect(second.containerName).toBe(first.containerName);
     expect(spawnState.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
     expect(spawnState.calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
     expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
@@ -396,7 +396,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       cfg: newCfg,
     });
 
-    expect(containerName).toBe("oc-test-shared");
+    expect(containerName.containerName).toBe("oc-test-shared");
     const dockerCalls = spawnState.calls.filter((call) => call.command === "docker");
     expect(
       dockerCalls.some(
@@ -868,7 +868,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
         agentWorkspaceDir: "/tmp/workspace",
         cfg,
       }),
-    ).resolves.toBe("oc-test-podman-shared");
+    ).resolves.toMatchObject({ containerName: "oc-test-podman-shared" });
 
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-podman-shared");
     expect(spawnState.calls).toContainEqual(

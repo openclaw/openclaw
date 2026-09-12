@@ -28,7 +28,7 @@ With the OpenShell backend, `mirror` mode still uses the local workspace as the 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
 <Note>
-**Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
+**Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into a generated read-only path. The Docker and Podman backends mount it directly at `<workdir>/.openclaw-skills/skills` — with the default `workdir` of `/workspace` that is `/workspace/.openclaw-skills/skills`; a custom `agents.defaults.sandbox.docker.workdir` moves it accordingly. The SSH and OpenShell backends keep the nested layout `<workdir>/.openclaw/sandbox-skills/skills`. A container created before an upgrade keeps the layout it was created with until it is recreated (for example `openclaw sandbox recreate --all`), and OpenClaw maps skill paths to that existing layout in the meantime.
 
 Local container mounts and sandbox file tools enforce these read-only roots.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy

@@ -57,7 +57,10 @@ function createConfig(): OpenClawConfig {
 }
 
 async function createDockerExecBackend() {
-  dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+  dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+    containerName: "sandbox-container",
+    skillsMountLayout: "direct",
+  });
   return createDockerSandboxBackend({
     sessionKey: "agent:coder:main",
     scopeKey: "agent:coder:main",
@@ -87,7 +90,10 @@ describe("docker sandbox backend manager", () => {
   });
 
   it("forwards the canonical scope key to container provisioning", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-container",
+      skillsMountLayout: "direct",
+    });
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
 
     await createDockerSandboxBackend({
@@ -104,7 +110,10 @@ describe("docker sandbox backend manager", () => {
   });
 
   it("binds Podman provisioning and later execs to the resolved target", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-podman");
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-podman",
+      skillsMountLayout: "direct",
+    });
     const podmanTarget = {
       key: `machine:${"a".repeat(32)}`,
       globalArgs: [

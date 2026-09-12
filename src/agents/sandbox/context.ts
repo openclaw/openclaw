@@ -359,6 +359,7 @@ async function resolveProvisionedSandboxContext(
     runtimeLabel: backend.runtimeLabel,
     containerName: backend.runtimeId,
     containerWorkdir: backend.workdir,
+    ...(backend.skillsMountLayout ? { skillsMountLayout: backend.skillsMountLayout } : {}),
     docker: resolvedCfg.docker,
     tools: resolvedCfg.tools,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,
@@ -437,6 +438,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     skillsWorkspaceDir,
   });
   return {
+    backendId: cfg.backend,
     workspaceDir,
     ...(containerWorkdir ? { containerWorkdir } : {}),
     skillsWorkspaceDir,

@@ -4,11 +4,17 @@ import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types
  *
  * Shared by config resolution, backend creation, tool policy checks, and runtime prompt/tool wiring.
  */
-import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
+import type {
+  SandboxBackendHandle,
+  SandboxBackendId,
+  SandboxSkillsMountLayout,
+} from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
+
+export type { SandboxSkillsMountLayout };
 
 export type SandboxToolPolicy = {
   allow?: string[];
@@ -116,6 +122,8 @@ export type SandboxContext = {
   runtimeLabel: string;
   containerName: string;
   containerWorkdir: string;
+  /** Skills mount layout the runtime container actually has; undefined keeps the backend default. */
+  skillsMountLayout?: SandboxSkillsMountLayout;
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
@@ -125,6 +133,7 @@ export type SandboxContext = {
 };
 
 export type SandboxWorkspaceInfo = {
+  backendId?: SandboxBackendId;
   workspaceDir: string;
   containerWorkdir?: string;
   skillsWorkspaceDir?: string;

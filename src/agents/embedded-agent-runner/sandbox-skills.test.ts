@@ -63,6 +63,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({
         sandbox: {
+          backendId: "docker",
           enabled: true,
           containerWorkdir: "/workspace",
           skillsEligibility,
@@ -75,7 +76,51 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ).toEqual({
       skillsEligibility,
       skillsSnapshot: undefined,
+      skillsPromptWorkspaceDir: "/workspace/.openclaw-skills",
+      skillsWorkspaceDir: "/state/sandbox-skills",
+      workspaceOnly: true,
+    });
+  });
+
+  it("keeps prompt paths on the nested layout for retained old-layout containers", () => {
+    expect(
+      resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          backendId: "docker",
+          skillsMountLayout: "nested",
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: "/state/sandbox-skills",
+          workspaceAccess: "rw",
+        },
+        skillsAnchorWorkspace: "/workspace",
+        skillsSnapshot: snapshot,
+      }),
+    ).toEqual({
+      skillsSnapshot: undefined,
       skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
+      skillsWorkspaceDir: "/state/sandbox-skills",
+      workspaceOnly: true,
+    });
+  });
+
+  it("prefers an explicit direct layout over the backend default", () => {
+    expect(
+      resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          backendId: "docker",
+          skillsMountLayout: "direct",
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: "/state/sandbox-skills",
+          workspaceAccess: "rw",
+        },
+        skillsAnchorWorkspace: "/workspace",
+        skillsSnapshot: snapshot,
+      }),
+    ).toEqual({
+      skillsSnapshot: undefined,
+      skillsPromptWorkspaceDir: "/workspace/.openclaw-skills",
       skillsWorkspaceDir: "/state/sandbox-skills",
       workspaceOnly: true,
     });
@@ -108,11 +153,11 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           },
         ],
         skillsWorkspaceDir: "/state/sandbox-skills",
-        skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
+        skillsPromptWorkspaceDir: "/workspace/.openclaw-skills",
       }),
     ).toEqual([
       {
-        readPath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        readPath: "/workspace/.openclaw-skills/skills/demo/SKILL.md",
         skillFile: "/agent-workspace/skills/demo/SKILL.md",
         skillName: "demo",
         skillSource: "workspace",
@@ -163,6 +208,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         workspaceOnly,
       } = resolveSandboxSkillRuntimeInputs({
         sandbox: {
+          backendId: "docker",
           enabled: true,
           containerWorkdir: "/workspace",
           skillsEligibility,
@@ -191,7 +237,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       });
 
       if (skillsSnapshot === snapshot) {
-        expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+        expect(prompt).toContain("/workspace/.openclaw-skills/skills/demo/SKILL.md");
       } else {
         expect(prompt).toBe("");
         expect(skillEntries).toEqual([]);

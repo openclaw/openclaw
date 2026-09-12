@@ -25,6 +25,7 @@ import {
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
 import type { SandboxRegistryEntry } from "./registry.js";
+import type { SandboxSkillsMountLayout } from "./types.js";
 
 type ContainerExecFinalizeToken = () => Promise<void>;
 
@@ -88,7 +89,7 @@ async function createContainerSandboxBackend(
   const podmanTarget =
     engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
   const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
-  const containerName = await ensureSandboxContainer({
+  const ensured = await ensureSandboxContainer({
     engine: boundEngine,
     ...(podmanTarget ? { podmanTarget } : {}),
     scopeKey: params.scopeKey,
@@ -102,7 +103,8 @@ async function createContainerSandboxBackend(
   });
   return createContainerSandboxBackendHandle({
     engine: boundEngine,
-    containerName,
+    containerName: ensured.containerName,
+    skillsMountLayout: ensured.skillsMountLayout,
     workdir: params.cfg.docker.workdir,
     env: params.cfg.docker.env,
     image: params.cfg.docker.image,
@@ -125,6 +127,7 @@ export async function createPodmanSandboxBackend(
 function createContainerSandboxBackendHandle(params: {
   engine: SandboxContainerEngine;
   containerName: string;
+  skillsMountLayout: SandboxSkillsMountLayout;
   workdir: string;
   env?: Record<string, string>;
   image: string;
@@ -135,6 +138,7 @@ function createContainerSandboxBackendHandle(params: {
     runtimeId: params.containerName,
     runtimeLabel: params.containerName,
     workdir: params.workdir,
+    skillsMountLayout: params.skillsMountLayout,
     env: params.env,
     configLabel: params.image,
     configLabelKind: "Image",
