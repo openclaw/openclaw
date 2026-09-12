@@ -282,7 +282,7 @@ describe("chat page split layout host", () => {
     const pane = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
     expect(pane.mergedChrome).toBe(true);
     expect(matchMedia).toHaveBeenCalledWith("(max-width: 1099px)");
-    expect(matchMedia).toHaveBeenCalledWith("(max-width: 1100px)");
+    expect(matchMedia).toHaveBeenCalledWith("(max-width: 900px)");
   });
 
   it("retains the classic pane element while split view opens and closes", async () => {
