@@ -724,10 +724,6 @@
   height: 14px;
 }
 
-.session-progress-card--composer[open] .session-progress-card__summary-chevron {
-  transform: rotate(180deg);
-}
-
 .session-progress-card__summary-indicator {
   position: relative;
   display: inline-grid;
