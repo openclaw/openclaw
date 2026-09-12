@@ -359,4 +359,45 @@ describe("modelsAuthListCommand", () => {
       },
     ]);
   });
+  it("shows last-used time and failure counters in text and JSON", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:user@example.com": {
+          type: "oauth",
+          provider: "openai",
+          access: "secret",
+          refresh: "secret",
+          expires: 1_800_000_000_000,
+          email: "user@example.com",
+        },
+      },
+      usageStats: {
+        "openai:user@example.com": {
+          lastUsed: 1_800_000_005_000,
+          errorCount: 3,
+          lastFailureAt: 1_800_000_008_000,
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const textRuntime = createRuntime();
+    await modelsAuthListCommand({}, textRuntime);
+    expect(textRuntime.logs.at(-1)).toContain("last used 2027-01-15T08:00:05.000Z");
+    expect(textRuntime.logs.at(-1)).toContain("errors 3");
+    expect(textRuntime.logs.at(-1)).toContain("last failure 2027-01-15T08:00:08.000Z");
+
+    const jsonRuntime = createRuntime();
+    await modelsAuthListCommand({ json: true }, jsonRuntime);
+    expect(jsonRuntime.jsonPayloads[0]).toMatchObject({
+      profiles: [
+        expect.objectContaining({
+          id: "openai:user@example.com",
+          lastUsedAt: "2027-01-15T08:00:05.000Z",
+          errorCount: 3,
+          lastFailureAt: "2027-01-15T08:00:08.000Z",
+        }),
+      ],
+    });
+  });
 });
