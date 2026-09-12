@@ -808,6 +808,7 @@ describe("OpenAI realtime voice provider routing", () => {
   it.each([
     { model: "gpt-live-test-canary", voice: "spruce", publicApi: false },
     { model: "gpt-live-1", voice: "marin", publicApi: true },
+    { model: "gpt-live-1-codex", voice: "cove", publicApi: false },
   ])(
     "passes $model voice and channel instructions to the native broker",
     async ({ model, voice, publicApi }) => {
@@ -841,6 +842,12 @@ describe("OpenAI realtime voice provider routing", () => {
         "quicksilver request",
       );
       expect(quicksilverRequest.instructions).toMatch(/^You are OpenClaw's realtime voice layer\./);
+      expect(quicksilverRequest.instructions).toContain(
+        "Delegate each user request once and wait for its result.",
+      );
+      expect(quicksilverRequest.instructions).toContain(
+        "New user follow-ups, corrections, and explicit retries are new requests.",
+      );
       if (publicApi) {
         expect(quicksilverRequest.instructions).toContain(
           "session.thinking.append is silent context",

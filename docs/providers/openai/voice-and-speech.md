@@ -256,6 +256,11 @@ sidebarTitle: "Voice and speech"
     as spoken updates. Custom instructions should preserve that distinction;
     the Codex route uses its separate commentary/speakable channel contract.
 
+    Both routes instruct the voice model to wait for delegated results instead
+    of repeating the same backend request. New user follow-ups, corrections, and
+    explicit retries remain allowed. These instructions guide model behavior;
+    they do not guarantee that each request executes only once.
+
     Public transcript events are fragments,
     not completed turns. The Gateway owns persistence of bounded received-text
     snapshots; clients display captions without saving another copy. Both live
