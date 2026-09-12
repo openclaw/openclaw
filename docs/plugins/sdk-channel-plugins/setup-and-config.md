@@ -88,10 +88,16 @@ selection, and other channel-specific account concerns in the plugin.
 
 ### Stored account-key selection
 
-Import `resolveAccountKey`, `resolveNormalizedAccountEntry`, and
+Import `resolveChannelAccountKey`, `resolveAccountKey`, `resolveNormalizedAccountEntry`, and
 `ChannelAccountKeyPolicy` from `openclaw/plugin-sdk/account-resolution`.
 Use the selected stored key for writes so an edit preserves the operator's key
 spelling and updates the same entry that readers use.
+
+For registered channel callbacks, use
+`resolveChannelAccountKey(accounts, accountId, channelId)` to consume the selected
+manifest policy from the owning operation or Gateway snapshot. Keep that metadata
+scope active through reads, setup, and deletion. Do not import a second policy
+from the runtime plugin's manifest: another manifest may own the channel policy.
 
 `resolveAccountKey(accounts, accountId, normalizeAccountId?, policy?)` returns a
 stored key or `undefined`:
@@ -112,15 +118,14 @@ channel inheritance can then apply.
 (the authored map), and `accountId`, plus optional `normalizeAccountId`,
 `channelId`, and `accountKeyPolicy`. `channelId` selects the rule from the current
 operation's prepared plugin metadata snapshot, or the published Gateway snapshot.
-`accountKeyPolicy` supplies an explicit rule for a plugin-owned call before that
-snapshot is available; use the declaration from the plugin manifest. An explicit
-policy works without `channelId` or `normalizeAccountId` and takes precedence over
-the snapshot rule. Account-key selection precedes the existing field merge and
+`accountKeyPolicy` remains available for callers with an explicitly supplied
+policy. It works without `channelId` or `normalizeAccountId` and takes precedence
+over the snapshot rule. Account-key selection precedes the existing field merge and
 collection inheritance rules.
 
 The setup and config adapter factories accept the same optional `accountKeyPolicy`.
-Pass the manifest declaration when constructing an adapter before metadata is
-available. The scoped setup, account-name, enable, delete, and field-clear helpers
+Registered adapters use the prepared channel policy. The scoped setup,
+account-name, enable, delete, and field-clear helpers
 also accept `accountKeyPolicy`; their `accountId` is the normalized routing ID,
 not a stored spelling. The registered adapters normalize operator input before
 calling these helpers. `clearAccountEntryFields` additionally accepts `channelId`
@@ -128,7 +133,10 @@ to select prepared metadata, or an explicit policy without `channelId`.
 
 Declare the rule in
 [`channelAccountKeyPolicies`](/plugins/manifest/surfaces#channelaccountkeypolicies-reference)
-so generic channel readers and writers receive the same policy.
+so generic channel readers and writers receive the same policy. Deletion reruns
+the selector on the proposed remaining map and refuses a deletion that would
+activate a colliding row. Creation with `allowMissing: true` rejects reserved
+object keys instead of writing an account that readers cannot select.
 
 ## Other narrow channel subpaths
 

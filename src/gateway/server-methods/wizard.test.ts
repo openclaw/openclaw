@@ -4,6 +4,20 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  type PluginCache,
+} from "../../plugins/plugin-cache.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  getPluginRuntimeGenerationRegistry,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -124,6 +138,96 @@ describe("wizard session lookup", () => {
 });
 
 describe("hosted wizard runtime isolation", () => {
+  it.each([
+    { flow: "setup", cancel: false },
+    { flow: "channels", cancel: false },
+    { flow: "channels", cancel: true },
+  ] as const)(
+    "wizard.start keeps $flow plugin resources separate from Gateway boot until the runner settles (cancel=$cancel)",
+    async ({ flow, cancel }) => {
+      await using bootCache = createPluginCache({ kind: "process" });
+      const metadataSnapshot = createPluginMetadataSnapshotFixture();
+      bindPluginMetadataSnapshotCache(metadataSnapshot, bootCache);
+      const pluginRegistry = createEmptyPluginRegistry();
+      const bootInstance = new PluginInstance("gateway-boot");
+      bootCache.instances.add(bootInstance);
+      const readBoot = bootInstance.wrap(() => "gateway available");
+      const wizardInstance = new PluginInstance("hosted-wizard");
+      const events: string[] = [];
+      wizardInstance.lifecycle.onDispose(() => {
+        events.push("wizard disposed");
+      });
+      const readWizard = wizardInstance.wrap(() => "post-write complete");
+      const finishPostWrite = createDeferred();
+      const observed = createDeferred<{
+        cache: PluginCache;
+        metadata: ReturnType<typeof getCurrentPluginMetadataSnapshot>;
+        registry: ReturnType<typeof getPluginRuntimeGenerationRegistry>;
+      }>();
+      const tracker = createWizardSessionTracker();
+      const runner = async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        const cache = getPluginCache();
+        cache.instances.add(wizardInstance);
+        observed.resolve({
+          cache,
+          metadata: getCurrentPluginMetadataSnapshot(),
+          registry: getPluginRuntimeGenerationRegistry(),
+        });
+        prompter.progress("Finishing channel setup");
+        await finishPostWrite.promise;
+        events.push(readWizard());
+      };
+      const context = { ...tracker, wizardRunner: runner, channelWizardRunner: runner };
+
+      try {
+        const start = await withPluginRuntimeGenerationScope(
+          { metadataSnapshot, pluginRegistry },
+          async () => {
+            const result = await invokeWizard(
+              "wizard.start",
+              flow === "channels" ? { flow } : { mode: "local" },
+              context,
+            );
+            expect(getPluginCache()).toBe(bootCache);
+            expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+            expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
+            return result;
+          },
+        );
+        expect(start).toMatchObject({ status: "running", done: false });
+        const session = expectDefined(
+          tracker.wizardSessions.get(String(start.sessionId)),
+          "hosted wizard session",
+        );
+        const scope = await observed.promise;
+        expect(scope.cache).not.toBe(bootCache);
+        expect(scope.metadata).toBeUndefined();
+        expect(scope.registry).toBeUndefined();
+
+        if (cancel) {
+          const respond = vi.fn();
+          await expectDefined(
+            wizardHandlers["wizard.cancel"],
+            "wizard.cancel test invariant",
+          )({ params: { sessionId: start.sessionId }, respond, context } as never);
+          expect(readSuccessfulResponse(respond)).toMatchObject({ status: "cancelled" });
+        }
+
+        expect(events).toEqual([]);
+        expect(readWizard()).toBe("post-write complete");
+        finishPostWrite.resolve();
+        await whenAdmittedWizardSessionSettled(session);
+        expect(events).toEqual(["post-write complete", "wizard disposed"]);
+        expect(() => readWizard()).toThrow("reloaded or disabled");
+        expect(readBoot()).toBe("gateway available");
+      } finally {
+        finishPostWrite.resolve();
+        await cancelWizardSessions(tracker.wizardSessions);
+        await wizardInstance.dispose();
+      }
+    },
+  );
+
   it.each([
     { flow: "setup", exitCode: 0, status: "done" },
     { flow: "setup", exitCode: 23, status: "error" },

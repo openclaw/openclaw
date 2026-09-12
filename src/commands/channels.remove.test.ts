@@ -7,6 +7,8 @@ import {
 } from "../channels/plugins/config-helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -578,22 +580,42 @@ describe("channelsRemoveCommand", () => {
         },
       },
     };
-    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "external-chat",
+          channels: ["external-chat"],
+          channelAccountKeyPolicies: {
+            "external-chat": { canonicalAliasesRequireOwnField: "account" },
+          },
+        },
+      ],
+    });
+    configMocks.readConfigFileSnapshotForWrite.mockResolvedValueOnce({
+      snapshot: createTestConfigSnapshot(cfg),
+      writeOptions: {
+        basePluginMetadataSnapshot: {
+          ...metadata,
+          bundledManifestRegistry: metadata.manifestRegistry,
+        },
+      },
+    });
     plugin.config.deleteAccount = (params) =>
       deleteAccountFromConfigSection({
         ...params,
         sectionKey: "external-chat",
-        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
       });
     plugin.gateway = { startAccount: vi.fn() };
     const onAccountRemoved = vi.fn();
     plugin.lifecycle = { onAccountRemoved };
 
     await expect(
-      channelsRemoveCommand(
-        { channel: "external-chat", account: "work-phone", delete: true },
-        runtime,
-        { hasFlags: true },
+      withPluginCache(createPluginCache(), () =>
+        channelsRemoveCommand(
+          { channel: "external-chat", account: "work-phone", delete: true },
+          runtime,
+          { hasFlags: true },
+        ),
       ),
     ).rejects.toThrow('stored keys "work-phone" and "Work Phone"');
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();

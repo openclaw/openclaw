@@ -9,6 +9,7 @@ import {
 } from "../config/config.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -47,9 +48,28 @@ export async function requireValidConfigForWrite(runtime: RuntimeEnv) {
   if (!validateConfigFileSnapshot(read.snapshot, runtime)) {
     return null;
   }
-  const { adoptCommandConfigSnapshotMetadata } = await import("../cli/command-config-snapshot.js");
-  adoptCommandConfigSnapshotMetadata(read.snapshot, read.writeOptions.basePluginMetadataSnapshot);
   return read;
+}
+
+export type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
+
+/** Each command phase owns prepared facts; installation ends the preceding metadata scope. */
+export async function withCommandPluginMetadata<T>(
+  params: { config: OpenClawConfig; workspaceDir?: string; snapshot?: PluginMetadataSnapshot },
+  run: () => T,
+): Promise<T> {
+  const [
+    { completePluginMetadataSnapshot, resolvePluginMetadataSnapshot },
+    { withPluginMetadataSnapshotScope },
+  ] = await Promise.all([
+    import("../plugins/plugin-metadata-snapshot.js"),
+    import("../plugins/current-plugin-metadata-snapshot.js"),
+  ]);
+  const snapshot = completePluginMetadataSnapshot(params) ?? resolvePluginMetadataSnapshot(params);
+  return withPluginMetadataSnapshotScope(snapshot, run, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
 }
 
 function validateConfigFileSnapshot(

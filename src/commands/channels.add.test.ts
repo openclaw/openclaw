@@ -4,7 +4,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { defineChannelSetupContract } from "../channels/plugins/setup-contract.js";
-import { patchScopedAccountConfig } from "../channels/plugins/setup-helpers.js";
+import {
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "../channels/plugins/setup-helpers.js";
 import type { SetupChannelsOptions } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -12,7 +15,11 @@ import { resolveMergedAccountConfig } from "../config/channel-account-config.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginPackageChannelCliOption } from "../plugins/manifest.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { WizardSession } from "../wizard/session.js";
@@ -779,6 +786,75 @@ describe("channelsAddCommand", () => {
     expect(setupOptions()).not.toHaveProperty("initialSelection");
     expect(setupOptions()).not.toHaveProperty("finishAfterInitialSelection");
     expect(setupOptions().deferDeviceLinkToClient).toBe(true);
+  });
+
+  it("runChannelsSetupWizard renames the stored Signal account after hosted setup without creating a name-only account", async () => {
+    const config: OpenClawConfig = {
+      channels: {
+        signal: {
+          accounts: { "Work Phone": { account: "+12025550123", name: "Old name" } },
+        },
+      },
+    };
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "signal",
+        config: {
+          resolveAccount: (cfg, accountId) =>
+            resolveChannelAccountEntry(
+              cfg.channels?.signal?.accounts,
+              normalizeAccountId(accountId),
+              "signal",
+            ),
+        },
+      }),
+      setup: {
+        applyAccountName: (params) =>
+          applyAccountNameToChannelSection({ ...params, channelKey: "signal" }),
+        applyAccountConfig: ({ cfg }) => cfg,
+      },
+    };
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "signal",
+          channels: ["signal"],
+          channelAccountKeyPolicies: {
+            signal: { canonicalAliasesRequireOwnField: "account" },
+          },
+        },
+      ],
+    });
+    const resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+      .mockReturnValue(snapshot);
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
+    channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+      const options = args[3] as SetupChannelsOptions;
+      options.onSelection?.(["signal"]);
+      options.onAccountId?.("signal", "work-phone");
+      options.onResolvedPlugin?.("signal", plugin);
+      return config;
+    });
+    channelWizardMocks.prompter.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    channelWizardMocks.prompter.text.mockResolvedValueOnce("Work calls");
+
+    try {
+      await using cache = createPluginCache();
+      await withPluginCache(cache, () =>
+        runChannelsSetupWizard({}, runtime, channelWizardMocks.prompter),
+      );
+
+      expect(channelWizardMocks.prompter.text).toHaveBeenCalledWith({
+        message: 'signal display name for account "work-phone"',
+        initialValue: "Old name",
+      });
+      expect(writtenChannel("signal")).toEqual({
+        accounts: { "Work Phone": { account: "+12025550123", name: "Work calls" } },
+      });
+    } finally {
+      resolveMetadata.mockRestore();
+    }
   });
 
   it.each(["authority", "write"] as const)(

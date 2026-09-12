@@ -114,6 +114,51 @@ export function getPluginCacheRetention(cache: PluginCache): Promise<void> | und
   return retained?.references.size ? retained.settled.promise : undefined;
 }
 
+function createPluginMetadataCache(): PluginCache["metadata"] {
+  return {
+    current: {
+      snapshot: undefined,
+      owner: "operation",
+      configFingerprint: undefined,
+      envFingerprint: undefined,
+      defaultDiscoveryCompatible: false,
+      compatiblePolicyHashes: undefined,
+      compatibleConfigFingerprints: undefined,
+      revision: Symbol("plugin-metadata-snapshot"),
+      configIdentities: new WeakSet(),
+    },
+    snapshots: new Map(),
+    discovery: new Map(),
+    projections: new WeakMap(),
+    projectionSources: new WeakMap(),
+    completions: new WeakMap(),
+    indexFacts: new WeakMap(),
+    channelAdapters: new WeakMap(),
+    bundledChannelCatalogs: new Map(),
+    staticCatalogStates: new WeakMap(),
+    modelSuppressionResolvers: new WeakMap(),
+  };
+}
+
+/** Invalidate discovery facts without retiring callbacks owned by this operation. */
+export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.metadata = createPluginMetadataCache();
+  for (const root of cache.roots.values()) {
+    root.files.clear();
+    root.checkedEntries.clear();
+    root.paths.clear();
+    root.directory = undefined;
+    root.artifacts.clear();
+    root.runtimeArtifacts.clear();
+    root.entryBoundaries.clear();
+    root.entryPaths.clear();
+  }
+  cache.rootAliases.clear();
+  cache.installRecords.clear();
+  cache.persistedInstalledIndex.clear();
+  cache.dependencyStatus = new WeakMap();
+}
+
 /** Each inventory owns its acquired facts and reusable load results; publication owns activation. */
 export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}): PluginCache {
   return {
@@ -126,29 +171,7 @@ export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}):
     sdk: createPluginCacheSdk(),
     setupModules: new Map(),
     instances: new Set(),
-    metadata: {
-      current: {
-        snapshot: undefined,
-        owner: "operation",
-        configFingerprint: undefined,
-        envFingerprint: undefined,
-        defaultDiscoveryCompatible: false,
-        compatiblePolicyHashes: undefined,
-        compatibleConfigFingerprints: undefined,
-        revision: Symbol("plugin-metadata-snapshot"),
-        configIdentities: new WeakSet(),
-      },
-      snapshots: new Map(),
-      discovery: new Map(),
-      projections: new WeakMap(),
-      projectionSources: new WeakMap(),
-      completions: new WeakMap(),
-      indexFacts: new WeakMap(),
-      channelAdapters: new WeakMap(),
-      bundledChannelCatalogs: new Map(),
-      staticCatalogStates: new WeakMap(),
-      modelSuppressionResolvers: new WeakMap(),
-    },
+    metadata: createPluginMetadataCache(),
     installRecords: new Map(),
     persistedInstalledIndex: new Map(),
     dependencyStatus: new WeakMap(),
