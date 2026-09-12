@@ -1,6 +1,7 @@
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -139,6 +140,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
                   class="sidebar-attachment-preview__markdown sidebar-markdown-reader sidebar-markdown"
                   dir=${detectTextDirection(this.text)}
                   aria-label=${this.label}
+                  ${markdownBlocks()}
                 >
                   ${unsafeHTML(
                     toSanitizedMarkdownHtml(this.text, {
