@@ -664,6 +664,117 @@ describe("worker environment service", () => {
     expect(order).toEqual(["node-desktop-stop", "provider-destroy"]);
   });
 
+  it.each([
+    ["stale receipt", { ...support.BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) }, undefined],
+    ["unavailable current bundle", support.BOOTSTRAP_RECEIPT, new Error("bundle unavailable")],
+  ] as const)("rejects desktop observe with %s", async (_name, receipt, prepareError) => {
+    const environmentId = "worker-desktop-observe-stale-build";
+    support.seedReadyDesktop(environmentId, undefined, receipt);
+    if (prepareError) {
+      support.testState.prepareInstallation = vi.fn(async () => {
+        throw prepareError;
+      });
+    }
+    const acquire = vi.fn();
+    const tunnelManager = {
+      desktop: {
+        acquire,
+        attachObserver: vi.fn(),
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      },
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+
+    await expect(
+      workerService.observeDesktop({ environmentId, control: true }),
+    ).rejects.toMatchObject({
+      code: "invalid_state",
+      message: prepareError
+        ? "Current worker build identity is unavailable"
+        : STALE_WORKER_BUILD_REASON,
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["stale receipt", { ...support.BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) }, undefined],
+    ["unavailable current bundle", support.BOOTSTRAP_RECEIPT, new Error("bundle unavailable")],
+  ] as const)("rejects desktop app launch with %s", async (_name, receipt, prepareError) => {
+    const environmentId = "worker-desktop-launch-stale-build";
+    support.seedReadyDesktop(environmentId, undefined, receipt);
+    if (prepareError) {
+      support.testState.prepareInstallation = vi.fn(async () => {
+        throw prepareError;
+      });
+    }
+    const launchApp = vi.fn();
+    const tunnelManager = {
+      desktop: {
+        acquire: vi.fn(),
+        attachObserver: vi.fn(),
+        launchApp,
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      },
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+
+    await expect(
+      workerService.launchDesktopApp({ environmentId, app: "browser" }),
+    ).rejects.toMatchObject({
+      code: "invalid_state",
+      message: prepareError
+        ? "Current worker build identity is unavailable"
+        : STALE_WORKER_BUILD_REASON,
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(launchApp).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale node-backed desktop before reaching the durable carrier", async () => {
+    const environmentId = "worker-node-desktop-stale-build";
+    support.seedReadyNodeDesktop(environmentId, undefined, {
+      ...support.BOOTSTRAP_RECEIPT,
+      bundleHash: "c".repeat(64),
+    });
+    const observe = vi.fn();
+    const launchApp = vi.fn();
+    const nodeDesktopCarrier = {
+      bindRuntime: vi.fn(),
+      observe,
+      launchApp,
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerNodeDesktopCarrier;
+    const workerService = support.createService(support.createProvider(), {
+      nodeDesktopCarrier,
+    });
+
+    await expect(
+      workerService.observeDesktop({ environmentId, control: true }),
+    ).rejects.toMatchObject({
+      code: "invalid_state",
+      message: STALE_WORKER_BUILD_REASON,
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(observe).not.toHaveBeenCalled();
+
+    await expect(
+      workerService.launchDesktopApp({ environmentId, app: "browser" }),
+    ).rejects.toMatchObject({
+      code: "invalid_state",
+      message: STALE_WORKER_BUILD_REASON,
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(launchApp).not.toHaveBeenCalled();
+  });
+
   it("rejects desktop observe for invalid lifecycle gates and a stopped service", async () => {
     const tunnelManager = {
       desktop: {

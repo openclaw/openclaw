@@ -343,6 +343,9 @@ export async function createPairedNodeWorkerHost(
   let client: GatewayClient | undefined;
   let closing = false;
   const invokeTasks = new Set<Promise<void>>();
+  // Desktop and portal stream commands ride the private worker transport and
+  // require the host's runtime signal, exactly like the production node host.
+  const hostLifetime = new AbortController();
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
@@ -391,6 +394,7 @@ export async function createPairedNodeWorkerHost(
     options.onInvoke?.(frame);
     const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
       workerBundleInstaller: bundleInstaller,
+      signal: hostLifetime.signal,
       workerSupervisor: supervisor,
       workerWorkspace: workspace,
       gatewayUrl:
@@ -504,6 +508,7 @@ export async function createPairedNodeWorkerHost(
     },
     async stop() {
       closing = true;
+      hostLifetime.abort(new Error("paired worker node stopped"));
       const current = client;
       client = undefined;
       const connectionCleanup = await Promise.allSettled([

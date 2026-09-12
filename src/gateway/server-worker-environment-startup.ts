@@ -129,6 +129,14 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   startup: GatewayWorkerEnvironmentStartupState;
   log: WorkerEnvironmentLogger;
+  /**
+   * Overrides the worker bundle producer used to resolve the current build
+   * identity. Defaults to packaging the running tree on first use. Process
+   * embedders and tests that run from an unpackaged checkout supply a producer
+   * here so admission checks (startTunnel, desktop observe/launch) can resolve
+   * a deterministic current build without a built worker artifact.
+   */
+  workerBundleProducer?: WorkerBundleProducer;
 }): Promise<GatewayWorkerEnvironmentRuntime> {
   const deviceRuntime = createDeviceWorkerRuntime({ getPairedDevice });
   const [
@@ -196,13 +204,15 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       loadWorkerEnvironmentRuntimeModule(),
       import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
     ]);
-    const producer = (workerBundleProducer ??= workerRuntime.createWorkerBundleProducer({
-      protocolFeatures: WORKER_PROTOCOL_FEATURES,
-      cacheOwnership: "exclusive",
-      onCacheCleanupError: (error) => {
-        workerEnvironmentLog.warn(`Worker bundle cache cleanup failed: ${String(error)}`);
-      },
-    }));
+    const producer = (workerBundleProducer ??= params.workerBundleProducer
+      ? params.workerBundleProducer
+      : workerRuntime.createWorkerBundleProducer({
+          protocolFeatures: WORKER_PROTOCOL_FEATURES,
+          cacheOwnership: "exclusive",
+          onCacheCleanupError: (error) => {
+            workerEnvironmentLog.warn(`Worker bundle cache cleanup failed: ${String(error)}`);
+          },
+        }));
     const bundle = await producer.prepare();
     await producer.prune(listRetainedBundleHashes());
     if (install === "bundle") {

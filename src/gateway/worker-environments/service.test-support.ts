@@ -307,7 +307,11 @@ export function seedReady(
   });
 }
 
-export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEndpoint = DESKTOP) {
+export function seedReadyDesktop(
+  environmentId: string,
+  desktop: WorkerDesktopEndpoint = DESKTOP,
+  receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
+) {
   const intent = testState.store.createIntent({
     environmentId,
     providerId: "fake",
@@ -334,13 +338,14 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
     environmentId,
     from: bootstrapping.state,
     to: "ready",
-    patch: readyPatch(environmentId),
+    patch: readyPatch(environmentId, receipt),
   });
 }
 
 export function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
+  receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
 ) {
   const intent = testState.store.createIntent({
     environmentId,
@@ -363,7 +368,7 @@ export function seedReadyNodeDesktop(
       nodeDeviceId: `node:${environmentId}`,
       sshEndpoint: null,
       desktop,
-      ...readyPatch(environmentId),
+      ...readyPatch(environmentId, receipt),
     },
   });
 }

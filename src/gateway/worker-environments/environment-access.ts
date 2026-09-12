@@ -93,6 +93,26 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     return { record, desktop: record.desktop, leaseId: record.leaseId };
   };
 
+  const prepareCurrentBuild = async (): Promise<ExpectedWorkerBuild> => {
+    try {
+      return await options.prepareCurrentBundle();
+    } catch {
+      throw serviceError("invalid_state", "Current worker build identity is unavailable");
+    }
+  };
+
+  const requireAdmittedBuild = (
+    record: WorkerEnvironmentRecord,
+    currentBundle: ExpectedWorkerBuild,
+  ) => {
+    if (
+      !record.bootstrapReceipt ||
+      !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
+    ) {
+      throw new StaleWorkerBuildError();
+    }
+  };
+
   const project = (record: WorkerEnvironmentRecord) => {
     const desktopAvailable =
       inState(record, "ready", "idle", "attached") && record.desktop !== null;
@@ -319,9 +339,15 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     let startup: ReturnType<WorkerTunnelManager["desktop"]["acquire"]> | undefined;
     let nodeStartup: ReturnType<WorkerNodeDesktopCarrier["observe"]> | undefined;
     let ownerEpoch: number | undefined;
+    // Prepare the current bundle outside the lock (process-stable metadata), then
+    // admit the freshly read durable record against it, mirroring startTunnel and
+    // attachSession: a worker bootstrapped against a superseded bundle is refused
+    // before any desktop transport or launcher side effect.
+    const currentBundle = await prepareCurrentBuild();
     await withLock(request.environmentId, async () => {
       const { record, desktop, leaseId } = requireDesktopRecord(request.environmentId);
       ownerEpoch = record.ownerEpoch;
+      requireAdmittedBuild(record, currentBundle);
       if (record.sshEndpoint) {
         if (!tunnels) {
           throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
@@ -403,9 +429,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
 
     let startup: Promise<void> | undefined;
     let launchEpoch: number | undefined;
+    const currentBundle = await prepareCurrentBuild();
     await withLock(request.environmentId, async () => {
       const { app, record, leaseId } = requireLaunchable();
       launchEpoch = record.ownerEpoch;
+      requireAdmittedBuild(record, currentBundle);
       if (record.sshEndpoint) {
         if (!tunnels) {
           throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
