@@ -1259,6 +1259,13 @@ async function inspectNpmGlobalOwner(
   timeoutMs: number,
   diagnostics: string[],
 ): Promise<boolean> {
+  const layout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(
+    inferGlobalRootFromPackageRoot(pkgRoot),
+  );
+  if (!layout) {
+    diagnostics.push("npm install layout: no global prefix");
+    return false;
+  }
   const command = resolvePreferredGlobalManagerCommand("npm", pkgRoot);
   const executable = resolveExecutablePath(command);
   const cli = executable
@@ -1293,13 +1300,6 @@ async function inspectNpmGlobalOwner(
     }
   }
 
-  const layout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(
-    inferGlobalRootFromPackageRoot(pkgRoot),
-  );
-  if (!layout) {
-    diagnostics.push("npm install layout: no global prefix");
-    return false;
-  }
   diagnostics.push(`npm install prefix: ${layout.prefix}`);
   const launcher = path.join(
     layout.binDir,
