@@ -2015,6 +2015,80 @@ public struct AuditActivityOutboundMessageV1: Codable, Sendable {
     }
 }
 
+public struct AuditActivitySkillSelectionV1: Codable, Sendable {
+    public let eventtype: String
+    public let schemaversion: Int
+    public let eventid: String
+    public let sequence: Int
+    public let sourcesequence: Int
+    public let occurredat: Int
+    public let redaction: String
+    public let actor: [String: AnyCodable]
+    public let agentid: String
+    public let sessionkey: String?
+    public let sessionid: String?
+    public let runid: String
+    public let kind: String
+    public let action: String
+    public let status: String
+    public let selectedskill: String
+
+    public init(
+        eventtype: String,
+        schemaversion: Int,
+        eventid: String,
+        sequence: Int,
+        sourcesequence: Int,
+        occurredat: Int,
+        redaction: String,
+        actor: [String: AnyCodable],
+        agentid: String,
+        sessionkey: String? = nil,
+        sessionid: String? = nil,
+        runid: String,
+        kind: String,
+        action: String,
+        status: String,
+        selectedskill: String)
+    {
+        self.eventtype = eventtype
+        self.schemaversion = schemaversion
+        self.eventid = eventid
+        self.sequence = sequence
+        self.sourcesequence = sourcesequence
+        self.occurredat = occurredat
+        self.redaction = redaction
+        self.actor = actor
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.runid = runid
+        self.kind = kind
+        self.action = action
+        self.status = status
+        self.selectedskill = selectedskill
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case eventtype = "eventType"
+        case schemaversion = "schemaVersion"
+        case eventid = "eventId"
+        case sequence
+        case sourcesequence = "sourceSequence"
+        case occurredat = "occurredAt"
+        case redaction
+        case actor
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case runid = "runId"
+        case kind
+        case action
+        case status
+        case selectedskill = "selectedSkill"
+    }
+}
+
 public struct AuditActivityToolActionV1: Codable, Sendable {
     public let eventtype: String
     public let schemaversion: Int
@@ -25361,6 +25435,7 @@ public enum ApprovalSnapshot: Codable, Sendable {
 public enum AuditActivityEventV1: Codable, Sendable {
     case agentRun(AuditActivityAgentRunV1)
     case toolAction(AuditActivityToolActionV1)
+    case skillSelection(AuditActivitySkillSelectionV1)
     case inboundMessage(AuditActivityInboundMessageV1)
     case outboundMessage(AuditActivityOutboundMessageV1)
 
@@ -25374,6 +25449,7 @@ public enum AuditActivityEventV1: Codable, Sendable {
         switch discriminator {
         case "agent_run": self = try .agentRun(AuditActivityAgentRunV1(from: decoder))
         case "tool_action": self = try .toolAction(AuditActivityToolActionV1(from: decoder))
+        case "skill_selection": self = try .skillSelection(AuditActivitySkillSelectionV1(from: decoder))
         case "inbound_message": self = try .inboundMessage(AuditActivityInboundMessageV1(from: decoder))
         case "outbound_message": self = try .outboundMessage(AuditActivityOutboundMessageV1(from: decoder))
         default:
@@ -25389,6 +25465,7 @@ public enum AuditActivityEventV1: Codable, Sendable {
         switch self {
         case .agentRun(let value): try value.encode(to: encoder)
         case .toolAction(let value): try value.encode(to: encoder)
+        case .skillSelection(let value): try value.encode(to: encoder)
         case .inboundMessage(let value): try value.encode(to: encoder)
         case .outboundMessage(let value): try value.encode(to: encoder)
         }

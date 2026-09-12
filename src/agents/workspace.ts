@@ -1352,15 +1352,19 @@ function resolveBootstrapSessionContext(
   return typeof session === "string" ? { sessionKey: session } : (session ?? {});
 }
 
+const ROOT_MEMORY_ONLY = new Set([DEFAULT_MEMORY_FILENAME]);
+
 function filterRootMemoryBootstrapFiles(
   files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
 ): WorkspaceBootstrapFile[] {
   if (!workspaceRoot) {
-    return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
+    return files.filter((file) => !ROOT_MEMORY_ONLY.has(file.name));
   }
   const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
-  const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
+  const rootMemoryPaths = new Set(
+    [...ROOT_MEMORY_ONLY].map((name) => path.join(resolvedWorkspaceRoot, name)),
+  );
   return files.filter((file) => {
     if (typeof file.path !== "string") {
       return true;
@@ -1374,7 +1378,7 @@ function filterRootMemoryBootstrapFiles(
       : filePath.startsWith("~")
         ? resolveUserPath(filePath)
         : path.resolve(resolvedWorkspaceRoot, filePath);
-    return resolvedPath !== rootMemoryPath;
+    return !rootMemoryPaths.has(resolvedPath);
   });
 }
 
@@ -1386,8 +1390,8 @@ export function filterBootstrapFilesForSession(
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
   const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  const isNonPrivate =
-    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
+  const isSharedContext = effectiveChatType === "group" || effectiveChatType === "channel";
+  const isNonPrivate = isSubagent || isCron || isSharedContext;
   const privacyFilteredFiles = isNonPrivate
     ? filterRootMemoryBootstrapFiles(files, workspaceDir)
     : files;
