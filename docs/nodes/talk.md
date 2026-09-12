@@ -94,6 +94,7 @@ with your own values.
     },
     speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
+    idleTimeoutS: 30,
     interruptOnSpeech: true,
     realtime: {
       provider: "openai",
@@ -185,6 +186,7 @@ and unlisted GPT-Live routes remain Platform-key-only.
 | `providers.mlx.referenceText`            | -                                           | Exact transcript of `referenceAudioPath`; Fish S2 Pro uses both values for local voice cloning.                                                                                                                                                                |
 | `providers.elevenlabs.apiKey`            | -                                           | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                    |
 | `silenceTimeoutMs`                       | `700` ms macOS/Android, `900` ms iOS        | Pause window before Talk sends the transcript.                                                                                                                                                                                                                 |
+| `idleTimeoutS`                           | unset (disabled)                           | macOS: seconds of no recognized user speech or assistant reply before Talk deactivates. Raw microphone energy does not reset the timer. Active assistant playback pauses the idle deadline. If Voice Wake is enabled, wake-word listening resumes after teardown. iOS and Android ignore this field. |
 | `interruptOnSpeech`                      | `true`                                      |                                                                                                                                                                                                                                                                |
 | `providers.<id>.outputFormat`            | `pcm_44100` macOS/iOS, `pcm_24000` Android  | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                            |
 | `consultThinkingLevel`                   | unset                                       | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                      |

@@ -14,6 +14,7 @@ sidebarTitle: "macOS and Gateway relay"
 - **Listening &rarr; Thinking &rarr; Speaking** phase transitions.
 - Phase notifications are best-effort: a failed update does not start the local Gateway or restart its tunnel. Starting Talk retains normal connection recovery.
 - On a short pause (silence window), the current transcript is sent.
+- Optional `idleTimeoutS`: if there is no recognized user speech or assistant reply for that many seconds, Talk deactivates. Raw microphone energy does not count as interaction. Active assistant playback pauses the idle deadline; stalled thinking or reply waits remain bounded. If Voice Wake is enabled, wake-word listening resumes after teardown.
 - Replies are written to WebChat (same as typing).
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
 
