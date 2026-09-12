@@ -155,6 +155,7 @@ export async function resolvePluginInstallPreflight(
     rawSpec: raw,
     marketplace,
     source: sourcePlan?.request.source,
+    localPath: sourcePlan?.localPath,
   });
   if (!requestResolution.ok) {
     return requestResolution;

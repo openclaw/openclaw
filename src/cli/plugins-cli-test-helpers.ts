@@ -10,6 +10,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { invokePluginArtifactInstallMock } from "../plugins/test-helpers/install-fixtures.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
@@ -493,29 +494,13 @@ function createPluginsCliMetadataSnapshot(
     ...params,
     installRecords: records,
   }) as import("../plugins/manifest-registry.js").PluginManifestRegistry;
-  const plugins = manifestRegistry.plugins;
-  return {
-    index: createTestInstalledPluginIndex({
-      policyHash: "test",
-      installRecords: records,
-      plugins: plugins.map((plugin) => ({
-        pluginId: plugin.id,
-        installOwner: plugin.id,
-        origin: plugin.origin,
-        rootDir: plugin.rootDir,
-        manifestPath: plugin.manifestPath,
-        manifestHash: "test",
-        startup: { sidecar: false, memory: false, agentHarnesses: [] },
-        compat: [],
-        enabled: true,
-      })),
-    }),
-    manifestRegistry,
-    plugins,
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    diagnostics: [],
-    normalizePluginId: (id: string) => id,
-  };
+  const snapshot = createPluginMetadataSnapshotFixture(manifestRegistry);
+  snapshot.index.installRecords = records;
+  snapshot.index.plugins = snapshot.index.plugins.map((plugin) => ({
+    ...plugin,
+    installOwner: plugin.pluginId,
+  }));
+  return snapshot;
 }
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({

@@ -141,6 +141,7 @@ describe("loadConfigForInstall", () => {
       const registry = resolvePluginInstallRequestContext({
         rawSpec: "fixture-package",
         source: "npm",
+        localPath,
       });
       expect(registry).toMatchObject({ ok: true });
       if (!registry.ok) {

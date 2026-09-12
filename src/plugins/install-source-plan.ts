@@ -2,14 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
 import { parseGitPluginSpec } from "./git-install.js";
@@ -19,6 +17,10 @@ import {
   type NonClawHubInstallSourceClass,
 } from "./install-provenance.js";
 import {
+  isBareNpmPackageName,
+  isSourceCheckoutBundledPath,
+  resolveBundledInstallPlanBeforeNpm,
+  type BundledLookup,
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
   resolveFileNpmSpecToLocalPath,
@@ -64,11 +66,6 @@ export function pluginInstallRequiresLocalHost(request: PluginsInstallParams): b
   return false;
 }
 
-type BundledLookup = (params: {
-  kind: "pluginId" | "npmSpec";
-  value: string;
-}) => BundledPluginSource | undefined;
-
 type PluginInstallSourcePlan =
   | { ok: false; error: string }
   | {
@@ -76,6 +73,7 @@ type PluginInstallSourcePlan =
       request: PluginsInstallParams;
       warning?: string;
       allowBundledFallback?: boolean;
+      localPath?: string;
       acknowledgement?: { sourceClass: NonClawHubInstallSourceClass; spec: string };
     };
 
@@ -83,7 +81,7 @@ function sourcePlan(
   request: PluginsInstallParams,
   raw: string,
   sourceClass?: NonClawHubInstallSourceClass,
-  metadata: { warning?: string; allowBundledFallback?: boolean } = {},
+  metadata: { warning?: string; allowBundledFallback?: boolean; localPath?: string } = {},
 ): PluginInstallSourcePlan {
   return {
     ok: true,
@@ -187,13 +185,10 @@ export function resolvePluginInstallSourcePlan(params: {
   }
 
   const npmSpec = explicitNpm ?? params.raw;
-  const bundledPlan =
-    explicitNpm === null
-      ? resolveBundledInstallPlanBeforeNpm({
-          rawSpec: params.raw,
-          findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-        })
-      : null;
+  const bundledPlan = resolveBundledInstallPlanBeforeNpm({
+    rawSpec: params.raw,
+    findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+  });
   if (bundledPlan) {
     return sourcePlan(
       {
@@ -203,7 +198,7 @@ export function resolvePluginInstallSourcePlan(params: {
       },
       params.raw,
       undefined,
-      { warning: bundledPlan.warning },
+      { warning: bundledPlan.warning, localPath: bundledPlan.bundledSource.localPath },
     );
   }
   const official =
@@ -232,36 +227,6 @@ export function resolvePluginInstallSourcePlan(params: {
     trusted ? undefined : "npm",
     { allowBundledFallback: explicitNpm === null },
   );
-}
-
-function isBareNpmPackageName(spec: string): boolean {
-  return /^[a-z0-9][a-z0-9-._~]*$/.test(spec.trim());
-}
-
-function isSourceCheckoutBundledPath(localPath: string): boolean {
-  const extensionsDir = path.dirname(path.resolve(localPath));
-  if (path.basename(extensionsDir) !== "extensions") {
-    return false;
-  }
-  const extensionsParent = path.dirname(extensionsDir);
-  const packageRoot = ["dist", "dist-runtime"].includes(path.basename(extensionsParent))
-    ? path.dirname(extensionsParent)
-    : extensionsParent;
-  try {
-    const packageJson: unknown = JSON.parse(
-      fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
-    );
-    return (
-      isRecord(packageJson) &&
-      packageJson.name === "openclaw" &&
-      fs.existsSync(path.join(packageRoot, ".git")) &&
-      fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
-      fs.existsSync(path.join(packageRoot, "src")) &&
-      fs.existsSync(path.join(packageRoot, "extensions"))
-    );
-  } catch {
-    return false;
-  }
 }
 
 export function resolveBundledInstallPlanForCatalogEntry(params: {
@@ -295,56 +260,6 @@ export function resolveBundledInstallPlanForCatalogEntry(params: {
   }
 
   return { bundledSource: bundledById };
-}
-
-function resolveBundledInstallPlanBeforeNpm(params: {
-  rawSpec: string;
-  findBundledSource: BundledLookup;
-}): { bundledSource: BundledPluginSource; warning: string } | null {
-  // Bundled plugin ids win before npm lookup so local official plugins do not hit the registry.
-  const rawSpec = params.rawSpec.trim();
-  if (!rawSpec) {
-    return null;
-  }
-  if (isBareNpmPackageName(rawSpec)) {
-    const bundledSource = params.findBundledSource({
-      kind: "pluginId",
-      value: rawSpec,
-    });
-    if (!bundledSource) {
-      return null;
-    }
-    return {
-      bundledSource,
-      warning: `Using bundled plugin "${bundledSource.pluginId}" from ${shortenHomePath(bundledSource.localPath)} for bare install spec "${rawSpec}". To install an npm package with the same name, use a scoped package name (for example @scope/${rawSpec}).`,
-    };
-  }
-
-  const parsedNpmSpec = parseRegistryNpmSpec(rawSpec);
-  if (!parsedNpmSpec) {
-    return null;
-  }
-  const bundledSource =
-    params.findBundledSource({
-      kind: "npmSpec",
-      value: rawSpec,
-    }) ??
-    params.findBundledSource({
-      kind: "npmSpec",
-      value: parsedNpmSpec.name,
-    });
-  if (!bundledSource) {
-    return null;
-  }
-  // Bare IDs already selected local source above. Npm package requests must not
-  // persist disposable source-checkout build output; packaged bundles remain image-owned.
-  if (isSourceCheckoutBundledPath(bundledSource.localPath)) {
-    return null;
-  }
-  return {
-    bundledSource,
-    warning: `Using bundled plugin "${bundledSource.pluginId}" from ${shortenHomePath(bundledSource.localPath)} for npm install spec "${rawSpec}" because this plugin ships with the current OpenClaw build. To force an external npm override, use npm:${rawSpec}.`,
-  };
 }
 
 export function resolveBundledInstallPlanForNpmFailure(params: {

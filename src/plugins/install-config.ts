@@ -17,7 +17,11 @@ import {
   type ConfigMutationPreflight,
   type ConfigSnapshotForInstallPersist,
 } from "./install-config-mutation.js";
-import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./install-source-spec.js";
+import {
+  parseNpmPrefixSpec,
+  resolveBundledInstallPlanBeforeNpm,
+  resolveFileNpmSpecToLocalPath,
+} from "./install-source-spec.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.js";
 import { loadPluginManifest } from "./manifest.js";
@@ -336,19 +340,6 @@ function resolvePluginInstallRecoveryMetadata(
       allowInvalidConfigRecovery: install?.allowInvalidConfigRecovery === true,
     };
   }
-  for (const value of [rawSpec.trim(), npmPrefixSpec ?? ""]) {
-    if (!value) {
-      continue;
-    }
-    const bundled = findBundledPluginSource({ lookup: { kind: "npmSpec", value } });
-    if (bundled) {
-      const recovered = readPluginInstallRecoveryMetadata(bundled.localPath);
-      return {
-        pluginId: recovered.pluginId ?? bundled.pluginId,
-        allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery,
-      };
-    }
-  }
   return {};
 }
 
@@ -356,6 +347,7 @@ function resolvePluginInstallRecoveryMetadata(
 export function resolvePluginInstallRequestContext(params: {
   rawSpec: string;
   source?: PluginsInstallParams["source"];
+  localPath?: string;
   marketplace?: string;
   installKind?: "plugin";
 }): PluginInstallRequestResolution {
@@ -377,14 +369,17 @@ export function resolvePluginInstallRequestContext(params: {
     };
   }
   const normalizedSpec = fileSpec && fileSpec.ok ? fileSpec.path : params.rawSpec;
-  const resolvedPath = resolveUserPath(normalizedSpec);
+  const resolvedPath = resolveUserPath(params.localPath ?? normalizedSpec);
   const localPath = params.source
     ? params.source === "local" || params.source === "bundled"
       ? resolvedPath
       : undefined
     : fileSpec || fs.existsSync(resolvedPath)
       ? resolvedPath
-      : undefined;
+      : resolveBundledInstallPlanBeforeNpm({
+          rawSpec: params.rawSpec,
+          findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+        })?.bundledSource.localPath;
   const recovered = resolvePluginInstallRecoveryMetadata(params.rawSpec, localPath);
   return {
     ok: true,
