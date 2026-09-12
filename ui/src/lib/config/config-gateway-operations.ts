@@ -185,7 +185,7 @@ export async function executeConfigExternalMutation<T>(
   const submitted = {
     raw: state.configFormDirty ? state.configRawOriginal : serializeFormForSubmit(state),
     form: state.configFormOriginal,
-    independentSnapshot: state.configSnapshot ?? undefined,
+    independentSnapshot: state.configSnapshot,
   };
   let value: T;
   try {
@@ -244,7 +244,11 @@ export async function executeConfigExternalMutation<T>(
       }
       adoptConfigWriteAck(
         state,
-        { raw: state.configRawOriginal, form: state.configFormOriginal },
+        {
+          raw: state.configRawOriginal,
+          form: state.configFormOriginal,
+          independentSnapshot: snapshot,
+        },
         { config, hash: snapshot.hash },
         { raw: snapshot.raw },
       );
@@ -429,7 +433,7 @@ export async function submitConfigDraft(
     }
     assertConfigDraftCurrent(state);
     const raw = serializeFormForSubmit(state);
-    const submitted = { raw, form: configFormForSubmit(state) };
+    const submitted = { raw, form: configFormForSubmit(state), independentSnapshot: null };
     submittedFormRaw = state.configFormMode === "form" ? raw : null;
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
@@ -512,7 +516,11 @@ export function teardownFlushConfigDraft(
     state.configAutoSaveStatus = isConfigBaseHashConflictError(error) ? "conflict" : "error";
     return;
   }
-  const draft = { raw: serializeFormForSubmit(state), form: configFormForSubmit(state) };
+  const draft = {
+    raw: serializeFormForSubmit(state),
+    form: configFormForSubmit(state),
+    independentSnapshot: null,
+  };
   void client
     .request<ConfigWriteAck>("config.set", { raw: draft.raw, baseHash: ack.hash })
     .then((receipt) => adoptConfigWriteAck(state, draft, receipt))

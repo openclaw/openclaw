@@ -318,7 +318,10 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
 export type ConfigSubmittedDraft = {
   raw: string;
   form: Record<string, unknown> | null;
-  independentSnapshot?: ConfigSnapshot;
+  // Full-draft writes commit raw/form; independent writes do not submit this
+  // shared draft. Supply their pre-write source (the admitted source for a no-op), or
+  // null for a full draft or an independent write before the initial load.
+  independentSnapshot: ConfigSnapshot | null;
 };
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
@@ -394,6 +397,19 @@ function configContentConflicts(
   );
 }
 
+function configFormContentConflicts(
+  original: Record<string, unknown>,
+  current: Record<string, unknown>,
+  canonical: Record<string, unknown>,
+): boolean {
+  const before = projectConfigContent(original, canonical);
+  const draft = projectConfigContent(current, canonical);
+  return (
+    stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
+    stableStringify(replayConfigDraftEdits(before, canonical, draft))
+  );
+}
+
 export function assertConfigDraftCurrent(state: RuntimeConfigState): void {
   const canonical = resolveEditableSnapshotConfig(state.configSnapshot);
   if (!canonical || state.configDraftBaseHash !== state.configSnapshot?.hash) {
@@ -426,7 +442,7 @@ export function adoptConfigWriteAck(
     currentForm &&
     state.configFormOriginal &&
     previous &&
-    configContentConflicts(state.configFormOriginal, currentForm, previous),
+    configFormContentConflicts(state.configFormOriginal, currentForm, previous),
   );
   const draft =
     currentRaw === submitted.raw
