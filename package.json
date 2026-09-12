@@ -2043,6 +2043,8 @@
     "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
     "test:live": "node --import ./scripts/tsx.mjs scripts/test-live.mts",
     "test:live:cache": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/check-live-cache.ts",
+    "test:live:cache:runtime": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_RUNTIME=1 -- node scripts/test-live-shard.mjs runtime-prompt-cache",
+    "test:live:cache:runtime:expanded": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_CACHE_RUNTIME_PROFILE=expanded -- pnpm test:live:cache:runtime",
     "test:live:codex-harness": "node --import ./scripts/tsx.mjs scripts/test-live.mts --codex-harness -- src/gateway/gateway-codex-harness.live.test.ts",
     "test:live:system-agent-rescue-channel": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL=1 -- node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/system-agent/rescue-channel.live.test.ts",
     "test:live:gateway-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/gateway/gateway-models.profiles.live.test.ts",

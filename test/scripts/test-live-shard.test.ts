@@ -30,6 +30,12 @@ import {
   validateLiveShardReportPayload,
 } from "../../scripts/test-live-shard.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import {
+  GATEWAY_PROMPT_CACHE_FILE,
+  GATEWAY_PROMPT_CACHE_SCENARIOS,
+  gatewayPromptCacheCaseId,
+  gatewayPromptCacheModels,
+} from "../e2e/qa-lab/runtime/gateway-prompt-cache-contract.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
 
 describe("scripts/test-live-shard", () => {
@@ -75,6 +81,7 @@ describe("scripts/test-live-shard", () => {
       "native-live-extensions-o-z",
       "native-live-extensions-media",
       "native-live-extensions-media-music",
+      "runtime-prompt-cache",
     ]);
 
     const oToZAlias = selectLiveShardFiles("native-live-extensions-o-z", allFiles);
@@ -92,6 +99,50 @@ describe("scripts/test-live-shard", () => {
         ...selectLiveShardFiles("native-live-extensions-media-music", allFiles),
         ...selectLiveShardFiles("native-live-extensions-media-video", allFiles),
       ].toSorted((a, b) => a.localeCompare(b)),
+    );
+  });
+
+  it("selects only the Gateway prompt-cache suite for its dedicated runner", () => {
+    expect(
+      selectLiveShardFiles("runtime-prompt-cache", [
+        GATEWAY_PROMPT_CACHE_FILE,
+        "src/agents/live-cache-regression.live.test.ts",
+        "test/another.live.test.ts",
+      ]),
+    ).toEqual([GATEWAY_PROMPT_CACHE_FILE]);
+    expect(resolveLiveShardPreparation([GATEWAY_PROMPT_CACHE_FILE])?.profile).toBe(
+      "sourcePerformance",
+    );
+  });
+
+  it("requires every enabled runtime cache matrix cell, not a green aggregate or sentinel", () => {
+    const assertions = gatewayPromptCacheModels().flatMap((model) =>
+      GATEWAY_PROMPT_CACHE_SCENARIOS.map((scenario) => ({
+        title: gatewayPromptCacheCaseId(model, scenario),
+        status: "passed",
+      })),
+    );
+    const validate = (results: unknown[], enabled: boolean) =>
+      validateLiveShardReportPayload(
+        {
+          numPassedTests: 7,
+          numTotalTests: 7,
+          testResults: [
+            { name: GATEWAY_PROMPT_CACHE_FILE, assertionResults: results },
+            { name: "test/other.live.test.ts", assertionResults: [{ status: "passed" }] },
+          ],
+        },
+        [GATEWAY_PROMPT_CACHE_FILE, "test/other.live.test.ts"],
+        process.cwd(),
+        enabled ? { OPENCLAW_LIVE_CACHE_RUNTIME: "1" } : {},
+      );
+    expect(validate(assertions, true)).toEqual({ ok: true });
+    expect(validate(assertions.slice(1), true).ok).toBe(false);
+    expect(validate([{ title: "disabled runtime cache opt-in", status: "passed" }], true).ok).toBe(
+      false,
+    );
+    expect(validate([{ title: "disabled runtime cache opt-in", status: "passed" }], false)).toEqual(
+      { ok: true },
     );
   });
 

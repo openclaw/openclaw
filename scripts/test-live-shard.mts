@@ -6,6 +6,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asSafeIntegerInRange } from "../packages/normalization-core/src/number-coercion.ts";
 import { isRecord as isUnknownRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import {
+  GATEWAY_PROMPT_CACHE_FILE,
+  validateGatewayPromptCacheAssertions,
+} from "../test/e2e/qa-lab/runtime/gateway-prompt-cache-contract.ts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { RUNTIME_POSTBUILD_STAMP_FILE } from "./lib/local-build-metadata-paths.mts";
 import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
@@ -17,6 +21,7 @@ import {
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
+  [GATEWAY_PROMPT_CACHE_FILE, ["OPENCLAW_LIVE_CACHE_RUNTIME"]],
   [
     "extensions/codex/src/app-server/native-subagent-monitor.live.test.ts",
     ["OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT"],
@@ -97,6 +102,7 @@ export const LIVE_TEST_SHARDS = Object.freeze([
   "native-live-extensions-o-z",
   "native-live-extensions-media",
   "native-live-extensions-media-music",
+  "runtime-prompt-cache",
 ]);
 
 function walkFiles(rootDir: string) {
@@ -314,6 +320,8 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
       return files.filter((file) => file.startsWith("src/infra/"));
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
+    case "runtime-prompt-cache":
+      return files.filter((file) => file === GATEWAY_PROMPT_CACHE_FILE);
     case "native-live-extensions-a-k":
       return files.filter((file) => isExtensionInRange(file, "a", "k"));
     case "native-live-extensions-l-n":
@@ -674,6 +682,27 @@ export function validateLiveShardReportPayload(
         ok: false,
         reason: `Vitest report selected live test files had no passing assertions: ${noPassFiles.join(", ")}`,
       };
+    }
+    if (
+      expectedFiles.includes(GATEWAY_PROMPT_CACHE_FILE) &&
+      env.OPENCLAW_LIVE_CACHE_RUNTIME === "1"
+    ) {
+      const assertions = (Array.isArray(payload.testResults) ? payload.testResults : [])
+        .filter(
+          (result) =>
+            isUnknownRecord(result) &&
+            typeof result.name === "string" &&
+            normalizeReportFilePath(result.name, repoRoot) === GATEWAY_PROMPT_CACHE_FILE,
+        )
+        .flatMap((result) =>
+          isUnknownRecord(result) && Array.isArray(result.assertionResults)
+            ? result.assertionResults
+            : [],
+        );
+      return validateGatewayPromptCacheAssertions(
+        assertions,
+        env.OPENCLAW_LIVE_CACHE_RUNTIME_PROFILE,
+      );
     }
   }
   return { ok: true };
