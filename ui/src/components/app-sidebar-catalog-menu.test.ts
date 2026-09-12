@@ -13,6 +13,7 @@ describe("SidebarCatalogMenuController", () => {
       beforeOpen: () => order.push("open"),
       requestUpdate: vi.fn(),
       terminalAvailable: () => true,
+      openTerminal: vi.fn(),
       navigate: vi.fn(),
       beginMutation: vi.fn(),
       isMutationCurrent: vi.fn(),

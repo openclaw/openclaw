@@ -123,7 +123,7 @@ describe("personal model accounts", () => {
           type: "api_key",
           provider: "xai",
           key: "  synthetic-personal-api-key\r\n",
-          displayName: "Personal Grok",
+          displayName: `${"x".repeat(255)}🤖`,
           metadata: { account: "synthetic-account" },
         },
         assertCurrent() {},
@@ -137,7 +137,7 @@ describe("personal model accounts", () => {
       type: "api_key",
       provider: "xai",
       key: "synthetic-personal-api-key",
-      displayName: "Personal Grok",
+      displayName: `${"x".repeat(255)}🤖`,
       metadata: { account: "synthetic-account" },
     });
     expect(listUserModelAccounts({ profileId: alice.id }, options)).toEqual({
@@ -145,13 +145,41 @@ describe("personal model accounts", () => {
         {
           authProfileId,
           provider: "xai",
-          label: "Personal Grok",
+          label: "x".repeat(255),
           authType: "api_key",
           selected: true,
         },
       ],
     });
     expect(listUserModelAccounts({ profileId: bob.id }, options)).toEqual({ accounts: [] });
+  });
+
+  it.each(["\ud83e", "\udd16"])("repairs a persisted label ending in %j", (surrogate) => {
+    const options = stateOptions();
+    const owner = ensureProfileForEmail("malformed-label@example.test", options);
+    const prefix = "x".repeat(255);
+    const { authProfileId } = connectUserModelAccount(
+      {
+        ownerProfileId: owner.id,
+        credential: {
+          type: "token",
+          provider: "anthropic",
+          token: "synthetic-malformed-label-token",
+          displayName: `${prefix}${surrogate}`,
+        },
+        assertCurrent() {},
+      },
+      options,
+    );
+
+    closeOpenClawStateDatabaseByPath(options.path);
+
+    expect(listUserModelAccounts({ profileId: owner.id }, options).accounts[0]?.label).toBe(
+      `${prefix}\ufffd`,
+    );
+    expect(readUserModelAuthProfile(authProfileId, options)?.credential.displayName).toBe(
+      `${prefix}${surrogate}`,
+    );
   });
 
   it.each([

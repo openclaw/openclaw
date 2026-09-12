@@ -5,7 +5,7 @@ mod gateway_sleep;
 #[path = "../src/gateway_sleep_logind_listener.rs"]
 mod gateway_sleep_logind_listener;
 
-use gateway_sleep::{GatewaySleepCycleController, SleepPrepareOutcome};
+use gateway_sleep::{GatewaySleepCycleController, GatewaySleepRoute, SleepPrepareOutcome};
 use gateway_sleep_logind_listener::{run_listener, BeginSleepCycleHook, EndSleepCycleHook};
 use std::io::{BufRead, BufReader, Read};
 use std::os::fd::OwnedFd as StdOwnedFd;
@@ -192,8 +192,13 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
     let resume_events = event_tx.clone();
     let controller = Arc::new(GatewaySleepCycleController::new(
         "logind-proof".into(),
-        || Some("ws://127.0.0.1:18789".into()),
-        move |_| {
+        || {
+            Some(GatewaySleepRoute {
+                ws_url: "ws://127.0.0.1:18789".into(),
+                generation: 1,
+            })
+        },
+        move |_, _| {
             let events = prepare_events.clone();
             async move {
                 let _ = events.send(MockEvent::Prepare);
@@ -202,7 +207,7 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
                 })
             }
         },
-        move |_| {
+        move |_, _| {
             let events = resume_events.clone();
             async move {
                 let _ = events.send(MockEvent::Resume);

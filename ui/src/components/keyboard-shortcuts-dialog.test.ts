@@ -26,6 +26,13 @@ describe("keyboard shortcuts dialog", () => {
     expect(
       Array.from(dialog.shadowRoot?.querySelectorAll("h3") ?? [], (heading) => heading.textContent),
     ).toEqual(["General", "Chat", "Panels", "Sidebar", "Image viewer", "Approvals"]);
+    const selectionRow = Array.from(
+      dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? [],
+    ).find((row) => row.textContent?.includes("Select multiple sessions"));
+    expect(
+      Array.from(selectionRow?.querySelectorAll("kbd") ?? [], (key) => key.textContent),
+    ).toEqual(["Alt", "Click"]);
+
     const sendRow = () =>
       Array.from(dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? []).find((row) =>
         row.textContent?.includes("Send message"),

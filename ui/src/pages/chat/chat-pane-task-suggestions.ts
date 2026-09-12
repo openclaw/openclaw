@@ -12,6 +12,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import type { TaskSuggestionStartMode } from "./components/chat-task-suggestions.ts";
 
 export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected taskSuggestions: TaskSuggestion[] = [];
@@ -120,8 +121,10 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     void this.refreshTaskSuggestions();
   }
 
-  protected readonly acceptTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
-    this.resolveTaskSuggestion(suggestion, "accept");
+  protected readonly acceptTaskSuggestion = (
+    suggestion: TaskSuggestion,
+    mode: TaskSuggestionStartMode = "local",
+  ): Promise<void> => this.resolveTaskSuggestion(suggestion, "accept", mode);
 
   protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
     this.resolveTaskSuggestion(suggestion, "dismiss");
@@ -188,6 +191,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected async resolveTaskSuggestion(
     suggestion: TaskSuggestion,
     action: "accept" | "dismiss",
+    mode: TaskSuggestionStartMode = "local",
   ): Promise<void> {
     const scope = this.captureConnectionScope();
     if (
@@ -211,7 +215,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (action === "accept") {
         const result = await scope.client.request<TaskSuggestionsAcceptResult>(
           "taskSuggestions.accept",
-          { taskId: suggestion.id, mode: "local" },
+          { taskId: suggestion.id, mode },
         );
         acceptedKey = result.key;
       } else {
@@ -221,7 +225,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         return;
       }
       this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== suggestion.id));
-      if (acceptedKey) {
+      if (acceptedKey && mode !== "session") {
         this.onPaneSessionChange?.(this.paneId, acceptedKey);
       }
     } catch (error) {

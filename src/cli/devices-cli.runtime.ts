@@ -58,6 +58,7 @@ type DevicesRpcOpts = {
   device?: string;
   role?: string;
   scope?: string[];
+  scopes?: boolean;
   name?: string;
 };
 
@@ -1114,7 +1115,7 @@ export async function runDevicesRotateCommand(opts: DevicesRpcOpts): Promise<voi
   if (!required) {
     return;
   }
-  const params = { ...required, scopes: Array.isArray(opts.scope) ? opts.scope : undefined };
+  const params = { ...required, scopes: opts.scopes === false ? [] : opts.scope };
   const scopes = await resolveTokenManagementScopes(opts, required, params.scopes);
   const result = await callGatewayCli("device.token.rotate", opts, params, { scopes });
   defaultRuntime.writeJson(result);

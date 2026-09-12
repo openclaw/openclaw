@@ -118,8 +118,8 @@ describe("ConnectionPage credentials", () => {
       expect(page.querySelectorAll(".settings-secret input")).toHaveLength(1);
       expect(secret().value).toBe(displayed);
       expect(page.querySelector('[role="radiogroup"]')).toBeNull();
-      control(page, ".settings-row__control > button.btn").click();
-      expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({ token, password }));
+      control(page, ".connection-details button").click();
+      expect(connect).toHaveBeenLastCalledWith();
 
       editInput(page, "Gateway secret", "");
       await settleLitElement(page);
@@ -133,35 +133,118 @@ describe("ConnectionPage credentials", () => {
     },
   );
 
-  it("highlights Connect and shows the unsaved hint only while the draft differs", async () => {
+  it("offers connection actions only while the draft differs", async () => {
     const current = source({
       request: vi.fn().mockResolvedValue(deviceSystemInfo),
     } as unknown as GatewayBrowserClient);
     const { page } = await mount(current.gateway);
-    const actions = () => [
-      ...page.querySelectorAll<HTMLButtonElement>(".settings-row__control > button.btn"),
-    ];
-    const connectButton = () => control(page, ".settings-row__control > button.btn");
-    const hint = "Unsaved changes apply when you connect.";
-    expect(actions().map((button) => button.textContent?.trim())).toEqual(["Connect"]);
-    expect(connectButton().className).toBe("btn");
-    expect(page.textContent).not.toContain(hint);
+    const actions = () =>
+      [...page.querySelectorAll<HTMLButtonElement>(".settings-group button")].filter((button) =>
+        ["Connect", "Apply and reconnect", "Discard changes"].includes(
+          button.textContent?.trim() ?? "",
+        ),
+      );
+    const labels = () => actions().map((button) => button.textContent?.trim());
+    expect(labels()).toEqual([]);
     editInput(page, "Gateway secret", "draft-token");
     await settleLitElement(page);
-    expect(connectButton().className).toBe("btn primary");
-    expect(page.textContent).toContain(hint);
+    expect(labels()).toEqual(["Discard changes", "Apply and reconnect"]);
     editInput(page, "Gateway secret", "");
     await settleLitElement(page);
-    expect(connectButton().className).toBe("btn");
-    expect(page.textContent).not.toContain(hint);
-    editInput(page, "Default session", "draft-session");
+    expect(labels()).toEqual([]);
+    editInput(page, "Gateway secret", "draft-token");
     await settleLitElement(page);
-    expect(connectButton().className).toBe("btn primary");
-    expect(page.textContent).toContain(hint);
+    control(page, ".connection-actions button").click();
+    await settleLitElement(page);
+    expect(control(page, 'input[aria-label="Gateway secret"]').value).toBe("");
+    expect(labels()).toEqual([]);
+  });
+});
+
+describe("ConnectionPage session selection", () => {
+  it("saves and discards session edits independently of the pending connection", async () => {
+    const current = source({
+      request: vi.fn().mockResolvedValue(deviceSystemInfo),
+    } as unknown as GatewayBrowserClient);
+    const connect = vi.spyOn(current.gateway, "connect");
+    current.gateway.setSessionKey = vi.fn((sessionKey) => {
+      current.publish({ ...current.gateway.snapshot, sessionKey: sessionKey.trim() });
+    });
+    const { page } = await mount(current.gateway);
+    const sessionSection = control(page, 'input[aria-label="Default session"]').closest(
+      ".settings-section",
+    );
+    if (!sessionSection) {
+      throw new Error("Missing Session section");
+    }
+    const button = (name: string) => {
+      const found = [...sessionSection.querySelectorAll<HTMLButtonElement>("button")].find(
+        (item) => item.textContent?.trim() === name,
+      );
+      if (!found) {
+        throw new Error(`Missing session action: ${name}`);
+      }
+      return found;
+    };
+    editInput(page, "Gateway secret", "pending-token");
+    editInput(page, "Default session", "main-other");
+    await settleLitElement(page);
+    editInput(page, "Default session", "main");
+    await settleLitElement(page);
+    expect(sessionSection.querySelector("button")).toBeNull();
+    editInput(page, "Default session", "  saved-session  ");
+    await settleLitElement(page);
+    button("Save").click();
+    await settleLitElement(page);
+    expect(current.gateway.snapshot.sessionKey).toBe("saved-session");
+    expect(control(page, 'input[aria-label="Default session"]').value).toBe("saved-session");
+    expect(control(page, 'input[aria-label="Gateway secret"]').value).toBe("pending-token");
+    expect(page.textContent).toContain("Saved");
+    expect(connect).not.toHaveBeenCalled();
+    editInput(page, "Default session", " ");
+    await settleLitElement(page);
+    expect(button("Save").disabled).toBe(true);
+    button("Discard changes").click();
+    await settleLitElement(page);
+    expect(control(page, 'input[aria-label="Default session"]').value).toBe("saved-session");
   });
 });
 
 describe("ConnectionPage Gateway lifecycle", () => {
+  it("shows pending host reads and keeps the last stats visible during refresh", async () => {
+    vi.useFakeTimers();
+    const firstResponse = deferred<SystemInfoResult>();
+    const refreshResponse = deferred<SystemInfoResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(firstResponse.promise)
+      .mockReturnValueOnce(refreshResponse.promise);
+    const current = source({ request } as unknown as GatewayBrowserClient);
+    const { page } = await mount(current.gateway);
+    const host = () => page.querySelector("#settings-connection-host");
+    const loading = () => host()?.querySelector('[role="status"]');
+    expect(loading()?.textContent).toContain("Loading…");
+    expect(host()?.getAttribute("aria-busy")).toBe("true");
+
+    firstResponse.resolve(deviceSystemInfo);
+    await settleLitElement(page);
+    expect(loading()).toBeNull();
+    expect(host()?.getAttribute("aria-busy")).toBe("false");
+    expect(host()?.textContent).toContain("Gateway");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settleLitElement(page);
+    expect(loading()?.textContent).toContain("Loading…");
+    expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+    expect(page.querySelectorAll('[role="meter"]').length).toBeGreaterThan(0);
+
+    refreshResponse.reject(new Error("temporarily unavailable"));
+    await settleLitElement(page);
+    expect(loading()).toBeNull();
+    expect(host()?.getAttribute("aria-busy")).toBe("false");
+    expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+  });
+
   it("keeps an edited draft through reconnect and resets it for a replacement source", async () => {
     const request = vi.fn().mockResolvedValue(deviceSystemInfo);
     const client = { request } as unknown as GatewayBrowserClient;

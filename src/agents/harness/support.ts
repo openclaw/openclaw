@@ -242,6 +242,8 @@ export function resolveAutoAgentHarnessId(
     provider: string;
     modelId?: string;
     config?: OpenClawConfig;
+    modelProvider?: AgentHarnessSupportContext["modelProvider"];
+    preparedModelProvider?: boolean;
   } & AgentRuntimePolicyScope,
 ): string | undefined {
   const registeredHarnesses = listRegisteredAgentHarnesses();

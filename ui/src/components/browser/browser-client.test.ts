@@ -5,6 +5,8 @@ import {
   fetchBrowserScreenshotDataUrl,
   requestBrowserScreencast,
   isBrowserScreencastUnsupportedError,
+  bindBrowserRequestClient,
+  downloadBrowserDocument,
 } from "./browser-client.ts";
 
 afterEach(async () => {
@@ -12,6 +14,56 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   await i18n.setLocale("en");
+});
+
+describe("downloadBrowserDocument", () => {
+  it("retains route authority, cancellation and the transfer deadline", async () => {
+    const request = vi.fn().mockResolvedValue({
+      download: { path: "/managed/report.pdf", suggestedFilename: "Report.pdf" },
+    });
+    const signal = new AbortController().signal;
+    const client = bindBrowserRequestClient(
+      { request },
+      { target: "node", node: "browser-node", profile: "work" },
+    );
+    await expect(
+      downloadBrowserDocument(client, "tab-a", "https://assets.example.test/report", signal),
+    ).resolves.toEqual({ path: "/managed/report.pdf", filename: "Report.pdf" });
+    expect(request).toHaveBeenCalledWith(
+      "browser.request",
+      {
+        method: "POST",
+        path: "/download",
+        target: "node",
+        node: "browser-node",
+        query: { profile: "work" },
+        body: {
+          targetId: "tab-a",
+          currentDocument: true,
+          expectedUrl: "https://assets.example.test/report",
+          timeoutMs: 120_000,
+        },
+        timeoutMs: 150_000,
+      },
+      { signal, timeoutMs: 150_000 },
+    );
+  });
+
+  it.each([
+    {},
+    { download: { path: "/managed/report.pdf" } },
+    { download: { suggestedFilename: "Report.pdf" } },
+  ])("rejects incomplete managed file replies %#", async (reply) => {
+    const request = vi.fn().mockResolvedValue(reply);
+    await expect(
+      downloadBrowserDocument(
+        { request },
+        "tab-a",
+        "https://assets.example.test/report",
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("No file returned.");
+  });
 });
 
 describe("fetchBrowserScreenshotDataUrl", () => {

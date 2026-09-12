@@ -524,12 +524,26 @@ function pickSafeBreakIndex(
   end: number,
   spans: ReturnType<typeof parseFenceSpans>,
 ): number {
-  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(
-    text,
-    start,
-    end,
-    (index) => findFenceSpanAt(spans, index)?.end,
-  );
+  // Windows may overlap after a soft break, so seek once before advancing through their fences.
+  let fenceIndex = 0;
+  let high = spans.length;
+  while (fenceIndex < high) {
+    const mid = Math.floor((fenceIndex + high) / 2);
+    const span = spans[mid];
+    if (span && span.end <= start) {
+      fenceIndex = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  let fence = fenceIndex < spans.length ? spans[fenceIndex] : undefined;
+  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(text, start, end, (index) => {
+    while (fence && fence.end <= index) {
+      fenceIndex += 1;
+      fence = fenceIndex < spans.length ? spans[fenceIndex] : undefined;
+    }
+    return fence && index > fence.start ? fence.end : undefined;
+  });
 
   if (lastNewline > start) {
     return lastNewline;

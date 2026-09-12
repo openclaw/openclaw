@@ -163,7 +163,6 @@ export function renderProjectChip(params: {
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        title=${t("newSession.what")}
         aria-label="${t("newSession.what")}: ${params.state.label}"
         data-project-id=${params.projectId || nothing}
         aria-haspopup="dialog"

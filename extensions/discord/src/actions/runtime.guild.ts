@@ -14,7 +14,7 @@ import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 import { getPresence } from "../monitor/presence-cache.js";
-import { discordGuildActionRuntime } from "./runtime-deps.js";
+import * as discordGuildActionRuntime from "../send.js";
 import {
   createDiscordMessagingActionContext,
   type DiscordMessagingActionOptions,

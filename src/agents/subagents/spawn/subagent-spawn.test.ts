@@ -1405,9 +1405,8 @@ describe("spawnSubagentDirect seam flow", () => {
       };
       if (
         scoped.readOnly !== true ||
-        scoped.scopedLiveProviderDiscovery !== true ||
-        scoped.providerDiscoveryProviderIds?.[0] !== "openai" ||
-        scoped.providerDiscoveryProviderIds.length !== 1
+        scoped.scopedLiveProviderDiscovery !== undefined ||
+        scoped.providerDiscoveryProviderIds !== undefined
       ) {
         return await hoisted.loadFullModelCatalogMock();
       }
@@ -1440,8 +1439,6 @@ describe("spawnSubagentDirect seam flow", () => {
       agentDir: expect.any(String),
       workspaceDir: resolveUserPath("/tmp/workspace-main"),
       readOnly: true,
-      providerDiscoveryProviderIds: ["openai"],
-      scopedLiveProviderDiscovery: true,
     });
     expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();

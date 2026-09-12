@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   configureProviderRoutes,
@@ -27,16 +28,8 @@ function configureMixedOpenAiAuthStore(): void {
   authStoreMocks.state.store = {
     version: 1,
     profiles: {
-      [API_PRIMARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-primary",
-      },
-      [API_BACKUP_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-backup",
-      },
+      [API_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+      [API_BACKUP_PROFILE_ID]: createApiKeyCredential("openai", "sk-backup"),
       [OAUTH_PROFILE_ID]: {
         type: "oauth",
         provider: "openai",
@@ -56,11 +49,7 @@ function configureAnthropicFallbackStore(): void {
   authStoreMocks.state.store = {
     version: 1,
     profiles: {
-      [ANTHROPIC_API_PROFILE_ID]: {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-anthropic",
-      },
+      [ANTHROPIC_API_PROFILE_ID]: createApiKeyCredential("anthropic", "sk-anthropic"),
       [CLAUDE_CLI_PROFILE_ID]: {
         type: "oauth",
         provider: "claude-cli",

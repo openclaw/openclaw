@@ -276,7 +276,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
     ? "Send a message to the current source conversation. Supports actions: send."
-    : buildMessageToolDescription(actions);
+    : `${buildMessageToolDescription(actions)}${currentChannelIsInternal ? ' When the user asks whether you can perform an action or install a capability, use action="send" with clawhub={query:"capability"} to check official plugins and skills and present installation cards. Omit channel and target. Installed capabilities show their current status; the card opens the listing inside Control UI.' : ""}`;
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true
@@ -510,10 +510,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const gatewayResolved = resolveGatewayOptions(gatewayOpts);
-      const { token: gatewayToken } = gatewayResolved;
+      const { target: gatewayTarget, ...gatewayConnection } = resolveGatewayOptions(gatewayOpts);
       const callerOwnsTerminalReceipt =
-        gatewayResolved.target === "remote" ||
+        gatewayTarget === "remote" ||
         normalizeOptionalString(gatewayOpts.gatewayUrl) !== undefined ||
         normalizeOptionalString(gatewayOpts.gatewayToken) !== undefined;
       // Direct tool invocations already execute inside the authenticated
@@ -524,9 +523,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.conversationReadOrigin === "direct-operator"
           ? undefined
           : {
-              url: gatewayResolved.url,
-              token: gatewayToken,
-              timeoutMs: gatewayResolved.timeoutMs,
+              ...gatewayConnection,
               clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
               clientDisplayName: "agent",
               mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -536,7 +533,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               resolveAgentRuntimeIdentityToken: (context) =>
                 resolveMessageActionAgentRuntimeIdentityToken({
                   opts: gatewayOpts,
-                  target: gatewayResolved.target,
+                  target: gatewayTarget,
                   turnCapability: options?.messageActionTurnCapability,
                   turnCapabilitySessionKey: options?.agentSessionKey,
                   runId: options?.runId,

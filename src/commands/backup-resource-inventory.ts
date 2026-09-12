@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isPathWithin } from "./cleanup-utils.js";
@@ -197,6 +198,9 @@ export async function createBackupResourceInventory(params: {
 
   const isIncluded = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
+    if (isUpdateCapturePath(candidate, stateDir)) {
+      return false;
+    }
     const exclusion = excludedPaths.find((excludedPath) => isPathWithin(candidate, excludedPath));
     if (!exclusion) {
       return true;
@@ -210,6 +214,9 @@ export async function createBackupResourceInventory(params: {
   };
   const isTraversable = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
+    if (isUpdateCapturePath(candidate, stateDir)) {
+      return false;
+    }
     return (
       isIncluded(candidate) ||
       protectedPaths.some((protectedPath) => isPathWithin(protectedPath, candidate))

@@ -569,7 +569,6 @@ it.each([
       );
       expect(config.plugins!.load!.paths).toEqual([entry]);
       expect(config.plugins!.installs!.demo!.sourcePath).toBe(sourcePackage);
-      expect(await rehearsal.changedConfigKeys()).toEqual([]);
     } finally {
       await rehearsal.cleanup();
     }

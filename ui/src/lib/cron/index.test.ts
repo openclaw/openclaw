@@ -372,7 +372,7 @@ describe("cron controller", () => {
   ] as const)(
     "preserves an explicit zero timeout in %s payloads",
     async (method, _editingJobId) => {
-      const { submit } = createCronSubmitHarness("no-timeout-job", {
+      const submitted = await createCronSubmitHarness("no-timeout-job", {
         method,
         listExisting: false,
         form: {
@@ -380,9 +380,7 @@ describe("cron controller", () => {
           payloadText: "Run until complete",
           timeoutSeconds: "0",
         },
-      });
-
-      const submitted = await submit();
+      }).submit();
       expect(submitted.result).toEqual({ saved: true, jobId: "no-timeout-job" });
 
       const call = submitted.call;
@@ -396,22 +394,20 @@ describe("cron controller", () => {
   );
 
   it.each(["", "   "])("omits an inherited timeout from cron.add: %j", async (timeoutSeconds) => {
-    const { submit } = createCronSubmitHarness("inherited-timeout-job", {
+    const submitted = await createCronSubmitHarness("inherited-timeout-job", {
       form: {
         name: "Inherited timeout",
         payloadText: "Use the default timeout",
         timeoutSeconds,
       },
-    });
-
-    const submitted = await submit();
+    }).submit();
     expect(submitted.result).toEqual({ saved: true, jobId: "inherited-timeout-job" });
     const payload = requireRecord(requestPayload(submitted.call).payload, "cron.add agent payload");
     expect(payload).not.toHaveProperty("timeoutSeconds");
   });
 
   it("forwards webhook delivery in cron.add payload", async () => {
-    const { submit } = createCronSubmitHarness("job-1", {
+    const submitted = await createCronSubmitHarness("job-1", {
       form: {
         name: "webhook job",
         scheduleKind: "every",
@@ -422,9 +418,7 @@ describe("cron controller", () => {
         deliveryMode: "webhook",
         deliveryTo: "https://example.invalid/cron",
       },
-    });
-
-    const submitted = await submit();
+    }).submit();
 
     expect(submitted.result.saved).toBe(true);
     const payload = requestPayload(submitted.call);
@@ -464,7 +458,7 @@ describe("cron controller", () => {
   });
 
   it("forwards sessionKey and delivery accountId in cron.add payload", async () => {
-    const { submit } = createCronSubmitHarness("job-3", {
+    const { call } = await createCronSubmitHarness("job-3", {
       form: {
         name: "account-routed",
         scheduleKind: "cron",
@@ -474,9 +468,7 @@ describe("cron controller", () => {
         deliveryMode: "announce",
         deliveryAccountId: "ops-bot",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     const payload = requestPayload(call);
     expectRecordFields(payload, {
@@ -489,7 +481,7 @@ describe("cron controller", () => {
   });
 
   it("omits a blank delivery accountId from cron.add payloads", async () => {
-    const { submit } = createCronSubmitHarness("job-blank-account-id", {
+    const { call } = await createCronSubmitHarness("job-blank-account-id", {
       form: {
         name: "implicit account",
         scheduleKind: "cron",
@@ -498,15 +490,13 @@ describe("cron controller", () => {
         deliveryMode: "announce",
         deliveryAccountId: "   ",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expect(requireRecord(requestPayload(call).delivery, "delivery").accountId).toBeUndefined();
   });
 
   it('omits delivery.channel when the form still uses the "last" sentinel', async () => {
-    const { submit } = createCronSubmitHarness("job-last-add", {
+    const { call } = await createCronSubmitHarness("job-last-add", {
       form: {
         name: "implicit channel",
         scheduleKind: "cron",
@@ -516,9 +506,7 @@ describe("cron controller", () => {
         deliveryMode: "announce",
         deliveryChannel: "last",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requireRecord(requestPayload(call).delivery, "delivery"), {
       mode: "announce",
@@ -529,7 +517,7 @@ describe("cron controller", () => {
   });
 
   it("forwards lightContext in cron payload", async () => {
-    const { submit } = createCronSubmitHarness("job-light", {
+    const { call } = await createCronSubmitHarness("job-light", {
       form: {
         name: "light-context job",
         scheduleKind: "cron",
@@ -537,9 +525,7 @@ describe("cron controller", () => {
         payloadText: "run this",
         payloadLightContext: true,
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectNestedRecordFields(requestPayload(call), "payload", {
       kind: "agentTurn",
@@ -562,7 +548,7 @@ describe("cron controller", () => {
   });
 
   it('sends delivery: { mode: "none" } explicitly in cron.update patch', async () => {
-    const { submit } = createCronSubmitHarness("job-none-update", {
+    const { call } = await createCronSubmitHarness("job-none-update", {
       method: "cron.update",
       form: {
         name: "switch to none",
@@ -570,9 +556,7 @@ describe("cron controller", () => {
         payloadText: "do work",
         deliveryMode: "none",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expect((call[1] as { patch?: { delivery?: unknown } } | undefined)?.patch?.delivery).toEqual({
       mode: "none",
@@ -580,7 +564,7 @@ describe("cron controller", () => {
   });
 
   it("sends explicit null model/thinking clears when blanking stored overrides on edit", async () => {
-    const { submit } = createCronSubmitHarness("job-clear-overrides", {
+    const { call } = await createCronSubmitHarness("job-clear-overrides", {
       method: "cron.update",
       jobs: [
         {
@@ -600,9 +584,7 @@ describe("cron controller", () => {
         payloadModel: "",
         payloadThinking: "",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectNestedRecordFields(requestPatch(call), "payload", {
       kind: "agentTurn",
@@ -613,7 +595,7 @@ describe("cron controller", () => {
   });
 
   it("does not send null model/thinking for a new job with blank fields", async () => {
-    const { submit } = createCronSubmitHarness("job-new-blank", {
+    const { call } = await createCronSubmitHarness("job-new-blank", {
       listExisting: true,
       form: {
         name: "new blank",
@@ -622,9 +604,7 @@ describe("cron controller", () => {
         payloadModel: "",
         payloadThinking: "",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     // A new job never had a stored override, so a blank field stays omitted
     // (no explicit null clear) rather than being mistaken for a cleared value.
@@ -696,9 +676,9 @@ describe("cron controller", () => {
       delivery: { mode: "none" },
     });
     expect(requestPatch(call)).not.toHaveProperty("deleteAfterRun");
-    expect(state.cronEditingJobId).toBe("job-1");
+    expect(state.cronEditingJob?.id).toBe("job-1");
     expect(state.cronEditingJob?.name).toBe("Existing job");
-    expect(state.cronEditingConfigRevision).toBe("config-revision-1");
+    expect(state.cronEditingJob?.configRevision).toBe("config-revision-1");
   });
 
   it("requires a loaded config revision before form saves and toggles", async () => {
@@ -715,7 +695,7 @@ describe("cron controller", () => {
     saveState.cronForm.name = "Unsafe edit";
 
     await expect(addCronJob(saveState)).resolves.toEqual({ saved: false });
-    expect(saveState.cronEditingJobId).toBe(job.id);
+    expect(saveState.cronEditingJob?.id).toBe(job.id);
     expect(saveState.cronError).toContain("configuration revision");
     expect(request).not.toHaveBeenCalled();
 
@@ -784,9 +764,7 @@ describe("cron controller", () => {
       }),
     );
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
-    expect(state.cronEditingJobId).toBe(staleJob.id);
     expect(state.cronEditingJob).toEqual(authoritativeJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-newest");
     expect(state.cronJobs).toEqual([listedJob]);
     expect(state.cronForm.name).toBe("Authoritative name");
     expect(state.cronForm.description).toBe("third writer definition");
@@ -852,9 +830,7 @@ describe("cron controller", () => {
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
     expect(state.cronJobs).toEqual([]);
     expect(state.cronJobsTotal).toBe(0);
-    expect(state.cronEditingJobId).toBe(authoritativeJob.id);
     expect(state.cronEditingJob).toEqual(authoritativeJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-current");
     expect(state.cronForm.name).toBe("Authoritative name");
     expect(state.cronForm.description).toBe("latest definition");
 
@@ -866,7 +842,6 @@ describe("cron controller", () => {
     expect(updateRevisions).toEqual(["revision-stale", "revision-current"]);
     expect(state.cronJobs).toEqual([]);
     expect(state.cronEditingJob).toEqual(savedJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-saved");
   });
 
   it("keeps a stale form paired with its frozen revision when conflict refresh fails", async () => {
@@ -912,14 +887,14 @@ describe("cron controller", () => {
     await expect(addCronJob(state)).resolves.toEqual({ saved: false });
 
     expect(state.cronForm.name).toBe("My stale edit");
-    expect(state.cronEditingConfigRevision).toBe("revision-stale");
+    expect(state.cronEditingJob?.configRevision).toBe("revision-stale");
     expect(state.cronError).toContain("could not be loaded");
 
     firstList.resolve(cronJobsListResponse([listedJob], { snapshotRevision: "newer-list" }));
     await inFlightList;
     expect(state.cronJobs).toEqual([listedJob]);
     expect(state.cronForm.name).toBe("My stale edit");
-    expect(state.cronEditingConfigRevision).toBe("revision-stale");
+    expect(state.cronEditingJob?.configRevision).toBe("revision-stale");
 
     await expect(addCronJob(state)).resolves.toEqual({ saved: false });
     expect(updateRevisions).toEqual(["revision-stale", "revision-stale"]);
@@ -960,7 +935,6 @@ describe("cron controller", () => {
 
     expect(state.cronJobs).toEqual([updatedJob]);
     expect(state.cronEditingJob).toEqual(updatedJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-saved");
   });
 
   it("commits authoritative toggle state and advances an open editor revision", async () => {
@@ -1003,7 +977,6 @@ describe("cron controller", () => {
     });
     expect(state.cronJobs).toEqual([updatedJob]);
     expect(state.cronEditingJob).toEqual(updatedJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-toggled");
     expect(state.cronForm.name).toBe("Unsaved rename");
 
     listResponse.resolve(cronJobsListResponse([updatedJob]));
@@ -1047,7 +1020,6 @@ describe("cron controller", () => {
 
     expect(state.cronJobs).toEqual([remainingJob]);
     expect(state.cronJobsTotal).toBe(1);
-    expect(state.cronEditingJobId).toBeNull();
     expect(state.cronEditingJob).toBeNull();
     expect(state.cronRunsJobId).toBeNull();
     expect(state.cronRuns).toEqual([]);
@@ -1059,7 +1031,7 @@ describe("cron controller", () => {
       name: "clear account",
       delivery: { mode: "announce", accountId: "ops-bot" },
     });
-    const { submit } = createCronSubmitHarness(job.id, {
+    const { call } = await createCronSubmitHarness(job.id, {
       method: "cron.update",
       jobs: [job],
       form: {
@@ -1071,9 +1043,7 @@ describe("cron controller", () => {
         deliveryMode: "announce",
         deliveryAccountId: "   ",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requestPayload(call), {
       id: "job-clear-account-id",
@@ -1090,7 +1060,7 @@ describe("cron controller", () => {
       name: "clear to",
       delivery: { mode: "announce", channel: "telegram", to: "12345" },
     });
-    const { submit } = createCronSubmitHarness(job.id, {
+    const { call } = await createCronSubmitHarness(job.id, {
       method: "cron.update",
       jobs: [job],
       form: {
@@ -1102,9 +1072,7 @@ describe("cron controller", () => {
         deliveryMode: "announce",
         deliveryTo: "   ",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requireRecord(requestPatch(call).delivery, "delivery"), {
       mode: "announce",
@@ -1127,9 +1095,7 @@ describe("cron controller", () => {
 
     startCronEdit(state, job);
 
-    expect(state.cronEditingJobId).toBe("job-9");
     expect(state.cronEditingJob).toEqual(job);
-    expect(state.cronEditingConfigRevision).toBe("config-revision-1");
     expect(state.cronRunsJobId).toBe("job-9");
     expect(state.cronForm.name).toBe("Weekly report");
     expect(state.cronForm.sessionKey).toBe("agent:ops:main");
@@ -1321,7 +1287,7 @@ describe("cron controller", () => {
   ] as const)(
     "preserves configured duration precision for $staggerAmount $staggerUnit stagger",
     async ({ staggerAmount, staggerUnit, staggerMs }) => {
-      const { submit } = createCronSubmitHarness("job-decimal-stagger", {
+      const { call, result } = await createCronSubmitHarness("job-decimal-stagger", {
         form: {
           name: "Decimal stagger",
           scheduleKind: "cron",
@@ -1330,9 +1296,7 @@ describe("cron controller", () => {
           staggerUnit,
           payloadText: "run",
         },
-      });
-
-      const { call, result } = await submit();
+      }).submit();
 
       expect(result.saved).toBe(true);
       expect(requestPayload(call).schedule).toEqual({ kind: "cron", expr: "0 * * * *", staggerMs });
@@ -1455,7 +1419,7 @@ describe("cron controller", () => {
   });
 
   it("includes trigger/model/thinking/stagger/bestEffort in cron.update patch", async () => {
-    const { submit } = createCronSubmitHarness("job-2", {
+    const { call } = await createCronSubmitHarness("job-2", {
       method: "cron.update",
       form: {
         name: "advanced edit",
@@ -1473,9 +1437,7 @@ describe("cron controller", () => {
         deliveryMode: "announce",
         deliveryBestEffort: true,
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requestPayload(call), {
       id: "job-2",
@@ -1531,7 +1493,7 @@ describe("cron controller", () => {
       expect(state.cronJobs).toEqual(originalInventory);
       expect(state.cronCreateOpen).toBe(method === "cron.add");
       if (method === "cron.update") {
-        expect(state.cronEditingJobId).toBe(existingJob.id);
+        expect(state.cronEditingJob?.id).toBe(existingJob.id);
         expect(state.cronEditingJob?.trigger).toEqual(existingJob.trigger);
       }
     },
@@ -1616,7 +1578,7 @@ describe("cron controller", () => {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "run", lightContext: true },
     });
-    const { submit } = createCronSubmitHarness(job.id, {
+    const { call } = await createCronSubmitHarness(job.id, {
       method: "cron.update",
       jobs: [job],
       form: {
@@ -1627,9 +1589,7 @@ describe("cron controller", () => {
         payloadText: "run",
         payloadLightContext: false,
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requestPayload(call), {
       id: "job-clear-light",
@@ -1641,7 +1601,7 @@ describe("cron controller", () => {
   });
 
   it("includes custom failureAlert fields in cron.update patch", async () => {
-    const { submit } = createCronSubmitHarness("job-alert", {
+    const { call } = await createCronSubmitHarness("job-alert", {
       method: "cron.update",
       form: {
         name: "alert job",
@@ -1654,9 +1614,7 @@ describe("cron controller", () => {
         failureAlertChannel: "telegram",
         failureAlertTo: "123456",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requestPayload(call), {
       id: "job-alert",
@@ -1672,7 +1630,7 @@ describe("cron controller", () => {
   });
 
   it("includes failure alert mode/accountId in cron.update patch", async () => {
-    const { submit } = createCronSubmitHarness("job-alert-mode", {
+    const { call } = await createCronSubmitHarness("job-alert-mode", {
       method: "cron.update",
       form: {
         name: "alert mode job",
@@ -1683,9 +1641,7 @@ describe("cron controller", () => {
         failureAlertDeliveryMode: "webhook",
         failureAlertAccountId: "bot-a",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requestPayload(call), {
       id: "job-alert-mode",
@@ -1741,7 +1697,7 @@ describe("cron controller", () => {
   });
 
   it("omits failureAlert.cooldownMs when custom cooldown is left blank", async () => {
-    const { submit } = createCronSubmitHarness("job-alert-no-cooldown", {
+    const { call } = await createCronSubmitHarness("job-alert-no-cooldown", {
       method: "cron.update",
       form: {
         name: "alert job no cooldown",
@@ -1753,9 +1709,7 @@ describe("cron controller", () => {
         failureAlertChannel: "telegram",
         failureAlertTo: "123456",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requestPayload(call), {
       id: "job-alert-no-cooldown",
@@ -1828,7 +1782,7 @@ describe("cron controller", () => {
   });
 
   it("includes failureAlert=false when disabled per job", async () => {
-    const { submit } = createCronSubmitHarness("job-no-alert", {
+    const { call } = await createCronSubmitHarness("job-no-alert", {
       method: "cron.update",
       form: {
         name: "alert off",
@@ -1836,9 +1790,7 @@ describe("cron controller", () => {
         payloadText: "run it",
         failureAlertMode: "disabled",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expectRecordFields(requestPayload(call), {
       id: "job-no-alert",
@@ -2009,7 +1961,7 @@ describe("cron controller", () => {
   ] as const)(
     "accepts a condition-triggered interval at the Gateway minimum: %s %s",
     async (everyAmount, everyUnit) => {
-      const { submit } = createCronSubmitHarness("job-trigger-boundary", {
+      const { call, result } = await createCronSubmitHarness("job-trigger-boundary", {
         form: {
           name: "Boundary automation",
           everyAmount,
@@ -2019,9 +1971,7 @@ describe("cron controller", () => {
           triggerScript: "json({ fire: true })",
           deliveryMode: "none",
         },
-      });
-
-      const { call, result } = await submit();
+      }).submit();
 
       expect(result.saved).toBe(true);
       expect(requestPayload(call).schedule).toEqual({ kind: "every", everyMs: 30_000 });
@@ -2087,7 +2037,7 @@ describe("cron controller", () => {
   ] as const)(
     "converts %s %s to safe integer milliseconds",
     async (everyAmount, everyUnit, expectedEveryMs) => {
-      const { submit } = createCronSubmitHarness("job-decimal", {
+      const submitted = await createCronSubmitHarness("job-decimal", {
         form: {
           name: "decimal interval",
           everyAmount,
@@ -2095,9 +2045,7 @@ describe("cron controller", () => {
           payloadText: "run",
           deliveryMode: "none",
         },
-      });
-
-      const submitted = await submit();
+      }).submit();
 
       expect(submitted.result.saved).toBe(true);
       expect(requestPayload(submitted.call).schedule).toEqual({
@@ -2160,9 +2108,7 @@ describe("cron controller", () => {
 
     cancelCronEdit(state, scenario.selectedAgentId);
 
-    expect(state.cronEditingJobId).toBeNull();
     expect(state.cronEditingJob).toBeNull();
-    expect(state.cronEditingConfigRevision).toBeNull();
     expect(state.cronForm).toEqual({
       ...DEFAULT_CRON_FORM,
       agentId: scenario.selectedAgentId,
@@ -2191,9 +2137,7 @@ describe("cron controller", () => {
     startCronEdit(state, sourceJob);
     startCronClone(state, sourceJob);
 
-    expect(state.cronEditingJobId).toBeNull();
     expect(state.cronEditingJob).toBeNull();
-    expect(state.cronEditingConfigRevision).toBeNull();
     expect(state.cronRunsJobId).toBe("job-1");
     expect(state.cronForm.name).toBe("Daily ping copy");
     expect(state.cronForm.payloadText).toBe("ping");
@@ -3482,16 +3426,14 @@ describe("failure alert form round trips", () => {
     { seconds: "0.0009", cooldownMs: 0 },
     { seconds: "8640000000000.001", cooldownMs: 8_640_000_000_000_001 },
   ])("serializes explicit cooldown seconds $seconds", async ({ seconds, cooldownMs }) => {
-    const { submit } = createCronSubmitHarness("authored-cooldown", {
+    const { call } = await createCronSubmitHarness("authored-cooldown", {
       form: {
         name: "Authored cooldown",
         payloadText: "Run report",
         failureAlertMode: "custom",
         failureAlertCooldownSeconds: seconds,
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expect(validateCronAddParams(requestPayload(call))).toBe(true);
     expectRecordFields(requireRecord(requestPayload(call).failureAlert, "failureAlert"), {
@@ -3505,16 +3447,14 @@ describe("failure alert form round trips", () => {
       ["0b10", 2_000],
       ["0o10", 8_000],
     ] as const) {
-      const { submit } = createCronSubmitHarness("prefixed-cooldown", {
+      const { call } = await createCronSubmitHarness("prefixed-cooldown", {
         form: {
           name: "Existing numeric spelling",
           payloadText: "Run report",
           failureAlertMode: "custom",
           failureAlertCooldownSeconds: seconds,
         },
-      });
-
-      const { call } = await submit();
+      }).submit();
 
       expect(validateCronAddParams(requestPayload(call))).toBe(true);
       expectRecordFields(requireRecord(requestPayload(call).failureAlert, "failureAlert"), {
@@ -3543,11 +3483,9 @@ describe("failure alert form round trips", () => {
   });
 
   it("creates an explicit policy without materializing inherited defaults", async () => {
-    const { submit } = createCronSubmitHarness("custom-inherited-policy", {
+    const { call } = await createCronSubmitHarness("custom-inherited-policy", {
       form: { name: "Use global policy", payloadText: "Run report", failureAlertMode: "custom" },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expect(validateCronAddParams(requestPayload(call))).toBe(true);
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- assert omitted fields on the websocket wire
@@ -3672,16 +3610,14 @@ describe("failure alert form round trips", () => {
   });
 
   it("keeps flooring a fractional alert threshold of at least one", async () => {
-    const { submit } = createCronSubmitHarness("valid-fractional-threshold", {
+    const { call } = await createCronSubmitHarness("valid-fractional-threshold", {
       form: {
         name: "Valid fractional threshold",
         payloadText: "Run report",
         failureAlertMode: "custom",
         failureAlertAfter: "1.5",
       },
-    });
-
-    const { call } = await submit();
+    }).submit();
 
     expect(validateCronAddParams(requestPayload(call))).toBe(true);
     expectRecordFields(requireRecord(requestPayload(call).failureAlert, "failureAlert"), {

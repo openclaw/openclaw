@@ -77,7 +77,10 @@ vi.mock("../hooks/workspace.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginDiagnosticsReport: () => ({ hooks: [] }),
+  withPluginDiagnosticsReport: async <T>(
+    _params: unknown,
+    consume: (report: { hooks: [] }) => T | Promise<T>,
+  ) => consume({ hooks: [] }),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({

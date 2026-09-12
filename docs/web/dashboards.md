@@ -56,6 +56,16 @@ Terminal, Files, and Review use the same layout controls:
 - **Layout** in the task toolbar moves the side panel left, right, or below the
   main area. Drag the divider to resize it. Narrow panes use a bottom panel
   until there is room for a side-by-side layout again.
+- Click the **Dashboard** side-panel tab to expand the dashboard to the full
+  task area in one step, even when another tab is selected. Click it again to
+  restore the split. Arrow-key tab navigation only selects the tab; Enter or
+  Space expands or restores Dashboard. Other tabs keep their normal selection
+  behavior.
+- **Expand** beside the side panel’s close **×** expands its active tab. The
+  same control becomes **Restore split** and stays beside **×** while expanded.
+  Restoring returns the original main view, panel placement, and size without
+  swapping chat and dashboard. Closing the expanded panel returns to the main
+  view instead.
 - **Focus** in the task toolbar gives the main view the full task area.
   **Restore split** brings back the side panel with its previous placement and
   size.
@@ -124,7 +134,9 @@ never needs the agent.
 - **Dashboard view.** The board can occupy the main area or a resizable side
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
-  the side panel back.
+  the side panel back. A tab with one full-width widget fills the focused
+  dashboard edge to edge, without a card border or surrounding padding.
+  Restoring the split or adding another widget brings back the normal spacing.
 - **Agent parity.** The agent's `dashboard` tool creates or updates trusted
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with

@@ -8,6 +8,7 @@ import {
   submitUpdateFailureReport,
   type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -31,7 +32,6 @@ function renderSubmissionResult(result: UpdateFailureReportSubmitResult): string
     result.message,
     ...(result.url ? [`Existing issue: ${result.url}`] : []),
     ...(result.fallbackUrl ? [`Existing prefilled issue: ${result.fallbackUrl}`] : []),
-    `Saved sanitized report: ${result.savedReportPath}`,
   ];
 }
 
@@ -41,11 +41,15 @@ export async function runInteractiveUpdateFailureAction(params: {
   env: NodeJS.ProcessEnv;
   error?: string;
   result?: UpdateRunResult;
+  rollbackCompleted?: boolean;
   runtime: Pick<RuntimeEnv, "error" | "log">;
 }): Promise<"triage" | "handled"> {
   while (true) {
     const action = await select<UpdateFailureAction>({
-      message: "Choose the next action for this failed update",
+      message: params.rollbackCompleted
+        ? "Update failed, but rollback completed successfully. Choose the next action"
+        : "Choose the next action for this failed update",
+      ...(params.rollbackCompleted ? { initialValue: "dismiss" as const } : {}),
       options: [
         { value: "triage", label: "Diagnose update failure" },
         { value: "report", label: "Report update failure" },
@@ -66,12 +70,23 @@ export async function runInteractiveUpdateFailureAction(params: {
         steps: [],
         durationMs: 0,
       };
+      // Managed handoffs can finish with a compact result while the canonical
+      // ledger still contains the failed activation/rollback phases. Read that
+      // history in the admitted state scope, but keep reporting usable if it is
+      // unavailable or locked.
+      let recordedRun: ReturnType<typeof getUpdateRun>;
+      try {
+        recordedRun = getUpdateRun(params.attemptId, { env: params.env });
+      } catch {
+        recordedRun = undefined;
+      }
       const stateDir = resolveStateDir(params.env);
       const prepared = await prepareUpdateFailureReport(
         {
           attemptId: params.attemptId,
           ...(params.error ? { error: params.error } : {}),
           result,
+          ...(recordedRun ? { recordedRun } : {}),
           ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
         },
         { env: params.env, stateDir },

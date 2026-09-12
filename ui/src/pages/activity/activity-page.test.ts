@@ -148,7 +148,7 @@ function toolEvent(id: string, sessionKey = "main") {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const page of activePages) {
     page.subscriptions.hostDisconnected();
   }
@@ -161,6 +161,8 @@ afterEach(() => {
   for (const source of activeGateways) {
     source.stop();
   }
+  // Credential changes start lazy cache cleanup; finish it before clearing the environment.
+  await vi.dynamicImportSettled();
   activePages.clear();
   activeGateways.clear();
   activeActivities.clear();

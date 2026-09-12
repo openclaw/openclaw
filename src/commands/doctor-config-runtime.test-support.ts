@@ -1,5 +1,20 @@
 // Fresh Doctor script processes share compiled config and install-index module identities.
 export const doctorConfigRuntimeEntrypoints = {
+  preflight: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "doctor-config-preflight",
+    distWorkerPath: "commands/doctor-config-preflight.js",
+  },
+  configGuard: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../cli/program/config-guard",
+    distWorkerPath: "cli/program/config-guard.js",
+  },
+  runtime: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../runtime",
+    distWorkerPath: "runtime.js",
+  },
   configFlow: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "doctor-config-flow",

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEventsSync,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
@@ -15,9 +18,22 @@ import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("sessions_yield transcript handoff", () => {
-  it.each([null, "Continue after the child completes"])(
-    "leaves yielded history ready for the next queued turn (context=%s)",
-    async (yieldMessage) => {
+  it.each([
+    { yieldMessage: null, retainedBytes: 0, bounded: false },
+    { yieldMessage: "Continue after the child completes", retainedBytes: 0, bounded: false },
+    {
+      yieldMessage: "Continue after the child completes",
+      retainedBytes: 3 * 1024 * 1024,
+      bounded: true,
+    },
+    {
+      yieldMessage: "Continue after the child completes",
+      retainedBytes: 3 * 1024 * 1024,
+      bounded: false,
+    },
+  ])(
+    "leaves yielded history ready (context=$yieldMessage, retainedBytes=$retainedBytes, bounded=$bounded)",
+    async ({ yieldMessage, retainedBytes, bounded }) => {
       await withOpenClawTestState({ label: "yield-projection-handoff" }, async (state) => {
         const target = {
           agentId: "main",
@@ -26,12 +42,19 @@ describe("sessions_yield transcript handoff", () => {
           storePath: state.statePath("sessions.json"),
         };
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        const manager = SessionManager.open(target, state.workspaceDir);
-        const { session } = await createTestSession({ sessionManager: manager });
+        const seed = SessionManager.open(target, state.workspaceDir);
         // Large histories rebuild asynchronously after yield cleanup replaces them.
         for (let index = 0; index < 4_001; index += 1) {
-          manager.appendCustomEntry("fixture-history", { index });
+          seed.appendCustomEntry("fixture-history", { index });
         }
+        const manager = bounded
+          ? SessionManager.openBounded(target, {
+              cwd: state.workspaceDir,
+              maxBytes: 4096,
+              maxEvents: 20,
+            })
+          : seed;
+        const { session } = await createTestSession({ sessionManager: manager });
         const user: AgentMessage = { role: "user", content: "Continue the task", timestamp: 1 };
         const toolResult: AgentMessage = {
           role: "toolResult",
@@ -45,6 +68,11 @@ describe("sessions_yield transcript handoff", () => {
         manager.appendMessage(user);
         manager.appendMessage(toolResult);
         manager.appendMessage(aborted);
+        const metadata = { text: "x".repeat(retainedBytes) };
+        const metadataId =
+          retainedBytes > 0
+            ? manager.appendCustomEntry("retained-plugin-state", metadata)
+            : undefined;
         // A live yield still has the synthetic abort that normal history loading omits.
         session.agent.state.messages = [user, toolResult, aborted];
         try {
@@ -62,7 +90,7 @@ describe("sessions_yield transcript handoff", () => {
           });
           // Reopen exactly as the next queued attempt does, with no unrelated await.
           const reopened = SessionManager.open(target, state.workspaceDir, {
-            maxBytes: 4096,
+            maxBytes: retainedBytes > 0 ? 8 * 1024 * 1024 : 4096,
             maxEvents: 20,
           });
           const messages = reopened.buildSessionContext().messages;
@@ -70,6 +98,16 @@ describe("sessions_yield transcript handoff", () => {
             yieldMessage ? ["user", "toolResult", "custom"] : ["user", "toolResult"],
           );
           expect(messages[0]).toMatchObject({ content: "Continue the task" });
+          if (metadataId) {
+            const retained = loadTranscriptEventsSync(target).find(
+              (entry) =>
+                typeof entry === "object" &&
+                entry !== null &&
+                "id" in entry &&
+                entry.id === metadataId,
+            );
+            expect(JSON.stringify(retained).includes(metadata.text)).toBe(true);
+          }
         } finally {
           session.dispose();
         }

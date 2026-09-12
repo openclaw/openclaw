@@ -32,6 +32,7 @@ import type {
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
@@ -198,13 +199,6 @@ function createBackupRestoreAuditAppendParams(params: {
   });
 }
 
-function resolveSuspiciousSignature(
-  current: ConfigHealthFingerprint,
-  suspicious: string[],
-): string {
-  return `${current.hash}:${suspicious.join(",")}`;
-}
-
 function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
   return (
     reason === "missing-meta-vs-last-good" ||
@@ -230,7 +224,7 @@ function resolveConfigReadRecoveryContext(params: {
   if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
     return null;
   }
-  const suspiciousSignature = resolveSuspiciousSignature(params.current, suspicious);
+  const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;
   if (params.entry.lastObservedSuspiciousSignature === suspiciousSignature) {
     return null;
   }
@@ -405,6 +399,10 @@ function* planSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
 ): ConfigRecoveryOperation<SuspiciousConfigRecoveryPlan | null> {
   const { deps, configPath, raw, parsed } = params;
+  // External owners also own recovery; do not substitute backup bytes or create sidecars.
+  if (resolveIsConfigReadOnly(deps.env)) {
+    return null;
+  }
   const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -570,6 +568,9 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   logger?: Pick<typeof console, "warn">;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
+  if (resolveIsConfigReadOnly(deps.env)) {
+    return false;
+  }
   if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
     return false;
   }
@@ -621,6 +622,9 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   prepareCandidate: PrepareConfigRecoveryCandidate;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
+  if (resolveIsConfigReadOnly(deps.env)) {
+    return false;
+  }
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return false;
   }

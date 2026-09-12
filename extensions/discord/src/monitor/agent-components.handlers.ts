@@ -162,6 +162,10 @@ async function handleDiscordComponentEvent(params: {
     channelCtx,
     guildInfo,
     eventText,
+    commandSource:
+      consumed.callbackDataKind === "command" && (buttonCallbackFallback || selectedCommandFallback)
+        ? "native"
+        : undefined,
     replyToId: consumed.messageId ?? params.interaction.message?.id,
     routeOverrides: {
       sessionKey: consumed.sessionKey,

@@ -5,17 +5,18 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { extract } from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   validatePackageExtensionEntriesForInstall,
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
 } from "../plugins/package-entry-resolution.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import {
+  collectPluginsValidationResult,
   loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
@@ -27,6 +28,8 @@ import {
 import { runPluginsPackCommand } from "./plugins-feature-artifact.js";
 
 const directories: string[] = [];
+let pristineParent: string | undefined;
+let pristineFixturePromise: Promise<string> | undefined;
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
@@ -34,9 +37,16 @@ afterEach(async () => {
   );
 });
 
-async function fixture() {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-"));
-  directories.push(parent);
+afterAll(async () => {
+  await pristineFixturePromise?.catch(() => undefined);
+  if (pristineParent) {
+    await fs.rm(pristineParent, { recursive: true, force: true });
+  }
+});
+
+async function createPristineFixture() {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-seed-"));
+  pristineParent = parent;
   const rootDir = path.join(parent, "draft-review");
   await runPluginsInitCommand("draft-review", { directory: rootDir, type: "feature" });
   await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "dir");
@@ -60,6 +70,17 @@ async function fixture() {
       'const __dirname = "local"; const resourceNames = { __filename: "import.meta.url" }; if (__dirname !== "local" || !resourceNames.__filename) throw new Error("Local resource names failed");\n',
   );
   await runPluginsBuildCommand({ root: rootDir });
+  return rootDir;
+}
+
+async function fixture() {
+  const pristineRoot = await (pristineFixturePromise ??= createPristineFixture());
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-"));
+  directories.push(parent);
+  const rootDir = path.join(parent, "draft-review");
+  await fs.cp(pristineRoot, rootDir, { recursive: true, verbatimSymlinks: true });
+  // Preserve the per-path module cache established by the original build before case mutations.
+  await loadToolPlugin({ rootDir, entryPath: path.join(rootDir, "dist/index.js") });
   return { rootDir, parent };
 }
 
@@ -101,12 +122,12 @@ describe("plugin artifact authoring", () => {
     expect(await fs.readFile(path.join(packageRoot, manifest.controlUi.entry), "utf8")).toContain(
       "Draft composer",
     );
-    const loaded = await loadToolPlugin({
-      rootDir: packageRoot,
-      entryPath: path.join(packageRoot, "dist/index.js"),
+    expect(await collectPluginsValidationResult({ root: packageRoot })).toEqual({
+      valid: true,
+      pluginId: "draft-review",
+      errors: [],
     });
-    expect(loaded.metadata.id).toBe("draft-review");
-    expect(loaded.metadata.tools.map((tool) => tool.name)).toEqual(["draft_review_analyze"]);
+    expect(manifest.contracts.tools).toEqual(["draft_review_analyze"]);
     const sourceExtracted = path.join(parent, "source-extracted");
     await fs.mkdir(sourceExtracted);
     await extract({ file: archive, cwd: sourceExtracted, strict: true });
@@ -115,9 +136,8 @@ describe("plugin artifact authoring", () => {
     // A separate extraction keeps Node's module cache from masking the source
     // loader's SDK aliases, even when the host also has built SDK artifacts.
     const sourceLoaded = withPluginCache(createPluginCache(), () =>
-      getCachedPluginSourceModuleLoader({
+      getCachedPluginModuleLoader({
         modulePath: sourceEntryPath,
-        rootDir: sourcePackageRoot,
         importerUrl: import.meta.url,
         aliasMap: buildPluginLoaderAliasMap(
           sourceEntryPath,
@@ -126,6 +146,7 @@ describe("plugin artifact authoring", () => {
           "src",
         ),
         transformOpenClawDependencies: true,
+        tryNative: false,
       })(sourceEntryPath),
     );
     expect(sourceLoaded).toMatchObject({
@@ -254,22 +275,36 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         tools: [{ name: "artifact_echo", optional: true }],
       });
       if (setup) {
-        const setupPath = resolvePackageSetupSource(resolution);
+        // Keep native module caches out of the independent source-loader graph.
+        const sourceExtracted = path.join(parent, "source-extracted");
+        await fs.mkdir(sourceExtracted);
+        await extract({ file: archive, cwd: sourceExtracted, strict: true });
+        const sourcePackageDir = path.join(sourceExtracted, "package");
+        const sourceResolution = {
+          ...resolution,
+          packageDir: sourcePackageDir,
+          sourceLabel: sourcePackageDir,
+        };
+        const [sourceEntryPath] = resolvePackageRuntimeExtensionSources({
+          ...sourceResolution,
+          extensions: manifest.openclaw.extensions,
+        });
+        const setupPath = resolvePackageSetupSource(sourceResolution);
         expect(setupPath).toBeTruthy();
         withPluginCache(createPluginCache(), () => {
-          const load = getCachedPluginSourceModuleLoader({
-            modulePath: entryPath!,
-            rootDir: packageDir,
+          const load = getCachedPluginModuleLoader({
+            modulePath: sourceEntryPath!,
             importerUrl: import.meta.url,
             aliasMap: buildPluginLoaderAliasMap(
-              entryPath!,
+              sourceEntryPath!,
               process.argv[1],
               import.meta.url,
               "src",
             ),
             transformOpenClawDependencies: true,
+            tryNative: false,
           });
-          expect(load(entryPath!)).toMatchObject({ default: { shared: { ready: true } } });
+          expect(load(sourceEntryPath!)).toMatchObject({ default: { shared: { ready: true } } });
           expect(load(setupPath!)).toMatchObject({
             default: {
               artifactMarker: runtime ? "setup-runtime" : "setup-source",
@@ -422,11 +457,11 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         path.join(rootDir, "dist/index.js"),
         `\nimport { resource } from "./runtime/${file}"; if (resource !== "required template") throw new Error("Backend resource failed");\n`,
       );
-      const loaded = await loadToolPlugin({
-        rootDir,
-        entryPath: path.join(rootDir, "dist/index.js"),
+      expect(await collectPluginsValidationResult({ root: rootDir })).toEqual({
+        valid: true,
+        pluginId: "draft-review",
+        errors: [],
       });
-      expect(loaded.metadata.id).toBe("draft-review");
       const archive = path.join(parent, "runtime-resource.tgz");
       await expect(runPluginsPackCommand({ root: rootDir, out: archive })).rejects.toThrow(
         "module-relative runtime files",

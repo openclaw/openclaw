@@ -326,7 +326,7 @@ describe("Browser panel stream ownership", () => {
       metrics: { title: "Next", url: NEXT_URL },
     });
     controller.setUrlDraftEditing(true);
-    controller.setUrlDraft("editing");
+    controller.setState("urlDraft", "editing");
     socket.receive(JSON.stringify({ type: "meta", url: PAGE_URL, title: "Page again" }));
     expect(controller.urlDraft).toBe("editing");
   });

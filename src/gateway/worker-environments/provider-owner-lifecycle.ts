@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
+import {
+  WorkerProviderError,
+  type WorkerProfile,
+  type WorkerProvider,
+} from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import type {
@@ -10,7 +14,10 @@ import {
   requireProviderOperationTimeoutMs,
   requireWorkerAllocation,
 } from "./service-validation.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
+import type {
+  WorkerEnvironmentRecord,
+  WorkerEnvironmentTransitionPatch as TransitionPatch,
+} from "./store.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelStopReason,
@@ -87,7 +94,9 @@ export function createWorkerProviderOwnerLifecycle(
     }
     // Fence admission without erasing the attachment needed to stop a retained node worker.
     // A crash or failed stop leaves the exact scope available for teardown replay.
-    store.revokeEnvironmentCredential(record.environmentId);
+    // The fence flag aborts in-flight workspace transfers immediately, before the tunnel
+    // stop completes; revocations that are followed by a re-mint (rotation) never fence.
+    store.revokeEnvironmentCredential(record.environmentId, { fenceWorkspaceTransfers: true });
     // Only a dedicated node lease makes provider teardown proof of worker termination.
     // Shared or unknown host isolation still requires the exact worker's stop acknowledgement.
     await tunnels?.stop(
@@ -159,6 +168,88 @@ export function createWorkerProviderOwnerLifecycle(
       sharedHost: false,
       lastError: destroying.lastError ?? "Worker bootstrap failed after provider teardown",
     });
+  };
+
+  const failBootstrap = async (
+    record: WorkerEnvironmentRecord,
+    leaseId: string,
+    provider: WorkerProvider,
+    error: unknown,
+    failureCode: "bootstrap_failure" | "invalid_profile" = "bootstrap_failure",
+    leasePatch?: TransitionPatch,
+  ): Promise<never> => {
+    const detail = boundedWorkerError(error);
+    const failureLabel =
+      failureCode === "invalid_profile"
+        ? "Worker provider returned an incompatible lease"
+        : leasePatch?.nodeDeviceId
+          ? "Worker node bootstrap failed"
+          : "Worker bootstrap failed";
+    const requested = store.requestDestroy({
+      environmentId: record.environmentId,
+      state: record.state,
+      terminalState: "failed",
+      lastError: detail,
+    });
+    const stopped = await stopOwner(requested);
+    const draining = move(stopped, "draining", { ...leasePatch, lastError: detail });
+    const destroying = beginDestroy(draining);
+    try {
+      await destroyLease(destroying, provider, lifecycleLease(destroying, leaseId));
+    } catch (cleanupError: unknown) {
+      // An indeterminate destroy must remain retryable; never hide a possibly-live paid lease
+      // behind terminal failed state.
+      saveError(
+        destroying,
+        new Error(`${detail}; provider teardown pending: ${boundedWorkerError(cleanupError)}`),
+      );
+      throw serviceError(failureCode, `${failureLabel}; teardown is pending: ${detail}`);
+    }
+    await finishProvenDestroy(destroying);
+    throw serviceError(failureCode, `${failureLabel}: ${detail}`);
+  };
+
+  const finishConfirmedProvisionCleanup = async (
+    record: WorkerEnvironmentRecord,
+    error: ReturnType<typeof WorkerProviderError.cleanupComplete>,
+  ): Promise<never> => {
+    const current = store.get(record.environmentId);
+    // Enrollment may bind a node while this same provisioning operation is awaiting cleanup.
+    if (
+      !current ||
+      current.provisionOperationId !== record.provisionOperationId ||
+      current.ownerEpoch !== record.ownerEpoch
+    ) {
+      throw serviceError("invalid_state", "Worker provisioning owner changed during cleanup");
+    }
+    const detail = boundedWorkerError(error.provisionError);
+    const destroying = store.adoptProvisionCleanupFailure({
+      environmentId: record.environmentId,
+      leaseId: error.leaseId,
+      lastError: detail,
+    });
+    await finishProvenDestroy(await stopOwner(destroying, "provider-destroyed"));
+    throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
+  };
+
+  const preserveIndeterminateProvisionCleanup = (
+    record: WorkerEnvironmentRecord,
+    error: ReturnType<typeof WorkerProviderError.cleanupIndeterminate>,
+  ): never => {
+    // Split the durable diagnostic budget so neither the allocation failure nor its cleanup
+    // failure can erase the other before restart reconciliation.
+    const provisionDetail = boundedWorkerError(error.provisionError, 480);
+    const cleanupDetail = boundedWorkerError(error.cleanupError, 480);
+    const detail = `${provisionDetail}; provider teardown pending: ${cleanupDetail}`;
+    store.adoptProvisionCleanupFailure({
+      environmentId: record.environmentId,
+      leaseId: error.leaseId,
+      lastError: detail,
+    });
+    throw serviceError(
+      "provider_failure",
+      `Worker provider operation failed; teardown is pending: ${detail}`,
+    );
   };
 
   const cancelRequested = (record: WorkerEnvironmentRecord) =>
@@ -300,6 +391,9 @@ export function createWorkerProviderOwnerLifecycle(
     finishProvenDestroy,
     lifecycleLease,
     finishDestroy,
+    failBootstrap,
+    finishConfirmedProvisionCleanup,
+    preserveIndeterminateProvisionCleanup,
     destroy,
   };
 }

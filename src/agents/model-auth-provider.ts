@@ -25,9 +25,11 @@ import {
 } from "./auth-profiles.js";
 import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
+import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
 import {
   assertRuntimeProviderSecretOwnerAvailable,
   resolveManagedSecretRefRuntimeProviderAuth,
@@ -85,6 +87,8 @@ export function resolveScopedAuthProfileStore(params: {
   preferredProfile?: string;
 }): AuthProfileStore {
   return ensureAuthProfileStore(params.agentDir, {
+    migrationProvider: params.provider,
+    config: params.cfg,
     profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
@@ -95,9 +99,9 @@ function assertProviderAuthReady(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): void {
-  // Pending credential files own this agent's auth route until Doctor commits
+  // Pending credential files own their providers' auth routes until Doctor commits
   // and archives them; do not fall through to env/config credentials.
-  assertAuthProfileMigrationReady(params.agentDir);
+  assertAuthProfileMigrationReady(params.agentDir, undefined, params.provider, params.cfg);
   // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
   // silently switch credentials while this configured owner is cold.
   assertRuntimeProviderSecretOwnerAvailable({ cfg: params.cfg, provider: params.provider });
@@ -161,7 +165,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
 }
 
 /** Resolves the credential that should be used for one provider request. */
-export async function resolveApiKeyForProviderCore(params: {
+export async function resolveApiKeyForProviderCore(input: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
@@ -180,9 +184,18 @@ export async function resolveApiKeyForProviderCore(params: {
   skipSetupProviderFallback?: boolean;
   modelId?: string;
   modelApi?: string;
+  modelBaseUrl?: string;
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  const modelAuthConfig = resolveModelProviderAuthConfig({
+    provider: input.provider,
+    config: input.cfg,
+    workspaceDir: input.workspaceDir,
+    modelBaseUrl: input.modelBaseUrl,
+  });
+  const changedAuthProvider = modelAuthConfig !== input.cfg;
+  const params = { ...input, cfg: modelAuthConfig };
   const { provider, cfg, profileId, preferredProfile } = params;
   let deprecatedProfileIds: ReadonlySet<string> | undefined;
   const getDeprecatedProfileIds = () =>
@@ -236,6 +249,18 @@ export async function resolveApiKeyForProviderCore(params: {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const resolvedProfileId = resolved.profileId ?? profileId;
+    if (params.lockedProfile && resolvedProfileId !== profileId) {
+      throw new Error("Locked auth profile resolution returned a different profile.");
+    }
+    const credential = store.profiles[resolvedProfileId];
+    if (
+      changedAuthProvider &&
+      (!credential || !isStoredCredentialCompatibleWithAuthProvider({ cfg, provider, credential }))
+    ) {
+      throw new Error(
+        `Auth profile "${resolvedProfileId}" is not compatible with the resolved model endpoint for "${provider}".`,
+      );
+    }
     const mode = resolved.profileType ?? store.profiles[resolvedProfileId]?.type;
     const result: ResolvedProviderAuth = {
       apiKey: authConfig.sentinelizeSecretRefProfileApiKey({
@@ -435,6 +460,7 @@ export async function resolveApiKeyForProviderCore(params: {
           provider,
           preferredProfile,
           forModel: params.modelId,
+          includePendingOAuthRefresh: true,
         });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;

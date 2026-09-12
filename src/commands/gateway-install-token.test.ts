@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { withGatewayServiceUpdateAuthority } from "../daemon/service-update-authority.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
@@ -171,6 +172,18 @@ describe("resolveGatewayInstallToken", () => {
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it("refuses missing required auth without generating config during deferred load", async () => {
+    const result = await resolveGatewayInstallToken({
+      config: { gateway: { auth: { mode: "token" } } },
+      env: {},
+      requireExisting: true,
+      generateIfMissing: createGeneration(),
+    });
+    expect(result.unavailableReason).toContain("existing Gateway token");
+    expect(randomTokenMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("persists an auto-generated token with the captured write guards", async () => {
     const generation = createGeneration();
     const baseSnapshot = generation.snapshot;
@@ -206,6 +219,39 @@ describe("resolveGatewayInstallToken", () => {
       },
       afterWrite: { mode: "auto" },
     });
+  });
+
+  it("refuses an update-owned token commit after its captured precommit revokes authority", async () => {
+    let current = true;
+    let committed = false;
+    replaceConfigFileMock.mockImplementationOnce(async (params) => {
+      await params.writeOptions.beforeCommit();
+      committed = true;
+    });
+    await expect(
+      withGatewayServiceUpdateAuthority(
+        () => {
+          if (!current) {
+            throw new Error("original owner revoked");
+          }
+        },
+        () =>
+          resolveGatewayInstallToken({
+            config: { gateway: { auth: { mode: "token" } } },
+            env: {},
+            generateIfMissing: {
+              ...createGeneration(),
+              writeOptions: {
+                beforeCommit: async () => {
+                  current = false;
+                },
+              },
+            },
+          }),
+      ),
+    ).rejects.toThrow("original owner revoked");
+    expect(replaceConfigFileMock).toHaveBeenCalledOnce();
+    expect(committed).toBe(false);
   });
 
   it("does not overwrite a SecretRef in the captured source config", async () => {

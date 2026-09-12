@@ -7,6 +7,7 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   inspectUpdateRunAbandonment,
+  isAbandonedUpdateRun,
   isUnacknowledgedAbandonedUpdateRun,
 } from "../../infra/update-run-activity.js";
 import {
@@ -56,8 +57,7 @@ function inspectNewerRecoveryHistory(recoveryRuns: UpdateRunRecord[], env: NodeJ
   const postCoreRuns = history.filter(
     (run) =>
       run.createdAtMs >= oldestRecovery &&
-      run.status === "failed" &&
-      run.reason === "abandoned" &&
+      isAbandonedUpdateRun(run) &&
       !run.steps.some((step) => step.step === "reconcile:acknowledged") &&
       needsPostCoreRepair(run),
   );

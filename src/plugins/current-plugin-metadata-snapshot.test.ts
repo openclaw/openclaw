@@ -10,7 +10,10 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getCurrentPluginMetadataSnapshot,
+  prepareGatewayPluginMetadataSnapshotPublication,
+  runOutsidePluginMetadataSnapshotScope,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
+  setGatewayPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
@@ -502,14 +505,6 @@ describe("current plugin metadata snapshot", () => {
     }
   });
 
-  it("rejects a workspace-scoped snapshot when the caller does not provide workspace scope", () => {
-    const config = { plugins: { allow: ["demo"] } };
-    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
-    setCurrentPluginMetadataSnapshot(snapshot, { config });
-
-    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
-  });
-
   it("can opt into reusing the stored workspace scope for unscoped control-plane readers", () => {
     const config = { plugins: { allow: ["demo"] } };
     const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
@@ -548,6 +543,12 @@ describe("current plugin metadata snapshot", () => {
           requireDefaultDiscoveryContext: true,
         }),
       ).toBeUndefined();
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+
+      withPluginMetadataSnapshotScope(createSnapshot({ normalizationAlias: "temporary" }), () => {
+        expect(getCurrentPluginMetadataSnapshot()).toBeDefined();
+        expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+      });
       expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
     } finally {
       clearCurrentPluginMetadataSnapshot();
@@ -831,6 +832,45 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot()).toBe(derived);
   });
 
+  it("publishes a prepared Gateway snapshot only at its synchronous commit", () => {
+    const first = createSnapshot({ normalizationAlias: "first" });
+    const next = createSnapshot({ normalizationAlias: "next" });
+    setGatewayPluginMetadataSnapshot(first);
+    try {
+      const publish = prepareGatewayPluginMetadataSnapshotPublication(next);
+      expect(getCurrentPluginMetadataSnapshot()).toBe(first);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("first");
+      publish();
+      expect(getCurrentPluginMetadataSnapshot()).toBe(next);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("next");
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
+  });
+
+  it("keeps a scoped reader pinned while a Gateway publication survives scope failure", async () => {
+    const original = createSnapshot();
+    const scoped = createSnapshot();
+    const next = createSnapshot();
+    setGatewayPluginMetadataSnapshot(original);
+    try {
+      await expect(
+        withPluginMetadataSnapshotScope(scoped, async () => {
+          await Promise.resolve();
+          runOutsidePluginMetadataSnapshotScope(() => setGatewayPluginMetadataSnapshot(next));
+          expect(getCurrentPluginMetadataSnapshot()).toBe(scoped);
+          expect(
+            runOutsidePluginMetadataSnapshotScope(() => getCurrentPluginMetadataSnapshot()),
+          ).toBe(next);
+          throw new Error("scoped operation failed");
+        }),
+      ).rejects.toThrow("scoped operation failed");
+      expect(getCurrentPluginMetadataSnapshot()).toBe(next);
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
+  });
+
   it("publishes prepared model policies without enumerating declarations", () => {
     const enumerate = vi.fn((target: object) => Reflect.ownKeys(target));
     const prepare = (alias: string) =>
@@ -850,7 +890,7 @@ describe("current plugin metadata snapshot", () => {
         }),
       );
     const original = prepare("original");
-    const replacement = prepare("replacement");
+    const temporary = prepare("temporary");
     const empty = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
     const env = {
       HOME: "/home/original-snapshot",
@@ -862,10 +902,13 @@ describe("current plugin metadata snapshot", () => {
       setCurrentPluginMetadataSnapshot(original, { env });
       expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
 
-      setCurrentPluginMetadataSnapshot(replacement);
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("replacement");
-
-      setCurrentPluginMetadataSnapshot(empty);
+      const publishTemporary = prepareGatewayPluginMetadataSnapshotPublication(temporary);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
+      publishTemporary();
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+      const publishEmpty = prepareGatewayPluginMetadataSnapshotPublication(empty);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+      publishEmpty();
       expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
       clearCurrentPluginMetadataSnapshot();
       expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");

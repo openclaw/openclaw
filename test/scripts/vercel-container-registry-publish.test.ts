@@ -18,6 +18,9 @@ const cleanIndexDigest = `sha256:${"5".repeat(64)}`;
 const defaultSourceDigest = `sha256:${"6".repeat(64)}`;
 const slimSourceDigest = `sha256:${"7".repeat(64)}`;
 const browserSourceDigest = `sha256:${"8".repeat(64)}`;
+const browserArm64Digest = `sha256:${"9".repeat(64)}`;
+const configDigest = `sha256:${"a".repeat(64)}`;
+const layerDigest = `sha256:${"b".repeat(64)}`;
 const immutableSourceRefs = [
   `default=${sourceImage}@${defaultSourceDigest}`,
   `slim=${sourceImage}@${slimSourceDigest}`,
@@ -76,9 +79,13 @@ function requireJob(workflow: Workflow, name: string): WorkflowJob {
   return job;
 }
 
-function indexManifest(architectures: Array<"amd64" | "arm64">, includeAttestations = true) {
+function indexManifest(
+  architectures: Array<"amd64" | "arm64">,
+  includeAttestations = true,
+  armDigest = arm64Digest,
+) {
   const manifests = architectures.flatMap((architecture) => {
-    const digest = architecture === "amd64" ? amd64Digest : arm64Digest;
+    const digest = architecture === "amd64" ? amd64Digest : armDigest;
     const image = {
       digest,
       mediaType: imageManifestMediaType,
@@ -127,6 +134,25 @@ function imageConfig(version: string) {
   });
 }
 
+function platformManifest() {
+  return {
+    schemaVersion: 2,
+    mediaType: imageManifestMediaType,
+    config: {
+      mediaType: "application/vnd.oci.image.config.v1+json",
+      digest: configDigest,
+      size: 256,
+    },
+    layers: [
+      {
+        mediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+        digest: layerDigest,
+        size: 1024,
+      },
+    ],
+  };
+}
+
 function publishParams(version: string, includeBrowser: boolean) {
   return {
     includeBrowser,
@@ -142,11 +168,31 @@ function successfulExecutor(
     changedTargetRef?: string;
     currentAliasVersion?: string;
     sourceVersions?: Record<string, string>;
+    rawManifests?: Record<string, string | Error>;
     unattestedSourceRef?: string;
     version?: string;
   } = {},
 ) {
   const version = options.version ?? "2026.7.2";
+  const rawManifests: Record<string, string | Error> = {
+    ...Object.fromEntries(
+      [defaultSourceDigest, slimSourceDigest, browserSourceDigest].map((digest) => [
+        `${sourceImage}@${digest}`,
+        indexManifest(
+          ["amd64", "arm64"],
+          `${sourceImage}@${digest}` !== options.unattestedSourceRef,
+          digest === browserSourceDigest ? browserArm64Digest : arm64Digest,
+        ),
+      ]),
+    ),
+    ...Object.fromEntries(
+      [amd64Digest, arm64Digest, browserArm64Digest].map((digest) => [
+        `${sourceImage}@${digest}`,
+        JSON.stringify(platformManifest()),
+      ]),
+    ),
+    ...options.rawManifests,
+  };
   return vi.fn((_command: string, args: string[]) => {
     calls.push(args);
     if (args[2] === "create") {
@@ -169,17 +215,21 @@ function successfulExecutor(
       });
     }
     if (ref.startsWith(sourceImage)) {
-      const architecture = architectureForRef(ref);
-      return indexManifest(
-        architecture ? [architecture] : ["amd64", "arm64"],
-        ref !== options.unattestedSourceRef,
-      );
+      const raw = rawManifests[ref];
+      if (!args.includes("--raw") || raw === undefined) {
+        throw new Error(`Unexpected source inspection: ${JSON.stringify(args)}`);
+      }
+      if (raw instanceof Error) {
+        throw raw;
+      }
+      return raw;
     }
+    const armDigest = ref.includes("-browser") ? browserArm64Digest : arm64Digest;
     if (args.at(-1) === "--raw") {
-      return indexManifest(["amd64", "arm64"], false);
+      return indexManifest(["amd64", "arm64"], false, armDigest);
     }
     const architecture = architectureForRef(ref);
-    const expectedDigest = architecture === "arm64" ? arm64Digest : amd64Digest;
+    const expectedDigest = architecture === "arm64" ? armDigest : amd64Digest;
     return JSON.stringify({
       digest:
         ref === options.changedTargetRef
@@ -190,6 +240,24 @@ function successfulExecutor(
       mediaType: architecture ? imageManifestMediaType : imageIndexMediaType,
     });
   });
+}
+
+function admissionFixture(
+  raw: string | Error,
+  { digest = amd64Digest, includeBrowser = true } = {},
+) {
+  const calls: string[][] = [];
+  const execFileSyncImpl = successfulExecutor(calls, {
+    rawManifests: { [`${sourceImage}@${digest}`]: raw },
+  });
+  return {
+    calls,
+    publish: () =>
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", includeBrowser), {
+        execFileSyncImpl,
+        log: () => {},
+      }),
+  };
 }
 
 describe("Vercel Container Registry publishing", () => {
@@ -266,8 +334,21 @@ describe("Vercel Container Registry publishing", () => {
       calls
         .slice(0, firstCreate)
         .map((args) => requireCommandRef(args))
-        .every((ref) => ref.includes("@sha256:")),
+        .every((ref) => ref.startsWith(`${sourceImage}@sha256:`)),
     ).toBe(true);
+    const platformRefs = new Set(
+      [amd64Digest, arm64Digest, browserArm64Digest].map((digest) => `${sourceImage}@${digest}`),
+    );
+    expect(
+      calls
+        .slice(0, firstCreate)
+        .filter((args) => args.includes("--raw") && platformRefs.has(requireCommandRef(args)))
+        .map((args) => requireCommandRef(args)),
+    ).toEqual(
+      [amd64Digest, arm64Digest, amd64Digest, arm64Digest, amd64Digest, browserArm64Digest].map(
+        (digest) => `${sourceImage}@${digest}`,
+      ),
+    );
     expect(calls.filter((args) => args[2] === "create")).toHaveLength(plan.copies.length);
     expect(calls[firstCreate]).toEqual([
       "buildx",
@@ -311,6 +392,228 @@ describe("Vercel Container Registry publishing", () => {
     ).toThrow("manifest unknown");
     expect(calls.some((args) => args[2] === "create")).toBe(false);
   });
+
+  it("rejects the observed oversized layer before any registry write", () => {
+    const calls: string[][] = [];
+    const manifest = platformManifest();
+    const rejectedDigest =
+      "sha256:4b9a73079b17c36ef03670032ea1d22f0441dc38d2668a0d176753795b586a18";
+    manifest.layers = Array.from({ length: 11 }, (_, index) => ({
+      ...manifest.layers[0]!,
+      digest: index === 10 ? rejectedDigest : layerDigest,
+      size: index === 10 ? 870_479_908 : 1024,
+    }));
+    const execFileSyncImpl = successfulExecutor(calls, {
+      rawManifests: { [`${sourceImage}@${amd64Digest}`]: JSON.stringify(manifest) },
+    });
+
+    expect
+      .soft(() =>
+        publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+          execFileSyncImpl,
+          log: () => {},
+        }),
+      )
+      .toThrow(
+        `VCR preflight: default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}: layer[10] ${rejectedDigest} is 870479908 bytes; client cap 500000000 bytes`,
+      );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it("admits every selection before copying even when only the last platform exceeds a cap", () => {
+    const manifest = platformManifest();
+    manifest.layers[0]!.size = 500_000_001;
+    const { calls, publish } = admissionFixture(JSON.stringify(manifest), {
+      digest: browserArm64Digest,
+    });
+
+    expect(publish).toThrow(
+      `browser/2026.7.2-browser linux/arm64 ${sourceImage}@${browserArm64Digest}: layer[0] ${layerDigest} is 500000001 bytes; client cap 500000000 bytes`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it("does not inspect unselected browser images", () => {
+    const { calls, publish } = admissionFixture(new Error("Browser must not be inspected"), {
+      digest: browserArm64Digest,
+      includeBrowser: false,
+    });
+
+    publish();
+
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(6);
+    expect(
+      calls.some(
+        (args) =>
+          args.includes(`${sourceImage}@${browserSourceDigest}`) ||
+          args.includes(`${sourceImage}@${browserArm64Digest}`),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["layer", 500_000_000, 0],
+    ["layer", 500_000_000, 1],
+    ["config", 1_000_000, 0],
+    ["config", 1_000_000, 1],
+  ] as const)("applies the inclusive %s cap of %i bytes with excess %i", (field, cap, excess) => {
+    const manifest = platformManifest();
+    const descriptor = field === "config" ? manifest.config : manifest.layers[0]!;
+    descriptor.size = cap + excess;
+    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
+
+    if (excess === 0) {
+      publish();
+      expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
+    } else {
+      expect(publish).toThrow(
+        `${field === "config" ? "config" : "layer[0]"} ${descriptor.digest} is ${cap + excess} bytes; client cap ${cap} bytes`,
+      );
+      expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+    }
+  });
+
+  it.each([0, 1])("applies the config-inclusive total cap with excess %i", (excess) => {
+    const manifest = platformManifest();
+    manifest.config.size = 1_000_000;
+    manifest.layers = Array.from({ length: 30 }, (_, index) => ({
+      ...manifest.layers[0]!,
+      size: index === 29 ? 499_000_000 + excess : 500_000_000,
+    }));
+    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
+
+    if (excess === 0) {
+      publish();
+      expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
+    } else {
+      expect(publish).toThrow(
+        "total (compressed layers plus config, through layer[29]) is 15000000001 bytes; client cap 15000000000 bytes",
+      );
+      expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+    }
+  });
+
+  it("rejects an otherwise admissible layer total tipped over the cap by config", () => {
+    const manifest = platformManifest();
+    manifest.config.size = 1;
+    manifest.layers = Array.from({ length: 30 }, () => ({
+      ...manifest.layers[0]!,
+      size: 500_000_000,
+    }));
+    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
+
+    expect(publish).toThrow(
+      "total (compressed layers plus config, through layer[29]) is 15000000001 bytes; client cap 15000000000 bytes",
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it.each([0, 1])(
+    "counts raw manifest UTF-8 bytes including whitespace with excess %i",
+    (excess) => {
+      const json = JSON.stringify({
+        ...platformManifest(),
+        annotations: { description: "\u00e9".repeat(20) },
+      });
+      const raw = ` \n${json}${" ".repeat(4_000_000 + excess - Buffer.byteLength(json, "utf8") - 2)}`;
+      const { calls, publish } = admissionFixture(raw);
+
+      if (excess === 0) {
+        publish();
+        expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
+      } else {
+        expect(publish).toThrow(
+          `${sourceImage}@${amd64Digest}: manifest body is 4000001 bytes; client cap 4000000 bytes`,
+        );
+        expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+      }
+    },
+  );
+
+  it.each(
+    ["config", "layer[0]"].flatMap((field) =>
+      [undefined, null, "1024", -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map((size) => ({
+        field,
+        size,
+      })),
+    ),
+  )("rejects invalid $field size $size before copying", ({ field, size }) => {
+    const manifest = platformManifest();
+    const raw = JSON.stringify({
+      ...manifest,
+      ...(field === "config"
+        ? { config: { ...manifest.config, size } }
+        : { layers: [{ ...manifest.layers[0], size }] }),
+    });
+    const { calls, publish } = admissionFixture(raw);
+
+    expect(publish).toThrow(
+      `default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}: ${field}.size must be a nonnegative safe integer byte count`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it.each([
+    ["missing config", { ...platformManifest(), config: undefined }, "config"],
+    ["missing layers", { ...platformManifest(), layers: undefined }, "layers"],
+    ["non-array layers", { ...platformManifest(), layers: {} }, "layers"],
+    ["null layer", { ...platformManifest(), layers: [null] }, "layer[0]"],
+    [
+      "invalid config digest",
+      { ...platformManifest(), config: { ...platformManifest().config, digest: "invalid" } },
+      "config",
+    ],
+    [
+      "missing layer media type",
+      {
+        ...platformManifest(),
+        layers: [{ ...platformManifest().layers[0], mediaType: undefined }],
+      },
+      "layer[0]",
+    ],
+    ["index instead of image", { mediaType: imageIndexMediaType, manifests: [] }, "image manifest"],
+    ["null manifest", null, "image manifest"],
+    ["unsupported schema", { ...platformManifest(), schemaVersion: 1 }, "image manifest"],
+  ] as const)("rejects %s before copying", (_name, manifest, diagnostic) => {
+    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
+    const execute = vi.fn(publish);
+
+    expect(execute).toThrow(
+      `VCR preflight: default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}:`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+    expect(execute.mock.results[0]?.value).toHaveProperty(
+      "message",
+      expect.stringContaining(diagnostic),
+    );
+  });
+
+  it.each([
+    ["invalid JSON", "{", "Invalid platform manifest JSON."],
+    ["inspect failure", new Error("Manifest fetch failed"), "Could not inspect platform manifest."],
+  ] as const)("rejects %s with selection context before copying", (_name, raw, diagnostic) => {
+    const { calls, publish } = admissionFixture(raw);
+
+    expect(publish).toThrow(
+      `VCR preflight: default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}: ${diagnostic} No images copied.`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it.each([imageManifestMediaType, "application/vnd.docker.distribution.manifest.v2+json"])(
+    "admits zero-byte descriptors and empty layers for %s",
+    (mediaType) => {
+      const manifest = platformManifest();
+      manifest.mediaType = mediaType;
+      manifest.config.size = 0;
+      manifest.layers = [];
+      const { calls, publish } = admissionFixture(JSON.stringify(manifest));
+
+      publish();
+
+      expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
+    },
+  );
 
   it("rejects an unattested immutable source before any registry write", () => {
     const calls: string[][] = [];

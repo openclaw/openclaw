@@ -5,7 +5,7 @@ import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "acpx/r
 import { expect, it } from "vitest";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createPluginDoctorStateMigrationContext } from "../../infra/state-migrations.plugin-doctor-context.js";
-import { resolvePluginDoctorContractArtifactPath } from "../../plugins/doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "../../plugins/doctor-contract-artifact.js";
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
@@ -176,10 +176,13 @@ it.each(["global", "shared-project"])(
       expect(before.incomplete).toEqual([]);
       expect(before.claims).toHaveLength(2);
       const rootDir = path.resolve("extensions/acpx");
-      const modulePath = resolvePluginDoctorContractArtifactPath(rootDir)!;
+      const modulePath = resolvePluginDoctorContractArtifact({
+        rootDir,
+        origin: "bundled",
+        sourcePreferred: true,
+      })!.modulePath;
       const load = getCachedPluginModuleLoader({
         modulePath,
-        rootDir,
         importerUrl: import.meta.url,
       });
       const { stateMigrations } = coercePluginDoctorContractModule(

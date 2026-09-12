@@ -14,21 +14,28 @@ Results are meant to be pasted into other commands, especially `openclaw message
 
 ## Common flags
 
-- `--channel <name>`: channel id/alias (required when multiple channels are configured; auto-selected when only one is configured)
+- `--channel <name>`: channel id or alias. Required when several channels are configured, and auto-selected when only one is configured.
 - `--account <id>`: account id (default: channel default)
 - `--json`: output JSON
+- `--limit <n>`: positive integer cap for peers/groups/members listings
+
+Omit `--account` to select the channel default. Explicitly empty and whitespace-only account
+values fail with `--account must not be blank` before account setup or lookup.
+
+`--limit` requires a positive integer. Omit `--limit` to use the selected channel plugin's default.
+Explicitly empty and whitespace-only values are rejected.
 
 Default output renders IDs and names in a table. Empty list results name the channel and account
-that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use the
+that were queried. JSON list output uses an empty array (`[]`). Failures exit nonzero and use the
 canonical `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` envelope in
 JSON mode.
 
 ## Notes
 
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
-- Before a live lookup, OpenClaw resolves configured SecretRefs only for the selected channel and account. Resolved credentials remain runtime-only; plugin installation and auto-enable writes preserve the authored references without persisting runtime defaults.
-- WhatsApp group listing is live. Gateway lookups reuse its owned connection; a standalone command opens the linked session only when no other process owns that account and otherwise reports that live groups are unavailable.
-- An already-installed channel plugin can lack directory support. In that case the command reports the unsupported operation; it does not try to reinstall or upgrade the plugin to add support.
+- Before a live lookup, OpenClaw resolves configured SecretRefs only for the selected channel and account. Resolved credentials remain runtime-only. Plugin installation and auto-enable writes preserve the authored references without persisting runtime defaults.
+- WhatsApp group listing is live. Gateway lookups reuse its owned connection. A standalone command opens the linked session only when no other process owns that account. Otherwise it reports that live groups are unavailable.
+- An already-installed channel plugin can lack directory support. In that case the command reports the unsupported operation. It does not try to reinstall or upgrade the plugin to add support.
 
 ## Using results with `message send`
 
@@ -98,6 +105,8 @@ openclaw directory groups list --channel zalouser
 openclaw directory groups list --channel zalouser --query "work"
 openclaw directory groups members --channel zalouser --group-id <id>
 ```
+
+`groups members` requires a non-blank `--group-id`. Empty or whitespace-only IDs fail before plugin setup or lookup.
 
 ## Related
 

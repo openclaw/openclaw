@@ -5,6 +5,10 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  createWebhookInFlightLimiter,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
 import type { FeishuWebhookInvoker } from "./feishu-ingress.js";
@@ -49,6 +53,13 @@ type MonitorTransportParams = {
 
 const FEISHU_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const FEISHU_WEBHOOK_ACCEPTED_VALUE = "durable";
+const FEISHU_PRE_AUTH_MAX_IN_FLIGHT = 64;
+// Feishu signs each delivery at send time, so a captured signed callback stays
+// validly signed forever. Reject deliveries whose signed timestamp is too far
+// from the local clock: generous enough for provider retries and host clock
+// skew, far shorter than the 24h persistent dedup TTL that otherwise guards
+// synthetic card-action replay.
+const FEISHU_WEBHOOK_TIMESTAMP_MAX_SKEW_MS = 60 * 60_000;
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
 const FEISHU_WS_RECONNECT_MAX_DELAY_MS = 30_000;
 const FEISHU_WS_LOG_ERROR_MAX_LENGTH = 500;
@@ -91,6 +102,16 @@ function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | n
   }
 }
 
+function isFeishuWebhookTimestampFresh(timestamp: string): boolean {
+  const parsed = Number.parseInt(timestamp, 10);
+  if (!Number.isFinite(parsed)) {
+    return false;
+  }
+  // Feishu signs with second-level timestamps; tolerate millisecond values too.
+  const timestampMs = parsed < 1e12 ? parsed * 1000 : parsed;
+  return Math.abs(Date.now() - timestampMs) <= FEISHU_WEBHOOK_TIMESTAMP_MAX_SKEW_MS;
+}
+
 function isFeishuWebhookSignatureValid(params: {
   headers: http.IncomingHttpHeaders;
   rawBody: string;
@@ -108,6 +129,10 @@ function isFeishuWebhookSignatureValid(params: {
   const nonce = Array.isArray(nonceHeader) ? nonceHeader[0] : nonceHeader;
   const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
   if (!timestamp || !nonce || !signature) {
+    return false;
+  }
+
+  if (!isFeishuWebhookTimestampFresh(timestamp)) {
     return false;
   }
 
@@ -380,6 +405,11 @@ export async function monitorWebhook({
     );
   }
   const host = account.config.webhookHost ?? "127.0.0.1";
+  const preAuthInFlightLimiter = createWebhookInFlightLimiter({
+    maxInFlightPerKey: FEISHU_PRE_AUTH_MAX_IN_FLIGHT,
+    maxTrackedKeys: 1,
+  });
+  const preAuthInFlightKey = `${accountId}:${path}`;
 
   log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);
 
@@ -434,42 +464,66 @@ export async function monitorWebhook({
       return;
     }
 
+    // Feishu signature validation needs the complete raw body; bound incomplete
+    // pre-auth reads per route so held uploads cannot consume all webhook capacity.
+    if (!preAuthInFlightLimiter.tryAcquire(preAuthInFlightKey)) {
+      void sendHttpRequestRejection(
+        req,
+        res,
+        429,
+        "Rate limit exceeded",
+        "text/plain; charset=utf-8",
+      ).catch((err: unknown) => {
+        error(`feishu[${accountId}]: webhook concurrency rejection failed: ${String(err)}`);
+      });
+      return;
+    }
+
     const guard = installRequestBodyLimitGuard(req, res, {
       maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
       timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
       responseFormat: "text",
     });
     if (guard.isTripped()) {
+      preAuthInFlightLimiter.release(preAuthInFlightKey);
       return;
     }
 
     void (async () => {
       try {
-        const body = await readWebhookBodyOrReject({
-          req,
-          res,
-          maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
-          timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
-          profile: "pre-auth",
-        });
-        if (!body.ok || res.writableEnded) {
-          return;
-        }
-        if (guard.isTripped()) {
-          return;
-        }
-        const rawBody = body.value;
+        let rawBody: string;
+        try {
+          const body = await readWebhookBodyOrReject({
+            req,
+            res,
+            maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
+            timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
+            profile: "pre-auth",
+          });
+          if (!body.ok || res.writableEnded) {
+            return;
+          }
+          if (guard.isTripped()) {
+            return;
+          }
+          rawBody = body.value;
 
-        // Reject invalid signatures before any JSON parsing to keep the auth boundary strict.
-        if (
-          !isFeishuWebhookSignatureValid({
-            headers: req.headers,
-            rawBody,
-            encryptKey,
-          })
-        ) {
-          respondText(res, 401, "Invalid signature");
-          return;
+          // Reject invalid signatures before any JSON parsing to keep the auth boundary strict.
+          if (
+            !isFeishuWebhookSignatureValid({
+              headers: req.headers,
+              rawBody,
+              encryptKey,
+            })
+          ) {
+            respondText(res, 401, "Invalid signature");
+            return;
+          }
+        } finally {
+          // This slot owns only untrusted body and signature work; authenticated
+          // parsing and dispatch must not reject new reads when downstream stalls.
+          guard.dispose();
+          preAuthInFlightLimiter.release(preAuthInFlightKey);
         }
 
         const payload = parseFeishuWebhookPayload(rawBody);
@@ -510,8 +564,6 @@ export async function monitorWebhook({
         if (!res.headersSent) {
           respondText(res, 500, "Internal Server Error");
         }
-      } finally {
-        guard.dispose();
       }
     })();
   });

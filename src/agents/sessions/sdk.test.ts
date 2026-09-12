@@ -30,6 +30,7 @@ vi.mock("../../auto-reply/thinking.js", () => ({
 vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import {
   createCompactionHandlers,
@@ -300,16 +301,8 @@ describe("AgentSession tree navigation", () => {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage({
-      role: "user",
-      content: "shared root",
-      timestamp: 1,
-    });
-    const abandonedLeafId = sessionManager.appendMessage({
-      role: "user",
-      content: "abandoned branch",
-      timestamp: 2,
-    });
+    const rootId = sessionManager.appendMessage(makeUserMessage("shared root", 1));
+    const abandonedLeafId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
     sessionManager.branch(rootId);
     const targetId = sessionManager.appendMessage({
       role: "assistant",
@@ -656,11 +649,7 @@ describe("createAgentSession tool defaults", () => {
       content: "Earlier context. ".repeat(100),
       timestamp: 1,
     });
-    sessionManager.appendMessage({
-      role: "user",
-      content: "Current question",
-      timestamp: 2,
-    });
+    sessionManager.appendMessage(makeUserMessage("Current question", 2));
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     const { session } = await createAgentSession({

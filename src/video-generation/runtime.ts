@@ -6,6 +6,7 @@ import { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
 import {
   getVideoGenerationProvider,
   listVideoGenerationProviders,
+  withVideoGenerationProviders,
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
@@ -14,6 +15,10 @@ import {
   resolveMediaProviderRequestTimeoutMs,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import {
+  buildCapabilityProviderIndex,
+  normalizeCapabilityProviderId,
+} from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
@@ -116,6 +121,29 @@ export function listRuntimeVideoGenerationProviders(
 export async function generateVideo(
   params: GenerateVideoParams,
   deps: VideoGenerationRuntimeDeps = {},
+): Promise<GenerateVideoRuntimeResult> {
+  if (deps.getProvider && deps.listProviders) {
+    return runVideoGeneration(params, deps);
+  }
+  return withVideoGenerationProviders(params.cfg, (providers) => {
+    const canonical = buildCapabilityProviderIndex(providers, "canonical");
+    const aliases = buildCapabilityProviderIndex(providers, "aliases");
+    return runVideoGeneration(params, {
+      ...deps,
+      getProvider:
+        deps.getProvider ??
+        ((id) => {
+          const normalized = normalizeCapabilityProviderId(id);
+          return normalized ? aliases.get(normalized) : undefined;
+        }),
+      listProviders: deps.listProviders ?? (() => [...canonical.values()]),
+    });
+  });
+}
+
+async function runVideoGeneration(
+  params: GenerateVideoParams,
+  deps: VideoGenerationRuntimeDeps,
 ): Promise<GenerateVideoRuntimeResult> {
   const getProvider = deps.getProvider ?? getVideoGenerationProvider;
   const listProviders = deps.listProviders ?? listVideoGenerationProviders;

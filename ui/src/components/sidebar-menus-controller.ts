@@ -11,6 +11,7 @@ import { isSessionRouteId, pathForRoute, type RouteId } from "../app-route-paths
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -18,6 +19,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
@@ -70,16 +72,7 @@ interface SidebarMenusControllerState {
 
 export type SidebarFilterMenuView = "root" | "specific-owner";
 
-type SidebarMenusRenderer = {
-  renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCatalogViewMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCustomizeMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarIdentityMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarMoreMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionGroupMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
-};
+type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
@@ -199,15 +192,18 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     },
   );
   readonly catalogMenu: SidebarCatalogMenuController;
+  readonly agentMenuAvatars: IdentityAvatarController;
   pluginActionLifetime = new AbortController();
 
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
+    this.agentMenuAvatars = new IdentityAvatarController(host);
     this.catalogMenu = new SidebarCatalogMenuController({
       // Closing every transient menu keeps one popover at a time.
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
+      openTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
       beginMutation: () => host.sessionData.beginSessionMutation(),
       isMutationCurrent: (scope) => host.sessionData.isSessionMutationScopeCurrent(scope),
       archive: (scope, params) => scope.client.request("sessions.catalog.archive", params),
@@ -720,7 +716,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   renderAgentMenu() {
-    return this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing;
+    return this.agentMenuAvatars.withActiveRoutes(
+      () => this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing,
+    );
   }
 
   renderIdentityMenu() {

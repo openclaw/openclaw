@@ -213,64 +213,84 @@ describe("Matrix durable delivery plans", () => {
     });
   });
 
-  it("preserves ordered typed receipt parts and the final event identity", async () => {
-    const deliveryIdentity = identity("queue-multi-event");
-    const plannedEvents = createMatrixPlannedEvents({
-      identity: deliveryIdentity,
-      events: [
-        { receiptKind: "media", content: { msgtype: "m.image", body: "caption" } },
-        { receiptKind: "text", content: { msgtype: "m.text", body: "follow-up" } },
-      ],
-    });
-    await persistMatrixDeliveryPlan({
-      identity: deliveryIdentity,
-      accountId: "default",
-      roomId: "!room:example.org",
-      transactionScopeId: "scope-1",
-      wireEventType: "m.room.message",
-      events: plannedEvents,
-      dispatch: {
-        roomId: "!room:example.org",
-        eventType: "m.room.message",
-        transactionId: plannedEvents[0]!.transactionId,
-        requestPath: `/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${plannedEvents[0]!.transactionId}`,
-      },
-    });
-    client.sendMessage.mockResolvedValueOnce("$media-event").mockResolvedValueOnce("$text-event");
-
-    await expect(
-      reconcileMatrixUnknownSend({
-        ...reconciliationContext("queue-multi-event"),
-        effectiveReplyToId: "$reply",
-        threadId: "$thread",
-      }),
-    ).resolves.toMatchObject({
-      status: "sent",
-      messageId: "$text-event",
-      receipt: {
-        primaryPlatformMessageId: "$media-event",
-        platformMessageIds: ["$media-event", "$text-event"],
-        replyToId: "$reply",
-        threadId: "$thread",
-        parts: [
+  it.each([false, true])(
+    "preserves ordered typed receipt parts and the final event identity (duplicate ID: %s)",
+    async (duplicateId) => {
+      const deliveryIdentity = identity("queue-multi-event");
+      const relation = {
+        rel_type: "m.thread" as const,
+        event_id: "$thread",
+        "m.in_reply_to": { event_id: "$reply" },
+      };
+      const plannedEvents = createMatrixPlannedEvents({
+        identity: deliveryIdentity,
+        events: [
           {
-            platformMessageId: "$media-event",
-            kind: "media",
-            index: 0,
-            replyToId: "$reply",
-            threadId: "$thread",
+            receiptKind: "media",
+            content: { msgtype: "m.image", body: "caption", "m.relates_to": relation },
           },
           {
-            platformMessageId: "$text-event",
-            kind: "text",
-            index: 1,
-            replyToId: "$reply",
-            threadId: "$thread",
+            receiptKind: "text",
+            content: { msgtype: "m.text", body: "follow-up", "m.relates_to": relation },
           },
         ],
-      },
-    });
-  });
+      });
+      await persistMatrixDeliveryPlan({
+        identity: deliveryIdentity,
+        accountId: "default",
+        roomId: "!room:example.org",
+        transactionScopeId: "scope-1",
+        wireEventType: "m.room.message",
+        events: plannedEvents,
+        dispatch: {
+          roomId: "!room:example.org",
+          eventType: "m.room.message",
+          transactionId: plannedEvents[0]!.transactionId,
+          requestPath: `/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${plannedEvents[0]!.transactionId}`,
+        },
+      });
+      client.sendMessage
+        .mockResolvedValueOnce("$media-event")
+        .mockResolvedValueOnce(duplicateId ? "$media-event" : "$text-event");
+
+      await expect(
+        reconcileMatrixUnknownSend({
+          ...reconciliationContext("queue-multi-event"),
+          effectiveReplyToId: "$reply",
+          threadId: "$thread",
+        }),
+      ).resolves.toMatchObject({
+        status: "sent",
+        messageId: duplicateId ? "$media-event" : "$text-event",
+        receipt: {
+          primaryPlatformMessageId: "$media-event",
+          platformMessageIds: duplicateId ? ["$media-event"] : ["$media-event", "$text-event"],
+          replyToId: "$reply",
+          threadId: "$thread",
+          parts: [
+            {
+              platformMessageId: "$media-event",
+              kind: "media",
+              index: 0,
+              replyToId: "$reply",
+              threadId: "$thread",
+            },
+            ...(duplicateId
+              ? []
+              : [
+                  {
+                    platformMessageId: "$text-event",
+                    kind: "text",
+                    index: 1,
+                    replyToId: "$reply",
+                    threadId: "$thread",
+                  },
+                ]),
+          ],
+        },
+      });
+    },
+  );
 
   it("fails closed without provider I/O when any expected part plan is missing", async () => {
     const incompleteIdentity = identity("queue-incomplete", 0, 2);

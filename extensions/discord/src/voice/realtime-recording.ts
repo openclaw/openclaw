@@ -104,6 +104,8 @@ export class DiscordRealtimeRecording {
   private unavailable = false;
   private stopped = false;
   private publishing = false;
+  private finishCompletion: Promise<void> | undefined;
+  private resolveFinish: (() => void) | undefined;
   private bytes = 0;
   private finals: Array<{ text: string; bytes: number; startedAt?: number }> = [];
 
@@ -176,6 +178,21 @@ export class DiscordRealtimeRecording {
     void this.publish();
   }
 
+  finish(): void | Promise<void> {
+    if (this.finishCompletion) {
+      return this.finishCompletion;
+    }
+    // Only an active publication has passed the whole-generation recording eligibility gate.
+    if (!this.publishing) {
+      this.close();
+      return;
+    }
+    this.finishCompletion = new Promise<void>((resolve) => {
+      this.resolveFinish = resolve;
+    });
+    return this.finishCompletion;
+  }
+
   close(): void {
     this.stopped = true;
     for (const unsubscribe of this.inputs.values()) {
@@ -186,6 +203,10 @@ export class DiscordRealtimeRecording {
       this.bytes -= final.bytes;
     }
     this.finals = [];
+    if (!this.publishing) {
+      this.resolveFinish?.();
+      this.resolveFinish = undefined;
+    }
   }
 
   private async publish(): Promise<void> {
@@ -228,6 +249,9 @@ export class DiscordRealtimeRecording {
       }
     } finally {
       this.publishing = false;
+      if (this.resolveFinish) {
+        this.close();
+      }
     }
   }
 }

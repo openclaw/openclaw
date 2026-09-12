@@ -297,6 +297,7 @@ function createStandardMemoryTableHarness(
   const openTable = vi.fn(async () => ({
     close: vi.fn(),
     schema: createAgentScopedSchemaMock(),
+    checkoutLatest: vi.fn(async () => undefined),
     vectorSearch,
     countRows,
     add,
@@ -777,6 +778,7 @@ describe("memory plugin e2e", () => {
         tableNames: vi.fn(async () => ["memories"]),
         close: vi.fn(),
         openTable: vi.fn(async () => ({
+          checkoutLatest: vi.fn(async () => undefined),
           schema: createAgentScopedSchemaMock(),
           vectorSearch,
           countRows: vi.fn(async () => 0),
@@ -889,6 +891,7 @@ describe("memory plugin e2e", () => {
         tableNames: vi.fn(async () => ["memories"]),
         close: vi.fn(),
         openTable: vi.fn(async () => ({
+          checkoutLatest: vi.fn(async () => undefined),
           schema: createAgentScopedSchemaMock(),
           vectorSearch,
           countRows: vi.fn(async () => 0),
@@ -1254,18 +1257,7 @@ describe("memory plugin e2e", () => {
     vi.useFakeTimers();
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const post = vi.fn(() => new Promise(() => {}));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(),
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const loadLanceDbModule = vi.fn(async () => undefined);
 
     try {
       await withMockedOpenAiMemoryPlugin({
@@ -1324,6 +1316,7 @@ describe("memory plugin e2e", () => {
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
+          checkoutLatest: vi.fn(async () => undefined),
           schema: createAgentScopedSchemaMock(),
           query,
           countRows: vi.fn(async () => 0),
@@ -1874,6 +1867,7 @@ describe("memory plugin e2e", () => {
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
+          checkoutLatest: vi.fn(async () => undefined),
           schema: createAgentScopedSchemaMock(),
           vectorSearch: vi.fn(() =>
             createAgentScopedVectorQuery(vi.fn(() => ({ toArray: vi.fn(async () => []) }))),
@@ -3768,6 +3762,7 @@ describe("memory plugin e2e", () => {
         connect: vi.fn(async () => ({
           tableNames: vi.fn(async () => ["memories"]),
           openTable: vi.fn(async () => ({
+            checkoutLatest: vi.fn(async () => undefined),
             schema: createAgentScopedSchemaMock(),
             vectorSearch,
             countRows: vi.fn(async () => 1),

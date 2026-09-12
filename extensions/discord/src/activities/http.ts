@@ -8,6 +8,7 @@ import {
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
+import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import {
   DISCORD_TOKEN_URL,
   DISCORD_USER_URL,
@@ -160,6 +161,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     if (!account) {
       return respondJson(res, 503, { error: "Discord Activities is not fully configured" });
     }
+    const endpointRuntime = getDiscordEndpointRuntime() ?? null;
     const bodyResult = await readJsonBodyWithLimit(req, {
       maxBytes: BODY_MAX_BYTES,
       timeoutMs: bodyTimeoutMs,
@@ -221,6 +223,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
             }),
           },
           auditContext: "discord.activities.oauth.token",
+          endpointRuntime,
         });
       } catch {
         return respondJson(res, 503, { error: "Discord token exchange unavailable" });
@@ -240,6 +243,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
           url: DISCORD_USER_URL,
           init: { headers: { Authorization: `Bearer ${granted}` } },
           auditContext: "discord.activities.oauth.user",
+          endpointRuntime,
         });
       } catch {
         return respondJson(res, 503, { error: "Discord user lookup unavailable" });

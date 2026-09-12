@@ -58,7 +58,7 @@ describe("crabline transport", () => {
           }),
         ).rejects.toThrow("JSON response exceeds 1048576 bytes");
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -94,7 +94,7 @@ describe("crabline transport", () => {
         ).rejects.toThrow("Crabline telegram inbound injection failed with HTTP 503");
         expect(cancel).toHaveBeenCalledOnce();
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -109,6 +109,8 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.id).toBe("crabline");
+        expect("cleanup" in transport).toBe(false);
+        expect("cleanupAfterGatewayStop" in transport).toBe(true);
         expect(transport.requiredPluginIds).toEqual(["telegram"]);
         expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
           channels: {
@@ -145,7 +147,7 @@ describe("crabline transport", () => {
           text: "Telegram baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -195,7 +197,7 @@ describe("crabline transport", () => {
         };
         expect(payload.result?.map((update) => update.message?.from?.id)).toEqual([100002, 100001]);
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -261,7 +263,7 @@ describe("crabline transport", () => {
           ],
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -325,7 +327,7 @@ describe("crabline transport", () => {
           final: { text: "final marker", threadId: "42" },
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -359,7 +361,7 @@ describe("crabline transport", () => {
           SLACK_SIGNING_SECRET: "crabline-slack-signing-secret",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -433,7 +435,7 @@ describe("crabline transport", () => {
           text: "assistant via fake slack",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -480,7 +482,7 @@ describe("crabline transport", () => {
         expect(env.CRABLINE_WHATSAPP_ACCESS_TOKEN).toBeUndefined();
         expect(env.CRABLINE_WHATSAPP_API_ROOT).toBeUndefined();
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -513,7 +515,7 @@ describe("crabline transport", () => {
           text: "WhatsApp baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -572,7 +574,7 @@ describe("crabline transport", () => {
           text: "Signal baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -622,7 +624,7 @@ describe("crabline transport", () => {
           text: "assistant via fake signal",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -676,7 +678,7 @@ describe("crabline transport", () => {
           text: "Mattermost baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -731,7 +733,7 @@ describe("crabline transport", () => {
           text: "assistant via fake mattermost",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -821,7 +823,7 @@ describe("crabline transport", () => {
           text: "Matrix baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -875,7 +877,7 @@ describe("crabline transport", () => {
           text: "assistant via fake matrix",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -951,7 +953,7 @@ describe("crabline transport", () => {
           text: "assistant via fake zalo",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -1048,7 +1050,7 @@ describe("crabline transport", () => {
           text: "assistant after reset",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });

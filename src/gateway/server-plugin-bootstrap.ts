@@ -1,13 +1,12 @@
 // Gateway plugin bootstrap helpers.
-// Applies activation config and loads the process-root plugin registry.
-import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
-import { primeConfiguredBindingRegistry } from "../channels/plugins/configured-binding-registry.js";
+// Resolves activation config before loading or staging a Gateway registry.
+import { performance } from "node:perf_hooks";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
-import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { PluginRegistryParams } from "../plugins/registry-types.js";
+import {
+  getPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
   findActiveDegradedPlugin,
@@ -15,44 +14,15 @@ import {
 } from "../plugins/runtime-degraded-state.js";
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worker-provider-manifest.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
-import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 
-// Gateway plugin bootstrap applies activation/auto-enable config, loads plugins,
-// and primes channel bindings for startup/reload paths.
-type GatewayPluginBootstrapLog = {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-  error: (msg: string) => void;
-  debug: (msg: string) => void;
-};
+type GatewayPluginBootstrapLog = Parameters<typeof loadGatewayPlugins>[0]["log"];
+type GatewayPluginBootstrapParams = Omit<
+  Parameters<typeof loadGatewayPlugins>[0],
+  "autoEnabledReasons"
+> & { logDiagnostics?: boolean };
 
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
-};
-
-type GatewayPluginBootstrapParams = {
-  cfg: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  workspaceDir?: string;
-  log: GatewayPluginBootstrapLog;
-  coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
-  coreGatewayMethodNames?: readonly string[];
-  hostServices?: PluginRegistryParams["hostServices"];
-  baseMethods: string[];
-  pluginIds?: string[];
-  pluginLookUpTable?: PluginLookUpTable;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  channelPluginLoadIntent?: ChannelPluginLoadIntent;
-  suppressPluginInfoLogs?: boolean;
-  logDiagnostics?: boolean;
-  startupTrace?: GatewayStartupTrace;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-  resolveGatewayContext?: GatewayContextResolver;
-};
-
-// Diagnostics are logged after registry priming so startup output contains
-// plugin ids/source hints without exposing internal diagnostic objects.
+// Keep plugin/source attribution without exposing internal diagnostic objects.
 function logGatewayPluginDiagnostics(params: {
   diagnostics: PluginRegistry["diagnostics"];
   log: Pick<GatewayPluginBootstrapLog, "error" | "warn">;
@@ -88,68 +58,56 @@ function logGatewayPluginDiagnostics(params: {
 
 /** Prepares gateway plugin runtime and returns the loaded plugin registry state. */
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
-  const activationSourceConfig = params.activationSourceConfig ?? params.cfg;
-  const autoEnabled = applyPluginAutoEnable({
-    config: activationSourceConfig,
-    env: process.env,
-    ...(params.pluginLookUpTable?.manifestRegistry
-      ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
-      : {}),
-    discovery: params.pluginLookUpTable?.discovery,
-    ambientEnvTriggers: params.ambientEnvTriggers,
-  });
-  const resolvedConfig =
-    activationSourceConfig === params.cfg
-      ? autoEnabled.config
-      : mergeActivationSectionsIntoRuntimeConfig({
-          runtimeConfig: params.cfg,
-          activationConfig: autoEnabled.config,
+  return withPluginCache(
+    params.pluginMetadataSnapshot
+      ? getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot)
+      : getPluginCache(),
+    () => {
+      const started = performance.now();
+      const { logDiagnostics = true, ...loadParams } = params;
+      const activationSourceConfig = params.activationSourceConfig ?? params.cfg;
+      const autoEnabled = applyPluginAutoEnable({
+        config: activationSourceConfig,
+        env: params.env ?? process.env,
+        ...(params.pluginLookUpTable?.manifestRegistry
+          ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+          : {}),
+        discovery: params.pluginLookUpTable?.discovery,
+        ambientEnvTriggers: params.ambientEnvTriggers,
+      });
+      const autoEnableMs = performance.now() - started;
+      const resolvedConfig =
+        activationSourceConfig === params.cfg
+          ? autoEnabled.config
+          : mergeActivationSectionsIntoRuntimeConfig({
+              runtimeConfig: params.cfg,
+              activationConfig: autoEnabled.config,
+            });
+      const durableReasons = params.pluginLookUpTable
+        ? resolveDurableWorkerProviderAutoEnabledReasons(
+            params.pluginLookUpTable.manifestRegistry,
+            params.pluginLookUpTable.workerProviderIds,
+          )
+        : {};
+      const autoEnabledReasons = { ...autoEnabled.autoEnabledReasons, ...durableReasons };
+      params.startupTrace?.detail("plugins.gateway-prepare", [
+        ["autoEnableMs", autoEnableMs],
+        ["resolvedConfigMs", performance.now() - started - autoEnableMs],
+      ]);
+      const loaded = loadGatewayPlugins({
+        ...loadParams,
+        cfg: resolvedConfig,
+        activationSourceConfig,
+        autoEnabledReasons,
+        channelPluginLoadIntent: params.channelPluginLoadIntent ?? "full",
+      });
+      if (logDiagnostics && loaded.pluginRegistry.diagnostics.length > 0) {
+        logGatewayPluginDiagnostics({
+          diagnostics: loaded.pluginRegistry.diagnostics,
+          log: params.log,
         });
-  const durableReasons = params.pluginLookUpTable
-    ? resolveDurableWorkerProviderAutoEnabledReasons(
-        params.pluginLookUpTable.manifestRegistry,
-        params.pluginLookUpTable.workerProviderIds,
-      )
-    : {};
-  const autoEnabledReasons = { ...autoEnabled.autoEnabledReasons, ...durableReasons };
-  const loaded = loadGatewayPlugins({
-    cfg: resolvedConfig,
-    activationSourceConfig,
-    autoEnabledReasons,
-    workspaceDir: params.workspaceDir,
-    log: params.log,
-    ...(params.coreGatewayHandlers !== undefined && {
-      coreGatewayHandlers: params.coreGatewayHandlers,
-    }),
-    ...(params.coreGatewayMethodNames !== undefined && {
-      coreGatewayMethodNames: params.coreGatewayMethodNames,
-    }),
-    ...(params.hostServices !== undefined && {
-      hostServices: params.hostServices,
-    }),
-    baseMethods: params.baseMethods,
-    pluginIds: params.pluginIds,
-    pluginLookUpTable: params.pluginLookUpTable,
-    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-    channelPluginLoadIntent: params.channelPluginLoadIntent ?? "full",
-    suppressPluginInfoLogs: params.suppressPluginInfoLogs,
-    startupTrace: params.startupTrace,
-    ambientEnvTriggers: params.ambientEnvTriggers,
-    ...(params.resolveGatewayContext
-      ? { resolveGatewayContext: params.resolveGatewayContext }
-      : {}),
-  });
-  primeConfiguredBindingRegistry({ cfg: resolvedConfig });
-  if ((params.logDiagnostics ?? true) && loaded.pluginRegistry.diagnostics.length > 0) {
-    logGatewayPluginDiagnostics({
-      diagnostics: loaded.pluginRegistry.diagnostics,
-      log: params.log,
-    });
-  }
-  return loaded;
-}
-
-/** Loads gateway plugins during normal gateway startup. */
-export function loadGatewayStartupPlugins(params: GatewayPluginBootstrapParams) {
-  return prepareGatewayPluginLoad(params);
+      }
+      return { ...loaded, resolvedConfig };
+    },
+  );
 }

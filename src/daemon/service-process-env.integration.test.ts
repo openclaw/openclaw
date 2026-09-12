@@ -33,6 +33,51 @@ async function runDriver(driver: string, env: NodeJS.ProcessEnv) {
 }
 
 describe.skipIf(process.platform === "win32")("native control environment boundary", () => {
+  it.skipIf(process.getuid?.() === 0)(
+    "inspects the user manager from an inaccessible operator working directory",
+    async () => {
+      await withTempDir("openclaw-manager-cwd-", async (temp) => {
+        const home = await fs.realpath(temp);
+        const callerDirectory = path.join(home, "operator");
+        await fs.mkdir(callerDirectory);
+        const native = {
+          XDG_RUNTIME_DIR: home,
+          DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/bus`,
+        };
+        for (const command of ["systemctl", "busctl"]) {
+          await fs.writeFile(
+            path.join(home, command),
+            `#!${process.execPath}
+console.log(JSON.stringify({
+  XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+  DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
+}));
+`,
+            { mode: 0o700 },
+          );
+        }
+        const driver = `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+const callerDirectory = ${JSON.stringify(callerDirectory)};
+process.chdir(callerDirectory);
+fs.chmodSync(callerDirectory, 0o600);
+try {
+  for (const execute of [execSystemctlUser, execBusctlUser]) {
+    const result = await execute(process.env, ["status"], 5000);
+    assert.equal(result.code, 0, JSON.stringify(result));
+    assert.deepEqual(JSON.parse(result.stdout), ${JSON.stringify(native)});
+  }
+} finally {
+  fs.chmodSync(callerDirectory, 0o700);
+}
+`;
+        await runDriver(driver, { HOME: home, PATH: home, USER: "target", ...native });
+      });
+    },
+  );
+
   it.each([false, true])(
     "keeps systemctl and busctl routing with machine fallback %s",
     async (fallback) => {

@@ -32,7 +32,6 @@ describe("controlUiPublicAssetPath", () => {
         "file-icons/compact/dark/pdf.svg",
         "file-icons/large/shell-dark.svg",
         "file-icons/overlays/pdf.svg",
-        "plugin-art/example.webp",
         "app-art/example.webp",
         "community-art/example.webp",
       ] as const) {

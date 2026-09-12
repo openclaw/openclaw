@@ -219,7 +219,7 @@ export async function recoverGatewaySession(params: {
                 context: params.workerPlacementContext,
                 sessionId: initialSource.sessionId,
                 sessionKey: sourceTarget.canonicalKey,
-              });
+              }).stop;
             }
           } catch (error) {
             return { ok: false as const, error: stopFailure(error) };

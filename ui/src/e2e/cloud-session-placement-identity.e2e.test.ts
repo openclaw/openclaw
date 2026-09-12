@@ -29,6 +29,7 @@ suite.define(() => {
         environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
         providerId: "machine0",
         profileId: "team",
+        machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
         activeOwnerEpoch: 1,
         workerBundleHash: "a".repeat(64),
         workspaceBaseManifestRef: "sha256:cloud-identity-base",
@@ -71,13 +72,18 @@ suite.define(() => {
         );
         expect(
           await sidebarRow.locator(".session-row-badge--cloud").getAttribute("aria-label"),
-        ).toBe("machine0 · team · active");
+        ).toBe("machine0 · team · Linux · medium · 4 vCPU · 16 GB · active");
         await sidebarRow.hover();
         const context = page.locator(
           '.session-hovercard__context-row[aria-label="Runs on machine0 · team"]',
         );
         await context.waitFor({ state: "visible" });
         expect(await context.textContent()).toContain("machine0 · team");
+        const machine = page.locator(".session-hovercard__machine");
+        expect(await machine.getAttribute("aria-label")).toBe(
+          "Machine: Linux · medium · 4 vCPU · 16 GB",
+        );
+        expect(await machine.textContent()).toMatch(/^\s*Linux\s*medium\s*4 vCPU\s*16 GB\s*$/u);
       },
     );
   });

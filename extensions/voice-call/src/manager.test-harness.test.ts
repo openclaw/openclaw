@@ -64,9 +64,9 @@ it("finalizes each fixture's calls and destroys its real duration and transcript
     const started = await fixture.manager.initiateCall("+15550000001");
     expect(started.success).toBe(true);
     callIds.push(started.callId);
-    ownership.run("duration", () => {
-      markCallAnswered(fixture.manager, started.callId, `answered-${index}`);
-    });
+    await ownership.run("duration", () =>
+      markCallAnswered(fixture.manager, started.callId, `answered-${index}`),
+    );
     if (index === 0) {
       turns.push(
         ownership.run("transcript", () =>

@@ -1,5 +1,5 @@
 // Transcript repair contract tests ensure orphaned user leaves are merged into
-// the next prompt consistently across runtime fixtures and strategy adapters.
+// the next prompt consistently across runtime fixtures.
 import {
   inlineDataUriOrphanLeaf,
   QUEUED_USER_MESSAGE_MARKER,
@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { describe, expect, it } from "vitest";
 import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
-import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 
 describe("embedded agent transcript repair runtime contract", () => {
   it("merges text orphan leaves into the next prompt with the queued marker", () => {
@@ -76,19 +75,17 @@ describe("embedded agent transcript repair runtime contract", () => {
     expect(result.prompt).not.toContain("aaaa");
   });
 
-  it("exposes transcript repair through the embedded message merge strategy", () => {
-    const strategy = resolveMessageMergeStrategy();
-    const result = strategy.mergeOrphanedTrailingUserPrompt({
+  it("merges manual-run orphan leaves into the next prompt", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
       trigger: "manual",
-      leafMessage: textOrphanLeaf("queued via strategy"),
+      leafMessage: textOrphanLeaf("queued manual message"),
     });
 
-    expect(strategy.id).toBe("orphan-trailing-user-prompt");
     expect(result).toEqual({
       merged: true,
       removeLeaf: false,
-      prompt: `${QUEUED_USER_MESSAGE_MARKER}\nqueued via strategy\n\nnewest inbound message`,
+      prompt: `${QUEUED_USER_MESSAGE_MARKER}\nqueued manual message\n\nnewest inbound message`,
     });
   });
 });

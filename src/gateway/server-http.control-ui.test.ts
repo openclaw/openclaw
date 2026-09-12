@@ -164,3 +164,80 @@ describe("Gateway Control UI identity", () => {
     });
   });
 });
+
+// Marketplace documents and plugin HTTP routes share only their path prefix.
+it("serves marketplace browser reads while preserving plugin HTTP boundaries", async () => {
+  await withTempDir("openclaw-marketplace-routing-", async (controlUiRoot) => {
+    await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>spa fallback</html>\n");
+    await withGatewayServer({
+      prefix: "plugin-marketplace-root-control-ui",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        controlUiRoot: { kind: "resolved", path: controlUiRoot },
+        handlePluginRequest: async (req, res) => {
+          if (req.url !== "/plugins/webhook") {
+            return false;
+          }
+          res.statusCode = 202;
+          res.end("plugin response");
+          return true;
+        },
+        shouldEnforcePluginGatewayAuth: () => false,
+        isStartupPluginRuntimeReady: () => true,
+      },
+      run: async (server) => {
+        const documentPaths = [
+          "/plugins",
+          "/plugins/",
+          "/plugins/ch_bWF0cml4",
+          "/plugins/local_bWVtb3J5",
+        ];
+        for (const pathname of documentPaths) {
+          for (const method of ["GET", "HEAD"]) {
+            const { res, getBody } = await sendRequest(server, {
+              path: pathname,
+              method,
+              headers: { accept: "text/html" },
+            });
+            expect(res.statusCode, `${method} ${pathname}`).toBe(200);
+            if (method === "GET") {
+              expect(getBody()).toContain("spa fallback");
+            } else {
+              expect(getBody()).toBe("");
+            }
+          }
+        }
+        for (const request of [
+          ...documentPaths.flatMap((pathname) => [
+            { path: pathname, method: "GET", headers: { accept: "application/json" } },
+            { path: pathname, method: "GET", headers: { accept: "text/html;q=0" } },
+            { path: pathname, method: "POST", headers: { accept: "text/html" } },
+          ]),
+          { path: "/plugins/unclaimed", method: "GET", headers: { accept: "text/html" } },
+          { path: "/plugins/ch_a", method: "GET", headers: { accept: "text/html" } },
+          { path: "/plugins/ch_bWF0cml4/extra", method: "GET", headers: { accept: "text/html" } },
+        ]) {
+          const { res, getBody } = await sendRequest(server, request);
+          expect(res.statusCode, JSON.stringify(request)).toBe(404);
+          expect(getBody()).toBe("Not Found");
+        }
+        const plugin = await sendRequest(server, {
+          path: "/plugins/webhook",
+          method: "GET",
+          headers: { accept: "text/html" },
+        });
+        expect(plugin.res.statusCode).toBe(202);
+        expect(plugin.getBody()).toBe("plugin response");
+        const pluginManager = await sendRequest(server, {
+          path: "/settings/plugins",
+          method: "GET",
+          headers: { accept: "text/html" },
+        });
+        expect(pluginManager.res.statusCode).toBe(200);
+        expect(pluginManager.getBody()).toContain("spa fallback");
+      },
+    });
+  });
+});

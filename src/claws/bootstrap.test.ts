@@ -125,7 +125,7 @@ describe("package-root BOOTSTRAP.md", () => {
     await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).resolves.toContain(
       "which repositories",
     );
-    expect(readWorkspaceStateSnapshot(workspace, { env }).setup).toMatchObject({
+    expect((await readWorkspaceStateSnapshot(workspace, { env })).setup).toMatchObject({
       bootstrapSeededAt: new Date(1_000).toISOString(),
     });
     await expect(readClawStatus("bootstrap-worker", { env, config })).resolves.toMatchObject({
@@ -214,7 +214,9 @@ describe("package-root BOOTSTRAP.md", () => {
     });
     expect(config).toEqual({});
     expect(readClawInstallRecord("bootstrap-worker", { env })?.status).toBe("workspace_ready");
-    expect(readWorkspaceStateSnapshot(workspace, { env }).setup.bootstrapSeededAt).toBeUndefined();
+    expect(
+      (await readWorkspaceStateSnapshot(workspace, { env })).setup.bootstrapSeededAt,
+    ).toBeUndefined();
     await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).rejects.toThrow();
 
     const resumed = await applyClawAddPlan(plan, {

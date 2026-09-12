@@ -247,6 +247,7 @@ export function buildThreadStartParams(
       : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
+    threadSource: "openclaw",
     ...resolveCodexThreadEnvironmentSelection(options),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
@@ -524,7 +525,7 @@ export async function readCodexInheritedMcpServerNames(
   signal?: AbortSignal,
   effectiveConfig?: CodexConfigReadResponse,
 ): Promise<string[]> {
-  const response = effectiveConfig ?? (await readCodexEffectiveConfig(client, cwd, signal));
+  const response = effectiveConfig ?? (await readCodexEffectiveConfig(client, cwd, { signal }));
   if (!Array.isArray(response.layers)) {
     throw new Error("Codex config/read omitted effective config layers");
   }

@@ -165,6 +165,36 @@ describe("route-args", () => {
       parse: parseAgentsListRouteArgs,
       argv: ["node", "openclaw", "agents", "--wat"],
     },
+    {
+      name: "config get empty excess operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", ""],
+    },
+    {
+      name: "config get unknown flag after an empty operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "--unknown"],
+    },
+    {
+      name: "config get extra path after an empty operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "gateway.bind"],
+    },
+    {
+      name: "config unset empty excess operand",
+      parse: parseConfigUnsetRouteArgs,
+      argv: ["node", "openclaw", "config", "unset", "gateway.port", "", "--dry-run"],
+    },
+    {
+      name: "health empty excess operand",
+      parse: parseHealthRouteArgs,
+      argv: ["node", "openclaw", "health", ""],
+    },
+    {
+      name: "agents list empty excess operand",
+      parse: parseAgentsListRouteArgs,
+      argv: ["node", "openclaw", "agents", "list", ""],
+    },
   ])("defers unsupported routed argv: $name", ({ parse, argv }) => {
     expect(parse(argv)).toBeNull();
   });

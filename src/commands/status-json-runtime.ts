@@ -1,7 +1,7 @@
 // Resolves runtime-only inputs for status JSON after the fast scan completes.
 // Keeps gateway health, usage, security audit, and service summaries behind explicit option gates.
 
-import { readBackupFreshness } from "./backup-health.js";
+import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
@@ -53,7 +53,7 @@ export async function resolveStatusJsonOutput(params: {
     lastHeartbeat,
     pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
   });
-  const backups = readBackupFreshness(scan.env ?? {});
+  const backups = await readBackupRunFreshness(scan.env ?? {});
   if (backups.latest || backups.latestOk) {
     Object.assign(payload, { backups });
   }

@@ -81,7 +81,7 @@ async function withRealtimeProvider(
     });
     return received;
   } finally {
-    bridge.close();
+    await bridge.close();
     for (const client of server.clients) {
       client.terminate();
     }

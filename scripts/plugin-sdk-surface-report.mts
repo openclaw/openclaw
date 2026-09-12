@@ -202,7 +202,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: restore the shipped read-only conversation-binding inspection facade.
       // +1: canonical node CLI owners for plugin-provided node commands.
       // +3: typed feature contracts, backend registration, and native Control UI hosting.
-      152,
+      // +1: public provider-owned asynchronous embedding batch contract.
+      153,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -363,7 +364,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: one exec policy object replaces two deprecated comparator exports.
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
-      4447,
+      // +1: prepared model-specific runtime choices for channel consumers.
+      // +3: public provider-owned asynchronous embedding batch contract.
+      // +2: canonical credential-value functions through the narrow secret-input surface.
+      // +1: shared removed-model choice recovery text for channel consumers.
+      4454,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -495,7 +500,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: exec comparators are members of the shared policy object.
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
-      2629,
+      // +1: prepared model-specific runtime choice reader.
+      // +2: canonical env-value reader and managed SecretRef marker constructor.
+      2632,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

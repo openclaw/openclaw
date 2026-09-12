@@ -12,6 +12,7 @@ import type {
   CodexAppServerExtensionRuntime,
   CodexAppServerToolResultEvent,
 } from "../../plugins/codex-app-server-extension-types.js";
+import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { AgentToolResult } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -24,16 +25,21 @@ export function createCodexAppServerToolResultExtensionRunner(
   factories: CodexAppServerExtensionFactory[] = listCodexAppServerExtensionFactories(),
 ) {
   const handlers: CodexToolResultHandler[] = [];
-  const runtime: CodexAppServerExtensionRuntime = {
-    on(event, handler) {
-      if (event === "tool_result") {
-        handlers.push(handler);
-      }
-    },
-  };
   const initPromise = (async () => {
     for (const factory of factories) {
-      await factory(runtime);
+      const instance = getPluginValueInstance(factory);
+      await factory({
+        on(event, handler) {
+          if (event === "tool_result") {
+            // Retained registrations and callbacks belong to the exact factory instance.
+            if (instance) {
+              instance.run(() => handlers.push(instance.wrap(handler)));
+            } else {
+              handlers.push(handler);
+            }
+          }
+        },
+      });
     }
   })();
 

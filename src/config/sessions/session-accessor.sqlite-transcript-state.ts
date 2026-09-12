@@ -15,6 +15,10 @@ import {
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
 import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
+import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
   resolveDeliveryProvenCanonicalSessionKey,
@@ -23,6 +27,7 @@ import {
 export type SessionTranscriptContextVersion = {
   generation: string | null;
   rawSeq: number | null;
+  updatedAt: number | null;
 };
 
 export function readTranscriptContextVersionInTransaction(
@@ -30,7 +35,8 @@ export function readTranscriptContextVersionInTransaction(
   sessionId: string,
 ) {
   const db = getSessionKysely(database.db);
-  return executeSqliteQueryTakeFirstSync(
+  const cold = readSessionColdTranscript(database.db, sessionId);
+  const version = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("transcript_events")
@@ -41,9 +47,15 @@ export function readTranscriptContextVersionInTransaction(
           .select("generation")
           .where("session_id", "=", sessionId)
           .as("generation"),
+        eb
+          .selectFrom("session_windows")
+          .select("transcript_updated_at")
+          .where("session_id", "=", sessionId)
+          .as("updatedAt"),
       ])
       .where("session_id", "=", sessionId),
   )!;
+  return cold ? { ...version, rawSeq: cold.last_seq } : version;
 }
 
 function createTranscriptGeneration(): string {
@@ -229,6 +241,7 @@ export function ensureTranscriptSessionRoot(
 }
 
 export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: string): number {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -306,6 +319,7 @@ export function deleteTranscriptEventsInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): boolean {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   executeSqliteQuerySync(
     database.db,

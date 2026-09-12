@@ -13,6 +13,11 @@ import {
   resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import {
+  PluginInstallPersistedError,
+  PluginRuntimeApplicationError,
+  projectPluginRuntimeFailure,
+} from "./lifecycle.js";
 import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
@@ -95,7 +100,13 @@ describe("managed plugin install transactions", () => {
   });
 
   it.each(requests)("settles $source payloads at the config commit boundary", async (request) => {
-    for (const failure of ["authority-closed", "before-commit", "after-commit", "none"] as const) {
+    for (const failure of [
+      "authority-closed",
+      "before-commit",
+      "after-commit",
+      "runtime-apply",
+      "none",
+    ] as const) {
       mocks.persist.mockClear();
       const home = await fs.realpath(tempDirs.make("openclaw-managed-upgrade-"));
       const sourceDir = path.join(home, "incoming");
@@ -111,7 +122,20 @@ describe("managed plugin install transactions", () => {
       createColdPluginFixture({ rootDir: targetDir, pluginId: "demo", packageVersion: "1.0.0" });
       await fs.writeFile(path.join(sourceDir, "version"), "2.0.0");
       await fs.writeFile(path.join(targetDir, "version"), "1.0.0");
-      const conflict = new Error(failure);
+      const conflict =
+        failure === "runtime-apply"
+          ? new PluginRuntimeApplicationError(
+              "plugin service failed to start",
+              {
+                operationId: "install-activation",
+                generation: 3,
+                pluginIds: ["demo"],
+                phase: "activate",
+                committed: false,
+              },
+              { cause: new Error("service startup failed") },
+            )
+          : new Error(failure);
       let active = true;
       mocks.persist.mockImplementation(
         async (
@@ -133,6 +157,7 @@ describe("managed plugin install transactions", () => {
           if (failure === "after-commit") {
             throw conflict;
           }
+          await params.applyRuntime?.({ config: {}, pluginIds: ["demo"], reason: "install" });
           return {};
         },
       );
@@ -200,6 +225,13 @@ describe("managed plugin install transactions", () => {
         request,
         snapshot,
         env: { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") },
+        ...(failure === "runtime-apply"
+          ? {
+              applyRuntime: async () => {
+                throw conflict;
+              },
+            }
+          : {}),
         onCapabilityConsent,
         beforePersistentApply: () => {
           if (!active) {
@@ -212,8 +244,25 @@ describe("managed plugin install transactions", () => {
       } else if (failure === "authority-closed") {
         await expect(installed).rejects.toThrow("authority-closed");
         expect(mocks.persist).not.toHaveBeenCalled();
+      } else if (failure === "after-commit" || failure === "runtime-apply") {
+        const rejected = await installed.catch((error: unknown) => error);
+        expect(rejected).toBeInstanceOf(PluginInstallPersistedError);
+        expect(rejected).toMatchObject({ pluginId: "demo", cause: conflict });
+        if (rejected instanceof PluginInstallPersistedError) {
+          expect(rejected.cause).toBe(conflict);
+        }
+        const projected = projectPluginRuntimeFailure(rejected);
+        expect(projected.persistence).toEqual({ operation: "install", pluginId: "demo" });
+        expect(projected.message).toContain(conflict.message);
+        if (failure === "runtime-apply") {
+          expect(projected.message).toContain("service startup failed");
+        }
+        expect(projected.runtime).toEqual(
+          conflict instanceof PluginRuntimeApplicationError ? conflict.details : undefined,
+        );
       } else {
         await expect(installed).rejects.toBe(conflict);
+        expect(projectPluginRuntimeFailure(conflict)).not.toHaveProperty("persistence");
       }
       expect(onCapabilityConsent).toHaveBeenCalledOnce();
       expect(await fs.readFile(path.join(targetDir, "version"), "utf8"), failure).toBe(

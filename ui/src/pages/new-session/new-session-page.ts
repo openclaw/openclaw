@@ -227,6 +227,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
         (sessions) => this.groupRouteRevalidation.synchronize(sessions),
       )
       .watch(
+        () => this.context?.runtimeConfig,
+        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      )
+      .watch(
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
       );

@@ -124,6 +124,11 @@ export function assertOpenClawAgentSchemaContains(
 ): void {
   assertSqliteSchemaContains(database, pathname, schemaSql, {
     ...AGENT_SCHEMA_COMPATIBILITY,
+    allowedMissingTables: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
+      // Legacy migration preflight precedes creation of the required v20 table.
+      ...(participantSchema === "legacy" ? ["session_transcript_cold_archives"] : []),
+    ],
     allowedMissingColumns: [
       ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingColumns,
       ...(participantSchema === "legacy" ? LEGACY_PARTICIPANT_OPTIONAL_COLUMNS : []),

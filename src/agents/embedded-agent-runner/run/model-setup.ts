@@ -14,7 +14,7 @@ import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 import {
@@ -29,7 +29,7 @@ export type PreparedNativeSessionRuntime = {
 } & ({ auth: "native" } | { auth: "host"; modelRef: ModelRef });
 
 function prepareNativeSessionRuntime(
-  runParams: RunEmbeddedAgentParams,
+  runParams: RunEmbeddedAgentInternalParams,
   harness: AgentHarness,
   admission: ReturnType<typeof assertAgentHarnessRunAdmission>,
 ): PreparedNativeSessionRuntime | undefined {
@@ -100,7 +100,7 @@ function prepareNativeSessionRuntime(
 }
 
 export async function resolveEmbeddedRunModelSetup(params: {
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
   provider: string;
   modelId: string;
@@ -216,6 +216,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
       ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
       modelId,
       agentDir: params.agentDir,
+      requestedRouteResolution: modelSelectionChangedByHook
+        ? "raw"
+        : runParams.requestedRouteResolution,
       config: runParams.config,
       workspaceDir: params.workspaceDir,
       authProfileId: runParams.authProfileId,
@@ -224,20 +227,13 @@ export async function resolveEmbeddedRunModelSetup(params: {
     });
     resolvedModelProvider = tieredResolution.provider;
     modelResolution = tieredResolution.resolution;
-  }
-  if (!modelResolution) {
-    throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
-      reason: "model_not_found",
-      provider,
-      model: modelId,
-      sessionId: runParams.sessionId,
-      lane: params.globalLane,
-    });
+    if (modelResolution.model) {
+      modelId = modelResolution.logicalRef.model;
+    }
   }
   provider = resolvedModelProvider;
-  const { model, error, authStorage, modelRegistry } = modelResolution;
-  if (!model) {
-    throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
+  if (!modelResolution.model) {
+    throw new FailoverError(modelResolution.error ?? `Unknown model: ${provider}/${modelId}`, {
       reason: "model_not_found",
       provider,
       model: modelId,
@@ -245,6 +241,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
       lane: params.globalLane,
     });
   }
+  const { model, authStorage, modelRegistry } = modelResolution;
 
   return {
     provider,

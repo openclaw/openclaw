@@ -1,3 +1,4 @@
+import { symlinkSync, unlinkSync, type Stats } from "node:fs";
 // Links plugin peer packages for local development installs.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -220,26 +221,25 @@ export async function auditDeclaredOpenClawHostDependency(params: {
 async function ensureRealNodeModulesDir(params: {
   installedDir: string;
   logger: PluginPeerLinkLogger;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<string | null> {
   const nodeModulesDir = path.join(params.installedDir, "node_modules");
+  let existing: Stats | undefined;
   try {
-    const existing = await fs.lstat(nodeModulesDir);
-    if (!existing.isDirectory() || existing.isSymbolicLink()) {
-      params.logger.warn?.(
-        `Skipping openclaw peerDependency link because ${nodeModulesDir} is not a real directory.`,
-      );
-      return null;
-    }
-    return nodeModulesDir;
+    existing = await fs.lstat(nodeModulesDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (!hasErrnoCode(error, "ENOENT")) {
       throw error;
     }
   }
-
-  await fs.mkdir(nodeModulesDir, { recursive: true });
-  const created = await fs.lstat(nodeModulesDir);
-  if (!created.isDirectory() || created.isSymbolicLink()) {
+  if (!existing) {
+    await params.beforePersistentEffect?.();
+    params.beforePersistentApply?.();
+    await fs.mkdir(nodeModulesDir, { recursive: true });
+    existing = await fs.lstat(nodeModulesDir);
+  }
+  if (!existing.isDirectory() || existing.isSymbolicLink()) {
     params.logger.warn?.(
       `Skipping openclaw peerDependency link because ${nodeModulesDir} is not a real directory.`,
     );
@@ -253,11 +253,10 @@ async function linkOpenClawPeerDependency(params: {
   installedDir: string;
   peerName: string;
   logger: PluginPeerLinkLogger;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<OpenClawPeerLinkResult> {
-  const nodeModulesDir = await ensureRealNodeModulesDir({
-    installedDir: params.installedDir,
-    logger: params.logger,
-  });
+  const nodeModulesDir = await ensureRealNodeModulesDir(params);
   if (!nodeModulesDir) {
     return "skipped";
   }
@@ -269,39 +268,56 @@ async function linkOpenClawPeerDependency(params: {
     return "unchanged";
   }
 
+  const warn = (error: unknown): "skipped" => {
+    params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(error)}`);
+    return "skipped";
+  };
+  let existing: Stats | null;
   try {
-    const existing = await fs.lstat(linkPath).catch((err: unknown) => {
-      if (hasErrnoCode(err, "ENOENT")) {
+    existing = await fs.lstat(linkPath).catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
         return null;
       }
-      throw err;
+      throw error;
     });
-    if (existing) {
-      if (!existing.isSymbolicLink()) {
-        if (params.peerName === "openclaw" && existing.isDirectory()) {
-          const existingPackageName = await readPackageName(linkPath);
-          if (existingPackageName === "openclaw") {
-            await fs.rm(linkPath, { recursive: true, force: true });
-            await fs.symlink(params.hostRoot, linkPath, "junction");
-            params.logger.info?.(
-              `Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`,
-            );
-            return "linked";
-          }
-        }
-        params.logger.warn?.(
-          `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
-        );
-        return "skipped";
-      }
-      await fs.unlink(linkPath);
+    if (
+      existing &&
+      !existing.isSymbolicLink() &&
+      (params.peerName !== "openclaw" ||
+        !existing.isDirectory() ||
+        (await readPackageName(linkPath)) !== "openclaw")
+    ) {
+      params.logger.warn?.(
+        `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
+      );
+      return "skipped";
     }
-    await fs.symlink(params.hostRoot, linkPath, "junction");
+  } catch (error) {
+    return warn(error);
+  }
+  // Await the initiating owner's effect gate, then revalidate synchronous
+  // mutation authority outside filesystem warning conversion before each effect.
+  if (existing) {
+    await params.beforePersistentEffect?.();
+    params.beforePersistentApply?.();
+    try {
+      if (existing.isSymbolicLink()) {
+        unlinkSync(linkPath);
+      } else {
+        await fs.rm(linkPath, { recursive: true, force: true });
+      }
+    } catch (error) {
+      return warn(error);
+    }
+  }
+  await params.beforePersistentEffect?.();
+  params.beforePersistentApply?.();
+  try {
+    symlinkSync(params.hostRoot, linkPath, "junction");
     params.logger.info?.(`Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`);
     return "linked";
-  } catch (err) {
-    params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(err)}`);
-    return "skipped";
+  } catch (error) {
+    return warn(error);
   }
 }
 
@@ -321,6 +337,8 @@ export async function linkOpenClawPeerDependencies(params: {
   logger: PluginPeerLinkLogger;
   /** Explicit source setup uses its selected checkout instead of the running host. */
   hostRoot?: string;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{ repaired: number; skipped: number }> {
   const peers = Object.keys(params.peerDependencies).filter((name) => name === "openclaw");
   if (peers.length === 0) {
@@ -349,6 +367,8 @@ export async function linkOpenClawPeerDependencies(params: {
       installedDir: params.installedDir,
       peerName,
       logger: params.logger,
+      beforePersistentApply: params.beforePersistentApply,
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     if (result === "linked") {
       repaired += 1;
@@ -369,6 +389,7 @@ export async function reconcileRegisteredOpenClawHostLinks(params: {
   env?: NodeJS.ProcessEnv;
   mode: "audit" | "repair";
   logger?: PluginPeerLinkLogger;
+  beforePersistentEffect?: () => void | Promise<void>;
   onPackageReadError?: (error: unknown, packageDir: string) => void;
 }): Promise<RegisteredOpenClawHostLinkResult> {
   const extensionsRoot = path.resolve(params.extensionsDir);
@@ -446,6 +467,7 @@ export async function reconcileRegisteredOpenClawHostLinks(params: {
       installedDir: packageDir,
       peerDependencies: dependencies,
       logger: params.logger ?? {},
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     repaired += result.repaired;
     skipped += result.skipped;
@@ -455,7 +477,9 @@ export async function reconcileRegisteredOpenClawHostLinks(params: {
 
 export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   npmRoot: string;
+  beforePersistentApply?: () => void;
   logger: PluginPeerLinkLogger;
+  beforePersistentEffect?: () => void | Promise<void>;
   onPackageReadError?: (error: unknown, packageDir: string) => void;
 }): Promise<RelinkManagedNpmRootResult> {
   let checked = 0;
@@ -482,6 +506,8 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
       installedDir: packageDir,
       peerDependencies: openClawLinkDependencies,
       logger: params.logger,
+      beforePersistentApply: params.beforePersistentApply,
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     attempted += 1;
     repaired += result.repaired;

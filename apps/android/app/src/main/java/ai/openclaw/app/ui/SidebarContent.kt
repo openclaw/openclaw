@@ -235,11 +235,25 @@ internal fun sidebarSessionPresentation(
 internal fun sessionPresentationTitle(
   session: ChatSessionEntry,
   unnamedTitle: () -> String,
-): String =
-  session.label?.trim()?.takeIf(String::isNotEmpty)
-    ?: session.displayName?.trim()?.takeIf(String::isNotEmpty)
-    ?: nativeString("New chat").takeIf { session.isDashboardSession() }
-    ?: unnamedTitle()
+): String {
+  val label = session.label?.trim()?.takeIf(String::isNotEmpty)
+  val displayName = session.displayName?.trim()?.takeIf(String::isNotEmpty)
+  val autoLabel = session.autoLabel?.trim()?.takeIf(String::isNotEmpty)
+  val localFallbackTitle = session.localFallbackTitle?.trim()?.takeIf(String::isNotEmpty)
+  if (label != null) {
+    return label
+  }
+  if (displayName != null) {
+    return displayName
+  }
+  if (autoLabel != null) {
+    return autoLabel
+  }
+  if (localFallbackTitle != null) {
+    return localFallbackTitle
+  }
+  return nativeString("New chat").takeIf { session.isDashboardSession() } ?: unnamedTitle()
+}
 
 private fun ChatSessionEntry.isDashboardSession(): Boolean {
   if (classification == "dashboard") return true
@@ -1331,10 +1345,20 @@ private fun SidebarCatalogSessionRow(
   val draggableSession = liveSession?.takeIf { canMutateSessions }
   val activity =
     sidebarSessionActivity(
-      status = liveSession?.status ?: session.status,
+      // Adopted rows use Gateway state; unadopted catalogs also call their running state "active".
+      status =
+        if (liveSession != null) {
+          liveSession.status
+        } else {
+          session.status
+            .trim()
+            .lowercase()
+            .let { if (it == "active") "running" else it }
+        },
       lastRunError = liveSession?.lastRunError,
-      hasActiveRun = continuing || liveSession?.hasActiveRun == true,
+      hasActiveRun = liveSession?.hasActiveRun,
       unread = liveSession?.unread == true,
+      continuing = continuing,
     )
   SidebarRowSurface(
     selected = selected,

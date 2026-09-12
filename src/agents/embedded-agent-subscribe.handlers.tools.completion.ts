@@ -343,9 +343,6 @@ export async function handleToolExecutionEnd(
   const sourceReplyFinal = deliveredMessageToolSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
     : undefined;
-  ctx.state.pendingMessagingTexts.delete(toolCallId);
-  ctx.state.pendingMessagingTargets.delete(toolCallId);
-  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
@@ -440,6 +437,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
+      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,
@@ -475,6 +473,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
+      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,

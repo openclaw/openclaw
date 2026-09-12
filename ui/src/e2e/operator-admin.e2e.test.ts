@@ -224,13 +224,25 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.status");
 
-      const agentSelect = page.locator('openclaw-agent-select[name="skills-agent"]');
-      await agentSelect.locator(".agent-select__trigger").click();
-      await agentSelect
-        .locator("wa-dropdown-item[data-agent-option]")
-        .filter({ hasText: "Reviewer" })
+      const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
+        hasText: "Deploy Helper",
+      });
+      await expect.poll(() => skillCard.getByRole("img", { name: "Ready" }).isVisible()).toBe(true);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-agent-menu")
+        .getByRole("menuitemradio", { name: "Reviewer" })
         .click();
       await waitForRequest(gateway, "skills.status", (params) => params.agentId === "reviewer");
+      expect(new URL(page.url()).pathname).toBe("/skills");
+      await expect
+        .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
+        .toBe(true);
+
+      await page.getByRole("button", { name: "Skill settings", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
+      const agentSelect = page.locator('openclaw-agent-select[name="skills-agent"]');
       await expect
         .poll(async () => (await agentSelect.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -323,8 +335,7 @@ suite.define(() => {
         "skills.install",
         "skills.proposals.apply",
         "skills.proposals.evaluate",
-        "skills.proposals.historyScan",
-        "skills.proposals.historyStatus",
+        "sessions.create",
         "skills.proposals.inspect",
         "skills.proposals.list",
         "skills.proposals.reject",
@@ -377,19 +388,12 @@ suite.define(() => {
           installedSkills: [],
           updatedAt: proposal.updatedAt,
         },
-        "skills.proposals.historyStatus": {
-          hasScanned: false,
-          hasMore: true,
-          ideasFound: 0,
-          reviewedSessions: 0,
-          lastScanReviewed: 0,
-        },
         "skills.status": skillStatus(false),
       },
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       await page.locator("#agents-tab-overview").click();
@@ -449,12 +453,21 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
-      const globalSkillToggle = page.locator("wa-switch.settings-toggle").first();
+      const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
+        hasText: "Deploy Helper",
+      });
+      await expect
+        .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
+        .toBe(true);
+      expect(await page.locator(".skill-discovery wa-switch").count()).toBe(0);
+      await page.getByRole("button", { name: "Skill settings", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
+      await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
+      const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
+      const globalSkillToggle = skillDialog.locator("wa-switch.settings-toggle");
       await expect.poll(() => globalSkillToggle.getAttribute("disabled")).not.toBeNull();
       await globalSkillToggle.click({ force: true });
       expect(await gateway.getRequests("skills.update")).toHaveLength(0);
-      await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
-      const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
       const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
       await expect.poll(() => install.isDisabled()).toBe(true);
       await install.click({ force: true });
@@ -487,11 +500,12 @@ suite.define(() => {
       await expect.poll(() => selfLearning.isDisabled()).toBe(true);
       await selfLearning.click({ force: true });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      const scanHistory = page.getByRole("button", { name: "Find skill ideas" });
-      await expect.poll(() => scanHistory.isDisabled()).toBe(true);
-      await scanHistory.click({ force: true });
-      expect(await gateway.getRequests("skills.proposals.historyScan")).toHaveLength(0);
-      await screenshot(page, "07-read-only-workshop.png", scanHistory);
+      const learn = page.getByRole("button", { name: "Learn from past conversations" });
+      await expect.poll(() => learn.isDisabled()).toBe(true);
+      const creates = (await gateway.getRequests("sessions.create")).length;
+      await learn.click({ force: true });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(creates);
+      await screenshot(page, "07-read-only-workshop.png", learn);
     } finally {
       await context.close();
     }
@@ -516,7 +530,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);

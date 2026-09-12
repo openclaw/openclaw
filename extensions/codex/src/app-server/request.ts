@@ -12,7 +12,7 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
-import { withTimeout } from "./timeout.js";
+import { withAbortableTimeout, withTimeout } from "./timeout.js";
 
 type CodexAppServerClientRequestParams = {
   client: CodexAppServerClient;
@@ -109,6 +109,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
 export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   method: string;
   requestParams?: unknown;
+  /** Rechecks caller-owned authority immediately before each physical write. */
+  assertCurrent?: () => void;
 }) => Promise<T>;
 
 /** A scoped guard rejected the request before a physical write. */
@@ -146,6 +148,9 @@ export async function readCodexAppServerUsage(options: {
   authProfileId?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   startOptions?: CodexAppServerStartOptions;
+  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
+  authRequirement?: CodexAppServerClientOptions["authRequirement"];
+  assertCurrent?: () => void;
 }): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
   const deadline = Date.now() + options.timeoutMs;
   return await withCodexAppServerJsonClient(
@@ -156,6 +161,9 @@ export async function readCodexAppServerUsage(options: {
       ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
       config: options.config,
       startOptions: options.startOptions,
+      preparedAuth: options.preparedAuth,
+      authRequirement: options.authRequirement,
+      assertCurrent: options.assertCurrent,
       isolated: true,
       // A throwaway read-only child: bound shutdown inside the outer usage deadline.
       isolatedShutdown: CODEX_USAGE_ISOLATED_SHUTDOWN,
@@ -226,7 +234,7 @@ export async function withCodexAppServerJsonClient<T>(
   run: (
     request: CodexAppServerScopedRequest,
     client: CodexAppServerClient,
-    scope: { assertCurrent: () => void },
+    scope: { assertCurrent: () => void; abort: (reason: Error) => void },
   ) => Promise<T>,
 ): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
@@ -235,6 +243,9 @@ export async function withCodexAppServerJsonClient<T>(
   const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
   const isPastDeadline = () => deadline !== undefined && Date.now() >= deadline;
   const throwIfAbandoned = () => {
+    if (timeoutController.signal.aborted && timeoutController.signal.reason instanceof Error) {
+      throw timeoutController.signal.reason;
+    }
     if (timeoutController.signal.aborted || isPastDeadline()) {
       throw new CodexAppServerScopedRequestRejectedError(timeoutMessage);
     }
@@ -245,8 +256,11 @@ export async function withCodexAppServerJsonClient<T>(
   };
 
   try {
-    return await withTimeout(
-      (async () => {
+    return await withAbortableTimeout({
+      signal: timeoutController.signal,
+      timeoutMs,
+      timeoutMessage,
+      promise: (async () => {
         const { resolveCodexAppServerDirectSandboxBypassBlock } =
           await import("./sandbox-guard.js");
         const {
@@ -273,6 +287,7 @@ export async function withCodexAppServerJsonClient<T>(
             agentDir: params.agentDir,
             config: params.config,
             abandonSignal: timeoutController.signal,
+            assertCurrent: params.assertCurrent,
           });
           let scopeActive = true;
           const assertCurrent = () => {
@@ -289,6 +304,7 @@ export async function withCodexAppServerJsonClient<T>(
             const scopedRequest: CodexAppServerScopedRequest = async <R>(request: {
               method: string;
               requestParams?: unknown;
+              assertCurrent?: () => void;
             }) => {
               const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
                 method: request.method,
@@ -304,10 +320,21 @@ export async function withCodexAppServerJsonClient<T>(
               return await client.request<R>(request.method, request.requestParams, {
                 timeoutMs: remainingTimeoutMs(),
                 signal: timeoutController.signal,
-                assertCurrent,
+                assertCurrent: () => {
+                  assertCurrent();
+                  request.assertCurrent?.();
+                },
               });
             };
-            return await run(scopedRequest, client, { assertCurrent });
+            return await run(scopedRequest, client, {
+              assertCurrent,
+              abort: (reason) => {
+                // An old attempt must not cancel its replacement's operation.
+                if (scopeActive) {
+                  timeoutController.abort(reason);
+                }
+              },
+            });
           } catch (error) {
             if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
               throw error;
@@ -335,9 +362,7 @@ export async function withCodexAppServerJsonClient<T>(
         }
         throw new Error("Codex app-server selection retry loop exited unexpectedly");
       })(),
-      timeoutMs,
-      timeoutMessage,
-    );
+    });
   } catch (error) {
     if (isPastDeadline()) {
       throw new Error(timeoutMessage, { cause: error });
@@ -346,6 +371,6 @@ export async function withCodexAppServerJsonClient<T>(
   } finally {
     // `withTimeout` only stops awaiting. Abort the shared operation before its
     // timeout becomes observable so no delayed acquire can issue a request or retry.
-    timeoutController.abort();
+    timeoutController.abort(new CodexAppServerScopedRequestRejectedError(timeoutMessage));
   }
 }

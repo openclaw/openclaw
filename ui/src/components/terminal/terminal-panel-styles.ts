@@ -74,6 +74,11 @@ export const terminalPanelStyles = css`
     background: var(--bg-elevated);
     box-shadow: var(--overlay-shadow);
   }
+  .tp-session-menu--hosted {
+    --tp-session-menu-max-height: calc(100% - 8px);
+
+    top: 4px;
+  }
   .tp-session-menu__header {
     display: flex;
     align-items: center;

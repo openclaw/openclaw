@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
@@ -17,30 +18,33 @@ import {
 
 type PublishOutputFileAtomically =
   typeof import("./output-file.runtime.js").publishOutputFileAtomically;
+type GetSubCliCompletionGroups =
+  typeof import("./program/register.subclis-core.js").getSubCliCompletionGroups;
 
 const outputFileMocks = vi.hoisted(() => ({
   publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
 }));
 const stderrWrites = vi.hoisted(() => vi.fn());
-const getCoreCliCommandNamesMock = vi.hoisted(() => vi.fn(() => []));
-const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
+const getCoreCliCompletionGroupsMock = vi.hoisted(() => vi.fn(() => []));
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
-const getSubCliEntriesMock = vi.hoisted(() =>
-  vi.fn(() => [
-    { name: "qa", description: "QA commands", hasSubcommands: true },
-    { name: "completion", description: "Completion", hasSubcommands: false },
-  ]),
+const { getSubCliCompletionGroupsMock, qaCompletionGroup } = vi.hoisted(() => {
+  const group = {
+    name: "qa",
+    entry: {
+      placeholders: [{ name: "qa", description: "QA commands" }],
+      register: async () => {
+        throw new Error("qa scenario pack not found: qa/scenarios/index.yaml");
+      },
+    },
+  };
+  return {
+    qaCompletionGroup: group,
+    getSubCliCompletionGroupsMock: vi.fn<GetSubCliCompletionGroups>(() => [group]),
+  };
+});
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() =>
+  vi.fn(async (_program: Command) => ({})),
 );
-const registerSubCliByNameMock = vi.hoisted(() =>
-  vi.fn(async (program: Command, name: string) => {
-    if (name === "qa") {
-      throw new Error("qa scenario pack not found: qa/scenarios/index.yaml");
-    }
-    program.command(name);
-    return true;
-  }),
-);
-const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("./output-file.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
@@ -56,8 +60,7 @@ vi.mock("./output-file.runtime.js", async () => {
 });
 
 vi.mock("./program/command-registry-core.js", () => ({
-  getCoreCliCommandNames: getCoreCliCommandNamesMock,
-  registerCoreCliByName: registerCoreCliByNameMock,
+  getCoreCliCompletionGroups: getCoreCliCompletionGroupsMock,
 }));
 
 vi.mock("./program/program-context.js", () => ({
@@ -65,8 +68,7 @@ vi.mock("./program/program-context.js", () => ({
 }));
 
 vi.mock("./program/register.subclis-core.js", () => ({
-  getSubCliEntries: getSubCliEntriesMock,
-  registerSubCliByNameCore: registerSubCliByNameMock,
+  getSubCliCompletionGroups: getSubCliCompletionGroupsMock,
 }));
 
 vi.mock("../plugins/cli.js", () => ({
@@ -110,10 +112,8 @@ async function writeCompletionCacheForShell(shell: CompletionShell): Promise<str
 
 function expectCompletionInstallationToSkipRegistration(): void {
   expect(getProgramContextMock).not.toHaveBeenCalled();
-  expect(getCoreCliCommandNamesMock).not.toHaveBeenCalled();
-  expect(registerCoreCliByNameMock).not.toHaveBeenCalled();
-  expect(getSubCliEntriesMock).not.toHaveBeenCalled();
-  expect(registerSubCliByNameMock).not.toHaveBeenCalled();
+  expect(getCoreCliCompletionGroupsMock).not.toHaveBeenCalled();
+  expect(getSubCliCompletionGroupsMock).not.toHaveBeenCalled();
   expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   expect(stderrWrites).not.toHaveBeenCalled();
 }
@@ -130,11 +130,9 @@ describe("completion-cli write-state", () => {
       actual.publishOutputFileAtomically,
     );
     stderrWrites.mockReset();
-    getCoreCliCommandNamesMock.mockClear();
-    registerCoreCliByNameMock.mockClear();
+    getCoreCliCompletionGroupsMock.mockClear();
     getProgramContextMock.mockClear();
-    getSubCliEntriesMock.mockClear();
-    registerSubCliByNameMock.mockClear();
+    getSubCliCompletionGroupsMock.mockClear();
     registerPluginCliCommandsFromValidatedConfigMock.mockClear();
     const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
       chunk: string | Uint8Array,
@@ -397,9 +395,7 @@ describe("completion-cli write-state", () => {
       expect(log).toHaveBeenCalledWith(
         "Completion installed. Restart your shell or run: source ~/.zshrc",
       );
-      expect(registerSubCliByNameMock.mock.calls).toEqual([
-        [program, "qa", process.argv, { purpose: "completion" }],
-      ]);
+      expect(getSubCliCompletionGroupsMock).toHaveBeenCalledTimes(1);
       expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
       expect(stderrWrites.mock.calls).toEqual([
         [
@@ -411,38 +407,51 @@ describe("completion-cli write-state", () => {
 
   it("keeps completion cache generation alive when a subcli fails to register", async () => {
     const { registerCompletionCli } = await import("./completion-cli.js");
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
 
-    try {
-      await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const program = new Command();
-        program.name("openclaw");
-        registerCompletionCli(program);
-
-        await program.parseAsync(["completion", "--write-state"], { from: "user" });
-
-        const cacheDir = path.join(stateDir, "completions");
-        expect((await fs.readdir(cacheDir)).toSorted()).toEqual([
-          "openclaw.bash",
-          "openclaw.fish",
-          "openclaw.ps1",
-          "openclaw.zsh",
-        ]);
-        expect(registerSubCliByNameMock.mock.calls).toEqual([
-          [program, "qa", process.argv, { purpose: "completion" }],
-        ]);
-        expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
-        expect(stderrWrites.mock.calls).toEqual([
-          [
-            "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.yaml\n",
-          ],
-        ]);
+    await withIsolatedCompletionState(async () => {
+      getSubCliCompletionGroupsMock.mockReturnValueOnce([
+        qaCompletionGroup,
+        {
+          name: "after-qa",
+          entry: {
+            placeholders: [{ name: "after-qa", description: "Commands registered after QA" }],
+            register: async (program) => {
+              await setImmediate();
+              program.command("after-qa").option("--subcli-ready", "Async subcli option");
+            },
+          },
+        },
+      ]);
+      registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async (program) => {
+        await Promise.resolve();
+        program.command("async-plugin").option("--plugin-ready", "Async plugin option");
+        return {};
       });
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-      await fs.rm(homeDir, { recursive: true, force: true });
-    }
+      const program = new Command().name("openclaw");
+      registerCompletionCli(program);
+
+      await program.parseAsync(["completion", "--write-state"], { from: "user" });
+
+      const cacheDir = path.dirname(resolveCompletionCachePath("zsh", "openclaw"));
+      expect((await fs.readdir(cacheDir)).toSorted()).toEqual([
+        "openclaw.bash",
+        "openclaw.fish",
+        "openclaw.ps1",
+        "openclaw.zsh",
+      ]);
+      for (const shell of COMPLETION_SHELLS) {
+        const script = await fs.readFile(resolveCompletionCachePath(shell, "openclaw"), "utf8");
+        expect(script, shell).toContain("subcli-ready");
+        expect(script, shell).toContain("plugin-ready");
+      }
+      expect(getSubCliCompletionGroupsMock).toHaveBeenCalledTimes(1);
+      expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
+      expect(stderrWrites.mock.calls).toEqual([
+        [
+          "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.yaml\n",
+        ],
+      ]);
+    });
   });
 
   it("writes core completion with a warning when invalid config prevents plugin discovery", async () => {
@@ -525,9 +534,7 @@ describe("completion-cli write-state", () => {
 
           await program.parseAsync(["completion", "--write-state"], { from: "user" });
 
-          expect(registerSubCliByNameMock.mock.calls).toEqual([
-            [program, "qa", process.argv, { purpose: "completion" }],
-          ]);
+          expect(getSubCliCompletionGroupsMock).toHaveBeenCalledTimes(1);
           expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
           expect((await fs.readdir(path.join(stateDir, "completions"))).toSorted()).toEqual([
             "openclaw.bash",

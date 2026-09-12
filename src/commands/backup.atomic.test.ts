@@ -8,11 +8,11 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import {
   backupVerifyCommandMock,
   createMockTarStream,
-  createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
   tarCreateMock,
 } from "./backup.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 
@@ -53,7 +53,7 @@ describe("backupCreateCommand atomic archive write", () => {
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
-    const runtime = createBackupTestRuntime();
+    const runtime = createTestRuntime();
     const outputPath = path.join(archiveDir, params.outputName ?? "backup.tar.gz");
 
     await mockStateOnlyBackupPlan(stateDir);

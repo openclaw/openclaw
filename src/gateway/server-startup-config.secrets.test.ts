@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import {
@@ -14,6 +15,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
+import { readConfigFileSnapshotForRuntimeTransaction } from "../config/io.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import {
   flushDiagnosticsTimeline,
@@ -705,49 +707,62 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
-  it("recovers provider-only degradation from a full reload through auth refresh", async () => {
-    const config = gatewayTokenConfig(
-      asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
-    );
-    const initial = preparedSnapshot(config);
-    const providerDegraded = {
-      ...preparedSnapshot(config),
-      degradedOwners: [
-        {
-          ownerKind: "provider" as const,
-          ownerId: "openai",
-          state: "unavailable" as const,
-          paths: ["models.providers.openai.apiKey"],
-          refKeys: ["env:default:OPENAI_API_KEY"],
-          reason: "secret provider failed" as const,
-          degradationState: "stale" as const,
+  it.each(["cold", "stale"] as const)(
+    "reports %s provider recovery without claiming prior availability",
+    async (degradationState) => {
+      const config = gatewayTokenConfig(
+        asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
+      );
+      const initial = preparedSnapshot(config);
+      const providerDegraded = {
+        ...preparedSnapshot(config),
+        degradedOwners: [
+          {
+            ownerKind: "provider" as const,
+            ownerId: "openai",
+            state: "unavailable" as const,
+            paths: ["models.providers.openai.apiKey"],
+            refKeys: ["env:default:OPENAI_API_KEY"],
+            reason: "secret provider failed" as const,
+            degradationState,
+          },
+        ],
+      };
+      const emitStateEvent = vi.fn();
+      const logSecrets = mockLogSecretsForTest();
+      const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+        emitStateEvent,
+        logSecrets,
+        prepareRuntimeSecretsSnapshot: vi.fn(async () => providerDegraded),
+        activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+      });
+      activateSecretsRuntimeSnapshotForTest(initial);
+
+      await activateRuntimeSecrets(config, { reason: "reload", activate: true });
+      const recovered = preparedSnapshot(config);
+      await activateProviderAuthRuntimeSnapshot({
+        snapshot: recovered,
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
+        activateSnapshotIfCurrent: () => {
+          activateSecretsRuntimeSnapshotForTest(recovered);
+          return true;
         },
-      ],
-    };
-    const emitStateEvent = vi.fn();
-    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
-      emitStateEvent,
-      prepareRuntimeSecretsSnapshot: vi.fn(async () => providerDegraded),
-      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
-    });
-    activateSecretsRuntimeSnapshotForTest(initial);
+      });
 
-    await activateRuntimeSecrets(config, { reason: "reload", activate: true });
-    const recovered = preparedSnapshot(config);
-    await activateProviderAuthRuntimeSnapshot({
-      snapshot: recovered,
-      expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
-      activateSnapshotIfCurrent: () => {
-        activateSecretsRuntimeSnapshotForTest(recovered);
-        return true;
-      },
-    });
-
-    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
-      "SECRETS_RELOADER_DEGRADED",
-      "SECRETS_RELOADER_RECOVERED",
-    ]);
-  });
+      expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+        "SECRETS_RELOADER_DEGRADED",
+        "SECRETS_RELOADER_RECOVERED",
+      ]);
+      expect(emitStateEvent).toHaveBeenLastCalledWith(
+        "SECRETS_RELOADER_RECOVERED",
+        "Secret resolution recovered.",
+        config,
+      );
+      expect(logSecrets.info).toHaveBeenCalledWith(
+        "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered.",
+      );
+    },
+  );
 
   it("narrows full degradation when a committed reload leaves only provider owners", async () => {
     const config = gatewayTokenConfig(
@@ -1298,6 +1313,163 @@ describe("gateway startup config secret preflight", () => {
       refresh: "refresh-new",
     });
   });
+
+  it.each([
+    "same source",
+    "secrets changed",
+    "credentials changed",
+    "admission closed",
+    "source rejected",
+  ] as const)(
+    "settles source observation inside the activation lock before publication (%s)",
+    async (scenario) => {
+      const initial = preparedSnapshot(gatewayTokenConfig({}));
+      const candidate = preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token");
+      const later = preparedSnapshotWithGatewayToken(initial.sourceConfig, "later-token");
+      const activator = runtimeSecretsActivatorForTest({
+        prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+        activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+      });
+      const activate = activator.activatePreparedSnapshotIfCurrent!;
+      activateSecretsRuntimeSnapshotForTest(initial);
+      const holding = createDeferred();
+      const unlock = createDeferred();
+      const readEntered = createDeferred();
+      const finishRead = createDeferred();
+      const first = activate(
+        initial,
+        getActiveSecretsRuntimeSnapshotRevisionState(),
+        { reason: "reload", activate: true },
+        async () => {
+          holding.resolve();
+          await unlock.promise;
+        },
+      );
+      let pending:
+        | Promise<{ value?: PreparedSecretsRuntimeSnapshot | null; error?: unknown }>
+        | undefined;
+      const publish = vi.fn();
+      let sourceCurrent = false;
+      let admissionCurrent = true;
+      try {
+        await holding.promise;
+        pending = activate(
+          candidate,
+          getActiveSecretsRuntimeSnapshotRevisionState(),
+          { reason: "reload", activate: true },
+          publish,
+          () => sourceCurrent && admissionCurrent,
+          async () => {
+            readEntered.resolve();
+            await finishRead.promise;
+            if (scenario === "source rejected") {
+              throw new Error("source rejected");
+            }
+            sourceCurrent = true;
+          },
+        ).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        unlock.resolve();
+        await readEntered.promise;
+        expect(publish).not.toHaveBeenCalled();
+        expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(initial.config);
+        if (scenario === "secrets changed") {
+          activateSecretsRuntimeSnapshotForTest(later);
+        }
+        if (scenario === "credentials changed") {
+          setRuntimeAuthProfileStoreSnapshot(
+            {
+              version: 1,
+              profiles: {
+                "openai:observation-test": {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "synthetic-new-key",
+                },
+              },
+            },
+            autoCleanupTempDirs.make("openclaw-lock-auth-"),
+          );
+        }
+        if (scenario === "admission closed") {
+          admissionCurrent = false;
+        }
+        finishRead.resolve();
+        const result = await pending;
+        if (scenario === "source rejected") {
+          expect(result).toHaveProperty("error.message", "source rejected");
+        } else {
+          expect(result).toMatchObject({ value: scenario === "same source" ? candidate : null });
+        }
+        expect(publish).toHaveBeenCalledTimes(scenario === "same source" ? 1 : 0);
+        expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(
+          (scenario === "same source"
+            ? candidate
+            : scenario === "secrets changed"
+              ? later
+              : initial
+          ).config,
+        );
+      } finally {
+        unlock.resolve();
+        finishRead.resolve();
+        await Promise.all([first, pending]);
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "reads and validates actual config inside the activation lock (valid=%s)",
+    async (valid) => {
+      const root = autoCleanupTempDirs.make("openclaw-lock-config-reader-");
+      const configPath = path.join(root, "openclaw.json");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugins: { enabled: false },
+          gateway: { mode: valid ? "local" : "invalid-mode" },
+        }),
+      );
+      const initial = preparedSnapshot(gatewayTokenConfig({}));
+      const candidate = preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token");
+      const activator = runtimeSecretsActivatorForTest({
+        prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+        activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+      });
+      activateSecretsRuntimeSnapshotForTest(initial);
+      const publish = vi.fn();
+      await withEnvAsync(
+        { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: root },
+        async () => {
+          const outcome = activator.activatePreparedSnapshotIfCurrent!(
+            candidate,
+            getActiveSecretsRuntimeSnapshotRevisionState(),
+            { reason: "reload", activate: true },
+            publish,
+            () => true,
+            async () => {
+              const read = await readConfigFileSnapshotForRuntimeTransaction(initial.sourceConfig);
+              expect(read.valid).toBe(valid);
+              if (!read.valid) {
+                throw new Error("observed source invalid");
+              }
+            },
+          );
+          if (valid) {
+            await expect(outcome).resolves.toMatchObject({ config: candidate.config });
+          } else {
+            await expect(outcome).rejects.toThrow("observed source invalid");
+          }
+        },
+      );
+      expect(publish).toHaveBeenCalledTimes(valid ? 1 : 0);
+      expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(
+        valid ? candidate.config : initial.config,
+      );
+    },
+  );
 
   it("holds activation ownership through the accepted publication callback", async () => {
     const initial = preparedSnapshot(gatewayTokenConfig({}));
@@ -2137,7 +2309,7 @@ describe("gateway startup config secret preflight", () => {
     );
     expect(JSON.stringify(logSecrets.warn.mock.calls)).not.toContain("OPENAI_API_KEY");
     expect(logSecrets.info).toHaveBeenCalledWith(
-      "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered; runtime remained on last-known-good during the outage.",
+      "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered.",
     );
 
     shouldResolve = false;

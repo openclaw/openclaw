@@ -1,11 +1,9 @@
-// Resolves native module require paths for plugin runtime loading.
-import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-const nodeRequire = createRequire(import.meta.url);
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
   ".ts",
@@ -44,6 +42,98 @@ const moduleWithResolver = Module as typeof Module & {
     ) => { shortCircuit?: boolean; url: string };
   }) => { deregister: () => void };
 };
+
+type CapturedModuleResolver = (
+  request: string,
+  parent: string,
+  resolve: () => string,
+) => string | undefined;
+type CapturedModuleBinding = {
+  resolve: CapturedModuleResolver;
+  prepare: (request: string, parent: string) => string | undefined;
+};
+type BunPluginRuntime = {
+  plugin(options: {
+    name: string;
+    setup(builder: {
+      onResolve(
+        options: { filter: RegExp; namespace: "file" },
+        callback: (args: {
+          path: string;
+          importer: string;
+        }) => { path: string; namespace: "file" } | undefined,
+      ): void;
+    }): void;
+  }): void;
+};
+
+const capturedModuleResolvers = resolveGlobalSingleton(
+  Symbol.for("openclaw.capturedModuleResolvers"),
+  () => ({
+    installed: false,
+    resolving: false,
+    owners: new Set<CapturedModuleBinding>(),
+  }),
+);
+
+/** Captured parents retain their resolver while their instance's consumers drain. */
+export function registerCapturedPluginModuleResolver(binding: CapturedModuleBinding): () => void {
+  if (!capturedModuleResolvers.installed) {
+    // SAFETY: Bun supplies this synchronous public API; Node leaves the optional global absent.
+    const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
+    bun?.plugin({
+      name: "openclaw-plugin-source-capture",
+      setup(builder) {
+        builder.onResolve({ filter: /.*/, namespace: "file" }, ({ path: request, importer }) => {
+          if (!capturedModuleResolvers.resolving) {
+            capturedModuleResolvers.resolving = true;
+            try {
+              for (const owner of capturedModuleResolvers.owners) {
+                const target = owner.prepare(request, importer);
+                if (target) {
+                  return { path: target, namespace: "file" };
+                }
+              }
+            } finally {
+              capturedModuleResolvers.resolving = false;
+            }
+          }
+          // Package selection stays native; owners redirect only captured physical source paths.
+          return undefined;
+        });
+      },
+    });
+    // Older Bun drops createRequire's ESM parent when this private hook is replaced.
+    // Its public resolver above retains the importer without changing native resolution.
+    if (!bun) {
+      const previous = moduleWithResolver["_resolveFilename"]!;
+      moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
+        if (!capturedModuleResolvers.resolving && parent?.filename) {
+          capturedModuleResolvers.resolving = true;
+          try {
+            for (const owner of capturedModuleResolvers.owners) {
+              const target = owner.resolve(request, parent.filename, () =>
+                previous(request, parent, isMain, options),
+              );
+              if (target) {
+                return target;
+              }
+            }
+          } finally {
+            // Original-source Jiti lookup can itself call the native resolver.
+            capturedModuleResolvers.resolving = false;
+          }
+        }
+        return previous(request, parent, isMain, options);
+      };
+    }
+    capturedModuleResolvers.installed = true;
+  }
+  capturedModuleResolvers.owners.add(binding);
+  return () => {
+    capturedModuleResolvers.owners.delete(binding);
+  };
+}
 
 /** True for file extensions Node can load through the native JS module loader. */
 export function isJavaScriptModulePath(modulePath: string): boolean {
@@ -103,19 +193,19 @@ export function tryNativeRequireModule(
     return { ok: false };
   }
   const modulePath = toNativeRequirePath(moduleSpecifier);
+  // A process-wide require retains evicted graphs through its parent's children.
+  // Keep that parent scoped to this load so retired graphs can be collected.
+  const require = createRequire(import.meta.url);
   if (
     isPluginSourceModulePath(modulePath) &&
     !process.features.typescript &&
-    typeof nodeRequire.extensions?.[path.extname(modulePath)] !== "function"
+    typeof require.extensions?.[path.extname(modulePath)] !== "function"
   ) {
     return { ok: false };
   }
   let resolvedPath = modulePath;
   try {
     const moduleExport = withNativeRequireAliases(options.aliasMap, () => {
-      // A process-wide require retains evicted graphs through its parent's children.
-      // Keep that parent scoped to this load so retired graphs can be collected.
-      const require = createRequire(import.meta.url);
       resolvedPath = require.resolve(modulePath);
       // Requiring the resolved target could apply a second alias to the same request.
       return require(modulePath);
@@ -144,21 +234,21 @@ export function tryNativeRequireModule(
   }
 }
 
-/** Clears native and source-transformed modules within the plugin dependency root. */
-export function clearPluginModuleRequireCache(
-  modulePath: string,
-  options: { dependencyRoot?: string } = {},
-): void {
-  try {
-    const resolved = nodeRequire.resolve(toNativeRequirePath(modulePath));
-    clearRequireCacheSubtree(
-      resolved,
-      resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
-      new Set(),
-    );
-  } catch {
-    // Best-effort lifecycle cleanup: unresolved paths were not loaded.
-  }
+/** Explicit public-library invalidation refreshes the current path synchronously. */
+export function clearPluginModuleRequireCache(modulePath: string, dependencyRoot: string): void {
+  const require = createRequire(import.meta.url);
+  const seen = new Set<string>();
+  const clear = (id: string) => {
+    if (seen.has(id) || !isPathInside(dependencyRoot, id)) {
+      return;
+    }
+    seen.add(id);
+    for (const child of require.cache[id]?.children ?? []) {
+      clear(child.id);
+    }
+    delete require.cache[id];
+  };
+  clear(modulePath);
 }
 
 // Native require and cache keys use paths; ESM/source loaders keep URL specifiers.
@@ -168,34 +258,6 @@ function toNativeRequirePath(specifier: string): string {
   } catch {
     return specifier;
   }
-}
-
-function resolveRequireCachePath(targetPath: string): string {
-  try {
-    return fs.realpathSync.native(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
-}
-
-function clearRequireCacheSubtree(
-  resolvedPath: string,
-  dependencyRoot: string,
-  seen: Set<string>,
-): void {
-  if (seen.has(resolvedPath)) {
-    return;
-  }
-  seen.add(resolvedPath);
-  const cached = nodeRequire.cache[resolvedPath];
-  if (cached) {
-    for (const child of cached.children) {
-      if (isPathInside(dependencyRoot, child.id)) {
-        clearRequireCacheSubtree(child.id, dependencyRoot, seen);
-      }
-    }
-  }
-  delete nodeRequire.cache[resolvedPath];
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */

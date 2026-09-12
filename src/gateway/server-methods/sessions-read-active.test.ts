@@ -311,7 +311,7 @@ it.each(["global", "unknown"] as const)(
         sessionId: literalSessionId,
         agentId: "ops",
       } as never);
-      new SqliteBoardStore({
+      await new SqliteBoardStore({
         resolveSession: () => ({ agentId: "ops", path: storePathFor("ops"), sessionKey: sentinel }),
       }).applyOps({ sessionKey: sentinel }, [{ kind: "tab_create", tabId: "main", title: "Ops" }]);
       const normal = await listSessions({
@@ -344,7 +344,7 @@ it.each(["global", "unknown"] as const)(
           kind: sentinel,
           boardFace,
           hasActiveRun: true,
-          derivedTitle: "ops task",
+          derivedTitle: "Ops task",
           lastMessagePreview: "ops progress",
         },
         {
@@ -353,7 +353,7 @@ it.each(["global", "unknown"] as const)(
           kind: sentinel,
           boardFace,
           hasActiveRun: true,
-          derivedTitle: "research task",
+          derivedTitle: "Research task",
           lastMessagePreview: "research progress",
         },
         {

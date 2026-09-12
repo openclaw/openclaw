@@ -3,6 +3,12 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import {
+  getConfigOverrides,
+  resetConfigOverrides,
+  setConfigOverride,
+} from "../config/runtime-overrides.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -183,14 +189,6 @@ describe("createGatewayKernel", () => {
       let closing: Promise<void> | undefined;
       let pendingStop: Promise<void> | undefined;
       let maintenanceTimer: ReturnType<typeof setTimeout> | undefined;
-      const createKernel = createGatewayKernel;
-      // Capture the actual owner; public startup, prelude, and teardown remain real.
-      const factory = vi
-        .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
-        .mockImplementation(async (...args) => {
-          kernel = await createKernel(...args);
-          return kernel;
-        });
       try {
         await state.writeConfig({
           gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
@@ -206,7 +204,19 @@ describe("createGatewayKernel", () => {
         };
         if (entry === "public") {
           const { startGatewayServerCore } = await import("./server-start.js");
-          server = await startGatewayServerCore(port, options);
+          const createKernel = createGatewayKernel;
+          // Capture public startup's real owner without retaining the spy through shutdown.
+          const factory = vi
+            .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
+            .mockImplementation(async (...args) => {
+              kernel = await createKernel(...args);
+              return kernel;
+            });
+          try {
+            server = await startGatewayServerCore(port, options);
+          } finally {
+            factory.mockRestore();
+          }
           await server.startupSettled;
         } else {
           kernel = await createGatewayKernel(port, options);
@@ -327,7 +337,6 @@ describe("createGatewayKernel", () => {
             await (server?.close() ?? kernel?.closeOnStartupFailure());
             await pendingStop;
           } finally {
-            factory.mockRestore();
             vi.restoreAllMocks();
             signal.removeEventListener("abort", release);
             await state.cleanup();
@@ -336,6 +345,106 @@ describe("createGatewayKernel", () => {
       }
     },
   );
+
+  it("prepares source activation with captured runtime and startup auth overrides", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-reload-candidate",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+        VITEST: "1",
+      },
+    });
+    const previousOverrides = getConfigOverrides();
+    const sourceToken = "gateway-reload-source-token";
+    const startupToken = "gateway-reload-startup-token";
+    const startupAuth = {
+      mode: "token" as const,
+      token: startupToken,
+      rateLimit: { maxAttempts: 7 },
+    };
+    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    try {
+      resetConfigOverrides();
+      await state.writeConfig({
+        agents: { defaults: { workspace: state.workspaceDir } },
+        gateway: {
+          auth: { mode: "token", token: sourceToken, rateLimit: { maxAttempts: 3 } },
+          controlUi: { enabled: false },
+          port,
+        },
+        logging: { level: "silent", consoleLevel: "silent" },
+        messages: { visibleReplies: "automatic" },
+      });
+      state.applyEnv();
+      kernel = await createGatewayKernel(port, {
+        auth: startupAuth,
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+      expect(kernel.minimalTestGateway).toBe(false);
+      startupAuth.token = "mutated-caller-token";
+      startupAuth.rateLimit.maxAttempts = 99;
+      expect(setConfigOverride("messages.visibleReplies", "message_tool").ok).toBe(true);
+      const previousSourceConfig = kernel.startupLastGoodSnapshot.sourceConfig;
+      const sourceConfig = {
+        ...previousSourceConfig,
+        channels: { ...previousSourceConfig.channels, telegram: { botToken: "source-bot-token" } },
+        logging: { ...previousSourceConfig.logging, level: "debug" },
+      } satisfies OpenClawConfig;
+      const originalSource = structuredClone(sourceConfig);
+      const runtimeConfig = {
+        ...sourceConfig,
+        channels: { ...sourceConfig.channels, telegram: { botToken: "materialized-bot-token" } },
+        logging: { ...sourceConfig.logging, consoleLevel: "error" },
+      } satisfies OpenClawConfig;
+      const persistedBefore = await fs.readFile(state.configPath, "utf8");
+      const candidate = await kernel.prepareReloadCandidate({
+        runtimeConfig,
+        sourceConfig,
+        previousSourceConfig,
+      });
+      expect(candidate.compareConfig).toMatchObject({
+        channels: { telegram: { enabled: true, botToken: "source-bot-token" } },
+        gateway: { auth: { token: sourceToken, rateLimit: { maxAttempts: 3 } } },
+        logging: { level: "debug", consoleLevel: "silent" },
+        messages: { visibleReplies: "message_tool" },
+      });
+      expect(candidate.runtimeConfig).toMatchObject({
+        channels: { telegram: { enabled: true, botToken: "materialized-bot-token" } },
+        gateway: { auth: { token: startupToken, rateLimit: { maxAttempts: 7 } } },
+        logging: { level: "debug", consoleLevel: "error" },
+        messages: { visibleReplies: "message_tool" },
+      });
+      expect(candidate.runtimeEnv.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+      expect(candidate.runtimeEnv.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
+      expect(setConfigOverride("messages.visibleReplies", "automatic").ok).toBe(true);
+      expect(candidate.reapplyRuntimeOverlays(runtimeConfig)).toEqual(candidate.runtimeConfig);
+      expect(candidate.reapplyCompareOverlays(sourceConfig)).toEqual(candidate.compareConfig);
+      expect(sourceConfig).toEqual(originalSource);
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(persistedBefore);
+    } finally {
+      try {
+        await kernel?.closeOnStartupFailure();
+      } finally {
+        resetConfigOverrides();
+        for (const [key, value] of Object.entries(previousOverrides)) {
+          setConfigOverride(key, value);
+        }
+        await state.cleanup();
+      }
+    }
+  });
 
   it("keeps startup readiness and sidecar shutdown at their lifecycle boundaries", async () => {
     const port = await getFreePort();

@@ -206,6 +206,7 @@ describe("memory index schema", () => {
       ).toEqual({ origin_class: "untrusted", session_kind: "unknown", observed_at: 50 });
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
+        { id: "chunk-2", text: "next" },
       ]);
       expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
         { provider: "openai", hash: "chunk-hash" },

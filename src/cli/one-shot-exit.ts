@@ -1,6 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { drainOneShotOutput } from "./one-shot-output.js";
+import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 
 type VitestWorkerMarkers = {
   tinypoolState?: unknown;
@@ -79,9 +80,10 @@ function requestExitAfterSystemCaCliCompletion(
   if (platform !== "darwin" || !usesSystemCa || runtime !== defaultRuntime) {
     return false;
   }
-  if (requestedExitCode === undefined) {
-    requestedExitCode = params.exitCode ?? "process";
+  if (requestedExitCode !== undefined) {
+    return false;
   }
+  requestedExitCode = params.exitCode ?? "process";
   return true;
 }
 
@@ -107,11 +109,14 @@ export async function runCliWithExitFinalization(params: {
       requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
     }
   } finally {
-    requestExitAfterSystemCaCliCompletion(runtime, {
+    const automaticExit = requestExitAfterSystemCaCliCompletion(runtime, {
       env: params.env,
       execArgv: params.execArgv,
       platform: params.platform,
     });
+    if (automaticExit && !isVitestWorker(params.env ?? process.env, params.markers)) {
+      await waitForPendingCliDisposers();
+    }
     flushExitAfterOneShotOutput(runtime, params.env, params.markers);
   }
 }

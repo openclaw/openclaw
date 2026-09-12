@@ -19,3 +19,7 @@ export function withPluginRuntimeGenerationRegistryScope<T>(
 export function getPluginRuntimeGenerationRegistry(): PluginRegistry | undefined {
   return registryScope.getStore();
 }
+
+export function runOutsidePluginRuntimeGenerationRegistryScope<T>(run: () => T): T {
+  return registryScope.exit(run);
+}

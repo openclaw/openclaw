@@ -49,6 +49,13 @@ export function createGatewayNodeSessionRuntime(params: {
           params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
         isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
         onPairingInvalidated: params.onPairingInvalidated,
+        onDesktopAvailabilityChanged: (nodeId) => {
+          params.broadcast(
+            GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+            { nodeId },
+            { dropIfSlow: true },
+          );
+        },
         onPairingGenerationChanged: (change) => {
           nodeSubscriptions.updatePairingGeneration({
             ...change,

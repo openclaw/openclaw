@@ -52,6 +52,27 @@ describe("model-authored details blocks", () => {
     expect(fragment.querySelector("details")?.textContent).toContain("<script>nope</script>");
   });
 
+  it.each([false, true])("consumes summary labels before nesting (streaming=%s)", (streaming) => {
+    const source =
+      "<details><summary>Outer </details><details> label</summary>" +
+      "<details><summary>Inner</summary>body</details>tail</details>\n\noutside";
+    const fragment = htmlFragment(
+      streaming ? toStreamingMarkdownParts(source).join("") : toSanitizedMarkdownHtml(source),
+    );
+    const details = fragment.querySelectorAll("details");
+
+    expect(details).toHaveLength(2);
+    expect([...details].map((entry) => entry.querySelector("summary")?.textContent)).toEqual([
+      "Outer </details><details> label",
+      "Inner",
+    ]);
+    expect(details[1]?.querySelector("p")?.textContent).toBe("body");
+    expect(details[1]?.textContent).not.toContain("tail");
+    expect(details[0]?.textContent).toContain("tail");
+    expect(details[0]?.textContent).not.toContain("outside");
+    expect(fragment.lastElementChild?.textContent).toBe("outside");
+  });
+
   it("keeps large runs of disclosure tags literal inside fenced code", () => {
     const count = 2_000;
     const literals = Array.from({ length: count }, () => "</details>").join("\n");
@@ -132,12 +153,22 @@ describe("model-authored details blocks", () => {
     expect(details?.textContent).not.toContain("</details>");
   });
 
-  it("repairs an unterminated summary while streaming", () => {
-    const html = toStreamingMarkdownParts("<details>\n<summary>Still arriving").join("");
-    const fragment = htmlFragment(html);
+  it.each([
+    ["<details>\n<summary>Still arriving", ["Still arriving"], null],
+    ["<details><summary>Outer</summary>\n<details><summary>Inner", ["Outer", "Inner"], null],
+    ["<summary>Orphan", [], "<summary>Orphan"],
+    ["<details><summary>First</summary>\n<summary>Second", ["First"], "<summary>Second"],
+    ["<details>\n<summary>Earlier\nbody", [], "<summary>Earlier"],
+  ] as const)("repairs only an eligible final summary: %s", (source, summaries, literal) => {
+    const fragment = htmlFragment(toStreamingMarkdownParts(source).join(""));
 
-    expect(fragment.querySelector("details summary")?.textContent).toBe("Still arriving");
-    expect(html).not.toContain("&lt;summary");
+    expect([...fragment.querySelectorAll("summary")].map((entry) => entry.textContent)).toEqual(
+      summaries,
+    );
+    expect(fragment.textContent).not.toContain("</summary>");
+    if (literal) {
+      expect(fragment.textContent).toContain(literal);
+    }
   });
 
   it("keeps completed code fences inside an open details streaming tail", () => {

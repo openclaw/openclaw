@@ -53,7 +53,7 @@ import {
   resolveNewSessionSubmitBlock,
   type NewSessionSubmitBlock,
 } from "./submit-gates.ts";
-import { startNewSessionInTerminal } from "./terminal-start.ts";
+import { navigateToStartedTerminal, startNewSessionInTerminal } from "./terminal-start.ts";
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -346,8 +346,7 @@ export class DraftSubmissionFlow {
       this.messageValue = "";
       this.mentionsValue = [];
     }
-    this.error = null;
-    this.callbacks.requestUpdate();
+    this.clearError();
   }
 
   clearPendingPlacementRecovery() {
@@ -474,15 +473,15 @@ export class DraftSubmissionFlow {
       const createParams =
         startup?.params ??
         this.buildDraftSessionCreateParams({
-          message: placementTarget ? "" : message,
-          mentions: placementTarget ? undefined : mentions,
+          message,
+          mentions,
           displayName: preparedTitle,
           visibility:
             this.visibilityValue === "draft" &&
             !this.capabilities.canStartAsDraft(this.read().context)
               ? "normal"
               : this.visibilityValue,
-          attachments: placementTarget ? undefined : draftAttachments,
+          attachments: draftAttachments,
         });
       const placementCreateParams = placementTarget
         ? pendingPlacement
@@ -707,6 +706,7 @@ export class DraftSubmissionFlow {
       this.messageValue = "";
       this.mentionsValue = [];
       this.attachmentDraft.clearAfterSubmit(true);
+      navigateToStartedTerminal(context, result.sessionId);
     } catch (error) {
       if (requestId === this.submitRequestToken && this.gateway.client === client) {
         this.error = error instanceof Error ? error.message : String(error);

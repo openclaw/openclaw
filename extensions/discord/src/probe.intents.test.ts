@@ -11,7 +11,6 @@ import {
 import { jsonResponse } from "./test-http-helpers.js";
 
 const DISCORD_PROBE_JSON_CAP_BYTES = 16 * 1024 * 1024;
-
 function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
   const response = new Response(
     new ReadableStream<Uint8Array>({

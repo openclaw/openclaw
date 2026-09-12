@@ -3,13 +3,14 @@ import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { matchesPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
+import { matchesPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
 } from "./runtime.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
@@ -27,7 +28,12 @@ export function resolveCompatibleRuntimePluginRegistry(
   if (!activeCacheKey) {
     return undefined;
   }
-  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
+  const requestedKey = resolvePluginLoadCacheContext(options).cacheKey;
+  if (requestedKey === activeCacheKey) {
+    return activeRegistry;
+  }
+  const identity = getPluginRuntimeLoadContextState(activeRegistry)?.loaderCacheIdentity;
+  return identity?.requestKey === activeCacheKey && identity.resolvedKey === requestedKey
     ? activeRegistry
     : undefined;
 }

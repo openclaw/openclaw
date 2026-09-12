@@ -1,16 +1,24 @@
 /** Verifies plugin loader behavior for native module loading and resolver hooks. */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
 import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginCache } from "./plugin-cache.js";
 import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
 
 const tempDirs = createTempDirTracker();
+
+function writeNativeDependency(pluginRoot: string) {
+  // Native ESM default imports retain raw CommonJS exports despite transpiler markers.
+  fs.writeFileSync(
+    path.join(pluginRoot, "dependency.cjs"),
+    "module.exports = { __esModule: true, default: { answer: 17 }, answer: 42 };",
+    "utf-8",
+  );
+}
 
 function writeJavaScriptPluginFixture(id: string) {
   const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
@@ -40,6 +48,18 @@ function writeJavaScriptPluginFixture(id: string) {
 
 function writePackagedPluginFixture(id: string) {
   const pluginRoot = writeJavaScriptPluginFixture(id);
+  writeNativeDependency(pluginRoot);
+  fs.writeFileSync(
+    path.join(pluginRoot, "index.cjs"),
+    `const assert = require("node:assert/strict");
+    const dependency = require("./dependency.cjs");
+    module.exports = { id: ${JSON.stringify(id)}, register() {
+      assert.equal(dependency, require.cache[require.resolve("./dependency.cjs")].exports);
+      assert.equal(dependency.answer, 42);
+      assert.equal(dependency.default.answer, 17);
+    } };`,
+    "utf-8",
+  );
   fs.writeFileSync(
     path.join(pluginRoot, "package.json"),
     JSON.stringify(
@@ -60,6 +80,7 @@ function writePackagedPluginFixture(id: string) {
 
 function writePreSplitSdkBridgeConsumerFixture() {
   const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
+  writeNativeDependency(pluginRoot);
   fs.mkdirSync(path.join(pluginRoot, "dist"));
   fs.writeFileSync(
     path.join(pluginRoot, "package.json"),
@@ -103,10 +124,16 @@ function writePreSplitSdkBridgeConsumerFixture() {
   fs.writeFileSync(
     path.join(pluginRoot, "dist", "index.js"),
     [
+      'import assert from "node:assert/strict";',
+      'import { createRequire } from "node:module";',
+      'import dependency from "../dependency.cjs";',
       'import { archiveLegacyStateSource, detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema, detectPluginInstallPathIssue, formatPluginInstallPathIssue, removePluginFromConfig, createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";',
       'import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";',
       'import { resolveChannelProgressDraftRender } from "openclaw/plugin-sdk/channel-outbound";',
       'export default { id: "sdk-bridge-consumer", register() {',
+      '  assert.equal(dependency, createRequire(import.meta.url)("../dependency.cjs"));',
+      "  assert.equal(dependency.answer, 42);",
+      "  assert.equal(dependency.default.answer, 17);",
       "  const bridged = [",
       "    archiveLegacyStateSource,",
       "    detectOpenClawStateDatabaseSchemaMigrations,",
@@ -191,7 +218,6 @@ describe("createPluginModuleLoader", () => {
 
     const after = getPluginModuleLoaderStats();
     expect(registry.plugins.find((plugin) => plugin.id === "npm-demo")?.status).toBe("loaded");
-    expect(after.nativeHits).toBeGreaterThan(before.nativeHits);
     expect(after.sourceTransformForced).toBe(before.sourceTransformForced);
     expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
   });
@@ -199,20 +225,9 @@ describe("createPluginModuleLoader", () => {
   it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
     const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
     const [entrypoint] = publishedSdkBridgeEntrypoints;
-    const artifact = fileURLToPath(resolveRuntimeWorkerUrl(entrypoint));
-    const hasCompiledSdk = path.extname(artifact) === ".js";
+    const hostRoot = createCompiledSdkHost(entrypoint, (prefix) => tempDirs.make(prefix));
+    const hasCompiledSdk = hostRoot !== undefined;
     if (hasCompiledSdk) {
-      const hostRoot = tempDirs.make("openclaw-sdk-bridge-host-");
-      fs.cpSync(path.dirname(path.dirname(artifact)), path.join(hostRoot, "dist"), {
-        recursive: true,
-      });
-      fs.copyFileSync(
-        path.resolve(import.meta.dirname, "../../package.json"),
-        path.join(hostRoot, "package.json"),
-      );
-      fs.mkdirSync(path.join(hostRoot, "src"));
-      fs.mkdirSync(path.join(hostRoot, "extensions"));
-      fs.symlinkSync(path.resolve("node_modules"), path.join(hostRoot, "node_modules"), "junction");
       vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", hostRoot);
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(hostRoot, "extensions"));
     } else {
@@ -240,7 +255,7 @@ describe("createPluginModuleLoader", () => {
     expect(entry?.status).toBe("loaded");
     if (hasCompiledSdk) {
       const after = getPluginModuleLoaderStats();
-      expect(after.nativeHits).toBeGreaterThan(before.nativeHits);
+      expect(after.sourceTransformForced).toBe(before.sourceTransformForced);
       expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
     }
   });

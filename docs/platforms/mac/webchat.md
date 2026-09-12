@@ -112,9 +112,11 @@ Inline widgets also load from that window's Gateway.
 
 ### Gateway picker
 
-The dashboard header shows a Gateway picker when the Mac app has at least two
-configured Gateways. Choose a Gateway to replace the current dashboard in the
-same window, or Option-click it to open a separate dashboard window. **Set as
+The sidebar identity menu lists the Mac app's configured Gateways, with health,
+primary, and current-selection indicators. The first nine rows show **⌘1–9**
+shortcuts in native Gateway menu order; later rows have no shortcut hint.
+Choose a Gateway to replace the current dashboard in the same window, or
+Command-click or Control-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
 Gateway after confirmation. The app replaces the primary Gateway's credentials
 and closes its native chat window; independent saved-profile windows stay open.
@@ -162,6 +164,9 @@ Disable the feature entirely under **Dashboard → Settings → This Mac → App
 - **Remote mode**: uses the configured direct `ws://`/`wss://` route or the app-managed SSH tunnel as the data plane.
 
 ## Launch and debugging
+
+Run the commands below from the repository root in a POSIX shell such as `zsh`
+or `bash`, after `./scripts/package-mac-app.sh` has produced `dist/OpenClaw.app`.
 
 - Manual: Lobster menu -> "Open Chat".
 - Auto-open for testing:

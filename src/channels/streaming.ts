@@ -302,7 +302,7 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
-/** Lines that need the operator's attention even when routine tool rows are hidden. */
+/** Approvals and failures that can start a draft when their rows are visible. */
 export function isChannelProgressAttentionLine(line: string | ChannelProgressDraftLine): boolean {
   if (typeof line === "string") {
     return false;
@@ -314,6 +314,17 @@ export function isChannelProgressAttentionLine(line: string | ChannelProgressDra
     status === "error" ||
     status === "blocked" ||
     (status?.startsWith("exit ") === true && status !== "exit 0")
+  );
+}
+
+/** Lines that reserve bounded progress capacity. */
+export function isChannelProgressPriorityLine(line: string | ChannelProgressDraftLine): boolean {
+  if (typeof line === "string") {
+    return false;
+  }
+  const status = line.status?.toLowerCase();
+  return (
+    line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
   );
 }
 
@@ -1217,27 +1228,44 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
   /** Merge limits for rolling progress drafts. */
   params: { maxLines: number },
 ): TLine[] {
+  // The shipped SDK lacks the compositor's effective preview mode and keeps its attention policy.
+  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressAttentionLine);
+}
+
+export function mergeChannelProgressDraftLineForStreaming<
+  TLine extends string | ChannelProgressDraftLine,
+>(lines: TLine[], line: TLine, params: { maxLines: number }): TLine[] {
+  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressPriorityLine);
+}
+
+function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
+  lines: TLine[],
+  line: TLine,
+  limit: number,
+  isPriorityLine: typeof isChannelProgressAttentionLine,
+): TLine[] {
   const normalized = normalizeChannelProgressDraftLineIdentity(line);
   if (!normalized) {
     return lines;
   }
-  const maxLines = Math.max(1, params.maxLines);
+  const maxLines = Math.max(1, limit);
   const lineKeys = resolveProgressDraftLineMergeKeys(line);
   if (lineKeys.length > 0) {
     const existingIndex = lines.findIndex((entry) =>
       resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      const replacement = mergeProgressDraftLineUpdate(
-        expectDefined(lines[existingIndex], "lines entry at existing index"),
-        line,
+      const existing = expectDefined(lines[existingIndex], "lines entry at existing index");
+      const replacement = keepProgressDraftLineId(
+        existing,
+        mergeProgressDraftLineUpdate(existing, line),
       );
-      if (replacement === lines[existingIndex]) {
+      if (replacement === existing) {
         return lines;
       }
       const next = [...lines];
       next[existingIndex] = replacement;
-      return limitProgressDraftLines(next, maxLines);
+      return limitProgressDraftLines(next, maxLines, isPriorityLine);
     }
   } else {
     const previous = lines.at(-1);
@@ -1245,21 +1273,20 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       return lines;
     }
   }
-  return limitProgressDraftLines([...lines, line], maxLines);
+  return limitProgressDraftLines([...lines, line], maxLines, isPriorityLine);
 }
 
 function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine>(
   lines: TLine[],
   maxLines: number,
+  isPriorityLine: typeof isChannelProgressAttentionLine,
 ): TLine[] {
   let attentionSlots = maxLines;
-  let ordinarySlots = Math.max(0, maxLines - lines.filter(isChannelProgressAttentionLine).length);
+  let ordinarySlots = Math.max(0, maxLines - lines.filter(isPriorityLine).length);
   // Keep attention through tool/commentary bursts without changing arrival order.
   return lines
     .toReversed()
-    .filter((line) =>
-      isChannelProgressAttentionLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0,
-    )
+    .filter((line) => (isPriorityLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0))
     .toReversed();
 }
 
@@ -1297,6 +1324,33 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
   return replacement;
 }
 
+/**
+ * A line keeps the id it was created with. The agent keys one tool call's
+ * item families separately (`tool:<call>`, `command:<call>`) and correlation
+ * merges them into one line; a channel that keys native rows on the line id
+ * (Slack task cards) would otherwise open a new row when a later family
+ * takes the line over. Later events still match through the correlation key.
+ */
+function keepProgressDraftLineId<TLine extends string | ChannelProgressDraftLine>(
+  previous: TLine,
+  replacement: TLine,
+): TLine {
+  if (typeof previous !== "object" || typeof replacement !== "object") {
+    return replacement;
+  }
+  const previousId = previous.id?.trim();
+  if (!previousId || previousId === replacement.id) {
+    return replacement;
+  }
+  const kept = { ...replacement, id: previousId };
+  setProgressDraftLineCorrelationKey(
+    kept,
+    progressDraftLineCorrelationKeys.get(replacement) ??
+      progressDraftLineCorrelationKeys.get(previous),
+  );
+  return kept;
+}
+
 function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLine): string[] {
   if (typeof line !== "object") {
     return [];
@@ -1307,7 +1361,7 @@ function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLi
   return [...new Set(keys)];
 }
 
-export function formatChannelProgressDraftText(params: {
+type ChannelProgressDraftTextParams = {
   /** @deprecated v2026.9.1 SDK presentation; retain until a breaking SDK release. */
   presentation?: "summary";
   /** Channel streaming config source for progress label and bounds. */
@@ -1322,12 +1376,27 @@ export function formatChannelProgressDraftText(params: {
   formatLine?: (line: string) => string;
   /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
-  /** Short narration paragraph; when present it replaces the tool lines. */
+  /** Status headline rendered above the plan and activity rows. */
   narration?: string;
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
   diffStat?: ChannelProgressDraftDiffStat;
-}): string {
+};
+
+export function formatChannelProgressDraftText(params: ChannelProgressDraftTextParams): string {
+  return formatProgressDraftText(params, isChannelProgressAttentionLine);
+}
+
+export function formatChannelProgressDraftTextForStreaming(
+  params: ChannelProgressDraftTextParams,
+): string {
+  return formatProgressDraftText(params, isChannelProgressPriorityLine);
+}
+
+function formatProgressDraftText(
+  params: ChannelProgressDraftTextParams,
+  isPriorityLine: typeof isChannelProgressAttentionLine,
+): string {
   const narration = compactProgressText(
     params.narration?.replace(/\s+/g, " ").trim() ?? "",
     PROGRESS_DRAFT_NARRATION_MAX_CHARS,
@@ -1335,7 +1404,7 @@ export function formatChannelProgressDraftText(params: {
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
-  const attention = params.lines.filter(isChannelProgressAttentionLine);
+  const attention = params.lines.filter(isPriorityLine);
   const planLines = formatPlanChecklistLines(params.plan ?? [], {
     maxLines: maxLines - attention.length,
     maxLineChars,
@@ -1353,10 +1422,7 @@ export function formatChannelProgressDraftText(params: {
   const bullet = params.bullet ?? "•";
   const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
   // Attention owns capacity before plans and routine progress consume the window.
-  const visibleLines = [
-    ...params.lines.filter((line) => !isChannelProgressAttentionLine(line)),
-    ...attention,
-  ];
+  const visibleLines = [...params.lines.filter((line) => !isPriorityLine(line)), ...attention];
   const renderedToolLines = visibleLines
     .map((line) => {
       if (params.presentation === "summary") {

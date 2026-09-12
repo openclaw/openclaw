@@ -18,6 +18,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-terminal",
@@ -72,6 +73,11 @@ describe("worker placement terminal persistence", () => {
         workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
         remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
       },
+    });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: identity.sessionId,
+      ownerEpoch: 7,
     });
     const active = store.transition({
       sessionId: identity.sessionId,

@@ -1,4 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { html, render } from "lit";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
+import { renderComposerLibraryMenu } from "../pages/chat/components/chat-composer-library-menu.ts";
+import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.ts";
+import "../pages/chat/components/browser-tab-card.ts";
+import { renderComposerMenuOption } from "./composer-menu.ts";
 import "../test-helpers/load-styles.ts";
 import "./menu-surface.ts";
 import "./resizable-divider.ts";
@@ -15,9 +22,25 @@ import "./web-awesome.ts";
 // which has neither the Popover API nor real layout; the paint-order
 // assertions only mean anything in the Chromium lane, so skip elsewhere.
 const hasPopoverApi = typeof HTMLElement.prototype.showPopover === "function";
+const originalTheme = document.documentElement.getAttribute("data-theme");
+const originalThemeMode = document.documentElement.getAttribute("data-theme-mode");
+const originalClasses = document.documentElement.className;
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
+  vi.unstubAllGlobals();
+  if (originalTheme === null) {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", originalTheme);
+  }
+  if (originalThemeMode === null) {
+    document.documentElement.removeAttribute("data-theme-mode");
+  } else {
+    document.documentElement.setAttribute("data-theme-mode", originalThemeMode);
+  }
+  document.documentElement.className = originalClasses;
 });
 
 // The default browser-lane viewport (414px) triggers the mobile drawer
@@ -81,6 +104,21 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
 
   it("paints a plain menu hosted in openclaw-menu-surface above the resizer divider", async () => {
     await useDesktopViewport();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
+    const nearby: boolean[] = [];
+    const distant: boolean[] = [];
+    onTestFinished(
+      subscribeNativeOverlayOcclusion(
+        (occluded) => nearby.push(occluded),
+        () => new DOMRect(300, 100, 200, 400),
+      ),
+    );
+    onTestFinished(
+      subscribeNativeOverlayOcclusion(
+        (occluded) => distant.push(occluded),
+        () => new DOMRect(900, 100, 300, 400),
+      ),
+    );
     const { nav, divider } = mountShell();
     const surface = document.createElement("openclaw-menu-surface");
     const menu = createSortMenu();
@@ -91,6 +129,13 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     const hit = hitTestOnDivider(menu, divider);
     expect(hit).not.toBeNull();
     expect(menu.contains(hit)).toBe(true);
+    expect(surface.getBoundingClientRect().width).toBe(0);
+    menu.style.left = "250px";
+    await expect.poll(() => nearby).toEqual([false, true]);
+    expect(distant).toEqual([false]);
+    menu.style.left = "850px";
+    await expect.poll(() => nearby).toEqual([false, true, false]);
+    await expect.poll(() => distant).toEqual([false, true]);
   });
 
   it("paints a Web Awesome dropdown above the divider through its own popover", async () => {
@@ -169,6 +214,8 @@ describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
 
 describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   it.each([
+    ["", "keyboard"],
+    ["", "pointer"],
     ["session-menu__item", "keyboard"],
     ["session-menu__item", "pointer"],
     ["sidebar-customize-menu__item", "keyboard"],
@@ -220,4 +267,190 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     await expect.poll(() => parent.matches(":hover")).toBe(false);
     await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe("rgba(0, 0, 0, 0)");
   });
+});
+
+describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
+  function useTheme(theme: "dark" | "light") {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.themeMode = theme;
+    document.documentElement.classList.toggle("wa-dark", theme === "dark");
+    document.documentElement.classList.toggle("wa-light", theme === "light");
+    const swatch = document.createElement("div");
+    swatch.style.backgroundColor = "var(--bg-hover)";
+    document.body.append(swatch);
+    return getComputedStyle(swatch).backgroundColor;
+  }
+
+  async function hoverBackground(element: HTMLElement, expected: string) {
+    const { page } = await import("vitest/browser");
+    await page.elementLocator(element).hover();
+    await expect.poll(() => getComputedStyle(element).backgroundColor).toBe(expected);
+  }
+
+  it.each(["dark", "light"] as const)(
+    "matches attachment and capability actions in %s mode",
+    async (theme) => {
+      await useDesktopViewport();
+      const highlight = useTheme(theme);
+      const host = document.createElement("div");
+      host.style.padding = "400px 40px 0";
+      document.body.append(host);
+      render(
+        renderChatComposerPlusMenu({
+          attachments: {},
+          disabled: false,
+          open: false,
+          view: "root",
+          toolOverrides: null,
+          onOpenChange: () => {},
+          onViewChange: () => {},
+          capabilityMenu: {
+            basePath: "",
+            skills: [],
+            skillsLoading: false,
+            skillsError: false,
+            mcpServers: [],
+            toolsEffectiveResult: null,
+            toolsEffectiveLoading: false,
+            toolsEffectiveError: false,
+            toolAccessMutationBlockedReason: null,
+            webSearchBaseEnabled: true,
+            mutationBlockedReason: null,
+            canAdmin: true,
+            adminBlockedReason: null,
+            onLoadSkills: () => {},
+            onPatchToolOverrides: () => {},
+            onNavigate: () => {},
+          },
+        }),
+        host,
+      );
+      const { page } = await import("vitest/browser");
+      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      const photo = host.querySelector<HTMLElement>('wa-dropdown-item[value="photo"]')!;
+      const skills = host.querySelector<HTMLElement>('wa-dropdown-item[value="open-skills"]')!;
+      await hoverBackground(photo, highlight);
+      const attachmentHover = getComputedStyle(photo).backgroundColor;
+      await hoverBackground(skills, attachmentHover);
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
+    "uses platform hover for library actions in %s mode",
+    async (theme) => {
+      await useDesktopViewport();
+      const highlight = useTheme(theme);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const { page } = await import("vitest/browser");
+      render(
+        html`<wa-dropdown>
+          <button slot="trigger">Library</button>
+          ${renderComposerLibraryMenu({
+            result: null,
+            loading: false,
+            busy: false,
+            error: "Library unavailable",
+            notice: null,
+            canWrite: false,
+            onReload: () => {},
+            onRead: () => {},
+            onActivate: () => {},
+          })}
+        </wa-dropdown>`,
+        host,
+      );
+      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      await hoverBackground(
+        host.querySelector<HTMLElement>('[value="library-reload"]')!,
+        highlight,
+      );
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
+    "reaches browser-card shadow menus in %s mode",
+    async (theme) => {
+      await useDesktopViewport();
+      const highlight = useTheme(theme);
+      const card = document.createElement("openclaw-browser-tab-card");
+      card.preview = {
+        kind: "browser-tab",
+        target: "host",
+        profile: "managed",
+        targetId: "tab-1",
+        url: "https://example.test/page",
+        title: "Example page",
+      };
+      document.body.append(card);
+      await card.updateComplete;
+      const { page } = await import("vitest/browser");
+      await page
+        .elementLocator(card.shadowRoot!.querySelector<HTMLElement>('[slot="trigger"]')!)
+        .click();
+      await hoverBackground(
+        card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!,
+        highlight,
+      );
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
+    "uses platform hover for slash suggestions in %s mode",
+    async (theme) => {
+      await useDesktopViewport();
+      const highlight = useTheme(theme);
+      const host = document.createElement("div");
+      document.body.append(host);
+      render(
+        renderComposerMenuOption({
+          id: "hover-command",
+          active: false,
+          select: () => {},
+          hover: () => {},
+          icon: "",
+          name: "/help",
+          description: "Show commands",
+        }),
+        host,
+      );
+      await hoverBackground(host.querySelector<HTMLElement>('[role="option"]')!, highlight);
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
+    "preserves disabled and danger states while neutral focus matches hover in %s mode",
+    async (theme) => {
+      await useDesktopViewport();
+      const highlight = useTheme(theme);
+      const host = document.createElement("div");
+      document.body.append(host);
+      render(
+        html`<wa-dropdown>
+          <button slot="trigger">Actions</button>
+          <wa-dropdown-item value="neutral">Open</wa-dropdown-item>
+          <wa-dropdown-item value="disabled" disabled>Unavailable</wa-dropdown-item>
+          <wa-dropdown-item value="danger" variant="danger">Delete</wa-dropdown-item>
+        </wa-dropdown>`,
+        host,
+      );
+      const { page, userEvent } = await import("vitest/browser");
+      const trigger = host.querySelector<HTMLElement>('[slot="trigger"]')!;
+      const neutral = host.querySelector<HTMLElement>('[value="neutral"]')!;
+      const disabled = host.querySelector<HTMLElement>('[value="disabled"]')!;
+      const danger = host.querySelector<HTMLElement>('[value="danger"]')!;
+      await page.elementLocator(trigger).click();
+      await userEvent.keyboard("{ArrowDown}");
+      await userEvent.keyboard("{Home}");
+      await expect.poll(() => document.activeElement).toBe(neutral);
+      await expect.poll(() => getComputedStyle(neutral).backgroundColor).toBe(highlight);
+      await hoverBackground(disabled, "rgba(0, 0, 0, 0)");
+      const dangerSwatch = document.createElement("div");
+      dangerSwatch.style.backgroundColor = "var(--wa-color-danger-fill-normal)";
+      danger.append(dangerSwatch);
+      const dangerHighlight = getComputedStyle(dangerSwatch).backgroundColor;
+      expect(dangerHighlight).not.toBe(highlight);
+      await hoverBackground(danger, dangerHighlight);
+    },
+  );
 });

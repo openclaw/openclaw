@@ -41,7 +41,8 @@ function failPluginInspect(message: string, json: boolean | undefined): void {
   defaultRuntime.exit(1);
 }
 
-function writeGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]): void {
+function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]): string {
+  const lines: string[] = [];
   for (const { pluginId, level, message } of diagnostics) {
     if (!pluginId) {
       const line = formatConsoleDiagnosticLine({
@@ -49,9 +50,10 @@ function writeGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]):
         message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
       });
       // Global discovery diagnostics also matter when the JSON result is an empty array.
-      process.stderr.write(`${line}\n`);
+      lines.push(`${line}\n`);
     }
   }
+  return lines.join("");
 }
 
 function formatInspectSection(title: string, lines: string[]): string[] {
@@ -175,24 +177,24 @@ export async function runPluginsInspectCommand(
     ...reportParams,
     runtimeInspection: true,
   };
+  let globalDiagnostics = "";
   if (opts.all) {
     if (id) {
       failPluginInspect("Pass either a plugin id or --all, not both.", opts.json);
       return;
     }
     const formatReport = (report: PluginStatusReport): string => {
-      writeGlobalPluginDiagnostics(report.diagnostics);
+      globalDiagnostics = formatGlobalPluginDiagnostics(report.diagnostics);
       const inspectAll = buildAllPluginInspectReports({
         config: cfg,
         ...loggerParams,
         report,
       });
-      const inspectAllWithInstall = inspectAll.map((inspect) => ({
-        ...inspect,
-        install: resolveInstallRecord(inspect.plugin.id),
-      }));
-
       if (opts.json) {
+        const inspectAllWithInstall = inspectAll.map((inspect) => ({
+          ...inspect,
+          install: resolveInstallRecord(inspect.plugin.id),
+        }));
         return JSON.stringify(inspectAllWithInstall, null, 2);
       }
       const tableWidth = getTerminalTableWidth();
@@ -243,6 +245,7 @@ export async function runPluginsInspectCommand(
             { command: "inspect", all: true },
           ),
         );
+    process.stderr.write(globalDiagnostics);
     if (opts.json) {
       defaultRuntime.writeStdout(output);
     } else {
@@ -265,7 +268,7 @@ export async function runPluginsInspectCommand(
     snapshotReport.plugins.find((entry) => entry.id === id) ??
     snapshotReport.plugins.find((entry) => entry.name === id);
   if (!targetPlugin) {
-    writeGlobalPluginDiagnostics(snapshotReport.diagnostics);
+    process.stderr.write(formatGlobalPluginDiagnostics(snapshotReport.diagnostics));
     if (id === "skill-workshop") {
       const { detectSkillWorkshopToolPolicyDiagnostic } =
         await import("../skills/workshop/tool-policy-diagnostic.js");
@@ -293,7 +296,7 @@ export async function runPluginsInspectCommand(
     return;
   }
   const formatReport = (report: PluginStatusReport): string | undefined => {
-    writeGlobalPluginDiagnostics(report.diagnostics);
+    globalDiagnostics = formatGlobalPluginDiagnostics(report.diagnostics);
     const inspect = buildPluginInspectReport({
       id: targetPlugin.id,
       config: cfg,
@@ -321,6 +324,7 @@ export async function runPluginsInspectCommand(
         { command: "inspect", pluginId: targetPlugin.id },
       )
     : formatReport(snapshotReport);
+  process.stderr.write(globalDiagnostics);
   if (output === undefined) {
     failPluginInspect(
       formatMissingPluginMessage({ id, listCommand: "openclaw plugins list --json" }),

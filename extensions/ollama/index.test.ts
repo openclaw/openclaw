@@ -819,6 +819,10 @@ describe("ollama plugin", () => {
   it.each([
     { baseUrl: "http://127.0.0.1:11434", contextTokens: 32_768 },
     { baseUrl: "https://ollama.com", contextTokens: undefined },
+    { baseUrl: "https://api.ollama.com", contextTokens: undefined },
+    { baseUrl: "https://models.ollama.com/v1", contextTokens: undefined },
+    { baseUrl: "http://api.ollama.com:11434", contextTokens: undefined },
+    { baseUrl: "https://ollama.com.example/v1", contextTokens: 32_768 },
   ])(
     "prepares the exact configured idle model at $baseUrl with its runtime context",
     async ({ baseUrl, contextTokens }) => {

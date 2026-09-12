@@ -37,6 +37,14 @@ const mocks = vi.hoisted(() => ({
     async () => "ok",
   ),
   stopCandidate: vi.fn(),
+  revalidateService: vi.fn<
+    typeof import("./update-command-service-maintenance.js").revalidateManagedGatewayServiceAfterUpdate
+  >(async ({ root }) => ({
+    kind: "owned",
+    root,
+    fingerprint: "fixture",
+    refreshDefinition: false,
+  })),
   restart:
     vi.fn<
       typeof import("./update-command-service.js").maybeRestartServiceAfterFailedMutableUpdate
@@ -75,6 +83,10 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
     command: { programArguments: ["node", "/repo/dist/entry.js", "gateway"] },
   }),
 }));
+vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
+}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
@@ -82,12 +94,7 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   maybeRestartService: mocks.restartCandidate,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stopCandidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
-  revalidateManagedGatewayServiceAfterUpdate: async () => ({
-    kind: "owned",
-    root: "/repo",
-    fingerprint: "fixture",
-    refreshDefinition: false,
-  }),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
@@ -481,7 +488,7 @@ describe("failed update recovery restart", () => {
   );
 
   it.each([79, 80])(
-    "does not restart again after post-activation convergence exits %s",
+    "does not activate when pre-restart convergence exits %s",
     async (childExitCode) => {
       mocks.restartCandidate.mockResolvedValueOnce("ok");
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
@@ -502,8 +509,8 @@ describe("failed update recovery restart", () => {
         reason: "post-core-update-failed",
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
-      expect(mocks.restartCandidate).toHaveBeenCalledOnce();
-      expect(mocks.restoreWindowsAutoStart).toHaveBeenCalledOnce();
+      expect(mocks.restartCandidate).not.toHaveBeenCalled();
+      expect(mocks.restoreWindowsAutoStart).not.toHaveBeenCalled();
       expect(mocks.restart).not.toHaveBeenCalled();
     },
   );
@@ -611,30 +618,43 @@ describe("failed package update recovery safety", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   });
 
-  it("retains and reports the recovery backup after candidate activation fails", async () => {
+  it("retains and reports the recovery backup after candidate publication and compensation fail", async () => {
     const base = tempDirs.make("update-older-target-backup-");
-    const { params, packageRoot, globalRoot } = await createPackageSwapFixture(base);
+    const { params, packageRoot } = await createPackageSwapFixture(base);
+    let retained: PackageUpdateTransaction | undefined;
     const rename = fs.rename.bind(fs);
-    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-      if (String(args[0]) === params.stage.packageRoot) {
-        throw Object.assign(new Error("candidate activation denied"), { code: "EACCES" });
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (
+        String(args[0]) === params.stage.packageRoot ||
+        String(args[0]) === retained?.backupRoot
+      ) {
+        throw Object.assign(new Error("package publication or compensation refused"), {
+          code: "EACCES",
+        });
       }
       return rename(...args);
     });
-    let transaction: PackageUpdateTransaction | undefined;
-    const result = await swapStagedPackageInstall({
-      ...params,
-      onTransaction: (retained) => {
-        transaction = retained;
-      },
-    });
-    if (!transaction) {
-      throw new Error("Package activation did not retain its recovery transaction");
+    let result;
+    try {
+      result = await swapStagedPackageInstall({
+        ...params,
+        onTransaction: (value) => {
+          retained = value;
+        },
+      });
+      if (!retained) {
+        throw new Error("The package owner did not retain its recovery transaction.");
+      }
+      expect((await retained.rollback(() => {})).exitCode).toBe(1);
+      expect(renameSpy).toHaveBeenCalledWith(retained.backupRoot, packageRoot);
+    } finally {
+      renameSpy.mockRestore();
     }
-    expect(result).toMatchObject({
-      status: "failed",
-      step: { stderrTail: expect.stringContaining("candidate activation denied") },
-    });
+    if (!retained) {
+      throw new Error("The package owner did not retain its recovery transaction.");
+    }
+    const transaction = retained;
+    expect(result.status).toBe("failed");
     const backupRuntime = path.join(transaction.backupRoot, "dist", "index.js");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(base, "state") };
     const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
@@ -667,11 +687,7 @@ describe("failed package update recovery safety", () => {
     expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
     expect(failure.result.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          name: "global install backup retention",
-          exitCode: 1,
-          stderrTail: expect.stringContaining(globalRoot),
-        }),
+        expect.objectContaining({ stderrTail: expect.stringContaining(transaction.backupRoot) }),
       ]),
     );
     expect(mocks.restart).not.toHaveBeenCalled();
@@ -797,12 +813,16 @@ describe("failed package update recovery safety", () => {
         return;
       }
       expect(failure.result).toMatchObject({ root: originalRoot, after: { version: "2026.9.1" } });
-      expect(mocks.restartCandidate.mock.lastCall?.[0]).toMatchObject({
+      expect(
+        mocks.restartCandidate.mock.lastCall?.[0],
+        JSON.stringify(failure.result),
+      ).toMatchObject({
         result: { root: originalRoot, after: { version: "2026.9.1" } },
       });
       expect(rollback).toHaveBeenCalledOnce();
       expect(complete).toHaveBeenCalledOnce();
-      expect(cleanupStatus).toBe("rolled-back");
+      // Cleanup is pre-terminal; rollback is recorded only after completion settles.
+      expect(cleanupStatus).toBe("running");
       expect(recorded.status).toBe("rolled-back");
       expect(renderUpdateRunReport(recorded).headline).toContain("↩️ OpenClaw update rolled back");
       expect(await fs.readFile(configPath, "utf8")).toBe(original);

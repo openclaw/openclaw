@@ -570,59 +570,7 @@ vi.mock("../config/legacy.js", async () => {
 });
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: vi.fn((channelId: string) => {
-    if (channelId !== "discord") {
-      return undefined;
-    }
-    return {
-      doctor: {
-        normalizeCompatibilityConfig: ({
-          cfg,
-        }: {
-          cfg: { channels?: { discord?: Record<string, unknown> } };
-        }) => {
-          const discord = cfg.channels?.discord;
-          if (!discord) {
-            return { config: cfg, changes: [] };
-          }
-          if (
-            !("streamMode" in discord) &&
-            typeof discord.streaming !== "boolean" &&
-            typeof discord.streaming !== "string"
-          ) {
-            return { config: cfg, changes: [] };
-          }
-          const next = structuredClone(cfg);
-          const nextDiscord = next.channels?.discord;
-          if (!nextDiscord) {
-            return { config: cfg, changes: [] };
-          }
-          const nextStreaming =
-            nextDiscord.streaming && typeof nextDiscord.streaming === "object"
-              ? { ...(nextDiscord.streaming as Record<string, unknown>) }
-              : {};
-          if (!("mode" in nextStreaming)) {
-            nextStreaming.mode =
-              nextDiscord.streamMode === "block"
-                ? "partial"
-                : nextDiscord.streaming === false
-                  ? "off"
-                  : "partial";
-          }
-          delete nextDiscord.streamMode;
-          nextDiscord.streaming = nextStreaming;
-          return {
-            config: next,
-            changes: ["Discord allowlist ids normalized to strings."],
-          };
-        },
-      },
-    };
-  }),
-}));
-
-vi.mock("../channels/plugins/doctor-contract-api.js", () => ({
-  loadBundledChannelDoctorContractApi: vi.fn(() => undefined),
+  getBootstrapChannelPlugin: vi.fn((_channelId: string) => undefined),
 }));
 
 vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
@@ -781,22 +729,6 @@ vi.mock("./doctor/shared/stale-plugin-config.js", () => ({
 vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
   collectBundledProviderAllowlistPolicyWarnings: vi.fn(() => []),
   collectPluginToolAllowlistWarnings: vi.fn(() => []),
-}));
-
-vi.mock("../doctor-plugin-host-links.js", () => ({
-  maybeRepairPluginOpenClawHostLinks: vi.fn(async () => undefined),
-}));
-
-vi.mock("../doctor-plugin-registry.js", () => ({
-  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => undefined),
-}));
-
-vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(async () => ({
-    detected: [],
-    changes: [],
-    warnings: [],
-  })),
 }));
 
 vi.mock("./doctor/shared/context-engine-host-compat.js", () => ({
@@ -1358,6 +1290,7 @@ vi.mock("./doctor/shared/preview-warnings.js", async () => {
 vi.mock("./doctor-config-preflight.js", async () => {
   const fsLocal = await import("node:fs/promises");
   const pathLocal = await import("node:path");
+  const { hashConfigRaw } = await import("../config/io.read-helpers.js");
   const {
     collectRelevantDoctorPluginIds,
     listPluginDoctorLegacyConfigRules,
@@ -1385,12 +1318,12 @@ vi.mock("./doctor-config-preflight.js", async () => {
           : {};
       let injectedEffectiveConfig = injected?.config ? structuredClone(injected.config) : parsed;
       let exists = injected?.exists ?? false;
+      let raw: string | null = exists ? JSON.stringify(parsed) : null;
       if (!injected) {
         try {
-          parsed = JSON.parse(await fsLocal.readFile(configPath, "utf-8")) as Record<
-            string,
-            unknown
-          >;
+          const contents = await fsLocal.readFile(configPath, "utf-8");
+          parsed = JSON.parse(contents) as Record<string, unknown>;
+          raw = contents;
           exists = true;
           injectedEffectiveConfig = parsed;
         } catch {
@@ -1406,6 +1339,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
           snapshot: {
             exists,
             path: configPath,
+            raw,
+            hash: hashConfigRaw(raw),
             parsed,
             agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
             ...(injected?.includeProvenance
@@ -1433,6 +1368,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
         snapshot: {
           exists,
           path: configPath,
+          raw,
+          hash: hashConfigRaw(raw),
           parsed,
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
           ...(injected?.includeProvenance ? { includeProvenance: injected.includeProvenance } : {}),

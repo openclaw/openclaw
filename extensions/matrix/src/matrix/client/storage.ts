@@ -29,9 +29,9 @@ import type { MatrixAuth, MatrixStoragePaths } from "./types.js";
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
-type LegacyMoveRecord = {
+type LegacyMigrationRecord = {
   sourcePath: string;
-  targetPath: string;
+  targetDescription: string;
   label: string;
 };
 
@@ -361,7 +361,7 @@ export async function maybeMigrateLegacyStorage(params: {
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
   fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
-  const moved: LegacyMoveRecord[] = [];
+  const migrations: LegacyMigrationRecord[] = [];
   const pendingArchives: LegacyArchiveRecord[] = [];
   const skippedExistingTargets: string[] = [];
   try {
@@ -371,34 +371,30 @@ export async function maybeMigrateLegacyStorage(params: {
         sourcePath: params.storagePaths.storagePath,
         targetRootDir: params.storagePaths.rootDir,
         label: "account sync cache",
-        moved,
+        migrations,
         pendingArchives,
       });
     }
     if (hasAccountScopedRecoveryKey) {
       migrateLegacyMatrixRecoveryKeyFileToStore(params.storagePaths.rootDir);
-      moved.push({
+      migrations.push({
         sourcePath: params.storagePaths.recoveryKeyPath,
-        targetPath: `${params.storagePaths.rootDir} SQLite recovery key state`,
+        targetDescription: `${params.storagePaths.rootDir} SQLite recovery key state`,
         label: "recovery key",
       });
     }
     if (hasAccountScopedLegacyCryptoMigration) {
       migrateLegacyMatrixLegacyCryptoMigrationFileToStore(params.storagePaths.rootDir);
-      moved.push({
+      migrations.push({
         sourcePath: path.join(params.storagePaths.rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
-        targetPath: `${params.storagePaths.rootDir} SQLite legacy crypto migration state`,
+        targetDescription: `${params.storagePaths.rootDir} SQLite legacy crypto migration state`,
         label: "legacy crypto migration",
       });
     }
   } catch (err) {
-    const rollbackError = rollbackLegacyMoves(moved);
-    throw new Error(
-      rollbackError
-        ? `Failed migrating legacy Matrix client storage: ${String(err)}. Rollback also failed: ${rollbackError}`
-        : `Failed migrating legacy Matrix client storage: ${String(err)}`,
-      { cause: err },
-    );
+    throw new Error(`Failed migrating legacy Matrix client storage: ${String(err)}`, {
+      cause: err,
+    });
   }
   for (const archive of pendingArchives) {
     archiveLegacyStoragePath({
@@ -406,10 +402,10 @@ export async function maybeMigrateLegacyStorage(params: {
       skippedExistingTargets,
     });
   }
-  if (moved.length > 0) {
+  if (migrations.length > 0) {
     logger.info(
-      `matrix: migrated legacy client storage into ${params.storagePaths.rootDir}\n${moved
-        .map((entry) => `- ${entry.label}: ${entry.sourcePath} -> ${entry.targetPath}`)
+      `matrix: migrated legacy client storage into ${params.storagePaths.rootDir}\n${migrations
+        .map((entry) => `- ${entry.label}: ${entry.sourcePath} -> ${entry.targetDescription}`)
         .join("\n")}`,
     );
   }
@@ -425,7 +421,7 @@ async function migrateLegacySyncCacheToSqlite(params: {
   sourcePath: string;
   targetRootDir: string;
   label: string;
-  moved: LegacyMoveRecord[];
+  migrations: LegacyMigrationRecord[];
   pendingArchives: LegacyArchiveRecord[];
 }): Promise<void> {
   const syncCache = await import("./sync-cache-state.js");
@@ -450,9 +446,9 @@ async function migrateLegacySyncCacheToSqlite(params: {
     claimCurrentTokenStorageState({
       rootDir: params.targetRootDir,
     });
-    params.moved.push({
+    params.migrations.push({
       sourcePath: params.sourcePath,
-      targetPath: `${params.targetRootDir} SQLite sync cache`,
+      targetDescription: `${params.targetRootDir} SQLite sync cache`,
       label: params.label,
     });
   }
@@ -475,20 +471,6 @@ function archiveLegacyStoragePath(params: {
     return;
   }
   fs.renameSync(params.sourcePath, archivedLegacyStoragePath);
-}
-
-function rollbackLegacyMoves(moved: LegacyMoveRecord[]): string | null {
-  for (const entry of moved.toReversed()) {
-    try {
-      if (!fs.existsSync(entry.targetPath) || fs.existsSync(entry.sourcePath)) {
-        continue;
-      }
-      fs.renameSync(entry.targetPath, entry.sourcePath);
-    } catch (err) {
-      return `${entry.label} (${entry.targetPath} -> ${entry.sourcePath}): ${String(err)}`;
-    }
-  }
-  return null;
 }
 
 function writeStoredRootMetadata(

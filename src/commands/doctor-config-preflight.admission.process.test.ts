@@ -2,14 +2,19 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
+  createBuiltRuntime,
   createSourceRuntime,
   runSourceRuntime,
 } from "./doctor-config-preflight.process.test-support.js";
+import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
@@ -143,7 +148,30 @@ describe("startup admission before persistent writes", () => {
       restored,
     }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-startup-admission-"));
-      const runtimeRoot = createSourceRuntime(root);
+      const preparedPreflightUrl = resolveRuntimeWorkerUrl(
+        doctorConfigRuntimeEntrypoints.preflight,
+      );
+      const compiled = preparedPreflightUrl.pathname.endsWith(".js");
+      const runtimeRoot = compiled
+        ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
+        : createSourceRuntime(root);
+      // Keep package discovery fixture-local in both source and prepared subprocesses.
+      const runtimeUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+        resolveRuntimeWorkerUrl({
+          ...entry,
+          ...(compiled
+            ? { root: runtimeRoot }
+            : {
+                currentModuleUrl: pathToFileURL(
+                  path.join(
+                    runtimeRoot,
+                    "src",
+                    "commands",
+                    "doctor-config-runtime.test-support.ts",
+                  ),
+                ).href,
+              }),
+        }).href;
       const stateDir = path.join(root, "state");
       const workspaceDir = path.join(
         stateDir,
@@ -226,12 +254,12 @@ describe("startup admission before persistent writes", () => {
         const entry =
           workspace || repairedSession
             ? `
-        const { runDoctorConfigPreflight } = await import("./src/commands/doctor-config-preflight.ts");
+        const { runDoctorConfigPreflight } = await import(${JSON.stringify(runtimeUrl(doctorConfigRuntimeEntrypoints.preflight))});
         await runDoctorConfigPreflight({ migrateState: true, migrateLegacyConfig: false, requireStartupMigrationCheckpoint: true });
       `
             : `
-        const { ensureConfigReady } = await import("./src/cli/program/config-guard.ts");
-        const { ExitError } = await import("./src/runtime.ts");
+        const { ensureConfigReady } = await import(${JSON.stringify(runtimeUrl(doctorConfigRuntimeEntrypoints.configGuard))});
+        const { ExitError } = await import(${JSON.stringify(runtimeUrl(doctorConfigRuntimeEntrypoints.runtime))});
         await ensureConfigReady({
           commandPath: ["gateway", "run"],
           runtime: { log: console.log, error: console.error, exit(code) { throw new ExitError(code); } },
@@ -276,7 +304,7 @@ describe("startup admission before persistent writes", () => {
           expect(fs.readFileSync(configPath, "utf8")).toBe(
             fs.readFileSync(`${configPath}.bak`, "utf8"),
           );
-          expect(schemaMetadata(databasePath).userVersion).toBe(16);
+          expect(schemaMetadata(databasePath).userVersion).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         } else {
           expect(manifest(stateDir)).toEqual(before);
           expect(schemaMetadata(databasePath)).toEqual(schemaBefore);

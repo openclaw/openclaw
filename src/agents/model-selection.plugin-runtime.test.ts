@@ -51,7 +51,7 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
 vi.mock("./model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => [],
   loadProviderScopedThinkingCatalog: async () => [],
-  loadPreparedModelCatalog: async () => [],
+  readPreparedModelCatalog: async () => [],
   loadPreparedModelCatalogSnapshot: loadPreparedModelCatalogSnapshotMock,
 }));
 
@@ -158,6 +158,25 @@ describe("model-selection plugin runtime normalization", () => {
       expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(false);
       expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
     }
+  });
+
+  it("normalizes an unrestricted reply default before selecting it", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
+    const cfg = { agents: { defaults: { modelPolicy: { allow: [] } } } };
+    const state = await createModelSelectionStateForTest({
+      cfg,
+      agentCfg: cfg.agents.defaults,
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+      provider: "custom-provider",
+      model: "custom-legacy-model",
+      hasModelDirective: false,
+    });
+
+    expect({ provider: state.provider, model: state.model }).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
   });
 
   it("keeps plugin-normalized stored overrides allowed in auto-reply runtime selection", async () => {

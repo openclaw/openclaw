@@ -6,6 +6,7 @@ import { extractText, extractTextCached } from "../../../lib/chat/message-extrac
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import {
+  prepareChatMessageRender,
   renderMessageActionButtons,
   resolveMessageActionDetails,
 } from "./chat-message-markdown.ts";
@@ -64,7 +65,10 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     const body = "Imported **answer**\n\n~~~ts\nconst answer = 42;\n~~~";
     const message = { role, content: wrap(body), __openclaw: { idempotencyKey: importKey } };
     render(
-      renderGroupedMessage(message, "imported", { isStreaming: false, showReasoning: false }),
+      renderGroupedMessage(prepareChatMessageRender(message), "imported", {
+        isStreaming: false,
+        showReasoning: false,
+      }),
       container,
     );
     expect(container.querySelector(".chat-text strong")?.textContent).toBe("answer");
@@ -73,8 +77,7 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     expect(container.textContent).not.toContain("Source: External");
     expect(container.querySelector("h2")).toBeNull();
     const onReply = vi.fn();
-    const details = resolveMessageActionDetails({
-      message,
+    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
       messageId: "imported",
       senderLabel: role,
       onReply,

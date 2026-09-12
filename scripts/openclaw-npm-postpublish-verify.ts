@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
-import { createPublicKey, verify as verifySignature } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -26,20 +26,23 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
+import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   comparePackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "./lib/package-dist-inventory-contract.mts";
-import {
-  collectPackageRootImportOccurrences,
-  type PackageRootImportOccurrence,
-} from "./lib/package-root-imports.ts";
+import { collectPackageRootImports } from "./lib/package-root-imports.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
 import { classifyReleaseTrain } from "./lib/release-version.mjs";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "./lib/runtime-dependency-ownership-contract.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -109,7 +112,6 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
 ]);
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
-type AcornComment = import("acorn").Comment;
 
 type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
@@ -259,50 +261,6 @@ type FetchRegistryJsonOptions = {
   maxBodyBytes?: number;
   timeoutMs?: number;
 };
-
-export function verifyNpmRegistrySignatures(params: {
-  integrity: string;
-  keys: NpmRegistryKey[];
-  packageName: string;
-  signatures: NpmRegistrySignature[];
-  version: string;
-}): void {
-  if (!params.integrity.startsWith("sha512-")) {
-    throw new Error(`npm registry integrity is missing a sha512 digest for ${params.packageName}.`);
-  }
-  if (params.signatures.length === 0) {
-    throw new Error(
-      `npm registry returned no signatures for ${params.packageName}@${params.version}.`,
-    );
-  }
-
-  const payload = `${params.packageName}@${params.version}:${params.integrity}`;
-  for (const signature of params.signatures) {
-    const key = params.keys.find((candidate) => candidate.keyid === signature.keyid);
-    if (!key) {
-      continue;
-    }
-    const publicKey = createPublicKey({
-      key: Buffer.from(key.key, "base64"),
-      format: "der",
-      type: "spki",
-    });
-    if (
-      verifySignature(
-        "sha256",
-        Buffer.from(payload, "utf8"),
-        publicKey,
-        Buffer.from(signature.sig, "base64"),
-      )
-    ) {
-      return;
-    }
-  }
-
-  throw new Error(
-    `npm registry signatures did not verify for ${params.packageName}@${params.version}.`,
-  );
-}
 
 function resolveNpmProvenanceVerificationPolicy(
   statement: NpmProvenanceStatement,
@@ -463,6 +421,7 @@ export async function verifyNpmProvenanceAttestation(params: {
 }
 
 export function collectInstalledPackageErrors(params: {
+  additionalCompanionManifestRoots?: string[];
   expectedVersion: string;
   installedVersion: string;
   packageRoot: string;
@@ -486,7 +445,12 @@ export function collectInstalledPackageErrors(params: {
   errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
-  errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
+  errors.push(
+    ...collectInstalledRootDependencyManifestErrors(
+      params.packageRoot,
+      params.additionalCompanionManifestRoots,
+    ),
+  );
 
   return [...new Set(errors)];
 }
@@ -671,28 +635,28 @@ function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string
 type ParsedImportSpecifiersResult =
   | {
       ok: true;
-      imports: PackageRootImportOccurrence[];
-      comments: AcornComment[];
+      imports: string[];
     }
   | { ok: false; error: string };
 
 function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifiersResult {
   try {
-    const comments: AcornComment[] = [];
     // Keep strict JavaScript validation: TypeScript accepts some invalid JS bindings/contexts.
     acorn.parse(source, {
       allowHashBang: true,
       ecmaVersion: "latest",
-      onComment: comments,
       sourceType: "module",
     });
-    return { ok: true, comments, imports: collectPackageRootImportOccurrences(source) };
+    return { ok: true, imports: collectPackageRootImports(source) };
   } catch (error) {
     return { ok: false, error: formatErrorMessage(error) };
   }
 }
 
-export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {
+export function collectInstalledRootDependencyManifestErrors(
+  packageRoot: string,
+  additionalCompanionManifestRoots: string[] = [],
+): string[] {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
     return ["installed package is missing package.json."];
@@ -720,7 +684,21 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   const missingImporters = new Map<string, Set<string>>();
   const bundledExtensionRuntimeDependencyOwners =
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
+  const companionManifestRoots = [
+    join(packageRoot, "..", "@openclaw"),
+    ...additionalCompanionManifestRoots,
+  ];
   const companionManifestCache = new Map<string, InstalledPackageJson | null>();
+  let runtimeDependencyOwnership: RuntimeDependencyOwnership | null;
+  try {
+    runtimeDependencyOwnership = readRuntimeDependencyOwnership(packageRoot);
+  } catch (error) {
+    return [
+      `installed package runtime dependency ownership is invalid: ${RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    ];
+  }
+  const importsByFile = new Map<string, string[]>();
+  const extensionsByFile = new Map<string, string[]>();
 
   for (const filePath of distFiles.files) {
     const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
@@ -733,36 +711,71 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
         `installed package root dist file '${file.relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
       ];
     }
-    const extensionOwners = collectGeneratedExtensionImportOwners(
-      file.source,
-      parsedSpecifiers.imports,
-      parsedSpecifiers.comments,
-    );
-    for (const runtimeImport of parsedSpecifiers.imports) {
-      const specifier = runtimeImport.specifier;
+    importsByFile.set(file.relativePath, parsedSpecifiers.imports);
+    const owners = runtimeDependencyOwnership?.chunks[file.relativePath];
+    if (owners) {
+      if (owners.sha256 !== createHash("sha256").update(file.source).digest("hex")) {
+        return [
+          `installed package runtime dependency ownership does not match '${file.relativePath}'; rebuild the package.`,
+        ];
+      }
+      extensionsByFile.set(file.relativePath, owners.extensions);
+    }
+  }
+
+  // Root imports from any build output override plugin evidence, including
+  // relative createRequire calls that are absent from the bundler's graph.
+  const pending = [...importsByFile.keys()].filter((file) => !extensionsByFile.has(file));
+  const visited = new Set<string>();
+  const distDir = importsByFile.size ? realpathSync(join(packageRoot, "dist")) : "";
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (visited.has(file)) {
+      continue;
+    }
+    visited.add(file);
+    extensionsByFile.delete(file);
+    const resolveImport = createRequire(pathToFileURL(join(distDir, file))).resolve;
+    for (const specifier of importsByFile.get(file) ?? []) {
+      if (specifier.startsWith(".")) {
+        try {
+          const importedPath = resolveImport(specifier.replace(/[?#].*$/u, ""));
+          const importedFile = relative(distDir, importedPath).replaceAll("\\", "/");
+          if (importsByFile.has(importedFile)) {
+            pending.push(importedFile);
+          }
+        } catch {
+          // Missing relative modules are reported by package closure checks.
+        }
+      }
+    }
+  }
+
+  for (const [file, imports] of importsByFile) {
+    const extensions = extensionsByFile.get(file);
+    for (const specifier of imports) {
       const dependencyName = packageNameFromSpecifier(specifier);
-      const extensionId = extensionOwners.get(runtimeImport.start);
       if (
         !dependencyName ||
         NODE_BUILTIN_MODULES.has(dependencyName) ||
         OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS.has(dependencyName) ||
         declaredRuntimeDeps.has(dependencyName) ||
-        isBundledExtensionOwnedRuntimeImport({
-          dependencyName,
-          extensionId,
-          ownersByDependency: bundledExtensionRuntimeDependencyOwners,
-        }) ||
-        isInstalledCompanionExtensionOwnedRuntimeImport({
-          dependencyName,
-          extensionId,
-          packageRoot,
-          manifestCache: companionManifestCache,
-        })
+        (extensions?.length &&
+          extensions.every(
+            (extensionId) =>
+              bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(extensionId) ||
+              isInstalledCompanionExtensionOwnedRuntimeImport({
+                dependencyName,
+                extensionId,
+                manifestRoots: companionManifestRoots,
+                manifestCache: companionManifestCache,
+              }),
+          ))
       ) {
         continue;
       }
       const importers = missingImporters.get(dependencyName) ?? new Set<string>();
-      importers.add(file.relativePath);
+      importers.add(file);
       missingImporters.set(dependencyName, importers);
     }
   }
@@ -775,69 +788,27 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function collectGeneratedExtensionImportOwners(
-  source: string,
-  imports: PackageRootImportOccurrence[],
-  comments: AcornComment[],
-): Map<number, string | undefined> {
-  const owners = new Map<number, string | undefined>();
-  const markers = comments.flatMap((comment) => {
-    if (
-      comment.type !== "Line" ||
-      source.slice(source.lastIndexOf("\n", comment.start - 1) + 1, comment.start).trim() !== ""
-    ) {
-      return [];
-    }
-    const match = comment.value.match(/^#(region|endregion)(?:[\t ]+([^\r\n]*?))?[\t ]*$/u);
-    return match
-      ? [
-          {
-            kind: match[1],
-            owner: match[2]?.match(/^extensions\/([a-z0-9][a-z0-9-]*)\//u)?.[1],
-            start: comment.start,
-          },
-        ]
-      : [];
-  });
-  let depth = 0;
-  for (const marker of markers) {
-    depth += marker.kind === "region" ? 1 : -1;
-    if (depth < 0) {
-      return owners;
-    }
-  }
-  if (depth !== 0) {
-    return owners;
-  }
-  const stack: Array<string | undefined> = [];
-  let markerIndex = 0;
-  for (const runtimeImport of imports.toSorted((left, right) => left.start - right.start)) {
-    while (markerIndex < markers.length && markers[markerIndex]!.start < runtimeImport.start) {
-      const marker = markers[markerIndex++]!;
-      if (marker.kind === "region") {
-        stack.push(marker.owner);
-      } else {
-        stack.pop();
-      }
-    }
-    owners.set(runtimeImport.start, stack.at(-1));
-  }
-  return owners;
-}
-
 function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
   dependencyName: string;
-  extensionId: string | undefined;
-  packageRoot: string;
+  extensionId: string;
+  manifestRoots: string[];
   manifestCache: Map<string, InstalledPackageJson | null>;
 }): boolean {
   const extensionId = params.extensionId;
-  if (!extensionId) {
-    return false;
-  }
-  let manifest = params.manifestCache.get(extensionId);
-  if (manifest === undefined) {
-    const manifestPath = join(params.packageRoot, "..", "@openclaw", extensionId, "package.json");
+  for (const manifestRoot of params.manifestRoots) {
+    const cacheKey = `${manifestRoot}\0${extensionId}`;
+    let manifest = params.manifestCache.get(cacheKey);
+    if (manifest !== undefined) {
+      if (
+        manifest &&
+        (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
+          Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
+      ) {
+        return true;
+      }
+      continue;
+    }
+    const manifestPath = join(manifestRoot, extensionId, "package.json");
     manifest = null;
     if (existsSync(manifestPath)) {
       const stat = lstatSync(manifestPath);
@@ -852,13 +823,16 @@ function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
         }
       }
     }
-    params.manifestCache.set(extensionId, manifest);
+    params.manifestCache.set(cacheKey, manifest);
+    if (
+      manifest &&
+      (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
+        Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
+    ) {
+      return true;
+    }
   }
-  return Boolean(
-    manifest &&
-    (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
-      Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName)),
-  );
+  return false;
 }
 
 function collectBundledExtensionRuntimeDependencyOwners(
@@ -874,15 +848,6 @@ function collectBundledExtensionRuntimeDependencyOwners(
     }
   }
   return ownersByDependency;
-}
-
-function isBundledExtensionOwnedRuntimeImport(params: {
-  dependencyName: string;
-  extensionId: string | undefined;
-  ownersByDependency: Map<string, Set<string>>;
-}): boolean {
-  const owners = params.ownersByDependency.get(params.dependencyName);
-  return Boolean(params.extensionId && owners?.has(params.extensionId));
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {

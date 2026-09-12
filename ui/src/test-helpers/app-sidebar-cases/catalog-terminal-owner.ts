@@ -5,7 +5,6 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import { createGatewayHarness, createSessions, deferred, mountSidebar } from "../app-sidebar.ts";
 import {
@@ -51,25 +50,28 @@ async function mountWithCatalog(
       features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
-  const { sidebar } = await mountSidebar(gateway.gateway, createSessions("main", sessionKeys));
+  const { sidebar, context } = await mountSidebar(
+    gateway.gateway,
+    createSessions("main", sessionKeys),
+  );
   sidebar.connected = true;
   await sidebar.updateComplete;
   await vi.advanceTimersByTimeAsync(0);
   await sidebar.updateComplete;
-  return sidebar;
+  return { sidebar, context };
 }
 
 describe("AppSidebar catalog terminal ownership", () => {
-  it("opens the catalog terminal menu with the rendered catalog owner", async () => {
+  it("opens the catalog terminal menu for the rendered catalog session", async () => {
     vi.useFakeTimers();
     try {
-      const sidebar = await mountWithCatalog(
+      const { sidebar, context } = await mountWithCatalog(
         catalogList([{ threadId: "thread-1", name: "Resume me", canOpenTerminal: true }]),
       );
       sidebar.terminalAvailable = true;
+      sidebar.onNavigate = vi.fn();
       await sidebar.updateComplete;
       const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
-      (sidebar as unknown as { newSessionAgentId: string }).newSessionAgentId = "jarvis";
       row.dispatchEvent(
         new MouseEvent("contextmenu", {
           bubbles: true,
@@ -84,21 +86,16 @@ describe("AppSidebar catalog terminal ownership", () => {
         updateComplete: Promise<boolean>;
       };
       await menu.updateComplete;
-      let detail: unknown;
-      const listener = (event: Event) => {
-        detail = (event as CustomEvent).detail;
-      };
-      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-      try {
-        menu.onAction("terminal");
-      } finally {
-        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-      }
-
-      expect(detail).toEqual({
-        open: true,
-        agentId: "main",
-        catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      const selection = context.agentSelection;
+      selection.set("other");
+      const select = vi.spyOn(selection, "set");
+      menu.onAction("terminal");
+      expect(select).toHaveBeenCalledWith("main");
+      expect(selection.state.selectedId).toBe("main");
+      expect(sidebar.onNavigate).toHaveBeenCalledWith("terminal", {
+        pathname: "/terminal",
+        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1",
+        hash: "",
       });
     } finally {
       vi.useRealTimers();
@@ -108,7 +105,7 @@ describe("AppSidebar catalog terminal ownership", () => {
   it("keeps a selected adopted catalog session as one row", async () => {
     vi.useFakeTimers();
     try {
-      const sidebar = await mountWithCatalog(
+      const { sidebar } = await mountWithCatalog(
         catalogList([
           {
             threadId: "thread-1",
@@ -132,7 +129,7 @@ describe("AppSidebar catalog terminal ownership", () => {
   it("binds the adopted session immediately on the catalog-continued event", async () => {
     vi.useFakeTimers();
     try {
-      const sidebar = await mountWithCatalog(
+      const { sidebar } = await mountWithCatalog(
         catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
         ["agent:main:main", "agent:main:adopted-codex"],
       );
@@ -164,7 +161,7 @@ describe("AppSidebar catalog terminal ownership", () => {
   it("ignores a catalog adoption event owned by another agent", async () => {
     vi.useFakeTimers();
     try {
-      const sidebar = await mountWithCatalog(
+      const { sidebar } = await mountWithCatalog(
         catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
       );
 
@@ -194,7 +191,9 @@ describe("AppSidebar catalog terminal ownership", () => {
   });
 });
 
-async function selectCatalogDelete(sidebar: Awaited<ReturnType<typeof mountWithCatalog>>) {
+async function selectCatalogDelete(
+  sidebar: Awaited<ReturnType<typeof mountWithCatalog>>["sidebar"],
+) {
   sidebar
     .querySelector('[data-session-key*="thread-1"]')!
     .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
@@ -222,7 +221,7 @@ describe("AppSidebar catalog deletion", () => {
       try {
         const result = catalogList([{ threadId: "thread-1", name: "Shared session", canArchive }]);
         result.catalogs[0]!.capabilities.archive = archive;
-        const sidebar = await mountWithCatalog(result);
+        const { sidebar } = await mountWithCatalog(result);
         sidebar
           .querySelector('[data-session-key*="thread-1"]')!
           .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
@@ -242,7 +241,7 @@ describe("AppSidebar catalog deletion", () => {
       try {
         const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
         const request = vi.fn().mockResolvedValue(result);
-        const sidebar = await mountWithCatalog(result, undefined, request);
+        const { sidebar } = await mountWithCatalog(result, undefined, request);
         sidebar.sessionKey = open
           ? "agent:main:catalog:codex:gateway%3Alocal:thread-1"
           : "agent:main:main";
@@ -299,7 +298,7 @@ describe("AppSidebar catalog deletion", () => {
           result.catalogs[0]!.hosts[0]!.nextCursor = "page-2";
         }
         const request = vi.fn().mockResolvedValue(result);
-        const sidebar = await mountWithCatalog(result, undefined, request);
+        const { sidebar } = await mountWithCatalog(result, undefined, request);
         await vi.advanceTimersByTimeAsync(50);
         const staleList = deferred<SessionsCatalogListResult>();
         const archive = deferred<unknown>();

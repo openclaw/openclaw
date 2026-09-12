@@ -1,7 +1,11 @@
 // Control UI chat module implements export behavior.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+  resolveMessageSenderLabel,
+} from "../../lib/chat/message-normalizer.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 
@@ -27,13 +31,12 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
   const lines: string[] = [`# Chat with ${assistantName}`, ""];
   for (const msg of history) {
     const m = msg as Record<string, unknown>;
-    const normalized = normalizeMessage(msg);
-    const role = normalizeRoleForGrouping(normalized.role);
+    const role = normalizeRoleForGrouping(resolveMessageRole(msg));
     const speaker =
       role === "user"
-        ? (normalized.senderLabel ?? "You")
+        ? (resolveMessageSenderLabel(msg) ?? "You")
         : role === "assistant"
-          ? (normalized.senderLabel ?? assistantName)
+          ? (resolveMessageSenderLabel(msg) ?? assistantName)
           : "Tool";
     const content = extractTextCached(msg) ?? "";
     const ts = timestampMsToIsoString(m.timestamp) ?? "";

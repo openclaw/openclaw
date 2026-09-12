@@ -173,7 +173,7 @@ Set-Mailbox -Identity "principal@[organization].org" `
 
 **Read access** (Graph API with application permissions):
 
-Register an Azure AD application with `Mail.Read` and `Calendars.Read` application permissions. **Before using the application**, scope access with an [application access policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) to restrict it to only the delegate and principal mailboxes:
+Register a Microsoft Entra ID (formerly Azure AD) application with `Mail.Read` and `Calendars.Read` application permissions. **Before using the application**, scope access with an [application access policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) to restrict it to only the delegate and principal mailboxes:
 
 ```powershell
 New-ApplicationAccessPolicy `
@@ -214,7 +214,8 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
       delegate: {
         workspace: "~/.openclaw/workspace-delegate",
         tools: {
-          deny: ["browser", "canvas"],
+          allow: ["read", "exec", "message", "cron"],
+          deny: ["write", "edit", "apply_patch", "browser", "canvas"],
         },
       },
     },

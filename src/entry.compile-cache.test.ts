@@ -67,6 +67,7 @@ describe("entry compile cache", () => {
   let argv: string[];
   let child: ChildProcess;
   let kill: Mock<ChildProcess["kill"]>;
+  let processKill: MockInstance<typeof process.kill>;
   let exit: MockInstance<typeof process.exit>;
   let writeStderr: MockInstance<typeof process.stderr.write>;
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -93,6 +94,7 @@ describe("entry compile cache", () => {
     spawn.mockReset().mockReturnValue(child);
     vi.spyOn(process, "argv", "get").mockImplementation(() => argv);
     vi.spyOn(process, "execArgv", "get").mockReturnValue(["--no-warnings"]);
+    processKill = vi.spyOn(process, "kill").mockReturnValue(true);
     exit = vi.spyOn(process, "exit").mockImplementation(vi.fn<typeof process.exit>());
     writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
@@ -258,36 +260,62 @@ describe("entry compile cache", () => {
     expect(writeStderr).not.toHaveBeenCalled();
   });
 
-  it("marks signal-terminated compile-cache respawn children as failed without forcing another exit", async () => {
-    await markSourceCheckout();
-    await respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root });
-    child.emit("exit", null, "SIGTERM");
-    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
-  });
-
-  it("waits for a signaled compile-cache respawn child after force-killing it", async () => {
-    await markSourceCheckout();
-    argv = [process.execPath, entryFile, "tui"];
-    vi.useFakeTimers();
-    try {
-      await respawnWithoutOpenClawCompileCacheIfNeeded({
-        currentFile: entryFile,
-        installRoot: root,
+  it.each(["linux", "win32"] as const)(
+    "preserves compile-cache respawn child signal termination on %s",
+    async (platform) => {
+      await markSourceCheckout();
+      await withMockedPlatform(platform, async () => {
+        await respawnWithoutOpenClawCompileCacheIfNeeded({
+          currentFile: entryFile,
+          installRoot: root,
+        });
+        child.emit("exit", null, "SIGTERM");
+        if (platform === "win32") {
+          expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+          expect(processKill).not.toHaveBeenCalled();
+        } else {
+          expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGTERM");
+          expect(exit).not.toHaveBeenCalled();
+        }
       });
-      const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
-      expectDefined(options?.onSignal, "signal handler")("SIGTERM");
-      vi.advanceTimersByTime(1_000);
-      expect(kill).toHaveBeenCalledWith("SIGTERM");
-      expect(exit).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(1_000);
-      expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-      expect(exit).not.toHaveBeenCalled();
-      child.emit("exit", null, "SIGKILL");
-      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
+    "waits for a signaled compile-cache respawn child after force-killing it on %s",
+    async (platform) => {
+      await markSourceCheckout();
+      argv = [process.execPath, entryFile, "tui"];
+      vi.useFakeTimers();
+      try {
+        await withMockedPlatform(platform, async () => {
+          await respawnWithoutOpenClawCompileCacheIfNeeded({
+            currentFile: entryFile,
+            installRoot: root,
+          });
+          const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
+          expectDefined(options?.onSignal, "signal handler")("SIGTERM");
+          vi.advanceTimersByTime(1_000);
+          expect(kill).toHaveBeenCalledWith("SIGTERM");
+          expect(exit).not.toHaveBeenCalled();
+          vi.advanceTimersByTime(1_000);
+          expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
+          expect(exit).not.toHaveBeenCalled();
+          expect(processKill).not.toHaveBeenCalled();
+          child.emit("exit", null, "SIGKILL");
+          if (platform === "win32") {
+            expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+            expect(processKill).not.toHaveBeenCalled();
+          } else {
+            expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
+            expect(exit).not.toHaveBeenCalled();
+          }
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("respawns when Node already enabled its cache without an inherited cache path", async () => {
     await markSourceCheckout();

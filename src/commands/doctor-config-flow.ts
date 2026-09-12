@@ -14,7 +14,7 @@ import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
-import { configWriteTargetsIncludeBoundary } from "../config/mutate.js";
+import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,6 +34,7 @@ import {
   shouldSkipPluginValidationForDoctorConfigPreflight,
 } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
@@ -73,11 +74,7 @@ function collectInvalidHookTransformsDirWarnings(
 }
 
 function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
-  const entries = cfg.hooks?.internal?.entries;
-  if (!entries) {
-    return [];
-  }
-  const unsupportedKeysByEntry = Object.entries(entries)
+  const unsupportedKeysByEntry = Object.entries(cfg.hooks?.internal?.entries ?? {})
     .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
     .map(([hookKey, entry]) => {
       const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
@@ -173,6 +170,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         recoverCorruptTargetStore: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
         preparePluginMetadataSnapshot: true,
+        beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
+          params.prompter,
+          progress.done,
+        ),
         measure: async (name, run) => {
           progress.setLabel(`${name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " ")}…`);
           return await run();
@@ -664,11 +665,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   const finalized = await finalizeDoctorConfigFlow({
-    cfg: state.cfg,
-    candidate: state.candidate,
-    pendingChanges: state.pendingChanges,
+    ...state,
+    snapshot,
     shouldRepair,
-    fixHints: state.fixHints,
     confirm: params.confirm,
     note,
   });
@@ -676,7 +675,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const shouldWriteConfig = finalized.shouldWriteConfig && legacyStep.blocksWrite !== true;
   const includeBoundaryWrite =
     shouldWriteConfig &&
-    configWriteTargetsIncludeBoundary({ snapshot, nextConfig: cfg, persistCanonicalAgentRoster });
+    resolveConfigIncludeWriteBoundary({
+      snapshot,
+      nextConfig: cfg,
+      persistCanonicalAgentRoster,
+      explicitSetPaths,
+    });
 
   const configuredOpencodePluginIds = [
     cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
@@ -711,7 +715,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const planBound = preflight.postSessionPluginMigrationPlanBound;
 
   return {
-    cfg,
+    ...finalized,
+    sourceConfigForWrite: snapshot.sourceConfig,
     ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
@@ -735,7 +740,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(blockedCodexProviderPlan.blockedModelIdentities.length > 0
       ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
       : {}),
-    ...(openAICodexAuthProfileIdMap?.size ? { openAICodexAuthProfileIdMap } : {}),
+    ...(openAICodexAuthProfileIdMap ? { openAICodexAuthProfileIdMap } : {}),
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     ...(pluginMetadataSnapshotState.current
       ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }

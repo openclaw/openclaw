@@ -20,6 +20,7 @@ import type {
 import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import type { FollowupRun } from "./queue.js";
+import type { DirectBlockDelivery } from "./reply-delivery.js";
 
 /** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
 export type AgentFallbackCandidateCommonParams = {
@@ -114,6 +115,7 @@ export type AgentFallbackCycleParams = {
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
   directlySentBlockKeys: Set<string>;
+  directBlockDeliveries: DirectBlockDelivery[];
   notifyAgentRunStart: () => void;
   signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
   notifyUserAboutCompaction: boolean;

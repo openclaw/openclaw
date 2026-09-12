@@ -1,4 +1,5 @@
 // Openrouter OAuth tests cover PKCE exchange and auth profile output.
+import { createHash } from "node:crypto";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
@@ -147,6 +148,81 @@ function runRemoteOpenRouterOAuthRedirect(redirectInput: string) {
 }
 
 describe("OpenRouter OAuth", () => {
+  it.each([false, true])(
+    "uses hosted authorization without a manual prompt or loopback when isRemote=%s",
+    async (isRemote) => {
+      const { ctx, note, text, log, openUrl } = createOpenRouterOAuthContext({ isRemote });
+      const redirectUrl = "https://gateway.example.com/auth/callback?flow=hosted-1";
+      const authorizationUrls: URL[] = [];
+      const authorize = vi.fn<NonNullable<ProviderAuthContext["oauth"]["authorize"]>>(
+        async ({ state, timeoutMs, buildAuthorizationUrl }) => {
+          expect(state).not.toBe("");
+          expect(timeoutMs).toBe(5 * 60 * 1000);
+          const authorizationUrl = new URL(buildAuthorizationUrl(redirectUrl));
+          const callbackUrl = new URL(authorizationUrl.searchParams.get("callback_url") ?? "");
+          expect(authorizationUrl.origin + authorizationUrl.pathname).toBe(
+            "https://openrouter.ai/auth",
+          );
+          expect(callbackUrl.origin + callbackUrl.pathname).toBe(
+            "https://gateway.example.com/auth/callback",
+          );
+          expect(callbackUrl.searchParams.get("flow")).toBe("hosted-1");
+          expect(callbackUrl.searchParams.get("state")).toBe(state);
+          expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
+          authorizationUrls.push(authorizationUrl);
+          return { code: "HOSTEDCODE", state };
+        },
+      );
+      ctx.oauth.authorize = authorize;
+      const startCallback = vi.fn(async () => {
+        throw new Error("Hosted sign-in must not open a loopback listener");
+      });
+      const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "hosted-api-key" }));
+
+      const result = await loginOpenRouterOAuth(ctx, {
+        createState: () => "state-1",
+        fetchImpl,
+        startCallback,
+      });
+
+      expect(authorize).toHaveBeenCalledTimes(1);
+      expect(startCallback).not.toHaveBeenCalled();
+      expect(text).not.toHaveBeenCalled();
+      expect(note).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+      expect(openUrl).not.toHaveBeenCalled();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [exchangeUrl, exchangeInit] = fetchImpl.mock.calls[0]!;
+      expect(requestUrl(exchangeUrl)).toBe("https://openrouter.ai/api/v1/auth/keys");
+      expect(exchangeInit?.method).toBe("POST");
+      const exchangeBody = requestJsonBody(exchangeInit);
+      expect(exchangeBody).toEqual({
+        code: "HOSTEDCODE",
+        code_verifier: expect.any(String),
+        code_challenge_method: "S256",
+      });
+      const verifier = exchangeBody.code_verifier;
+      if (typeof verifier !== "string") {
+        throw new Error("Expected a PKCE verifier");
+      }
+      expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
+      expect(authorizationUrls[0]?.searchParams.get("code_challenge")).toBe(
+        createHash("sha256").update(verifier).digest("base64url"),
+      );
+      expect(result.profiles).toMatchObject([
+        {
+          profileId: "openrouter:default",
+          credential: {
+            type: "api_key",
+            provider: "openrouter",
+            key: "hosted-api-key",
+            metadata: { authFlow: "oauth-pkce" },
+          },
+        },
+      ]);
+    },
+  );
+
   it("builds the documented PKCE authorize URL", async () => {
     const { ctx, openUrl } = createOpenRouterOAuthContext({ isRemote: true });
     await loginOpenRouterOAuth(ctx, {
@@ -321,7 +397,7 @@ describe("OpenRouter OAuth", () => {
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("stores a browser OAuth result as the default OpenRouter API-key profile", async () => {
+  it("returns a browser credential without claiming persistence", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" }),
     );
@@ -362,7 +438,7 @@ describe("OpenRouter OAuth", () => {
         },
       },
     ]);
-    expect(progress.stop).toHaveBeenCalledWith("OpenRouter OAuth complete");
+    expect(progress.stop).toHaveBeenCalledWith("OpenRouter credential received");
   });
 
   it("binds the local callback before opening the browser and exchanges its accepted code", async () => {

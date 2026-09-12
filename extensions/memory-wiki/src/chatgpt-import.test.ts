@@ -12,6 +12,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rollbackChatGptImportRun } from "./chatgpt-import.js";
 import { configureMemoryWikiCompiledCacheStore } from "./compiled-cache.js";
+import { deferred } from "./deferred.test-helpers.js";
 import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
@@ -46,14 +47,6 @@ vi.mock("./compile.js", async (importOriginal) => {
 });
 
 const { configureCompiledCacheStore, createTempDir, createVault } = createMemoryWikiTestHarness();
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function configureDurableImportRunStore(
   stateDir: string,

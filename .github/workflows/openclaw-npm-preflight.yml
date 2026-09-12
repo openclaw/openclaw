@@ -745,7 +745,9 @@ jobs:
           artifact_dir="$RUNNER_TEMP/openclaw-plugin-npm-preflight"
           rm -rf "$artifact_dir"
           mkdir -p "$artifact_dir"
-          node --import tsx scripts/plugin-npm-release-plan.ts \
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/plugin-npm-release-plan.ts" \
             --selection-mode all-publishable \
             --npm-dist-tag extended-stable > "$plan"
           cp "$plan" "$artifact_dir/plugin-npm-release-plan.json"
@@ -760,7 +762,6 @@ jobs:
           for package_dir in "${package_dirs[@]}"; do
             runtime_args+=(--package "$package_dir")
           done
-          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
           TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
             node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/check-plugin-npm-runtime-builds.mts" "${runtime_args[@]}"
 

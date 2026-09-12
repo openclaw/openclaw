@@ -1,5 +1,6 @@
 {
   "id": "huggingface",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

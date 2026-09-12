@@ -58,6 +58,7 @@ import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel
 import { getSlackWriteClient } from "./client.js";
 import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { resolveSlackEnterpriseUserTeamId } from "./enterprise-user-route.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
@@ -65,7 +66,7 @@ import { isSlackWorkspaceInstallation } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
-import { resolveSlackReplyBlocks } from "./reply-blocks.js";
+import { normalizeSlackReplyPayload, resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
 import { slackSecurityAdapter } from "./security.js";
 import { setSlackSessionStatus } from "./session-status.js";
@@ -308,6 +309,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   agentId: string;
   accountId?: string | null;
   target: string;
+  deliveryPurpose?: "heartbeat-owner";
   replyToId?: string | null;
   threadId?: string | number | null;
   currentSessionKey?: string | null;
@@ -318,6 +320,22 @@ async function resolveSlackOutboundSessionRoute(params: {
   }
   const apiTargetId = canonicalizeSlackApiTargetId(parsed.kind, parsed.id, params.target);
   const isDm = parsed.kind === "user";
+  if (
+    params.deliveryPurpose === "heartbeat-owner" &&
+    isDm &&
+    !parsed.teamId &&
+    /^[UW][A-Z0-9]{8,}$/.test(apiTargetId)
+  ) {
+    const teamId = await resolveSlackEnterpriseUserTeamId({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      userId: apiTargetId,
+    });
+    if (teamId) {
+      parsed.teamId = teamId;
+      parsed.id = apiTargetId;
+    }
+  }
   let peerKind: "direct" | "channel" | "group" = isDm ? "direct" : "channel";
   let peerId = formatSlackTarget(parsed);
   let recipientSessionExact = isDm
@@ -439,6 +457,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  normalizePayload: ({ payload }) => normalizeSlackReplyPayload(payload),
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/canvas-plugin",
-  "version": "2026.9.2",
+  "version": "2026.9.4",
   "private": true,
   "description": "OpenClaw Canvas plugin",
   "type": "module",
@@ -9,10 +9,10 @@
   },
   "dependencies": {
     "@a2ui/lit": "0.10.3",
-    "@a2ui/web_core": "0.10.6",
+    "@a2ui/web_core": "0.10.7",
     "@lit/context": "1.1.6",
     "lit": "3.3.3",
-    "typebox": "1.3.18"
+    "typebox": "1.3.26"
   },
   "openclaw": {
     "extensions": [

@@ -36,6 +36,7 @@ import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
@@ -52,6 +53,7 @@ import {
 import { installSkill } from "../../skills/lifecycle/install.js";
 import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
+import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import {
   collectClawHubVerdictTargets,
@@ -273,6 +275,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    ensureSkillsWatcher({
+      workspaceDir: resolved.workspaceDir,
+      config: resolved.cfg,
+      agentId: resolved.agentId,
+    });
     const report = buildRemoteAwareWorkspaceSkillStatus(
       resolved,
       target?.entry.skillLibrarySelections,
@@ -379,6 +386,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         query: (params as { query?: string }).query,
         limit: (params as { limit?: number }).limit,
       });
+      registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
       respond(true, { results }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
@@ -410,6 +418,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: requested.slug,
         ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
       });
+      registerClawHubCatalogIconUrls([
+        detail.skill?.icon ?? undefined,
+        detail.owner?.image ?? undefined,
+      ]);
       respond(true, detail, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));

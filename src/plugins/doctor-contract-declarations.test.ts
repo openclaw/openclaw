@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
@@ -25,7 +25,10 @@ describe("bundled plugin doctor contract declarations", () => {
         loadBundledPluginManifestRegistry({ env: sourceManifestEnv }).plugins.map(
           async (record) => {
             const pluginMismatches: string[] = [];
-            const artifactPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
+            const artifactPath = resolvePluginDoctorContractArtifact({
+              ...record,
+              sourcePreferred: true,
+            })?.modulePath;
             if (!artifactPath) {
               return pluginMismatches;
             }
@@ -80,7 +83,10 @@ describe("bundled plugin doctor contract declarations", () => {
             if (!Array.isArray(declaration)) {
               return [];
             }
-            const artifactPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
+            const artifactPath = resolvePluginDoctorContractArtifact({
+              ...record,
+              sourcePreferred: true,
+            })?.modulePath;
             if (!artifactPath) {
               return [`${record.id}: missing Doctor contract artifact`];
             }

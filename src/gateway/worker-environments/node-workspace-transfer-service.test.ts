@@ -381,7 +381,9 @@ describe("node workspace transfer service", () => {
         headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
       });
       expect(replay.status).toBe(404);
+      service.revoke("environment-1", uploadToken);
       const uploaded = service.takeUpload("environment-1", prepared.snapshot.manifestRef);
+      await service.discardUpload("environment-1", uploadToken);
       expect(uploaded.current.entries).toContainEqual(
         expect.objectContaining({ path: "result.txt", type: "file" }),
       );

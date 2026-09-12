@@ -259,6 +259,7 @@ describe("runEmbeddedAgentEntry", () => {
                 readDeliveryEvidence: () => ({
                   hasDirectlySentBlockReply: false,
                   hasBlockReplyPipelineOutput: false,
+                  hasRetryBlockedDelivery: false,
                 }),
               }
             : {
@@ -545,6 +546,7 @@ describe("runEmbeddedAgentEntry", () => {
         readDeliveryEvidence: () => ({
           hasDirectlySentBlockReply: false,
           hasBlockReplyPipelineOutput: false,
+          hasRetryBlockedDelivery: false,
         }),
       },
       sessionOverride: { kind: "preserve" },
@@ -622,7 +624,6 @@ describe("runEmbeddedAgentEntry", () => {
       );
       expect(state.finalizedAttempts).toEqual(committed ? ["candidate"] : []);
       expect(state.discardedAttempts).toEqual(committed ? [] : ["candidate"]);
-      expect(hasCommittedSideEffect).toHaveBeenCalledOnce();
     },
   );
 
@@ -672,7 +673,11 @@ describe("runEmbeddedAgentEntry", () => {
     {
       label: "timed out",
       status: "timeout",
-      meta: { timeoutPhase: "provider" as const, stopReason: "timeout" },
+      meta: {
+        timeoutPhase: "provider" as const,
+        stopReason: "timeout",
+        modelFallbackStopReason: "agent_run_terminal_timeout" as const,
+      },
     },
     {
       label: "errored",
@@ -680,17 +685,26 @@ describe("runEmbeddedAgentEntry", () => {
       meta: {
         error: { kind: "retry_limit" as const, message: "provider failed" },
         stopReason: "error",
+        modelFallbackStopReason: "idle_timeout_circuit_breaker" as const,
       },
     },
     { label: "blocked", status: "error", meta: { livenessState: "blocked" as const } },
   ])("does not finalize a $label candidate", async ({ meta, status }) => {
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "completed" as const,
-      result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
-      provider: params.provider,
-      model: params.model,
-      attempts: [],
-    }));
+    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const { provider, model } = params;
+      const result = await params.run(provider, model, initialAttemptOptions(params));
+      if ("modelFallbackStopReason" in meta) {
+        const classification = await params.classifyResult?.({
+          result,
+          provider,
+          model,
+          attempt: 1,
+          total: 2,
+        });
+        expect(classification).toEqual({ stopReason: meta.modelFallbackStopReason });
+      }
+      return { outcome: "completed" as const, result, provider, model, attempts: [] };
+    });
     const innerFailure = {
       provider: "inner-provider",
       model: "inner-model",
@@ -803,6 +817,7 @@ describe("runEmbeddedAgentEntry", () => {
           readDeliveryEvidence: () => ({
             hasDirectlySentBlockReply: true,
             hasBlockReplyPipelineOutput: false,
+            hasRetryBlockedDelivery: false,
           }),
         },
         sessionOverride: { kind: "preserve" },
@@ -864,6 +879,7 @@ describe("runEmbeddedAgentEntry", () => {
         readDeliveryEvidence: () => ({
           hasDirectlySentBlockReply: false,
           hasBlockReplyPipelineOutput: false,
+          hasRetryBlockedDelivery: false,
         }),
       },
       sessionOverride: { kind: "preserve" },

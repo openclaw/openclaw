@@ -146,7 +146,7 @@ Notes:
 
 | Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search [query...]`              | Optional query; omit it to browse the default ClawHub search feed.                                                                                                                                                                                                                                                                |
+| `search [query...]`              | Optional query; omit it to browse the ClawHub Trending skills feed.                                                                                                                                                                                                                                                               |
 | `search --limit <n>`             | Caps returned results.                                                                                                                                                                                                                                                                                                            |
 | `install git:owner/repo[@ref]`   | Installs a Git skill. Branch refs may contain slashes, such as `git:owner/repo@feature/foo`.                                                                                                                                                                                                                                      |
 | `install ./path/to/skill`        | Installs a local directory whose root contains `SKILL.md`.                                                                                                                                                                                                                                                                        |
@@ -171,6 +171,16 @@ Notes:
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
 | `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events, collection review outcomes per agent, and experience review outcomes per agent and workspace.                                                                                                                                                        |
 | `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
+
+On servers supporting full scanner reports, verification JSON includes `security.scannerReports.aig` (the full upstream SARIF report)
+and `security.scannerReports.skillspector` (the full upstream JSON report) when ClawHub
+has retained them. Nested scanner fields pass through unchanged, including
+coverage and incomplete-analysis details. A report is `null` when unavailable,
+including older scans whose full output was not retained; summaries are not
+substituted. Older servers may omit `security.scannerReports` entirely. `verify`
+reads the stored scan and does not start another scan. Verification responses
+can be up to 64 MiB; larger responses fail explicitly without printing partial
+reports. Other ClawHub JSON requests retain their 16 MiB limit.
 
 ## Release trust
 

@@ -441,6 +441,25 @@ describe("gateway url override hardening", () => {
 
   it.each([
     {
+      name: "preserves the prepared local connection for a hosted Gateway send",
+      params: {
+        gateway: {
+          config: { gateway: { mode: "remote" as const, port: 18789 } },
+          localPortOverride: 18789,
+          ignoreEnvUrlOverride: true,
+          tlsFingerprint: "fixture-fingerprint",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+      },
+      expected: {
+        config: { gateway: { mode: "remote", port: 18789 } },
+        localPortOverride: 18789,
+        ignoreEnvUrlOverride: true,
+        tlsFingerprint: "fixture-fingerprint",
+      },
+    },
+    {
       name: "drops gateway url overrides in backend mode (SSRF hardening)",
       params: {
         gateway: {

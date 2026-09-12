@@ -120,6 +120,7 @@ export async function runStartupUpgradeConvergence(params: {
     cfg: params.cfg,
     failures: convergence.smokeFailures,
   });
+  const quarantinedPluginIds = new Set(quarantinedPlugins.map((plugin) => plugin.pluginId));
   const nonBlockingWarningKeys = new Set(
     convergence.smokeFailures
       .filter(
@@ -130,11 +131,19 @@ export async function runStartupUpgradeConvergence(params: {
       .map((failure) => JSON.stringify([failure.pluginId, `${failure.reason}: ${failure.detail}`])),
   );
   const blockingMessages = convergence.warnings
-    .filter(
-      (warning) =>
+    .filter((warning) => {
+      if (
+        warning.kind === "repair" &&
+        warning.pluginId &&
+        quarantinedPluginIds.has(warning.pluginId)
+      ) {
+        return false;
+      }
+      return (
         !warning.pluginId ||
-        !nonBlockingWarningKeys.has(JSON.stringify([warning.pluginId, warning.reason])),
-    )
+        !nonBlockingWarningKeys.has(JSON.stringify([warning.pluginId, warning.reason]))
+      );
+    })
     .map((warning) => `${warning.message} ${warning.guidance.join(" ")}`.trim());
   return {
     blockingDiagnostic:

@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { MediaUnderstandingConfig } from "../config/types.tools.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
-import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
@@ -263,7 +262,6 @@ describe("runCapability auto audio entries", () => {
       const transcribeAudio = vi.fn(async () => ({ text: "second-provider transcript" }));
       try {
         await createWhisperExecutable(binDir);
-        clearMediaUnderstandingBinaryCacheForTests();
         await withAudioFixture("openclaw-auto-prepare-fallback", async ({ ctx, media, cache }) => {
           await withEnvAsync(
             { PATH: binDir, SHERPA_ONNX_MODEL_DIR: undefined, WHISPER_CPP_MODEL: undefined },
@@ -314,7 +312,6 @@ describe("runCapability auto audio entries", () => {
           );
         });
       } finally {
-        clearMediaUnderstandingBinaryCacheForTests();
         await fs.rm(binDir, { recursive: true, force: true });
       }
     },
@@ -327,7 +324,6 @@ describe("runCapability auto audio entries", () => {
       error: new ProviderAuthError("missing-provider-auth", "openai", "No configured credentials"),
     }));
     try {
-      clearMediaUnderstandingBinaryCacheForTests();
       await withEnvAsync(
         { PATH: binDir, SHERPA_ONNX_MODEL_DIR: undefined, WHISPER_CPP_MODEL: undefined },
         async () => {
@@ -354,7 +350,6 @@ describe("runCapability auto audio entries", () => {
         },
       );
     } finally {
-      clearMediaUnderstandingBinaryCacheForTests();
       await fs.rm(binDir, { recursive: true, force: true });
     }
   });
@@ -594,7 +589,6 @@ describe("runCapability auto audio entries", () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-audio-bin-"));
     try {
       await createWhisperExecutable(binDir);
-      clearMediaUnderstandingBinaryCacheForTests();
       let seenModel: string | undefined;
       await withAudioFixture("openclaw-auto-audio-priority", async ({ ctx, media, cache }) => {
         const result = await withEnvAsync(
@@ -618,7 +612,6 @@ describe("runCapability auto audio entries", () => {
       });
       expect(seenModel).toBe("gpt-4o-transcribe");
     } finally {
-      clearMediaUnderstandingBinaryCacheForTests();
       await fs.rm(binDir, { recursive: true, force: true });
     }
   });

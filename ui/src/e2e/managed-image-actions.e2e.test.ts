@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureUiProofEnabled,
@@ -24,6 +25,13 @@ suite.define(() => {
     const imageTitle = `${filenamePrefix}📊`;
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    await page.route(`**${controlUiBasePath}/chat`, async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: { ...response.headers(), "content-security-policy": buildControlUiCspHeader() },
+      });
+    });
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const imageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
@@ -130,8 +138,8 @@ suite.define(() => {
       await page
         .getByRole("dialog", { name: `Image preview: ${imageTitle}` })
         .waitFor({ state: "visible" });
-      expect(requestedVariants).toEqual(["thumbnail", "full"]);
-      expect(await gateway.getRequests("artifacts.download")).toHaveLength(2);
+      expect(requestedVariants).toEqual(["thumbnail", "full", "full"]);
+      expect(await gateway.getRequests("artifacts.download")).toHaveLength(3);
     } finally {
       await suite.closeBrowserContext(context);
     }

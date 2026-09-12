@@ -6,8 +6,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 
 /** Allocates temp directories under reusable roots with explicit cleanup control. */
 export function createTrackedTempDirs() {
-  const prefixRoots = new Map<string, { root: string; nextIndex: number }>();
-  const pendingPrefixRoots = new Map<string, Promise<{ root: string; nextIndex: number }>>();
+  const prefixRoots = new Map<string, { root: string }>();
+  const pendingPrefixRoots = new Map<string, Promise<{ root: string }>>();
   const cleanupRoots = new Set<string>();
   let globalDirIndex = 0;
 
@@ -22,7 +22,7 @@ export function createTrackedTempDirs() {
     }
     const create = (async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-      const state = { root, nextIndex: 0 };
+      const state = { root };
       prefixRoots.set(prefix, state);
       cleanupRoots.add(root);
       return state;
@@ -39,7 +39,6 @@ export function createTrackedTempDirs() {
     async make(prefix: string): Promise<string> {
       const state = await ensurePrefixRoot(prefix);
       const dir = path.join(state.root, `dir-${String(globalDirIndex)}`);
-      state.nextIndex += 1;
       globalDirIndex += 1;
       await fs.mkdir(dir, { recursive: true });
       return dir;
@@ -64,13 +63,6 @@ export function createTrackedTempDirs() {
           ),
         ),
       );
-      for (const dir of roots) {
-        for (const state of prefixRoots.values()) {
-          if (state.root === dir) {
-            state.nextIndex = 0;
-          }
-        }
-      }
     },
   };
 }

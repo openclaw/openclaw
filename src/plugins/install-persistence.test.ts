@@ -19,7 +19,6 @@ import {
   applyPluginUninstallDirectoryRemovalMock,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ConfigWriteOptions } from "../config/io.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -57,12 +56,15 @@ describe("persistPluginInstall", () => {
       const { persistPluginInstall } = await import("./install-persistence.js");
       const expired = new Error("approved operation owner expired");
       let ownerActive = phase === "at config publication";
-      replaceConfigFileMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const params = args[0] as { nextConfig: OpenClawConfig; writeOptions: ConfigWriteOptions };
+      const replaceConfig = replaceConfigFileMock.getMockImplementation();
+      if (!replaceConfig) {
+        throw new Error("missing config writer fixture");
+      }
+      replaceConfigFileMock.mockImplementationOnce(async (params) => {
         await Promise.resolve();
         ownerActive = false;
-        await params.writeOptions.beforeCommit?.();
-        await configWriteMock(params.nextConfig);
+        await params.writeOptions?.beforeCommit?.();
+        return await replaceConfig(params);
       });
       await expect(
         persistPluginInstall({
@@ -299,14 +301,12 @@ describe("persistPluginInstall", () => {
         deleteFiles: true,
       }),
     );
-    expect(applyPluginUninstallDirectoryRemovalMock).toHaveBeenCalledWith({
-      target: "/tmp/openclaw/extensions/codex",
-    });
-    const cleanupOrder =
-      applyPluginUninstallDirectoryRemovalMock.mock.invocationCallOrder[0] ??
-      Number.MAX_SAFE_INTEGER;
-    const refreshOrder = refreshPluginRegistryMock.mock.invocationCallOrder[0] ?? 0;
-    expect(cleanupOrder).toBeLessThan(refreshOrder);
+    expect(applyPluginUninstallDirectoryRemovalMock.mock.calls.map(([removal]) => removal)).toEqual(
+      [{ target: "/tmp/openclaw/extensions/codex" }],
+    );
+    expect(applyPluginUninstallDirectoryRemovalMock).toHaveBeenCalledBefore(
+      refreshPluginRegistryMock,
+    );
     expect(pluginsCliRuntimeLogs.join("\n")).toContain(
       "Removed previous plugin install directory: /tmp/openclaw/extensions/codex",
     );

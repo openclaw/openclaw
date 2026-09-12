@@ -62,9 +62,11 @@ describe("shared-root workspace Doctor migration", () => {
           ["main", "other"].map((id) => path.join(context.workspaceDir, id)),
         );
         // An unused shared root is a Doctor source, not a runtime admission requirement.
-        expect(() => assertConfiguredWorkspaceStateReady({ cfg, env: context.env })).not.toThrow();
+        await expect(
+          assertConfiguredWorkspaceStateReady({ cfg, env: context.env }),
+        ).resolves.toBeUndefined();
       }
-      const detected = detect({ ...context, cfg });
+      const detected = await detect({ ...context, cfg });
       expect(
         detected.sources
           .filter((source) => source.kind === "setup")
@@ -92,7 +94,7 @@ describe("shared-root workspace Doctor migration", () => {
           originalCorpus[index],
         );
       }
-      expect(detect({ ...context, cfg })).toEqual({ sources: [], hasLegacy: false });
+      expect(await detect({ ...context, cfg })).toEqual({ sources: [], hasLegacy: false });
       expect(await migrate({ ...context, cfg })).toEqual({ changes: [], warnings: [] });
     },
   );
