@@ -199,6 +199,8 @@ Use the tab strip to select or close a page, the URL bar to navigate, and the ba
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
+Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. A tab's page temporarily hides only when the menu overlaps its Browser pane, or while a modal dialog or the command palette is open, and returns when the obstruction clears.
+
 Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 
 Right-click an external link in the dashboard to choose **Open in Browser Panel**, **Open in Default Browser**, or **Copy Link**. Modified clicks still open the default browser. New-window links inside a Mac tab open another Mac tab; pointer-activated downloads hand off to the default browser. Responses WebKit cannot display hand off only for pointer-activated main-frame navigation; other non-displayable responses are cancelled silently. Regular browser-hosted Control UI pages keep their normal link and context-menu behavior unless you enable the Browser panel link preference.
