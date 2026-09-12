@@ -147,6 +147,7 @@ type GatewaySessionStoreLookupParams = {
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   exactRead?: boolean;
+  listCandidatesOnly?: boolean;
   deferCanonicalValidation?: boolean;
   includeStoreChildEntries?: boolean;
   store?: Record<string, SessionEntry>;
@@ -195,6 +196,7 @@ function prepareGatewaySessionStoreLookup(
     options: {
       readOnly: configured ? params.readOnly : true,
       ...(params.exactRead ? { exactKeys: scanTargets } : {}),
+      ...(params.listCandidatesOnly ? { listKeys: scanTargets } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     },
@@ -289,6 +291,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
       options: {
         readOnly: true,
         ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
+        ...(params.listCandidatesOnly ? { listKeys: lookupSeeds } : {}),
         ...(params.projection ? { projection: params.projection } : {}),
         ...(params.storeCache ? { cache: params.storeCache } : {}),
       },
@@ -377,6 +380,7 @@ function prepareGatewaySessionStoreTarget(
         // Arbitrary stale keys must not materialize process-lifetime incognito state.
         readOnly: true,
         ...(params.exactRead ? { exactKeys: [canonicalKey] } : {}),
+        ...(params.listCandidatesOnly ? { listKeys: [canonicalKey] } : {}),
         ...(params.projection ? { projection: params.projection } : {}),
         ...(params.storeCache ? { cache: params.storeCache } : {}),
       },
@@ -614,7 +618,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   clone?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTarget {
-  // Only keys and store metadata escape; omit large prompt snapshots without changing read mode.
+  // Keep listing validation and read mode while avoiding unrelated entry clones.
   const {
     store: _store,
     readSource: _readSource,
@@ -622,6 +626,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   } = resolveGatewaySessionStoreTargetWithStore({
     ...params,
     projection: "list",
+    listCandidatesOnly: true,
   });
   return target;
 }
