@@ -435,6 +435,10 @@ time or isolate a validation phase. Short writer sections can therefore remain
 quiet while this whole-operation warning exposes slow preparation between them.
 The record inherits an existing parent trace when available; it contains no
 database path, session identifier, plan content, or raw error.
+Cold-storage operations use the same warning with `reclamationKind` set to
+`cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
+`cold-restore` (restore a transcript). Their writer warnings carry the same Worker
+identity and numbered admission fields.
 
 ### SQLite transaction timing
 
@@ -450,6 +454,18 @@ and before `COMMIT`, including any JavaScript consumer work inside that callback
 It excludes database opening and the separately timed begin and commit steps.
 These elapsed durations do not measure SQL CPU time or establish a causal link
 to a nearby request.
+
+The operation `session.reclamation.commit-settlement` identifies the parent's
+synchronous join after it authorizes a reclamation Worker to commit. Its lock
+wait is separate from the Worker's integrity scan and deletion work. This label
+also applies to cold-storage operations using that commit boundary.
+
+Hot transcript reads identify their purpose in `operation`: `session transcript
+<purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,
+`checkpoint`, `events`, `raw rows`, `storage rows`, or `match`. These fixed labels
+distinguish readers without retaining session IDs or transcript content. Nested
+reads remain part of the outer transaction's timing; older warnings use the
+generic `session transcript hot read` label.
 
 Immediate `BEGIN` warnings also include `beginAdmission`: `nativeAttempts` counts
 actual native `BEGIN IMMEDIATE` calls and `nativeMs` measures those calls;

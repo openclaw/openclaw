@@ -10,6 +10,16 @@ import {
 export function readHotSessionTranscriptSnapshot<T>(
   database: { db: DatabaseSync },
   sessionId: string,
+  purpose:
+    | "identity"
+    | "header"
+    | "tail"
+    | "incremental"
+    | "checkpoint"
+    | "events"
+    | "raw rows"
+    | "storage rows"
+    | "match",
   read: () => T,
 ): T {
   return runSqliteDeferredTransactionSync(
@@ -18,7 +28,7 @@ export function readHotSessionTranscriptSnapshot<T>(
       assertSessionTranscriptHot(database.db, sessionId);
       return read();
     },
-    { operationLabel: "session transcript hot read" },
+    { operationLabel: `session transcript ${purpose} read` },
   );
 }
 
