@@ -112,6 +112,27 @@ describe("agentsListCommand", () => {
     expect(summary).not.toHaveProperty("providers");
   });
 
+  it("marks the materialized system agent as default in an explicit multi-agent fleet", async () => {
+    // Regression: after doctor persists a multi-agent legacy roster, ownership is explicit
+    // and raw default markers are stripped; the retired default's identity survives only
+    // in agents.defaults.systemAgent. The JSON summaries must still expose exactly one
+    // isDefault row instead of all-false, which broke legacy CLI integrations.
+    requireValidConfigMock.mockResolvedValueOnce({
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, wuse: {}, hermes: {} },
+      },
+    } satisfies OpenClawConfig);
+
+    const runtime = createRuntime();
+    await agentsListCommand({ json: true }, runtime);
+
+    const summaries = runtime.json[0] as Array<{ id: string; isDefault: boolean }>;
+    expect(summaries.filter((s) => s.isDefault).map((s) => s.id)).toEqual(["main"]);
+    expect(summaries.find((s) => s.id === "wuse")?.isDefault).toBe(false);
+  });
+
   it("renders roots, children, missing rows, and dangling creators as a tree", async () => {
     requireValidConfigMock.mockResolvedValueOnce({
       agents: {

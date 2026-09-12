@@ -56,6 +56,7 @@ export {
   resolveSoleAgentId,
   tryResolveAmbientOwnerAgentId,
   tryResolveLegacyCompatibilityAgentId,
+  tryResolveDiscoveryDefaultAgentId,
   tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
