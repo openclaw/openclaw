@@ -1,0 +1,132 @@
+title: Telegram policy hot reload
+
+scenario:
+  id: telegram-policy-hot-reload
+  surface: channels
+  coverage:
+    primary:
+      - gateway.config-reload-hot-apply
+    secondary:
+      - telegram.conversation-routing-and-delivery
+      - telegram.built-in-commands
+  objective: Apply root and account access and delivery settings on one retained Telegram monitor.
+  successCriteria:
+    - Root and account DM policy and allowlist changes affect the next native command.
+    - New ordinary replies use the updated streaming, reply threading, and text chunk limit.
+    - Gateway PID and Telegram account start time stay unchanged through every edit.
+  docsRefs:
+    - docs/channels/telegram/access-control.md
+    - docs/channels/telegram/messaging.md
+  codeRefs:
+    - extensions/telegram/src/setup-plugin.ts
+    - extensions/telegram/src/bot-message.ts
+    - extensions/telegram/src/bot-native-command-dispatch.ts
+  execution:
+    kind: flow
+    channel: telegram
+    retryCount: 0
+    timeoutMs: 600000
+    suiteIsolation: isolated
+    isolationReason: Policy changes belong to this leased Test Server bot and retained Gateway.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Change DM admission and delivery policy through config.patch, observe real Telegram responses, and verify the account never reconnects.
+    config:
+      requiredChannelDriver: live
+
+flow:
+  steps:
+    - name: root and account policies update on the same Telegram monitor
+      actions:
+        - assert:
+            expr: "transport.id === 'telegram' && typeof readTelegramMessages === 'function'"
+            message: this proof requires the leased Telegram Test Server observer
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: proof
+          value:
+            expr: |
+              await (async () => {
+                const accountId = transport.accountId;
+                const allowed = env.cfg.channels.telegram.accounts[accountId].allowFrom;
+                if (!allowed?.length) throw new Error('The leased DM account must identify its tester');
+                const denied = ['999999999999999'];
+                if (allowed.some(id => denied.includes(String(id)))) throw new Error('Synthetic denied ID overlaps the tester');
+                const identity = async () => {
+                  const system = await env.gateway.call('system.info', {});
+                  const status = await env.gateway.call('channels.status', { probe: false });
+                  const account = status.channelAccounts.telegram.find(row => row.accountId === accountId);
+                  if (!account?.running || !account.lastStartAt) throw new Error('Telegram monitor is not running');
+                  return { pid: system.pid, lastStartAt: account.lastStartAt };
+                };
+                const original = await identity();
+                const rows = [];
+                const mutate = async (scope, policy) => {
+                  const telegram = scope === 'root' ? policy : { accounts: { [accountId]: policy } };
+                  await patchConfig({ env, patch: { channels: { telegram } }, replacePaths: [
+                    'channels.telegram.allowFrom', `channels.telegram.accounts.${accountId}.allowFrom`
+                  ] });
+                  if (JSON.stringify(await identity()) !== JSON.stringify(original)) throw new Error('Policy edit restarted the Gateway or Telegram monitor');
+                };
+                const command = async (expected) => {
+                  const start = state.getSnapshot().messages.filter(row => row.direction === 'outbound').length;
+                  await transport.sendInbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, senderId: 'qa-operator', senderName: 'QA Operator', text: '/whoami', nativeCommand: { name: 'whoami' } });
+                  await transport.waitForOutbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, sinceIndex: start, textIncludes: expected, timeoutMs: 60000 });
+                };
+                for (const scope of ['root', 'account']) {
+                  if (scope === 'root') {
+                    await mutate('root', { dmPolicy: 'allowlist', allowFrom: allowed, replyToMode: 'off', streaming: { mode: 'off' }, textChunkLimit: 4000,
+                      accounts: { [accountId]: { dmPolicy: null, allowFrom: null, replyToMode: null, streaming: null, textChunkLimit: null } } });
+                  } else {
+                    await mutate(scope, { dmPolicy: 'allowlist', allowFrom: allowed, replyToMode: 'off', streaming: { mode: 'off' }, textChunkLimit: 4000 });
+                  }
+                  await command('Identity');
+                  await mutate(scope, { dmPolicy: 'disabled' });
+                  await command('not authorized');
+                  await mutate(scope, { dmPolicy: 'allowlist', allowFrom: denied });
+                  await command('not authorized');
+                  await mutate(scope, { allowFrom: allowed, replyToMode: 'first', streaming: { mode: 'partial' }, textChunkLimit: 512 });
+                  const marker = `TG-RELOAD-${scope}-${randomUUID().slice(0, 8)}`;
+                  const start = state.getSnapshot().messages.filter(row => row.direction === 'outbound').length;
+                  await transport.sendInbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, senderId: 'qa-operator', senderName: 'QA Operator', text: `Write 40 numbered plain-text lines. Every line must contain ${marker} and the words hot reload keeps this conversation connected. Finish with a separate final line containing ${marker}-END. Do not use tools, Markdown, or explicit reply tags.` });
+                  await transport.waitForOutbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, sinceIndex: start, textIncludes: marker, timeoutMs: 180000 });
+                  const active = await env.gateway.call('sessions.list', {});
+                  if (!active.sessions.some(row => row.hasActiveRun)) throw new Error('The long reply finished before the held-turn reload checkpoint');
+                  const nextPolicy = { replyToMode: 'off', streaming: { mode: 'off' }, textChunkLimit: 4000 };
+                  const snapshot = await env.gateway.call('config.get', {});
+                  await env.gateway.call('config.patch', { baseHash: snapshot.hash, restartDelayMs: 0, raw: JSON.stringify({ channels: { telegram: scope === 'root' ? nextPolicy : { accounts: { [accountId]: nextPolicy } } } }) });
+                  const afterWrite = await env.gateway.call('sessions.list', {});
+                  if (!afterWrite.sessions.some(row => row.hasActiveRun)) throw new Error('The held turn settled before config.patch completed');
+                  await waitForCondition(async () => {
+                    const sessions = await env.gateway.call('sessions.list', {});
+                    return sessions.sessions.every(row => !row.hasActiveRun) ? true : undefined;
+                  }, 180000, 200);
+                  const replies = await waitForCondition(() => {
+                    const observed = readTelegramMessages().filter(row => row.text.includes(marker));
+                    return observed.length >= 2 && observed.some(row => row.text.includes(`${marker}-END`)) && observed.some(row => row.kind === 'edit') && observed.some(row => row.replyToMessageId) ? observed : undefined;
+                  }, 30000, 200);
+                  if (replies.length < 2 || replies.some(row => row.text.length > 512)) throw new Error('Reloaded text chunk limit was not observed');
+                  if (!replies.some(row => row.replyToMessageId)) throw new Error('Reloaded reply threading was not observed');
+                  if (!replies.some(row => row.kind === 'edit')) throw new Error('Reloaded partial streaming was not observed');
+                  if (JSON.stringify(await identity()) !== JSON.stringify(original)) throw new Error('Delivery replaced the running monitor');
+                  const nextMarker = `${marker}-NEXT`;
+                  const nextStart = state.getSnapshot().messages.filter(row => row.direction === 'outbound').length;
+                  await transport.sendInbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, senderId: 'qa-operator', senderName: 'QA Operator', text: `Write 12 numbered plain-text lines. Every line must contain ${nextMarker} and the words new policy keeps this conversation connected. Finish with a separate final line containing ${nextMarker}-END. Do not use tools, Markdown, or explicit reply tags.` });
+                  await transport.waitForOutbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, sinceIndex: nextStart, textIncludes: nextMarker, timeoutMs: 180000 });
+                  await waitForCondition(async () => {
+                    const sessions = await env.gateway.call('sessions.list', {});
+                    return sessions.sessions.every(row => !row.hasActiveRun) ? true : undefined;
+                  }, 180000, 200);
+                  await waitForCondition(() => readTelegramMessages().find(row => row.text.includes(`${nextMarker}-END`)), 30000, 200);
+                  // A later native response fences the observer behind this turn's sends/edits.
+                  await command('Identity');
+                  const nextReplies = readTelegramMessages().filter(row => row.text.includes(nextMarker));
+                  if (nextReplies.length !== 1 || nextReplies[0].text.length <= 512 || nextReplies[0].text.length > 4000 || nextReplies[0].kind !== 'message' || nextReplies[0].replyToMessageId) throw new Error('The next turn did not use the reloaded delivery settings');
+                  rows.push({ scope, admissionChecks: 3, heldTurnRetained: true, nextTurnUpdated: true, nextTurnLength: nextReplies[0].text.length, replyChunks: replies.length, largestChunk: Math.max(...replies.map(row => row.text.length)), observedEdit: true, observedReply: true, monitorRetained: true });
+                }
+                return rows;
+              })()
+      detailsExpr: JSON.stringify(proof)

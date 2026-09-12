@@ -1,0 +1,101 @@
+title: Telegram group policy hot reload
+
+scenario:
+  id: telegram-group-policy-hot-reload
+  surface: channels
+  coverage:
+    primary:
+      - gateway.config-reload-hot-apply
+    secondary:
+      - telegram.conversation-routing-and-delivery
+  objective: Apply root and account group sender policy without reconnecting Telegram.
+  successCriteria:
+    - An allowlisted tester can invoke a native command before and after policy changes.
+    - Group allowlist edits reject the next command and disabling the group policy stays silent.
+    - Gateway PID and Telegram account start time stay unchanged during policy edits.
+  docsRefs:
+    - docs/channels/telegram/access-control.md
+  codeRefs:
+    - extensions/telegram/src/setup-plugin.ts
+    - extensions/telegram/src/bot-native-command-dispatch.ts
+  execution:
+    kind: flow
+    channel: telegram
+    retryCount: 0
+    timeoutMs: 600000
+    suiteIsolation: isolated
+    isolationReason: Group policy edits belong to this leased bot in the shared Test Server group.
+    summary: Change inherited root/account group policy through config.patch and observe native command acceptance, rejection, and silence on the retained account.
+    config:
+      requiredChannelDriver: live
+
+flow:
+  steps:
+    - name: group policy reload preserves the running monitor
+      actions:
+        - assert:
+            expr: "transport.id === 'telegram' && typeof readTelegramMessages === 'function'"
+            message: this proof requires the leased Telegram Test Server observer
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: proof
+          value:
+            expr: |
+              await (async () => {
+                const accountId = transport.accountId;
+                const groups = env.cfg.channels.telegram.accounts[accountId].groups;
+                const [groupId, group] = Object.entries(groups)[0];
+                const allowed = group.allowFrom;
+                if (!allowed?.length) throw new Error('The leased group must identify its tester');
+                const denied = ['999999999999999'];
+                if (allowed.some(id => denied.includes(String(id)))) throw new Error('Synthetic denied ID overlaps the tester');
+                // Select inherited policy once; the group map itself remains startup-owned.
+                await patchConfig({ env, patch: { channels: { telegram: {
+                  groupPolicy: 'allowlist', groupAllowFrom: allowed,
+                  accounts: { [accountId]: { groupPolicy: null, groupAllowFrom: null,
+                    groups: { [groupId]: { groupPolicy: null, allowFrom: null } } } }
+                } } }, replacePaths: [`channels.telegram.accounts.${accountId}.groups.${groupId}.allowFrom`] });
+                await waitForTransportReady(env, 60000);
+                const identity = async () => {
+                  const system = await env.gateway.call('system.info', {});
+                  const status = await env.gateway.call('channels.status', { probe: false });
+                  const account = status.channelAccounts.telegram.find(row => row.accountId === accountId);
+                  if (!account?.running || !account.lastStartAt) throw new Error('Telegram monitor is not running');
+                  return { pid: system.pid, lastStartAt: account.lastStartAt };
+                };
+                const original = await identity();
+                const mutate = async (scope, policy) => {
+                  const telegram = scope === 'root' ? policy : { accounts: { [accountId]: policy } };
+                  await patchConfig({ env, patch: { channels: { telegram } }, replacePaths: [
+                    'channels.telegram.groupAllowFrom', `channels.telegram.accounts.${accountId}.groupAllowFrom`
+                  ] });
+                  if (JSON.stringify(await identity()) !== JSON.stringify(original)) throw new Error('Group policy edit replaced the monitor');
+                };
+                const command = async (expected) => {
+                  const start = state.getSnapshot().messages.filter(row => row.direction === 'outbound').length;
+                  await transport.sendInbound({ conversation: { id: 'telegram-policy-group', kind: 'group' }, senderId: 'qa-operator', senderName: 'QA Operator', text: '/whoami', nativeCommand: { name: 'whoami' } });
+                  if (expected) {
+                    await transport.waitForOutbound({ conversation: { id: 'telegram-policy-group', kind: 'group' }, sinceIndex: start, textIncludes: expected, timeoutMs: 60000 });
+                  } else {
+                    await transport.waitForNoOutbound({ quietMs: 3000, sinceIndex: start });
+                  }
+                };
+                const rows = [];
+                for (const scope of ['root', 'account']) {
+                  await mutate(scope, { groupPolicy: 'allowlist', groupAllowFrom: allowed });
+                  await command('Identity');
+                  await mutate(scope, { groupAllowFrom: denied });
+                  await command('not authorized');
+                  await mutate(scope, { groupPolicy: 'disabled' });
+                  await command(null);
+                  await mutate(scope, { groupPolicy: 'allowlist', groupAllowFrom: allowed });
+                  await command('Identity');
+                  if (JSON.stringify(await identity()) !== JSON.stringify(original)) throw new Error('Group command replaced the monitor');
+                  rows.push({ scope, admissionChecks: 4, monitorRetained: true });
+                }
+                return rows;
+              })()
+      detailsExpr: JSON.stringify(proof)
