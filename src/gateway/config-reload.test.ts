@@ -58,10 +58,12 @@ import {
   runOutsidePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
@@ -317,10 +319,19 @@ describe("diffConfigPaths", () => {
 
 describe("buildGatewayReloadPlan", () => {
   const emptyRegistry = createTestRegistry([]);
-  it("reloads the registered Browser service for control policy without restarting the Gateway", async () => {
-    const { default: browser } = await import("../../extensions/browser/index.js");
+  it("reloads the registered Browser service for control policy without restarting the Gateway", () => {
+    const { default: browser } = loadPluginPublicArtifactModuleSync<{
+      default: OpenClawPluginDefinition;
+    }>({
+      pluginRoot: nodePath.resolve("extensions/browser"),
+      artifactBasename: "index.ts",
+      origin: "bundled",
+    });
+    if (!browser.register) {
+      throw new Error("Browser plugin must expose its registration entry point");
+    }
     const registry = createTestRegistry([]);
-    await browser.register(
+    browser.register(
       createTestPluginApi({
         runtime: {
           state: {
