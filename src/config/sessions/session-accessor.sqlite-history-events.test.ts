@@ -704,6 +704,31 @@ describe("SQLite transcript history events", () => {
       "before-tool",
       "first-reset",
     ]);
+    for (const [messageId, maxMessages, ids, seqs, offset, hasOverreadContext] of [
+      ["before-user", 1, ["before-user"], [1], 3, false],
+      [
+        "before-assistant",
+        2,
+        ["before-user", "before-assistant", "before-tool"],
+        [1, 2, 3],
+        1,
+        true,
+      ],
+      [
+        "before-tool",
+        3,
+        ["before-user", "before-assistant", "before-tool", "first-reset"],
+        [1, 2, 3, 4],
+        0,
+        true,
+      ],
+      ["first-reset", 1, ["before-tool", "first-reset"], [3, 4], 0, true],
+    ] as const) {
+      const page = readSessionTranscriptHistoryAnchorPage(scope, { messageId, maxMessages });
+      expect(page).toMatchObject({ found: true, totalMessages: 4, offset, hasOverreadContext });
+      expect(page.events.map(historyEventId)).toEqual(ids);
+      expect(page.events.map(({ seq }) => seq)).toEqual(seqs);
+    }
     expect(
       readSessionTranscriptHistoryAnchorPage(scope, {
         maxMessages: 10,
@@ -733,6 +758,57 @@ describe("SQLite transcript history events", () => {
       events: [],
       totalMessages: 2,
     });
+  });
+
+  it("keeps historical anchor pages in display order across hidden control rows", async () => {
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      { type: "message", id: "first", parentId: null, message: { role: "user", content: "first" } },
+      { type: "custom", id: "control", parentId: "first", customType: "hidden" },
+      {
+        type: "custom_message",
+        id: "hidden",
+        parentId: "control",
+        customType: "notice",
+        display: false,
+        content: "hidden",
+      },
+      {
+        type: "custom_message",
+        id: "notice",
+        parentId: "hidden",
+        customType: "notice",
+        display: true,
+        content: "visible",
+      },
+      {
+        type: "message",
+        id: "last",
+        parentId: "notice",
+        message: { role: "assistant", content: "last" },
+      },
+      { type: "reset", id: "reset", parentId: "last", reason: "new" },
+      {
+        type: "message",
+        id: "fresh",
+        parentId: "reset",
+        message: { role: "user", content: "fresh" },
+      },
+    ]);
+    for (const [messageId, maxMessages, ids, seqs, offset, hasOverreadContext] of [
+      ["first", 2, ["first", "notice"], [1, 2], 2, false],
+      ["notice", 1, ["first", "notice"], [1, 2], 2, true],
+      ["last", 2, ["notice", "last", "reset"], [2, 3, 4], 0, true],
+      ["first", 10, ["first", "notice", "last", "reset"], [1, 2, 3, 4], 0, false],
+    ] as const) {
+      const page = readSessionTranscriptHistoryAnchorPage(scope, { messageId, maxMessages });
+      expect(page).toMatchObject({ found: true, totalMessages: 4, offset, hasOverreadContext });
+      expect(page.events.map(historyEventId)).toEqual(ids);
+      expect(page.events.map(({ seq }) => seq)).toEqual(seqs);
+    }
+    expect(
+      readSessionTranscriptHistoryAnchorPage(scope, { messageId: "hidden", maxMessages: 10 }).found,
+    ).toBe(false);
   });
 
   it.each(["message", "custom_message"])(
