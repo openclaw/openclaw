@@ -179,6 +179,13 @@ Notes:
 - Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
 - The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
+## Reaction notifications
+
+`reactionNotifications` controls whether the agent is notified of reactions that others add to messages. It is unrelated to `ackReaction` and `typingReaction`, which are reactions the agent sends on inbound messages while processing.
+
+- `channels.slack.reactionNotifications`: `off | own | all | allowlist` (default `own`). `off` ignores all reactions from others; `own` notifies only on reactions to the agent's own messages; `all` notifies on reactions to any message; `allowlist` notifies only on reactions from senders listed in `reactionAllowlist`.
+- `channels.slack.reactionAllowlist`: senders whose reactions notify the agent when `reactionNotifications: "allowlist"`. Enterprise Grid org installs require stable Slack user entries here.
+
 ## Commands and slash behavior
 
 Slash commands appear in Slack as either a single configured command or multiple native commands. Configure `channels.slack.slashCommand` to change command defaults:
