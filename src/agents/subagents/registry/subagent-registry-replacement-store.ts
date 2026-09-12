@@ -7,7 +7,7 @@ import {
   bindTaskFlowRecord,
   readTaskFlowRecord,
   upsertTaskFlowRowInDatabase,
-} from "../../../tasks/task-flow-registry.store.sqlite.js";
+} from "../../../tasks/task-flow-registry.store.kernel.js";
 import {
   prepareTaskMirroredFlowSync,
   publishTaskFlowAfterAtomicStore,
@@ -16,7 +16,7 @@ import {
   bindTaskRecord,
   readTaskRecord,
   upsertTaskRunRowInDatabase,
-} from "../../../tasks/task-registry.store.sqlite.js";
+} from "../../../tasks/task-registry.store.kernel.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import {

@@ -15,10 +15,8 @@ import {
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
-import {
-  bindTaskRunExecution,
-  listTaskRecordsByRuntimeSourceIdInDatabase,
-} from "../../tasks/task-registry.store.sqlite.js";
+import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.kernel.js";
+import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
