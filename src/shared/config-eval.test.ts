@@ -95,55 +95,49 @@ describe("config-eval helpers", () => {
   });
 
   it("caches binary lookups until PATH changes", () => {
-    mockProcessPlatform("linux");
-    vi.stubEnv("PATH", ["/missing/bin", "/found/bin"].join(path.delimiter));
-    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
-      if (String(candidate) === path.join("/found/bin", "tool")) {
-        return undefined;
+    withTempDirSync({ prefix: "openclaw-binary-cache-" }, (root) => {
+      mockProcessPlatform("linux");
+      const missingDir = path.join(root, "missing");
+      const foundDir = path.join(root, "found");
+      const otherDir = path.join(root, "other");
+      for (const dir of [missingDir, foundDir, otherDir]) {
+        fs.mkdirSync(dir);
       }
-      throw new Error("missing");
+      const executable = path.join(foundDir, "tool");
+      fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+      fs.chmodSync(executable, 0o755);
+      vi.stubEnv("PATH", [missingDir, foundDir].join(path.delimiter));
+
+      expect(hasBinary("tool")).toBe(true);
+
+      // The cached positive survives the binary disappearing under an unchanged PATH.
+      fs.rmSync(executable);
+      expect(hasBinary("tool")).toBe(true);
+
+      vi.stubEnv("PATH", otherDir);
+      expect(hasBinary("tool")).toBe(false);
     });
-
-    expect(hasBinary("tool")).toBe(true);
-    expect(hasBinary("tool")).toBe(true);
-    expect(accessSpy).toHaveBeenCalledTimes(2);
-
-    vi.stubEnv("PATH", "/other/bin");
-    accessSpy.mockClear();
-    accessSpy.mockImplementation(() => {
-      throw new Error("missing");
-    });
-
-    expect(hasBinary("tool")).toBe(false);
-    expect(accessSpy).toHaveBeenCalledTimes(1);
   });
 
   it("checks PATHEXT candidates and invalidates cached hits when PATHEXT changes", () => {
-    mockProcessPlatform("win32");
-    const toolsDir = path.join(path.sep, "tools");
-    vi.stubEnv("PATH", toolsDir);
-    vi.stubEnv("PATHEXT", ".EXE;.CMD");
-    const plainCandidate = path.join(toolsDir, "tool");
-    const exeCandidate = path.join(toolsDir, "tool.EXE");
-    const cmdCandidate = path.join(toolsDir, "tool.CMD");
-    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
-      if (String(candidate) === cmdCandidate) {
-        return undefined;
-      }
-      throw new Error("missing");
+    withTempDirSync({ prefix: "openclaw-binary-pathext-" }, (toolsDir) => {
+      mockProcessPlatform("win32");
+      vi.stubEnv("PATH", toolsDir);
+      vi.stubEnv("PATHEXT", ".EXE;.CMD");
+      const cmdCandidate = path.join(toolsDir, "tool.CMD");
+      fs.writeFileSync(cmdCandidate, "@exit 0\r\n");
+      fs.chmodSync(cmdCandidate, 0o755);
+      const accessSpy = vi.spyOn(fs, "accessSync");
+
+      expect(hasBinary("tool")).toBe(true);
+      // Candidates that are not regular files never reach the permission probe.
+      expect(accessSpy.mock.calls.map(([candidate]) => String(candidate))).toEqual([cmdCandidate]);
+
+      vi.stubEnv("PATHEXT", ".EXE");
+      expect(hasBinary("tool")).toBe(false);
+      vi.stubEnv("PATHEXT", ".CMD");
+      expect(hasBinary("tool")).toBe(true);
     });
-
-    expect(hasBinary("tool")).toBe(true);
-    expect(accessSpy.mock.calls.map(([candidate]) => String(candidate))).toEqual([
-      plainCandidate,
-      exeCandidate,
-      cmdCandidate,
-    ]);
-
-    vi.stubEnv("PATHEXT", ".EXE");
-    expect(hasBinary("tool")).toBe(false);
-    vi.stubEnv("PATHEXT", ".CMD");
-    expect(hasBinary("tool")).toBe(true);
   });
 
   it.each([
@@ -169,6 +163,44 @@ describe("config-eval helpers", () => {
       });
     },
   );
+
+  it.each([
+    { platform: "linux", suffix: "" },
+    { platform: "darwin", suffix: "" },
+    { platform: "win32", suffix: ".CMD" },
+  ] as const)(
+    "reports a $platform PATH directory named like the binary as missing",
+    ({ platform, suffix }) => {
+      withTempDirSync({ prefix: "openclaw-binary-dir-" }, (binDir) => {
+        mockProcessPlatform(platform);
+        vi.stubEnv("PATH", binDir);
+        vi.stubEnv("PATHEXT", ".EXE;.CMD");
+        const candidate = path.join(binDir, `fixture-tool${suffix}`);
+        fs.mkdirSync(candidate);
+        // A searchable directory passes X_OK, which is what used to make it look installed.
+        expect(fs.accessSync(candidate, fs.constants.X_OK)).toBeUndefined();
+
+        expect(hasBinary("fixture-tool")).toBe(false);
+      });
+    },
+  );
+
+  it("accepts a PATH symlink pointing at an executable file", () => {
+    withTempDirSync({ prefix: "openclaw-binary-symlink-" }, (root) => {
+      mockProcessPlatform("linux");
+      const binDir = path.join(root, "bin");
+      const targetDir = path.join(root, "target");
+      fs.mkdirSync(binDir);
+      fs.mkdirSync(targetDir);
+      const target = path.join(targetDir, "fixture-tool");
+      fs.writeFileSync(target, "#!/bin/sh\nexit 0\n");
+      fs.chmodSync(target, 0o755);
+      fs.symlinkSync(target, path.join(binDir, "fixture-tool"));
+      vi.stubEnv("PATH", binDir);
+
+      expect(hasBinary("fixture-tool")).toBe(true);
+    });
+  });
 });
 
 describe("runtime requirements through eligibility", () => {

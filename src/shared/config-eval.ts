@@ -1,6 +1,7 @@
 // Config evaluation helpers load dynamic config modules with guarded evaluation.
 import fs from "node:fs";
 import path from "node:path";
+import { isRegularFile } from "../infra/executable-path.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
@@ -178,6 +179,11 @@ export function hasBinary(bin: string): boolean {
   for (const part of parts) {
     for (const ext of extensions) {
       const candidate = path.join(part, bin + ext);
+      // X_OK also succeeds for searchable directories, so a PATH entry holding a
+      // directory named like the binary would otherwise be reported available.
+      if (!isRegularFile(candidate)) {
+        continue;
+      }
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
         hasBinaryCache.add(bin);
