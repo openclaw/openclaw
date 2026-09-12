@@ -18,7 +18,12 @@ export async function prepareGitCandidateTransfer(params: {
       name,
       argv: ["git", "-C", step.cwd, ...args],
       runCommand: async (argv, options) => {
-        const result = await step.runCommand(argv, { ...options, input });
+        // Transfer inputs must never be silently truncated by diagnostic capture.
+        const result = await step.runCommand(argv, {
+          ...options,
+          input,
+          terminateOnOutputLimit: true,
+        });
         stdout = result.stdout;
         // Object inventories are transfer input, not operator diagnostics.
         return args[0] === "rev-list" ? { ...result, stdout: "" } : result;
