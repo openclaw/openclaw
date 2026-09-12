@@ -3596,18 +3596,16 @@ async function createChatPickerScenario(
     workspaceGit: true,
   };
   if (fixture === "sidebar-roster") {
-    const teamTasks = backgroundTasks.methodResponses["tasks.list"].tasks
-      .slice(0, 2)
-      .map((task, index) => {
-        const agent = expectDefined(rosterAgents[index], "team task agent");
-        return Object.assign({}, task, {
-          agentId: agent.id,
-          title: agent.sessionLabels[0],
-          sessionKey: `agent:${agent.id}:main`,
-          ownerKey: `agent:${agent.id}:main`,
-          childSessionKey: `agent:${agent.id}:sample-1`,
-        });
+    const teamTasks = backgroundTasks.tasks.slice(0, 2).map((task, index) => {
+      const agent = expectDefined(rosterAgents[index], "team task agent");
+      return Object.assign({}, task, {
+        agentId: agent.id,
+        title: agent.sessionLabels[0],
+        sessionKey: `agent:${agent.id}:main`,
+        ownerKey: `agent:${agent.id}:main`,
+        childSessionKey: `agent:${agent.id}:sample-1`,
       });
+    });
     scenario.methodResponses = {
       ...scenario.methodResponses,
       "sessions.catalog.list": { catalogs: [] },
@@ -3664,7 +3662,7 @@ async function createMockGatewayPlugin(
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
-      backgroundTasksMockInitScript(Date.now()) +
+      (fixture === "sidebar-roster" ? "" : backgroundTasksMockInitScript(Date.now())) +
       approvalMockInitScript(fixture === "approval"),
   );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
