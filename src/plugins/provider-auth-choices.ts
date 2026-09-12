@@ -5,6 +5,7 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-st
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestProviderAuthChoice } from "./manifest-types.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
@@ -12,34 +13,14 @@ import {
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
-export type ProviderAuthChoiceMetadata = {
+export type ProviderAuthChoiceMetadata = Omit<
+  PluginManifestProviderAuthChoice,
+  "provider" | "method" | "choiceLabel"
+> & {
   pluginId: string;
   providerId: string;
   methodId: string;
-  choiceId: string;
   choiceLabel: string;
-  choiceHint?: string;
-  icon?: string;
-  website?: string;
-  assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
-  deprecatedChoiceIds?: string[];
-  groupId?: string;
-  groupLabel?: string;
-  groupHint?: string;
-  onboardingFeatured?: boolean;
-  optionKey?: string;
-  cliFlag?: string;
-  cliOption?: string;
-  cliDescription?: string;
-  appGuidedSecret?: boolean;
-  personalAccount?: boolean;
-  appGuidedActionLabel?: string;
-  appGuidedDiscovery?: boolean;
-  appGuidedAuth?: "oauth" | "device-code";
-  credentialOnly?: boolean;
-  channelLogin?: { aliases?: string[] };
-  onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 type ProviderOnboardAuthFlag = {
@@ -52,11 +33,6 @@ type ProviderOnboardAuthFlag = {
 
 type ProviderAuthChoiceCandidate = ProviderAuthChoiceMetadata & {
   origin: PluginOrigin;
-};
-type ProviderOnboardAuthFlagCandidate = ProviderAuthChoiceCandidate & {
-  optionKey: string;
-  cliFlag: string;
-  cliOption: string;
 };
 type ManifestProviderAuthChoiceParams = {
   config?: OpenClawConfig;
@@ -96,37 +72,15 @@ function toProviderAuthChoiceCandidate(params: {
   choice: NonNullable<PluginManifestRecord["providerAuthChoices"]>[number];
 }): ProviderAuthChoiceCandidate {
   const { pluginId, origin, choice } = params;
+  const { provider, method, choiceId, choiceLabel, ...metadata } = choice;
   return {
     pluginId,
     origin,
-    providerId: choice.provider,
-    methodId: choice.method,
-    choiceId: choice.choiceId,
-    choiceLabel: choice.choiceLabel ?? choice.choiceId,
-    ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-    ...(choice.icon ? { icon: choice.icon } : {}),
-    ...(choice.website ? { website: choice.website } : {}),
-    ...(choice.assistantPriority !== undefined
-      ? { assistantPriority: choice.assistantPriority }
-      : {}),
-    ...(choice.assistantVisibility ? { assistantVisibility: choice.assistantVisibility } : {}),
-    ...(choice.deprecatedChoiceIds ? { deprecatedChoiceIds: choice.deprecatedChoiceIds } : {}),
-    ...(choice.groupId ? { groupId: choice.groupId } : {}),
-    ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-    ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-    ...(choice.onboardingFeatured ? { onboardingFeatured: true } : {}),
-    ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
-    ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
-    ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
-    ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
-    ...(choice.appGuidedSecret ? { appGuidedSecret: true } : {}),
-    ...(choice.personalAccount ? { personalAccount: true } : {}),
-    ...(choice.appGuidedActionLabel ? { appGuidedActionLabel: choice.appGuidedActionLabel } : {}),
-    ...(choice.appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
-    ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
-    ...(choice.credentialOnly ? { credentialOnly: true } : {}),
-    ...(choice.channelLogin ? { channelLogin: choice.channelLogin } : {}),
-    ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
+    providerId: provider,
+    methodId: method,
+    choiceId,
+    choiceLabel: choiceLabel ?? choiceId,
+    ...metadata,
   };
 }
 
@@ -357,37 +311,31 @@ export function resolveManifestDeprecatedProviderAuthChoice(
 function resolveManifestProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
-  const preferredByFlag = new Map<string, ProviderOnboardAuthFlagCandidate>();
+  const preferredByFlag = new Map<string, ProviderAuthChoiceCandidate>();
 
   for (const choice of resolveManifestProviderAuthChoiceCandidates(params)) {
     if (!choice.optionKey || !choice.cliFlag || !choice.cliOption) {
       continue;
     }
-    const normalizedChoice: ProviderOnboardAuthFlagCandidate = {
-      ...choice,
-      optionKey: choice.optionKey,
-      cliFlag: choice.cliFlag,
-      cliOption: choice.cliOption,
-    };
     const dedupeKey = `${choice.optionKey}::${choice.cliFlag}`;
     const existing = preferredByFlag.get(dedupeKey);
     if (
       existing &&
-      resolveProviderAuthChoiceOriginPriority(normalizedChoice.origin) >=
+      resolveProviderAuthChoiceOriginPriority(choice.origin) >=
         resolveProviderAuthChoiceOriginPriority(existing.origin)
     ) {
       continue;
     }
-    preferredByFlag.set(dedupeKey, normalizedChoice);
+    preferredByFlag.set(dedupeKey, choice);
   }
 
   const flags: ProviderOnboardAuthFlag[] = [];
   for (const choice of preferredByFlag.values()) {
     flags.push({
-      optionKey: choice.optionKey,
+      optionKey: choice.optionKey!,
       authChoice: choice.choiceId,
-      cliFlag: choice.cliFlag,
-      cliOption: choice.cliOption,
+      cliFlag: choice.cliFlag!,
+      cliOption: choice.cliOption!,
       description: choice.cliDescription ?? choice.choiceLabel,
     });
   }
