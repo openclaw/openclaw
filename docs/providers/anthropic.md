@@ -119,11 +119,12 @@ OpenClaw release:
         Gateway startup shares the native login availability check across agent
         workspaces using the same config and environment. Explicit catalog/auth
         captures recheck availability for their own generation.
-        Saved subscription credentials follow the configured account order and
+        New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
         the `anthropic` provider require an explicit account selection for CLI
-        forwarding. Native-tool approvals remain under OpenClaw
+        forwarding. Existing sessions keep their account until you select another
+        or remove its saved profile. Native-tool approvals remain under OpenClaw
         control. Schema-valid native calls pass through OpenClaw's canonical
         tool policy before native approval. Isolated side-question completions
         and paired-node execution retain the supervised CLI path.

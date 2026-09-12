@@ -89,18 +89,6 @@ export async function runCliFallbackCandidate(
     config: params.runtimeConfig,
     agentId: params.candidateRun.agentId,
   });
-  // The CLI owner must see explicit pins before provider scoping can discard them.
-  const authProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId({
-        cliExecutionProvider: params.cliExecutionProvider,
-        authProfileProvider: params.provider,
-        config: params.runtimeConfig,
-        agentDir: params.candidateRun.agentDir,
-        selected: params.candidateRun,
-      })
-    : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
-        config: params.runtimeConfig,
-      }).authProfileId;
   const hookMessageProvider = resolveOriginMessageProvider({
     originatingChannel: turn.followupRun.originatingChannel,
     provider: turn.sessionCtx.Provider,
@@ -178,8 +166,21 @@ export async function runCliFallbackCandidate(
         ) {
           throw createAgentRunSupersededAbortError();
         }
-        const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
+        // The CLI owner must see explicit pins before provider scoping can discard them.
+        const authProfileId = allowCliAuthProfileForwarding
+          ? resolveCliExecutionAuthProfileId({
+              cliExecutionProvider: params.cliExecutionProvider,
+              authProfileProvider: params.provider,
+              config: params.runtimeConfig,
+              agentDir: params.candidateRun.agentDir,
+              selected: params.candidateRun,
+              sessionBinding: cliSessionBinding,
+            })
+          : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
+              config: params.runtimeConfig,
+            }).authProfileId;
+        const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
         let droppedCliSessionReplacement = false;
         const candidateResult = await runCliAgentWithLifecycle({

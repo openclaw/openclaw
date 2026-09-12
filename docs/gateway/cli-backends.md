@@ -234,9 +234,10 @@ Normal agent turns can also use a saved subscription token without a native logi
 openclaw models auth paste-token --provider anthropic
 ```
 
-OpenClaw selects saved subscription credentials through the configured account
-order and forwards them to the CLI through a protected file descriptor. Explicit
-account selections and empty account orders remain authoritative. API keys saved
+New sessions select saved subscription credentials through the configured account
+order and forward them to the CLI through a protected file descriptor. Existing
+sessions keep their account until you select another or remove its saved profile.
+Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
 
