@@ -1,8 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { resumableClaudeCatalog } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { TERMINAL_START_FEATURE_METHODS } from "./new-session-page.native-terminal.test-support.ts";
+import { WORKSPACE } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "native catalog terminal release",
@@ -26,14 +27,50 @@ async function expandCodingSection(page: Page) {
   }
 }
 
+function codexCatalog(canContinue?: boolean) {
+  return {
+    catalogs: [
+      {
+        id: "codex",
+        label: "Codex",
+        capabilities: { continueSession: true, archive: false, startTerminal: true },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Codex",
+            kind: "gateway",
+            connected: true,
+            canStartTerminal: true,
+            sessions:
+              canContinue === undefined
+                ? []
+                : [
+                    {
+                      threadId: "codex-terminal-session",
+                      name: "Native Codex terminal",
+                      status: "stored",
+                      source: "codex-cli",
+                      archived: false,
+                      canContinue,
+                      canArchive: false,
+                      canOpenTerminal: true,
+                    },
+                  ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 suite.define(() => {
   it("refreshes the selected catalog pane after its terminal writer exits", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.clock.install();
-    const staleCatalog = resumableClaudeCatalog();
+    const staleCatalog = codexCatalog(false);
     const staleSession = staleCatalog.catalogs.at(0)?.hosts.at(0)?.sessions.at(0);
     if (!staleSession) {
-      throw new Error("expected the Claude catalog fixture to include one native session");
+      throw new Error("expected the Codex catalog fixture to include one native session");
     }
     staleSession.canContinue = false;
     const gateway = await installMockGateway(page, {
@@ -48,7 +85,7 @@ suite.define(() => {
         "sessions.catalog.list": staleCatalog,
         "sessions.catalog.read": {
           hostId: "gateway:local",
-          threadId: "claude-terminal-session",
+          threadId: "codex-terminal-session",
           items: [{ type: "agentMessage", text: "Native answer" }],
         },
         "terminal.list": { sessions: [] },
@@ -56,9 +93,9 @@ suite.define(() => {
           agentId: "main",
           confined: false,
           cwd: "/workspace",
-          sessionId: "claude-terminal-release",
+          sessionId: "codex-terminal-release",
           shell: "/bin/zsh",
-          title: "claude --resume claude-terminal-session",
+          title: "codex resume codex-terminal-session",
         },
       },
       terminalEnabled: true,
@@ -68,7 +105,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await expandCodingSection(page);
       const row = page.locator('[data-catalog-session-key^="catalog:"]').filter({
-        hasText: "Native Claude terminal",
+        hasText: "Native Codex terminal",
       });
       await row.click();
       const activePane = page
@@ -85,15 +122,15 @@ suite.define(() => {
       await gateway.waitForRequest("terminal.open");
       await page.locator(".tabstrip-tab.is-connecting").waitFor();
       await gateway.emitGatewayEvent("terminal.data", {
-        sessionId: "claude-terminal-release",
+        sessionId: "codex-terminal-release",
         seq: 1,
-        data: "Claude Code ready\r\n",
+        data: "Codex ready\r\n",
       });
       await expect.poll(() => page.locator(".tabstrip-tab.is-live").count()).toBe(1);
       const listedBeforeExit = (await gateway.getRequests("sessions.catalog.list")).length;
-      await gateway.setMethodResponse("sessions.catalog.list", resumableClaudeCatalog());
+      await gateway.setMethodResponse("sessions.catalog.list", codexCatalog(true));
       await gateway.emitGatewayEvent("terminal.exit", {
-        sessionId: "claude-terminal-release",
+        sessionId: "codex-terminal-release",
         reason: "process_exit",
         exitCode: 0,
       });
@@ -109,6 +146,78 @@ suite.define(() => {
       await expect.poll(() => pane.getAttribute("aria-hidden")).toBe("false");
       await expect.poll(() => composer.isEnabled()).toBe(true);
       expect(await pane.getByText("Native answer", { exact: true }).count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("discovers a New Session terminal after writer exit and opens it continuable", async () => {
+    const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.clock.install();
+    const gateway = await installMockGateway(page, {
+      cliAgentsEnabled: true,
+      featureMethods: [...TERMINAL_START_FEATURE_METHODS, "sessions.catalog.read"],
+      methodResponses: {
+        "sessions.catalog.list": codexCatalog(),
+        "sessions.catalog.read": {
+          hostId: "gateway:local",
+          threadId: "codex-terminal-session",
+          items: [{ type: "agentMessage", text: "Native answer" }],
+        },
+        "sessions.catalog.startTerminal": {
+          agentId: "main",
+          confined: false,
+          cwd: WORKSPACE,
+          sessionId: "codex-new-terminal",
+          shell: "codex",
+          title: "codex exec",
+        },
+      },
+      terminalEnabled: true,
+      workspace: WORKSPACE,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main&catalog=codex`);
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Explain the project architecture");
+      await message.press("Enter");
+      await page.waitForURL(`${suite.server.baseUrl}terminal/codex-new-terminal`);
+      await gateway.waitForRequest("sessions.catalog.startTerminal");
+      await page.locator(".tabstrip-tab").waitFor();
+      await gateway.emitGatewayEvent("terminal.data", {
+        sessionId: "codex-new-terminal",
+        seq: 1,
+        data: "Native answer\r\n",
+      });
+      await expect.poll(() => page.locator(".tabstrip-tab.is-live").count()).toBe(1);
+
+      const listedBeforeExit = (await gateway.getRequests("sessions.catalog.list")).length;
+      await gateway.setMethodResponse("sessions.catalog.list", codexCatalog(true));
+      await gateway.emitGatewayEvent("terminal.exit", {
+        sessionId: "codex-new-terminal",
+        reason: "process_exit",
+        exitCode: 0,
+      });
+      await page.clock.fastForward(5_000);
+      await page.clock.runFor(100);
+
+      await expect
+        .poll(() => gateway.getRequests("sessions.catalog.list").then((rows) => rows.length))
+        .toBeGreaterThan(listedBeforeExit);
+      expect(await page.locator(".tabstrip-tab.is-exited").count()).toBe(1);
+      await expandCodingSection(page);
+      const row = page.locator('[data-catalog-session-key^="catalog:"]').filter({
+        hasText: "Native Codex terminal",
+      });
+      await row.click();
+      const pane = page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
+        .filter({ hasText: "Native answer" });
+      await pane.getByText("Native answer", { exact: true }).waitFor();
+      await expect
+        .poll(() => pane.locator(".agent-chat__composer-combobox > textarea").isEnabled())
+        .toBe(true);
     } finally {
       await page.close();
     }

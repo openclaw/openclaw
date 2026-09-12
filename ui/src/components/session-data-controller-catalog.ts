@@ -158,7 +158,7 @@ export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): v
   owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
 }
 
-function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): Promise<void> {
+export function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): Promise<void> {
   const snapshot = owner.context?.gateway.snapshot;
   return owner.sessionCatalogLive.requestRefresh({
     visible: document.visibilityState !== "hidden",

@@ -128,6 +128,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       !state.client ||
       !key ||
       !detail ||
+      !detail.threadId ||
       key.catalogId !== detail.catalogId ||
       key.hostId !== detail.hostId ||
       key.threadId !== detail.threadId ||

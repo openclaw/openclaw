@@ -234,9 +234,8 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }, release);
   }
 
-  restoreSessions(): Promise<void> {
-    return this.intentQueue.queue({ kind: "restore", agentId: this.host.agentId?.trim() || null });
-  }
+  restoreSessions = (): Promise<void> =>
+    this.intentQueue.queue({ kind: "restore", agentId: this.host.agentId?.trim() || null });
 
   private terminalActionsCanRun(): boolean {
     return (
@@ -461,7 +460,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     try {
       const boot = await this.bootTab(operation, {
         awaitFirstOutput: Boolean(catalog),
-        catalogRelease: catalog ? { catalog, agentId } : undefined,
+        catalogRelease: catalog ? { ...catalog, agentId } : undefined,
       });
       createdTab = boot.tab;
       boot.tab.pendingOpen = action;
@@ -536,6 +535,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }
       const boot = await this.bootTab(operation, {
         awaitFirstOutput: prepared !== null,
+        catalogRelease: prepared?.release,
         restore: restore && { batch: restore, sessionId },
       });
       createdTab = boot.tab;
