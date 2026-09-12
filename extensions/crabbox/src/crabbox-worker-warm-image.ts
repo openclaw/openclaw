@@ -244,37 +244,33 @@ export function createCrabboxWarmImageManager(dependencies: {
 
   const makeRoom = async (context: LeaseContext) => {
     const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
-    const candidates = openStore()
-      .entries()
+    const entries = openStore().entries();
+    if (entries.length < WARM_IMAGE_MAX_ENTRIES) {
+      return;
+    }
+    const candidates = entries
       .filter(({ value }) => !value.operation && Object.keys(value.allocations).length === 0)
       .toSorted(
         (a, b) => (a.value.image?.lastDemandAtMs ?? 0) - (b.value.image?.lastDemandAtMs ?? 0),
       );
     // Previous generations are reclaimed first, but a slot is freed only when its
     // whole profile has no images, allocations, or deletion obligations left.
-    for (const { key } of candidates) {
-      if (openStore().entries().length < WARM_IMAGE_MAX_ENTRIES) {
-        return;
-      }
-      const current = openStore().lookup(key);
-      const remaining = () => deadline - Date.now();
-      if (current?.previous && remaining() > 0) {
-        await deleteImage(context, key, current, remaining, current.previous.checkpointId);
-      }
-    }
-    for (const { key } of candidates) {
-      if (openStore().entries().length < WARM_IMAGE_MAX_ENTRIES) {
-        return;
-      }
-      const remaining = () => deadline - Date.now();
-      if (remaining() <= 0) {
-        break;
-      }
-      const current = openStore().lookup(key);
-      if (current?.image && !current.previous) {
-        await deleteImage(context, key, current, remaining);
-      } else {
-        deleteEmptyProfile(key);
+    for (const generation of ["previous", "image"] as const) {
+      for (const { key } of candidates) {
+        if (openStore().entries().length < WARM_IMAGE_MAX_ENTRIES) {
+          return;
+        }
+        const remaining = () => deadline - Date.now();
+        if (remaining() <= 0) {
+          break;
+        }
+        const current = openStore().lookup(key);
+        const image = current?.[generation];
+        if (current && image && (generation === "previous" || !current.previous)) {
+          await deleteImage(context, key, current, remaining, image.checkpointId);
+        } else if (generation === "image") {
+          deleteEmptyProfile(key);
+        }
       }
     }
     if (openStore().entries().length >= WARM_IMAGE_MAX_ENTRIES) {
@@ -616,16 +612,17 @@ export function createCrabboxWarmImageManager(dependencies: {
             ),
             { checkpointId, leaseId: context.id, provider: context.provider, slug: context.slug },
           );
-          openStore().update(owner.key, (current) =>
-            withCrabboxWarmImageGeneration(current, owner.imageGeneration, (image) => ({
+          openStore().update(owner.key, (current) => {
+            assertCurrent(context);
+            return withCrabboxWarmImageGeneration(current, owner.imageGeneration, (image) => ({
               ...image,
               state: "available",
               lastDemandAtMs:
                 owner.purpose === "session" || owner.demandAtMs === null
                   ? image.lastDemandAtMs
                   : Math.max(image.lastDemandAtMs ?? 0, owner.demandAtMs),
-            })),
-          );
+            }));
+          });
           return owner.choice;
         }
       }
