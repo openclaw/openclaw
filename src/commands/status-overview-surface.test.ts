@@ -74,7 +74,6 @@ describe("status-overview-surface", () => {
         updateValue: "available · custom update",
         gatewayAuthWarningValue: "warn(warn-text)",
         gatewaySelfFallbackValue: "gateway-self",
-        includeBackendStateWhenOff: true,
         includeDnsNameWhenOff: true,
         decorateOk: (value) => `ok(${value})`,
         decorateWarn: (value) => `warn(${value})`,
