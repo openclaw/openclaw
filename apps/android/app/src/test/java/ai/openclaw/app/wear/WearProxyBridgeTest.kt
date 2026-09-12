@@ -283,6 +283,39 @@ class WearProxyBridgeTest {
   }
 
   @Test
+  fun canonicalMessagesCanShrinkAndClearWithoutLosingCompleteness() {
+    val projector = WearChatStreamProjector()
+    for (text in listOf("Hello world", "Hello", "")) {
+      val event = projectStreamEvent(projector, state = "delta", runId = "run-1", message = text)
+      assertEquals(text, event.getValue("streamText").jsonPrimitive.content)
+      assertEquals("true", event.getValue("streamTextComplete").jsonPrimitive.content)
+    }
+    val continued = projectStreamEvent(projector, state = "delta", runId = "run-1", text = "New")
+    assertEquals("New", continued.getValue("streamText").jsonPrimitive.content)
+  }
+
+  @Test
+  fun explicitReplacementCanClearWhileMissingContentStillAppends() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "run-1", message = "Hello world")
+    val cleared =
+      checkNotNull(
+        projector.project(
+          buildJsonObject {
+            put("sessionKey", "main")
+            put("runId", "run-1")
+            put("state", "delta")
+            put("replace", true)
+            put("deltaText", "")
+          },
+        ),
+      )
+    assertEquals("", cleared.getValue("streamText").jsonPrimitive.content)
+    val continued = projectStreamEvent(projector, state = "delta", runId = "run-1", text = "New")
+    assertEquals("New", continued.getValue("streamText").jsonPrimitive.content)
+  }
+
+  @Test
   fun foreignFinalPreservesTheActiveWatchStream() = assertForeignTerminalPreservesStream("final", runId = "active-run")
 
   @Test

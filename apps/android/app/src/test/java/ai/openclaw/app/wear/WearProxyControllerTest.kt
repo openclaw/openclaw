@@ -977,7 +977,7 @@ class WearProxyControllerTest {
           assertEquals("chat.history", method)
           requestedParams = params
           json.parseToJsonElement(
-            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"sessionInfo":{"model":"${"m".repeat(201)}"},"defaults":{"token":"hidden"},"offset":40,"nextOffset":60,"totalMessages":80,"hasMore":true}""",
+            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","idempotencyKey":"wear-history-run","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"sessionInfo":{"model":"${"m".repeat(201)}"},"defaults":{"token":"hidden"},"offset":40,"nextOffset":60,"totalMessages":80,"hasMore":true}""",
           )
         }
 
@@ -1034,12 +1034,15 @@ class WearProxyControllerTest {
           .content
           .toBoolean(),
       )
-      val content =
+      val message =
         result
           .getValue("messages")
           .jsonArray
           .single()
           .jsonObject
+      assertEquals("wear-history-run", message.getValue("idempotencyKey").jsonPrimitive.content)
+      val content =
+        message
           .getValue("content")
           .jsonArray
       assertEquals(1, content.size)

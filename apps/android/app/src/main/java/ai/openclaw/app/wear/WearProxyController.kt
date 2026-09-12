@@ -484,7 +484,8 @@ internal fun projectedWearMessageText(message: JsonElement?): String? {
         null
       }
     }
-  return text?.takeIf { it.isNotEmpty() }
+  // Empty canonical content is a replacement, not an absent message/delta.
+  return text
 }
 
 private fun projectHistory(source: JsonObject): JsonObject =

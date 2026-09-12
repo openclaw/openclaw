@@ -168,7 +168,7 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
     streamingAssistantText = streamText,
     pendingRunCount = if (activeRunId != null) 1 else 0,
     selectedModelRef = selectedModelRef,
-    failure = failure,
+    failure = conversationFailure,
     realtimeTalk = realtimeTalk,
     agentPulseSupported = pulseSupported,
     agentPulse = agentPulse.takeIf { pulseSupported },

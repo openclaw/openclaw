@@ -27,6 +27,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -197,6 +198,7 @@ internal fun OpenClawWearApp(
   }
   var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
   var awaitingReplySessionId by remember { mutableStateOf<String?>(null) }
+  var awaitingReplyRunId by remember { mutableStateOf<String?>(null) }
   var awaitingReply by remember { mutableStateOf(false) }
   var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
   var realtimeThinkingTurnId by remember { mutableStateOf<String?>(null) }
@@ -215,7 +217,7 @@ internal fun OpenClawWearApp(
       interaction = WearInteractionState.READY
       return
     }
-    if (state.sending || !state.streamText.isNullOrBlank()) {
+    if (!state.canSubmitReply) {
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
@@ -225,12 +227,16 @@ internal fun OpenClawWearApp(
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
     }
+    if (!viewModel.sendReply(message) { awaitingReplyRunId = it }) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
     expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
     awaitingReplySessionId = sessionId
     awaitingReply = true
     interaction = WearInteractionState.SENDING
     speaker.stop()
-    viewModel.sendReply(message)
   }
 
   val speechLauncher =
@@ -303,6 +309,7 @@ internal fun OpenClawWearApp(
   fun leaveConversationContext() {
     awaitingReply = false
     awaitingReplySessionId = null
+    awaitingReplyRunId = null
     expectedAssistantKey = null
     interaction = WearInteractionState.READY
     speaker.stop()
@@ -354,40 +361,19 @@ internal fun OpenClawWearApp(
     }
   }
 
-  LaunchedEffect(
-    snapshot?.activeSessionId,
-    state.messages,
-    state.activeRunId,
-    state.sending,
-    state.failure,
-    awaitingReply,
-  ) {
-    if (!awaitingReply) return@LaunchedEffect
-    val activeSnapshot = snapshot
-    if (
-      state.failure != null ||
-      activeSnapshot == null ||
-      activeSnapshot.activeSessionId != awaitingReplySessionId
-    ) {
-      awaitingReply = false
-      awaitingReplySessionId = null
-      expectedAssistantKey = null
-      interaction = WearInteractionState.READY
-      return@LaunchedEffect
-    }
-    if (state.sending || state.activeRunId != null) return@LaunchedEffect
-    val reply =
-      newAssistantReplyForSession(
-        awaitingSessionId = awaitingReplySessionId,
-        activeSessionId = activeSnapshot.activeSessionId,
-        expectedAssistantKey = expectedAssistantKey,
-        latestAssistantMessage = activeSnapshot.latestAssistantMessage(),
-      )
+  WearReplyCompletionEffect(
+    state = state,
+    snapshot = snapshot,
+    awaitingReply = awaitingReply,
+    awaitingReplySessionId = awaitingReplySessionId,
+    awaitingReplyRunId = awaitingReplyRunId,
+    expectedAssistantKey = expectedAssistantKey,
+  ) { reply ->
+    awaitingReply = false
+    awaitingReplySessionId = null
+    expectedAssistantKey = null
+    interaction = WearInteractionState.READY
     if (reply != null) {
-      awaitingReply = false
-      awaitingReplySessionId = null
-      expectedAssistantKey = null
-      interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
       if (autoSpeak) speaker.speak(reply.text)
     }
@@ -416,15 +402,15 @@ internal fun OpenClawWearApp(
   }
 
   val failure =
-    state.failure
+    state.conversationFailure
       ?: WearConversationFailure.PHONE_UNAVAILABLE.takeIf {
         state.phoneNodeId == null && !state.loading
       }
   val resolvedInteraction =
     when {
-      state.failure != null -> WearInteractionState.ERROR
+      state.conversationFailure != null -> WearInteractionState.ERROR
       state.sending -> WearInteractionState.SENDING
-      state.activeRunId != null -> WearInteractionState.AGENT_WORKING
+      state.hasActiveStream || state.pendingReply?.retryable == false -> WearInteractionState.AGENT_WORKING
       else -> interaction
     }
 
@@ -446,13 +432,12 @@ internal fun OpenClawWearApp(
             state.sending ||
             state.talkBusy ||
             state.controlBusy ||
-            state.activeRunId != null ||
-            !state.streamText.isNullOrBlank() ||
+            state.hasActiveStream ||
             state.realtimeTalk.active ||
             state.realtimeCapturing ||
             state.realtimePlaying,
-        inputEnabled = state.connected && snapshot?.activeSessionId != null,
-        canAbort = state.activeRunId != null || !state.streamText.isNullOrBlank(),
+        inputEnabled = state.connected && snapshot?.activeSessionId != null && state.canSubmitReply,
+        canAbort = state.hasActiveStream || state.pendingReply != null,
         themeMode = themeMode,
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
@@ -494,10 +479,6 @@ internal fun OpenClawWearApp(
         },
         onRealtimeTalk = ::toggleRealtimeTalk,
         onAbort = {
-          awaitingReply = false
-          awaitingReplySessionId = null
-          expectedAssistantKey = null
-          interaction = WearInteractionState.READY
           speaker.stop()
           viewModel.abort()
         },
@@ -567,6 +548,81 @@ internal fun OpenClawWearApp(
         onStopSpeaking = speaker::stop,
       )
     }
+  }
+}
+
+@Composable
+internal fun WearReplyCompletionEffect(
+  state: WearUiState,
+  snapshot: WearConversationSnapshot?,
+  awaitingReply: Boolean,
+  awaitingReplySessionId: String?,
+  expectedAssistantKey: String?,
+  awaitingReplyRunId: String? = null,
+  onCompleted: (WearChatMessage?) -> Unit,
+) {
+  val complete by rememberUpdatedState(onCompleted)
+  LaunchedEffect(
+    snapshot?.activeSessionId,
+    state.messages,
+    state.activeRunId,
+    state.streamText,
+    state.sending,
+    state.failure,
+    state.pendingReply,
+    state.replyTerminal,
+    state.replyCompletion,
+    state.pendingAbortRunId,
+    awaitingReply,
+    awaitingReplySessionId,
+    expectedAssistantKey,
+    awaitingReplyRunId,
+  ) {
+    if (!awaitingReply) return@LaunchedEffect
+    if (snapshot == null || snapshot.activeSessionId != awaitingReplySessionId) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    // Gateway can emit the terminal before replying to the matching Abort RPC.
+    // Wait for that recorded operation result, without discarding reply ownership.
+    if (awaitingReplyRunId != null && state.pendingAbortRunId == awaitingReplyRunId) return@LaunchedEffect
+    val terminal = state.replyCompletion ?: state.replyTerminal
+    val ownsPending = awaitingReplyRunId != null && state.pendingReply?.runId == awaitingReplyRunId
+    val ownsTerminal = awaitingReplyRunId != null && terminal?.runId == awaitingReplyRunId
+    if (ownsTerminal && terminal.outcome == WearReplyOutcome.Canceled) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    // An Abort/history/control failure does not end the still-owned logical send.
+    if (state.failure != null && !ownsPending && !ownsTerminal) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    if (state.sending || state.hasActiveStream || state.pendingReply != null) return@LaunchedEffect
+    // Preserved foreign finals are not evidence for this reply. The terminal
+    // history must reconcile the transcript before choosing text to confirm or speak.
+    if (terminal != null && terminal.history == null) return@LaunchedEffect
+    if (awaitingReplyRunId != null && terminal?.runId != null && terminal.runId != awaitingReplyRunId) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    val confirmationRunId = awaitingReplyRunId ?: terminal?.runId
+    val ownedMessage =
+      if (terminal == null && confirmationRunId == null) {
+        snapshot.latestAssistantMessage()
+      } else {
+        confirmationRunId?.let { runId ->
+          snapshot.messages.lastOrNull { it.replyOutcomeForRun(runId) != null }
+        } ?: terminal?.message?.takeIf { it.role == "assistant" }
+      }
+    val reply =
+      newAssistantReplyForSession(
+        awaitingSessionId = awaitingReplySessionId,
+        activeSessionId = snapshot.activeSessionId,
+        expectedAssistantKey = expectedAssistantKey,
+        latestAssistantMessage = ownedMessage,
+      )
+    if (reply != null || terminal?.history != null) complete(reply)
   }
 }
 
