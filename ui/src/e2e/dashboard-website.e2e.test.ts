@@ -113,10 +113,10 @@ suite.define(() => {
         const viewportFits = () =>
           frame.evaluate((element) => {
             const board = element.closest("openclaw-board-view")!.getBoundingClientRect();
-            const website = element.closest(".board-website")!.getBoundingClientRect();
+            const websiteBounds = element.closest(".board-website")!.getBoundingClientRect();
             return (
-              Math.abs(board.width - website.width) < 1 &&
-              Math.abs(board.height - website.height) < 1
+              Math.abs(board.width - websiteBounds.width) < 1 &&
+              Math.abs(board.height - websiteBounds.height) < 1
             );
           });
         await expect.poll(viewportFits).toBe(true);
