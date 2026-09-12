@@ -68,8 +68,8 @@ import {
   validateToolExecutionParams,
 } from "./agent-tools.execution-validation.js";
 import {
+  bindBeforeToolCallMetadata,
   clearBeforeToolCallWrappedMarker,
-  setBeforeToolCallMetadata,
   getBeforeToolCallDiagnosticOptions,
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
@@ -698,8 +698,9 @@ export function wrapToolWithBeforeToolCallHook(
     }
   };
   copyBeforeToolCallWrapperMetadata(tool, wrappedTool);
-  setBeforeToolCallMetadata(wrappedTool, tool, {
-    diagnosticOptions: hookOptions,
+  bindBeforeToolCallMetadata(wrappedTool, {
+    options: hookOptions,
+    sourceTool: tool,
     hookContext: ctx,
   });
   return wrappedTool;
