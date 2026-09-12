@@ -120,6 +120,28 @@ on every turn, including follow-ups. The per-run timeout still bounds the whole
 workload. Health/control sampling is capped at 2,048 samples, while heap
 sampling continues until the full workload finishes.
 
+Use `--probe-rounds N` for allocation comparisons with equal probe work. It
+attempts exactly N sampler rounds and N history bursts per configured history
+client, regardless of which finishes first. Each sampler round requests
+`/readyz`, the Control UI, and `sessions.list`; `--control-plane` adds one each
+of `tasks.list`, `cron.list`, and `cron.status`. Enabling `--subscribers` adds
+one subscribe attempt per round and an unsubscribe after each successful
+subscription. History attempts total `N × historyClients × historyBurst`, capped
+at 2048 per run. Slow clients receive the same history budget as fast clients.
+Failed probes remain recorded failures; counts describe attempts, not successes.
+Omitting the flag retains adaptive probing until agent turns and mutations end.
+
+Fixed probes can finish before or after agent turns. Every configured workload
+joins before final memory and allocation capture; an exhausted load deadline
+fails the run instead of reporting a partial fixed workload as complete. Output
+records the mode and requested counts in `probeWorkload`; actual sampler and
+history counts remain in `summary.sampleCount` and `summary.historySampleCount`.
+Peak RSS is sampled during sampler rounds plus the final memory observation. If
+those rounds finish early, a later transient RSS peak can be missed; this is not
+continuous peak-RSS coverage of the entire agent workload.
+Equal request counts do not equalize their overlap with agent turns or the
+Gateway's time-dependent background work.
+
 `--heap-prof-dir` samples allocations in the Gateway's main V8 isolate, starting
 after startup, session seeding, and probe warmup. Sampling ends after the load
 and its final memory probe, before profile serialization and teardown. It uses
