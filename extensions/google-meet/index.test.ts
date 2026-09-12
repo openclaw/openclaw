@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createContext, Script } from "node:vm";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
@@ -6923,10 +6924,12 @@ describe("google-meet plugin", () => {
   });
 
   it("stops the Chrome realtime audio bridge when child stdout errors", async () => {
-    const { bridge, provider } = createTestMeetVoiceProvider({
+    const providerClosed = createDeferred<void>();
+    const { bridge, provider, requireRequest } = createTestMeetVoiceProvider({
       handleBargeIn: vi.fn(),
       triggerGreeting: vi.fn(),
     });
+    bridge.close.mockReturnValue(providerClosed.promise);
     const inputStdout = new PassThrough();
     const outputProcess = testBridgeProcess({
       stdin: new Writable({
@@ -6953,16 +6956,26 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
-    expect(() => inputStdout.emit("error", new Error("EPIPE"))).not.toThrow();
-    expect(noopLogger.warn).toHaveBeenCalledWith(
-      "[google-meet] audio input command stdout failed: EPIPE",
-    );
+    try {
+      expect(() => inputStdout.emit("error", new Error("EPIPE"))).not.toThrow();
+      expect(noopLogger.warn).toHaveBeenCalledWith(
+        "[google-meet] audio input command stdout failed: EPIPE",
+      );
+      expect(inputProcess.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      expect(outputProcess.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      expect(handle.getHealth().bridgeClosed).toBe(false);
+      inputStdout.emit("data", Buffer.from([1, 2]));
+      expect(bridge.sendAudio).not.toHaveBeenCalled();
+      await Promise.resolve();
+      expect(bridge.close).toHaveBeenCalledOnce();
+      requireRequest().onTranscript?.("assistant", "Final received words.", true);
+      expect(handle.getHealth().lastRealtimeTranscriptText).toBe("Final received words.");
+      expect(handle.getHealth().bridgeClosed).toBe(false);
+    } finally {
+      providerClosed.resolve();
+      await handle.stop();
+    }
     expect(handle.getHealth().bridgeClosed).toBe(true);
-    await vi.waitFor(() => {
-      expect(bridge.close).toHaveBeenCalled();
-    });
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("defaults Chrome command-pair realtime to agent-driven talk-back", async () => {

@@ -87,14 +87,12 @@ export async function rollbackFailedUpdate(params: {
       assertCurrent();
       // A lost live context (including the same run ID) is not permission to
       // fall back to legacy rollback, even when publication removed the main DB.
-      await assertUpdateRecoveryAdmission({ env });
+      const targetPath = resolveOpenClawStateSqlitePath(env);
+      await assertUpdateRecoveryAdmission({ env, path: targetPath });
       assertCurrent();
       // Service authority and diagnostic history can select distinct state
       // roots. Neither may contain pending recovery before legacy mutation.
-      if (
-        opts.run &&
-        resolveOpenClawStateSqlitePath(opts.run.env) !== resolveOpenClawStateSqlitePath(env)
-      ) {
+      if (opts.run && resolveOpenClawStateSqlitePath(opts.run.env) !== targetPath) {
         await assertUpdateRecoveryAdmission({ env: opts.run.env });
         assertCurrent();
       }

@@ -362,7 +362,7 @@ describe("Models provider login", () => {
     expect(page.querySelector<HTMLButtonElement>("[data-models-login-start]")?.disabled).toBe(true);
     expect(
       [...page.querySelectorAll("button")].some((button) =>
-        button.textContent?.includes("Configure Models"),
+        button.textContent?.includes("Model setup"),
       ),
     ).toBe(true);
   });

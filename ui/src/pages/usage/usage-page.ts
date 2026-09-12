@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { PropertyValues } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
@@ -653,3 +653,9 @@ class UsagePage extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-usage-page")) {
   customElements.define("openclaw-usage-page", UsagePage);
 }
+
+export const usagePageComponent = {
+  header: true,
+  render: (data: UsageRouteData | undefined) =>
+    html`<openclaw-usage-page .routeData=${data}></openclaw-usage-page>`,
+};

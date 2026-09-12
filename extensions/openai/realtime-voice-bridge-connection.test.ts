@@ -77,7 +77,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     });
 
     void bridge.connect();
-    bridge.close();
+    void bridge.close();
 
     const socket = FakeWebSocket.instances[0];
     const options = socket?.args[1] as
@@ -269,7 +269,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       if (throwingCloseCallback) {
         expect(() => bridge.close()).toThrow("close callback failed");
       } else {
-        bridge.close();
+        await bridge.close();
       }
       expect(onClose).toHaveBeenCalledOnce();
       expect(onTerminal).toHaveBeenCalledOnce();
@@ -349,7 +349,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(
       audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
     ).toEqual([512 * 1024, Buffer.byteLength("overflow")]);
-    bridge.close();
+    await bridge.close();
   });
 
   it("drops stalled input audio and rate-limits aggregate warnings", async () => {
@@ -385,7 +385,7 @@ describe("OpenAI realtime voice bridge connection", () => {
         2,
         "OpenAI realtime input audio backpressure; droppedFrames=2",
       );
-      bridge.close();
+      await bridge.close();
     } finally {
       vi.useRealTimers();
     }
@@ -412,7 +412,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       "OpenAI realtime input audio backpressure; droppedFrames=1",
     );
-    bridge.close();
+    await bridge.close();
   });
 
   it("discards audio closed before the first connection and reconnects fresh", async () => {
@@ -420,8 +420,8 @@ describe("OpenAI realtime voice bridge connection", () => {
     const bridge = createNativeBridge({ onClose });
 
     bridge.sendAudio(Buffer.from("queued-before-connect"));
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -436,7 +436,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
     ).toHaveLength(0);
 
-    bridge.close();
+    void bridge.close();
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("completed");
   });
@@ -448,7 +448,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     await Promise.resolve();
 
     bridge.sendAudio(Buffer.from("queued-before-close"));
-    bridge.close();
+    void bridge.close();
     await firstConnect;
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
@@ -460,7 +460,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(
       parseSent(secondSocket).filter((event) => event.type === "input_audio_buffer.append"),
     ).toHaveLength(0);
-    bridge.close();
+    await bridge.close();
   });
 
   it("shares an in-flight connection until session readiness", async () => {
@@ -476,7 +476,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
     await Promise.all([firstConnect, secondConnect]);
     expect(onReady).toHaveBeenCalledOnce();
-    bridge.close();
+    await bridge.close();
   });
 
   it("fails terminally when the readiness callback throws", async () => {
@@ -500,7 +500,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     await vi.advanceTimersByTimeAsync(0);
     const immediateConnectError = connectError;
 
-    bridge.close();
+    await bridge.close();
     await observedConnect;
 
     expect(immediateConnectError).toBe(readyError);
@@ -747,8 +747,8 @@ describe("OpenAI realtime voice bridge connection", () => {
     const bridge = createNativeBridge({ onClose });
     const { connecting, socket } = beginBridgeConnection(bridge);
 
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
 
     await expect(connecting).resolves.toBeUndefined();
     expect(socket.closed).toBe(true);

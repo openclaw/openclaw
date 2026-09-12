@@ -5,6 +5,7 @@ import type {
   SessionMembersListEvidenceResult as SessionSharingResult,
   SessionVisibility,
 } from "../../api/types.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -188,7 +189,6 @@ export abstract class ChatPaneSharingActions extends ChatPaneBase {
     this.setSessionSharingState(cacheKey, pending);
     try {
       if (enabled) {
-        const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
         if (!isCurrent() || !access()) {
           return;
         }

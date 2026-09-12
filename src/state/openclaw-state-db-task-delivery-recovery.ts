@@ -6,7 +6,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
 import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  SqliteRepairableForeignKeyError,
+} from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectorySync } from "../infra/sqlite-private-directory.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -94,27 +97,15 @@ function assertRecoveryShape(database: DatabaseSync): void {
 }
 
 function assertKnownOrphanIntegrity(database: DatabaseSync): number {
-  const structural = database.prepare("PRAGMA integrity_check").all();
-  if (structural.length !== 1 || structural[0]?.integrity_check !== "ok") {
-    throw new Error("Orphan task delivery recovery requires a structurally intact database.");
-  }
-  let count = 0;
-  const check = database.prepare("PRAGMA foreign_key_check");
-  check.setReadBigInts(true);
-  for (const violation of check.iterate()) {
-    if (
-      violation.table !== "task_delivery_state" ||
-      violation.parent !== "task_runs" ||
-      violation.fkid !== 0n ||
-      typeof violation.rowid !== "bigint"
-    ) {
-      throw new Error(
-        "Orphan task delivery recovery refused unrelated foreign-key violations; preserve the database for supported recovery.",
-      );
+  try {
+    assertSqliteIntegrity(database, "task delivery recovery database");
+    return 0;
+  } catch (error) {
+    if (error instanceof SqliteRepairableForeignKeyError) {
+      return error.repair.orphanCount;
     }
-    count += 1;
+    throw error;
   }
-  return count;
 }
 
 function syncAndHash(filePath: string) {

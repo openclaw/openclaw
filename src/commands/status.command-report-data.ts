@@ -17,6 +17,7 @@ import {
 import { formatPluginCompatibilityNotice } from "../plugins/status-compatibility.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
+import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import type { StatusSummary } from "../status/types.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
@@ -89,6 +90,7 @@ export async function buildStatusCommandReportData(params: {
   const muted = (value: string) => theme.muted(value);
   const overviewRows = buildStatusCommandOverviewRows({
     env: params.env,
+    backupFreshness: await readBackupRunFreshness(params.env),
     opts: params.opts,
     surface: params.surface,
     osLabel: params.osSummary.label,

@@ -5,14 +5,17 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNpmSpecMetadata } from "../../infra/install-source-utils.js";
 import { readInstalledPackageManifest } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
-import { resolveNpmInstallSpecsForUpdateChannel } from "../../plugins/install-channel-specs.js";
+import {
+  NpmChannelResolutionError,
+  resolveNpmInstallSpecsForUpdateChannel,
+} from "../../plugins/install-channel-specs.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { checkMinHostVersion } from "../../plugins/min-host-version.js";
 import {
   resolvePackagePluginApiRange,
   satisfiesPluginApiRange,
 } from "../../plugins/package-compat.js";
-import { UpdatePreMutationError } from "./shared.js";
+import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 function incompatibleRequirement(
@@ -33,19 +36,20 @@ function incompatibleRequirement(
   return !host.ok && host.kind === "incompatible" ? `OpenClaw ${host.requirement.raw}` : undefined;
 }
 
-/** Block only a declared incompatibility that an available plugin update cannot repair. */
+/** Report unavailable replacements without vetoing the core package update. */
 export async function preflightConfiguredNpmPluginTargets(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   targetVersion: string | null;
   channel: UpdateChannel;
   timeoutMs: number;
-}): Promise<void> {
+}): Promise<PluginUpdateWarning[]> {
   const targetVersion = params.targetVersion;
   if (!targetVersion) {
-    return;
+    return [];
   }
-  await withOwnedManagedUpdateEnv(params.env, async () => {
+  return await withOwnedManagedUpdateEnv(params.env, async () => {
+    const warnings: PluginUpdateWarning[] = [];
     const installRecords = await loadInstalledPluginIndexInstallRecords({ env: params.env });
     const targets = await collectConfiguredNpmPluginTargets({
       ...params,
@@ -93,12 +97,18 @@ export async function preflightConfiguredNpmPluginTargets(params: {
           failure = `resolved plugin requires ${candidateRequirement}`;
         }
       } catch (error) {
+        if (!(error instanceof NpmChannelResolutionError)) {
+          throw error;
+        }
         failure = `registry could not be reached: ${formatErrorMessage(error)}`;
       }
-      throw new UpdatePreMutationError(
-        "plugin-incompatible",
-        `Update refused: Plugin "${target.pluginId}" (installed ${manifest.version}) requires ${requirement} and would not load on core ${targetVersion}. Cannot resolve a compatible ${requiredSpec}: ${failure}. Retry when the registry is reachable, pin a compatible plugin version with \`openclaw plugins update <package>@<compatible-version>\`, disable it with \`openclaw plugins disable ${target.pluginId}\`, or wait for a compatible release.`,
-      );
+      warnings.push({
+        pluginId: target.pluginId,
+        reason: `Installed ${manifest.version} requires ${requirement}; ${requiredSpec}: ${failure}`,
+        message: `Plugin "${target.pluginId}" update availability could not be confirmed; the core update can continue.`,
+        guidance: [],
+      });
     }
+    return warnings;
   });
 }

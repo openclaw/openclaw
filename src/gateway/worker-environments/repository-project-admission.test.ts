@@ -52,6 +52,15 @@ describe("repository project admission", () => {
   let truncated: boolean;
   let unavailable: boolean;
   let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
+  const repositoryNode = () => ({
+    __typename: "Repository",
+    node_id: repositoryId,
+    clone_url: repositoryUrl.replace(/\.git$/u, ""),
+    private: privateRepository,
+    object: { __typename: "Commit", sha: commit, tree: { sha: rootTree } },
+  });
+  const requestPaths = () =>
+    fetchImpl.mock.calls.map(([input]) => new URL(new Request(input).url).pathname);
 
   beforeEach(() => {
     selection = { source: "system-configured", profileId: `ghp_${"1".repeat(32)}`, accountId: 1 };
@@ -90,7 +99,12 @@ describe("repository project admission", () => {
     fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(new Request(input).url);
       let value: unknown;
-      if (url.pathname === "/repos/acme/project") {
+      if (url.pathname === "/graphql") {
+        if (unavailable) {
+          return new Response(null, { status: 404 });
+        }
+        value = { data: { node: repositoryNode() } };
+      } else if (url.pathname === "/repos/acme/project") {
         if (unavailable) {
           return new Response(null, { status: 404 });
         }
@@ -173,6 +187,199 @@ describe("repository project admission", () => {
       fetchImpl.mock.calls.every(([url]) => !new Request(url).url.includes("/commits/heads")),
     ).toBe(true);
   });
+
+  it("uses seven reads across discovery, pinned admission, and post-binding revalidation", async () => {
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: (project) => ({ project, setupRecipe: recipe }),
+    });
+    const restored = await prepareRepositoryWorkerProjectSource({
+      namespace: initial.namespace,
+      getConfig: initial.getConfig,
+      assertCurrent: initial.assertCurrent,
+      expected: admitted.project,
+      knownRecipe: (project) => ({ project, setupRecipe: recipe }),
+    });
+    await restored.revalidate();
+    expect(restored.project).toEqual(admitted.project);
+    expect(requestPaths()).toEqual([
+      "/repos/acme/project",
+      "/repos/acme/project/commits/heads%2Fmain",
+      "/repos/acme/project",
+      "/graphql",
+      "/repos/acme/project",
+      "/graphql",
+      "/repos/acme/project",
+    ]);
+    for (const [requestInput, init] of fetchImpl.mock.calls.filter(([input]) =>
+      new Request(input).url.endsWith("/graphql"),
+    )) {
+      const request = new Request(requestInput, init);
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("content-type")).toBe("application/json");
+      expect(request.headers.get("authorization")).toBe(`Bearer ${token}`);
+      const body = await request.json();
+      expect(body.variables).toEqual({ repositoryId, commit });
+      expect(body.query).toMatch(
+        /node\(id: \$repositoryId\)[\s\S]*on Repository[\s\S]*object\(oid: \$commit\)/u,
+      );
+      expect(body.query).not.toMatch(/repository\(owner:/u);
+    }
+  });
+
+  it.each(["refill", "revalidate"] as const)(
+    "rejects invalid GraphQL repository/object metadata during %s without a REST fallback",
+    async (phase) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const node = repositoryNode();
+      const responses = [
+        {},
+        { data: null },
+        { data: { node: null } },
+        { data: { node: { ...node, __typename: "User" } } },
+        { data: { node: { ...node, node_id: "R_replaced_project" } } },
+        { data: { node: { ...node, clone_url: "https://github.com/acme/another" } } },
+        { data: { node: { ...node, private: undefined } } },
+        { data: { node: { ...node, private: true } } },
+        { data: { node: { ...node, object: null } } },
+        { data: { node: { ...node, object: { ...node.object, __typename: "Tree" } } } },
+        { data: { node: { ...node, object: { ...node.object, sha: "e".repeat(40) } } } },
+        { data: { node: { ...node, object: { ...node.object, tree: null } } } },
+        { data: { node: { ...node, object: { ...node.object, tree: { sha: "invalid" } } } } },
+        { data: { node }, errors: [{ type: "FORBIDDEN" }] },
+        { data: { node }, errors: [{ type: "INTERNAL", message: "private-diagnostic" }] },
+        { data: { node }, errors: {} },
+        { errors: [{ type: "FORBIDDEN" }, { type: "INTERNAL" }] },
+      ];
+      for (const response of responses) {
+        fetchImpl.mockClear().mockResolvedValueOnce(new Response(JSON.stringify(response)));
+        const pending =
+          phase === "revalidate"
+            ? admitted.revalidate()
+            : prepareRepositoryWorkerProjectSource({
+                namespace: initial.namespace,
+                getConfig: initial.getConfig,
+                assertCurrent: initial.assertCurrent,
+                expected: admitted.project,
+                knownRecipe: (project) => ({ project, setupRecipe: recipe }),
+              });
+        await expect(pending).rejects.toThrow();
+        expect(requestPaths()).toEqual(["/graphql"]);
+      }
+    },
+  );
+
+  it.each(["repository", "visibility", "access"] as const)(
+    "rejects %s changes after the immutable-node read",
+    async (change) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const response = { data: { node: repositoryNode() } };
+      fetchImpl.mockClear().mockImplementationOnce(async () => {
+        if (change === "repository") {
+          repositoryId = "R_recreated_project";
+        }
+        if (change === "visibility") {
+          privateRepository = true;
+        }
+        if (change === "access") {
+          unavailable = true;
+        }
+        return new Response(JSON.stringify(response));
+      });
+      await expect(admitted.revalidate()).rejects.toThrow();
+      expect(requestPaths()).toEqual(["/graphql", "/repos/acme/project"]);
+    },
+  );
+
+  it.each(["http forbidden", "forbidden", "insufficient scopes"] as const)(
+    "preserves the complete REST fence for a public token with %s GraphQL access",
+    async (refusal) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      fetchImpl.mockClear().mockResolvedValueOnce(
+        refusal === "http forbidden"
+          ? new Response(
+              JSON.stringify({ message: "Resource not accessible by personal access token" }),
+              { status: 403 },
+            )
+          : new Response(
+              JSON.stringify({
+                data: null,
+                errors: [{ type: refusal === "forbidden" ? "FORBIDDEN" : "INSUFFICIENT_SCOPES" }],
+              }),
+            ),
+      );
+      await expect(admitted.revalidate()).resolves.toBeUndefined();
+      expect(requestPaths()).toEqual([
+        "/graphql",
+        "/repos/acme/project",
+        `/repos/acme/project/git/commits/${commit}`,
+        "/repos/acme/project",
+      ]);
+    },
+  );
+
+  it.each(["agent", "identity", "credential", "caller"] as const)(
+    "rejects %s revocation after successful or refused GraphQL reads without falling back",
+    async (revoked) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const originalToken = token;
+      for (const status of [200, 403]) {
+        selected = true;
+        token = originalToken;
+        mocks.matchesAgentLifecycleBinding.mockReturnValue(true);
+        const controller = new AbortController();
+        fetchImpl.mockClear().mockImplementationOnce(async () => {
+          if (revoked === "agent") {
+            mocks.matchesAgentLifecycleBinding.mockReturnValue(false);
+          }
+          if (revoked === "identity") {
+            selected = false;
+          }
+          if (revoked === "credential") {
+            token = "replaced-credential";
+          }
+          if (revoked === "caller") {
+            controller.abort();
+          }
+          return new Response(
+            JSON.stringify(
+              status === 403
+                ? { message: "Resource not accessible by personal access token" }
+                : { data: { node: repositoryNode() } },
+            ),
+            { status },
+          );
+        });
+        await expect(admitted.revalidate(controller.signal)).rejects.toThrow();
+        expect(requestPaths()).toEqual(["/graphql"]);
+      }
+    },
+  );
+
+  it.each<{ label: string; status: number; body?: string; headers?: Record<string, string> }>([
+    { label: "authentication", status: 401, body: "{}" },
+    { label: "missing endpoint", status: 404, body: "{}" },
+    { label: "upstream failure", status: 500, body: "{}" },
+    { label: "malformed JSON", status: 200, body: "{" },
+    { label: "ambiguous forbidden", status: 403, body: "{}" },
+    { label: "empty forbidden", status: 403 },
+    {
+      label: "quota at HTTP 403",
+      status: 403,
+      headers: { "x-ratelimit-remaining": "42" },
+      body: JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }),
+    },
+    { label: "quota", status: 200, body: JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }) },
+    { label: "redirect", status: 307, headers: { location: "https://api.github.com/graphql" } },
+  ])(
+    "does not reinterpret $label as unavailable GraphQL capability",
+    async ({ status, body, headers }) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      fetchImpl.mockClear().mockResolvedValueOnce(new Response(body, { status, headers }));
+      await expect(admitted.revalidate()).rejects.toThrow();
+      expect(requestPaths()).toEqual(["/graphql"]);
+    },
+  );
 
   it.each([undefined, recipe])(
     "reuses an exact known recipe %s without Git tree reads",

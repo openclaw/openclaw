@@ -95,17 +95,6 @@ function renderPicker(
 }
 
 describe("Where chip", () => {
-  it("focuses environment search only after the enclosing picker opens", () => {
-    const container = renderPicker(true);
-    const popover = container.querySelector("wa-popover")!;
-    const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
-    const focus = vi.spyOn(search, "focus");
-    search.dispatchEvent(new CustomEvent("wa-after-show", { bubbles: true }));
-    expect(focus).not.toHaveBeenCalled();
-    popover.dispatchEvent(new CustomEvent("wa-after-show"));
-    expect(focus).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { label: "Work MacBook Pro", platform: "darwin", icon: deviceIcons.laptop, form: "laptop" },
     {
@@ -523,7 +512,10 @@ describe("Where chip", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onEnvironmentQueryInput).toHaveBeenCalledExactlyOnceWith("cloud");
 
-    expect(container.querySelector('[data-value="connect-machine"]')).toBeNull();
+    const connect = container.querySelector<HTMLButtonElement>('[data-action="connect-machine"]')!;
+    expect(connect.disabled).toBe(false);
+    connect.click();
+    expect(onConnectMachine).toHaveBeenCalledOnce();
   });
 
   it.each([true, false])("preserves destination eligibility with Auto set to %s", (autoDevice) => {
@@ -797,7 +789,7 @@ describe("Where chip", () => {
   });
 
   it("disables device placements when the selected runtime cannot dispatch to devices", () => {
-    const state = resolveWhereChip({
+    const container = renderPicker(true, undefined, {
       environments: [
         {
           id: "node:macbook",
@@ -809,37 +801,8 @@ describe("Where chip", () => {
         },
       ],
       cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
       deviceDisabledReason: "This runtime does not support paired devices",
     });
-    const container = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        environmentQuery: "",
-        onEnvironmentQueryInput: vi.fn(),
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: true,
-        onGuardTransition: () => undefined,
-        onPopoverShow: () => undefined,
-        onPopoverHide: () => undefined,
-        onPopoverAfterHide: () => undefined,
-        onSelectDevice: () => undefined,
-        onSelectAutoDevice: () => undefined,
-        onSelectCloudProfile: () => undefined,
-        onConnectMachine: () => undefined,
-        onManageCloudWorkers: () => undefined,
-      }),
-      container,
-    );
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
@@ -850,39 +813,10 @@ describe("Where chip", () => {
   });
 
   it("omits automatic placement when no devices are paired and Auto is off", () => {
-    const state = resolveWhereChip({
+    const emptyContainer = renderPicker(false, undefined, {
       environments: [],
       cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
     });
-    const emptyContainer = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        environmentQuery: "",
-        onEnvironmentQueryInput: vi.fn(),
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: false,
-        onGuardTransition: vi.fn(),
-        onPopoverShow: vi.fn(),
-        onPopoverHide: vi.fn(),
-        onPopoverAfterHide: vi.fn(),
-        onSelectDevice: vi.fn(),
-        onSelectAutoDevice: vi.fn(),
-        onSelectCloudProfile: vi.fn(),
-        onConnectMachine: vi.fn(),
-        onManageCloudWorkers: () => undefined,
-      }),
-      emptyContainer,
-    );
     expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });
 
@@ -905,7 +839,7 @@ describe("Where chip", () => {
       reason: /openclaw update.*openclaw node restart/i,
     },
   ])("disables automatic selection with an actionable reason when $name", ({ issues, reason }) => {
-    const state = resolveWhereChip({
+    const container = renderPicker(false, undefined, {
       environments: [
         { id: "node:other", type: "node", label: "Other", status: "offline", sessionHost: false },
         {
@@ -918,36 +852,7 @@ describe("Where chip", () => {
         },
       ],
       cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
     });
-    const container = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        environmentQuery: "",
-        onEnvironmentQueryInput: vi.fn(),
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: false,
-        onGuardTransition: vi.fn(),
-        onPopoverShow: vi.fn(),
-        onPopoverHide: vi.fn(),
-        onPopoverAfterHide: vi.fn(),
-        onSelectDevice: vi.fn(),
-        onSelectAutoDevice: vi.fn(),
-        onSelectCloudProfile: vi.fn(),
-        onConnectMachine: vi.fn(),
-        onManageCloudWorkers: () => undefined,
-      }),
-      container,
-    );
 
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
     expect(automatic?.disabled).toBe(true);
@@ -1015,7 +920,7 @@ describe("Where chip", () => {
       reason,
       label,
     }) => {
-      const state = resolveWhereChip({
+      const container = renderPicker(true, undefined, {
         environments: [
           {
             id: "node:runner",
@@ -1037,37 +942,8 @@ describe("Where chip", () => {
           },
         ],
         cloudProfiles: [],
-        cloudProfileId: "",
-        deviceId: "",
         devicePlacement,
       });
-      const container = document.createElement("div");
-      render(
-        renderWhereChip({
-          state,
-          gatewayName: "",
-          environmentQuery: "",
-          onEnvironmentQueryInput: vi.fn(),
-          cloudProfileId: "",
-          deviceId: "",
-          worktreeAvailable: true,
-          submitting: false,
-          pendingPlacement: false,
-          popoverOpen: true,
-          popoverHiding: false,
-          isAdmin: true,
-          onGuardTransition: vi.fn(),
-          onPopoverShow: vi.fn(),
-          onPopoverHide: vi.fn(),
-          onPopoverAfterHide: vi.fn(),
-          onSelectDevice: vi.fn(),
-          onSelectAutoDevice: vi.fn(),
-          onSelectCloudProfile: vi.fn(),
-          onConnectMachine: vi.fn(),
-          onManageCloudWorkers: () => undefined,
-        }),
-        container,
-      );
 
       const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
       expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);

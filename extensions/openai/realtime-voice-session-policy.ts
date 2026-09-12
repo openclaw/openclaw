@@ -38,8 +38,8 @@ import {
 } from "./realtime-quicksilver-redaction.js";
 import {
   OPENAI_GPT_LIVE_MODELS,
-  OPENAI_GPT_LIVE_VOICES,
-  isSupportedOpenAIGptLiveModel,
+  isOpenAIGptLiveSubscriptionModel,
+  resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
 
 export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
@@ -84,8 +84,7 @@ export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
 };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
-// Picker suggestions surfaced through talk.catalog; each value is live-verified
-// against the OpenAI realtime APIs. Free-form model values are still accepted.
+// Picker suggestions surfaced through talk.catalog. Free-form model values are still accepted.
 export const OPENAI_REALTIME_MODELS = [
   "gpt-realtime-2.1",
   "gpt-realtime-2.1-mini",
@@ -97,7 +96,10 @@ export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
   voicesByModel: Record<string, readonly string[]>;
 } = {
   voicesByModel: Object.fromEntries(
-    OPENAI_GPT_LIVE_MODELS.map((model) => [model, OPENAI_GPT_LIVE_VOICES]),
+    OPENAI_GPT_LIVE_MODELS.map((model) => [
+      model,
+      resolveOpenAIQuicksilverVoiceCapabilities(model).voices,
+    ]),
   ),
   transports: ["webrtc", "gateway-relay"],
   inputAudioFormats: [
@@ -560,7 +562,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   },
   runtime: OpenAIRealtimeHost,
 ) {
-  if (isSupportedOpenAIGptLiveModel(params.model)) {
+  if (isOpenAIGptLiveSubscriptionModel(params.model)) {
     const { resolveAgentDir } = runtime;
     const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
       {
@@ -589,13 +591,13 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
     )
   ) {
     throw new Error(
-      isSupportedOpenAIGptLiveModel(params.model)
+      isOpenAIGptLiveSubscriptionModel(params.model)
         ? OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE
         : OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
     );
   }
   throw new Error(
-    isSupportedOpenAIGptLiveModel(params.model)
+    isOpenAIGptLiveSubscriptionModel(params.model)
       ? OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED
       : OPENAI_GPT_LIVE_AUTH_REQUIRED,
   );

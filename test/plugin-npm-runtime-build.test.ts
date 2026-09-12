@@ -186,6 +186,7 @@ describe("plugin npm runtime build planning", () => {
       "dist/**",
       "openclaw.plugin.json",
       "README.md",
+      "assets/icon.png",
       "skills/**",
     ]);
   });

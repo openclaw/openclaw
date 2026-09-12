@@ -8,6 +8,7 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -130,11 +131,14 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
-    await assertUpdateRecoveryAdmission({
-      env: params.ownedManagedUpdateEnv ?? params.opts.run?.env,
-    });
+    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+    // Keep the first target stable if selectors change during admission.
+    const targetPath = resolveOpenClawStateSqlitePath(env);
+    await assertUpdateRecoveryAdmission({ env, path: targetPath });
     if (params.opts.run) {
-      await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+      if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
+        await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+      }
       const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
       if (prior && prior.status !== "running" && settlementFailed) {
         throw new Error("Update history was already finalized by another owner.");
