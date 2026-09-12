@@ -10,7 +10,6 @@ import {
   APP_ROUTE_IDS,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   inferBasePathFromPathname,
-  isLegacyPluginsDiscoveryPath,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
@@ -709,16 +708,16 @@ describe("Memory tab route paths", () => {
 });
 
 describe("legacy Plugins discovery route", () => {
-  it("parses the retired discovery path only for inbound compatibility", () => {
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover")).toBe(true);
-    expect(isLegacyPluginsDiscoveryPath("/ui/settings/plugins/discover", "/ui")).toBe(true);
+  it("routes retired discovery links through the application router", () => {
+    const router = createApplicationRouter();
+    expect(router.routeIdFromPath("/settings/plugins/discover")).toBe("plugins");
+    expect(router.routeIdFromPath("/ui/settings/plugins/discover", "/ui")).toBe("plugins");
   });
 
-  it("keeps settings detail paths out of the legacy discovery matcher", () => {
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/unknown")).toBe(false);
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover/extra")).toBe(false);
-    expect(routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
-    expect(routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
+  it("keeps settings detail paths distinct from discovery in the application router", () => {
+    const router = createApplicationRouter();
+    expect(router.routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
+    expect(router.routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
   });
 });
 

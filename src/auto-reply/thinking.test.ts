@@ -435,7 +435,15 @@ describe("listThinkingLevels", () => {
         model: "company-fable",
         catalog,
       }),
-    ).toBe("high");
+    ).toBe("medium");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "microsoft-foundry",
+        model: "company-fable",
+        level: "adaptive",
+        catalog,
+      }),
+    ).toBe("medium");
   });
 
   it("exposes Claude Opus xhigh on custom anthropic-messages providers without a plugin profile", () => {

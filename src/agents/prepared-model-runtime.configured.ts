@@ -19,6 +19,7 @@ import {
   type PreparedProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 import {
   listAgentIds,
@@ -308,26 +309,28 @@ export function listConfiguredOwnerInputs(
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
-  return listAgentIds(config).map((agentId) => {
-    const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
-    const input: PreparedModelRuntimeInput = {
-      agentId,
-      agentDir: resolveAgentDir(config, agentId),
-      config,
-      inheritedAuthDir,
-      workspaceDir: preserveWorkspaceDirOnRefresh
-        ? defaultWorkspaceDir
-        : resolveAgentWorkspaceDir(config, agentId),
-      runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
-    };
-    if (allowGatewaySubagentBinding === true) {
-      input.allowGatewaySubagentBinding = true;
-    }
-    if (preserveWorkspaceDirOnRefresh) {
-      input.preserveWorkspaceDirOnRefresh = true;
-    }
-    return input;
-  });
+  return listAgentIds(config)
+    .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
+    .map((agentId) => {
+      const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
+      const input: PreparedModelRuntimeInput = {
+        agentId,
+        agentDir: resolveAgentDir(config, agentId),
+        config,
+        inheritedAuthDir,
+        workspaceDir: preserveWorkspaceDirOnRefresh
+          ? defaultWorkspaceDir
+          : resolveAgentWorkspaceDir(config, agentId),
+        runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
+      };
+      if (allowGatewaySubagentBinding === true) {
+        input.allowGatewaySubagentBinding = true;
+      }
+      if (preserveWorkspaceDirOnRefresh) {
+        input.preserveWorkspaceDirOnRefresh = true;
+      }
+      return input;
+    });
 }
 
 function resolveConfiguredRuntimePluginSelections(

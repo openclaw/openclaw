@@ -23,6 +23,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
+import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -182,6 +183,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
   const voiceEnabled = resolveDiscordVoiceEnabled(discordCfg.voice);
+  if (voiceEnabled && getDiscordEndpointRuntime()) {
+    throw new Error("Discord voice transport is unavailable while DISCORD_API_URL is configured");
+  }
 
   const allowlistResolved = await resolveDiscordAllowlistConfig({
     token,

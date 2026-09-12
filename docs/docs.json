@@ -2336,6 +2336,7 @@
                   "platforms/index",
                   "platforms/macos",
                   "platforms/linux",
+                  "platforms/omarchy",
                   "platforms/windows",
                   "platforms/android",
                   "platforms/chromeos",

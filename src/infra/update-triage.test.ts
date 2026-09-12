@@ -106,6 +106,8 @@ describe("update triage child lifecycle", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),
     );
+    expect(runtime.log).toHaveBeenCalledWith("Update failed. Preparing triage diagnostics...");
+    expect(runtime.log).not.toHaveBeenCalledWith("Update failed. Entering triage...");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
@@ -167,7 +169,9 @@ describe("update triage child lifecycle", () => {
       controller.abort();
       expect(await pending).toEqual({ status: "cancelled" });
       await expect.poll(() => isPidAlive(pid)).toBe(false);
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith("Update failed. Entering triage...");
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+        "Update failed. Preparing triage diagnostics...",
+      );
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
       controller.abort();

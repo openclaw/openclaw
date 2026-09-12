@@ -28,6 +28,7 @@ import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
@@ -604,6 +605,9 @@ export function projectExistingAgentDatabaseTargets(
 ): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
   return targets.flatMap((target) => {
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      return [];
+    }
     const sqlitePath = resolveTargetSqlitePath(target, env);
     if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       return [];

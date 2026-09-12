@@ -640,6 +640,8 @@ public struct AgentParams: Codable, Sendable {
 
 public struct AgentSummary: Codable, Sendable {
     public let id: String
+    public let status: String?
+    public let admissionrefusal: [String: AnyCodable]?
     public let kind: AgentKind?
     public let createdvia: AnyCodable?
     public let creatoragentid: AnyCodable?
@@ -657,6 +659,8 @@ public struct AgentSummary: Codable, Sendable {
 
     public init(
         id: String,
+        status: String? = nil,
+        admissionrefusal: [String: AnyCodable]? = nil,
         kind: AgentKind? = nil,
         createdvia: AnyCodable? = nil,
         creatoragentid: AnyCodable? = nil,
@@ -673,6 +677,8 @@ public struct AgentSummary: Codable, Sendable {
         defaultpermissionmode: SessionPermissionMode? = nil)
     {
         self.id = id
+        self.status = status
+        self.admissionrefusal = admissionrefusal
         self.kind = kind
         self.createdvia = createdvia
         self.creatoragentid = creatoragentid
@@ -691,6 +697,8 @@ public struct AgentSummary: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case status
+        case admissionrefusal = "admissionRefusal"
         case kind
         case createdvia = "createdVia"
         case creatoragentid = "creatorAgentId"

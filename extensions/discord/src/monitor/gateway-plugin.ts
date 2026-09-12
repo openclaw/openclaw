@@ -14,9 +14,10 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type * as ws from "ws";
+import { assertDiscordEndpointGatewayUrl, getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import * as discordGateway from "../internal/gateway.js";
 import { WebSocket } from "../internal/ws-runtime.js";
-import { createDiscordDnsLookup } from "../network-config.js";
+import { createDiscordDnsLookup, createDiscordEndpointDnsLookup } from "../network-config.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
@@ -36,6 +37,11 @@ const discordDnsLookup = createDiscordDnsLookup();
 
 type DiscordGatewayWebSocketCtor = typeof ws.WebSocket;
 type DiscordGatewayWebSocketAgent = InstanceType<typeof HttpsAgent> | HttpAgent;
+type DiscordGatewayEndpoint = Readonly<{
+  gatewayBotUrl: string;
+  gatewayOrigin: string;
+  fetch: typeof fetch;
+}>;
 const registrationPromises = new WeakMap<discordGateway.GatewayPlugin, Promise<void>>();
 type DiscordGatewayClient = Parameters<discordGateway.GatewayPlugin["registerClient"]>[0];
 type GatewayPluginTestingOptions = {
@@ -198,6 +204,7 @@ function createGatewayPlugin(params: {
     autoInteractions: boolean;
   };
   gatewayInfoTimeoutMs: number;
+  endpoint?: DiscordGatewayEndpoint;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
   wsAgent?: DiscordGatewayWebSocketAgent;
@@ -228,6 +235,7 @@ function createGatewayPlugin(params: {
       if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
         const resolved = await fetchDiscordGatewayInfoWithTimeout({
           token: client.options.token,
+          ...(params.endpoint ? { gatewayBotUrl: params.endpoint.gatewayBotUrl } : {}),
           fetchImpl: params.fetchImpl,
           fetchInit: params.fetchInit,
           timeoutMs: params.gatewayInfoTimeoutMs,
@@ -236,9 +244,12 @@ function createGatewayPlugin(params: {
             info,
             usedFallback: false,
           }))
-          .catch((error: unknown) =>
-            resolveGatewayInfoWithFallback({ runtime: params.runtime, error }),
-          );
+          .catch((error: unknown) => {
+            if (params.endpoint) {
+              throw error;
+            }
+            return resolveGatewayInfoWithFallback({ runtime: params.runtime, error });
+          });
         this.gatewayInfo = resolved.info;
         this.gatewayInfoUsedFallback = resolved.usedFallback;
       }
@@ -258,6 +269,7 @@ function createGatewayPlugin(params: {
       if (!url) {
         throw new Error("Gateway URL is required");
       }
+      assertDiscordEndpointGatewayUrl(url, params.endpoint?.gatewayOrigin);
       const wsFlowId = randomUUID();
       // Avoid Node's undici-backed global WebSocket here. We have seen late
       // close-path crashes during Discord gateway teardown; the ws transport is
@@ -354,8 +366,18 @@ function createGatewayPlugin(params: {
 
 function createDiscordGatewayMetadataFetch(
   debugCaptureEnabled: boolean,
-  proxyUrl?: string,
+  transport?: { endpoint?: DiscordGatewayEndpoint; proxyUrl?: string },
 ): DiscordGatewayFetch {
+  const endpoint = transport?.endpoint;
+  if (endpoint) {
+    return (input, init) => {
+      const signal = init?.signal instanceof AbortSignal ? init.signal : undefined;
+      return endpoint.fetch(input, {
+        ...(init?.headers ? { headers: init.headers } : {}),
+        ...(signal ? { signal } : {}),
+      });
+    };
+  }
   return (input, init) =>
     fetchDiscordGatewayMetadataGuarded(input, init, {
       ...(debugCaptureEnabled
@@ -366,7 +388,7 @@ function createDiscordGatewayMetadataFetch(
               meta: { subsystem: "discord-gateway-metadata" },
             },
           }),
-      ...(proxyUrl ? { proxyUrl } : {}),
+      ...(transport?.proxyUrl ? { proxyUrl: transport.proxyUrl } : {}),
     });
 }
 
@@ -393,18 +415,37 @@ export function createDiscordGatewayPlugin(params: {
   const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
     env: process.env,
   });
-  let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
-  let wsAgent: DiscordGatewayWebSocketAgent = new HttpsAgent({
-    lookup: discordDnsLookup,
-  });
+  const endpointRuntime = getDiscordEndpointRuntime();
+  const endpoint = endpointRuntime
+    ? {
+        gatewayBotUrl: endpointRuntime.descriptor.gatewayBotUrl,
+        gatewayOrigin: endpointRuntime.descriptor.gatewayOrigin,
+        fetch: endpointRuntime.fetch,
+      }
+    : undefined;
+  const endpointGatewayUrl = endpoint ? new URL(endpoint.gatewayOrigin) : undefined;
+  let fetchImpl = createDiscordGatewayMetadataFetch(
+    debugProxySettings.enabled,
+    endpoint ? { endpoint } : undefined,
+  );
+  let wsAgent: DiscordGatewayWebSocketAgent | undefined =
+    endpointGatewayUrl?.protocol === "ws:"
+      ? undefined
+      : new HttpsAgent({
+          lookup: endpointGatewayUrl
+            ? createDiscordEndpointDnsLookup(endpointGatewayUrl.hostname)
+            : discordDnsLookup,
+        });
 
-  if (proxy) {
+  if (proxy && !endpoint) {
     try {
       validateDiscordProxyUrl(proxy);
       wsAgent =
         params.testing?.createProxyAgent?.(proxy) ??
         createNodeProxyAgent({ mode: "explicit", proxyUrl: proxy, protocol: "https" });
-      fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled, proxy);
+      fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled, {
+        proxyUrl: proxy,
+      });
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {
       params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
@@ -421,6 +462,7 @@ export function createDiscordGatewayPlugin(params: {
       autoInteractions: false,
     },
     gatewayInfoTimeoutMs,
+    ...(endpoint ? { endpoint } : {}),
     fetchImpl,
     runtime: params.runtime,
     testing: params.testing,

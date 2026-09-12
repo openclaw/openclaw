@@ -160,9 +160,9 @@ export function startManagedGatewayConfigReloader(
         activeGmailRestartAbortController = null;
       }
     },
-    assertRestartReady: () =>
+    assertRestartReady: (config) =>
       import("../state/openclaw-database-preflight.js").then(({ assertOpenClawDatabasesReady }) =>
-        assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),
+        assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart", config }),
       ),
     restartRecoveryAvailable,
   });
