@@ -4,6 +4,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import { withProviderCatalogExpiry } from "./provider-catalog-expiry.js";
 import {
   copyProviderCatalogOutcomes,
   copyProviderCatalogResultProjection,
@@ -171,15 +172,20 @@ export async function runProviderCatalog(params: {
   if (!hook) {
     return undefined;
   }
-  const result = await hook.run({
-    config: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
-    resolveProviderApiKey: params.resolveProviderApiKey,
-    resolveProviderAuth: params.resolveProviderAuth,
-  });
+  const result = await withProviderCatalogExpiry(
+    () =>
+      hook.run({
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
+        resolveProviderApiKey: params.resolveProviderApiKey,
+        resolveProviderAuth: params.resolveProviderAuth,
+      }),
+    (value) =>
+      Object.keys(normalizePluginDiscoveryResult({ provider: params.provider, result: value })),
+  );
   if (params.isActive?.() === false) {
     return undefined;
   }

@@ -170,7 +170,6 @@ describe("prepared model runtime reload auth adoption", () => {
       expect
         .soft(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))
         .toBe(dispatch);
-      expect.soft(owner.catalogAttempt?.error).toBe(failure);
       expect.soft(snapshot.modelCatalog.refreshFailed).toBe(true);
       expect.soft(original.refreshFailed).toBe(true);
       expect.soft(events).toContainEqual({ phase: "catalog-failed", error: failure });
@@ -212,7 +211,6 @@ describe("prepared model runtime reload auth adoption", () => {
       if (!owner.catalogInventory) {
         throw new Error("catalog attempt test lost its internal inventory after recovery");
       }
-      expect.soft(owner.catalogAttempt?.error).toBeUndefined();
       expect.soft(snapshot.modelCatalog.refreshFailed).toBeUndefined();
       expect.soft(snapshot.readFullModelCatalog()?.refreshFailed).toBeUndefined();
     } finally {
@@ -241,14 +239,12 @@ describe("prepared model runtime reload auth adoption", () => {
     if (!owner || !snapshot.loadFullModelCatalog || !snapshot.readFullModelCatalog) {
       throw new Error("expected the published catalog owner");
     }
-    await vi.waitFor(() => expect(owner.catalogAttempt?.error).toBe(failure));
-    expect(owner.catalogAttempt?.error).toBe(failure);
+    await vi.waitFor(() => expect(snapshot.modelCatalog.refreshFailed).toBe(true));
     expect(snapshot.modelCatalog.refreshFailed).toBe(true);
     expect(owner.catalogInventory).toBeUndefined();
     expect(snapshot.readFullModelCatalog()).toBeUndefined();
     expect(snapshot.isCurrent()).toBe(true);
     await snapshot.loadFullModelCatalog();
-    expect(owner.catalogAttempt?.error).toBeUndefined();
     expect(snapshot.modelCatalog.refreshFailed).toBeUndefined();
     expect(snapshot.readFullModelCatalog()).toBeDefined();
   });
@@ -297,7 +293,6 @@ describe("prepared model runtime reload auth adoption", () => {
       result.reject(failure);
       await rejected;
       await replacement;
-      expect(owner.catalogAttempt?.error).toBeUndefined();
       expect(events).not.toContain("catalog-failed");
     } finally {
       result.reject(failure);

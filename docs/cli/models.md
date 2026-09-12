@@ -142,6 +142,11 @@ agent on that Gateway. Provider filtering, model visibility and availability use
 the Gateway's captured config and auth facts. The command does not resolve local
 model-provider secrets for that request.
 
+When a provider's saved inventory expires, catalog reads return saved rows while
+the Gateway refreshes that provider in the background. A later read shows newly
+published models. Failed refreshes preserve saved rows and show a warning; use
+`--refresh` to retry.
+
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
 are reported directly; they do not switch the command to a different local list.
