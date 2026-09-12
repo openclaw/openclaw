@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
@@ -8,6 +12,7 @@ import {
   assertCanonicalAgentPersistenceVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
 
 export type AgentSchemaInspectionInput = {
   pathname: string;
@@ -32,9 +37,14 @@ export function inspectAgentDatabaseSchema(
   try {
     if (version > input.supportedVersion) {
       try {
-        const row = database
-          .prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-          .get();
+        const row = executeSqliteQueryTakeFirstSync(
+          database,
+          getNodeSqliteKysely<DB>(database)
+            .selectFrom("schema_meta")
+            .select("app_version")
+            .where("meta_key", "=", "primary")
+            .limit(1),
+        );
         return {
           version,
           ...(typeof row?.app_version === "string" && row.app_version.length > 0

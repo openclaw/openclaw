@@ -39,7 +39,9 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     try {
       try {
         database = openNodeSqliteDatabase(canonicalPath, { readOnly: true });
+        // sqlite-allow-raw -- SQLite connection policy and deferred read admission, not a row query.
         database.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+        // sqlite-allow-raw -- Stepping this SQLite pragma pins the schema read snapshot.
         database.prepare("PRAGMA schema_version;").get();
       } catch (error) {
         // Only changed WAL state or private rollback recovery can make a
@@ -63,6 +65,7 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
         throw error;
       }
       const value = inspect(database);
+      // sqlite-allow-raw -- End the read-only snapshot without committing any source changes.
       database.exec("ROLLBACK;");
       return { value };
     } finally {
