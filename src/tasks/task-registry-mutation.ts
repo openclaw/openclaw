@@ -193,7 +193,12 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   ensureLinkedTaskFlowRegistryReady(current);
   ensureLinkedTaskFlowRegistryReady(next);
   const equivalent = isEquivalentTaskRecord(current, next);
-  if (!equivalent) {
+  // Only terminal replays are restore no-ops. Live task updates still publish
+  // an equivalent projection after a registry reload so observers can refresh
+  // their transient view of in-flight work.
+  const skipEquivalentWrite =
+    equivalent && isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
+  if (!skipEquivalentWrite) {
     if (becomesTerminal) {
       flushTaskActivity(taskId);
     }
@@ -223,7 +228,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   }
   // Equivalent task replay still reconciles the linked flow independently so a
   // stale mirrored projection can recover without a redundant task write.
-  const authoritative = equivalent ? current : next;
+  const authoritative = skipEquivalentWrite ? current : next;
   syncFlowFromTaskAfterTaskMutation(authoritative, "update");
   try {
     syncManagedFlowCancellationFromTask(authoritative);
@@ -234,7 +239,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
       error,
     });
   }
-  if (!equivalent) {
+  if (!skipEquivalentWrite) {
     emitTaskRegistryObserverEvent(() => ({
       kind: "upserted",
       task: cloneTaskRecordForObserver(next),

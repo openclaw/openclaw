@@ -15,7 +15,9 @@ export function cloneTaskRecord(record: TaskRecord): TaskRecord {
 
 /** Restored or replayed projections must not persist when they already match durable state. */
 export function isEquivalentTaskRecord(current: TaskRecord, next: TaskRecord): boolean {
-  return isDeepStrictEqual(current, next);
+  const canonical = (record: TaskRecord) =>
+    Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  return isDeepStrictEqual(canonical(current), canonical(next));
 }
 
 /** Observer notifications need detached metadata, never runtime-owned detail. */
