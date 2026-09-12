@@ -207,6 +207,63 @@ describe("cached file integrity", () => {
 });
 
 describe("downloadVerifiedFile", () => {
+  it.each([
+    { label: "shared clock ticks", times: [1000, 1000, 1010], rates: [0, 0, 300_000_000] },
+    {
+      label: "shared clock ticks after an established sample",
+      times: [1010, 1010, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+    },
+    {
+      label: "distinct clock ticks",
+      times: [1010, 1020, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+    },
+  ])("counts every persisted byte in the rate across $label", async ({ times, rates }) => {
+    const { destination } = await createDestination();
+    const chunks = [1, 2, 3].map((value) => Buffer.alloc(1_000_000, value));
+    const payload = Buffer.concat(chunks);
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(chunk);
+            }
+            controller.close();
+          },
+        }),
+      ),
+      release,
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    let written = 0;
+    injectFileHandle((handle) => {
+      const writeFile = handle.writeFile.bind(handle);
+      handle.writeFile = async (...args) => {
+        await writeFile(...args);
+        clock.mockReturnValue(times[written++]!);
+      };
+    });
+    const onProgress = vi.fn();
+
+    await downloadVerifiedFile({
+      url: "https://downloads.example/model.gguf",
+      destination,
+      expectedSize: payload.byteLength,
+      expectedSha256: createHash("sha256").update(payload).digest("hex"),
+      onProgress,
+    });
+
+    expect(onProgress.mock.calls.map(([progress]) => progress.bytesPerSecond)).toEqual(rates);
+    expect(onProgress.mock.calls.map(([progress]) => progress.downloadedSize)).toEqual([
+      1_000_000, 2_000_000, 3_000_000,
+    ]);
+    expect(await fs.readFile(destination)).toEqual(payload);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("persists complete chunks before reporting progress under positive short writes", async () => {
     const payload = Buffer.from("short writes must not truncate verified downloads");
     const { destination, root } = await createDestination();
