@@ -11,6 +11,7 @@ import {
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
   withForegroundGitMaintenance,
+  type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
@@ -83,17 +84,9 @@ export function gitEnvironment(
 export async function runGit(
   cwd: string,
   args: string[],
-  options: {
-    env?: NodeJS.ProcessEnv;
-    input?: string | Uint8Array;
-    maxOutputBytes?: number;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    baseEnv?: NodeJS.ProcessEnv;
+  options: GitCommandOptions & {
     /** Recheck caller authority at execution, after any shared-ref queue wait. */
     beforeRun?: () => void;
-    killProcessTree?: boolean;
-    terminateOnOutputLimit?: boolean;
   } = {},
 ): Promise<GitResult> {
   if (hasGitWorkerContext()) {

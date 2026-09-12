@@ -6,7 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
 import type { SpawnResult } from "../process/exec-result.js";
-import { runCommandBuffersWithTimeout } from "../process/exec-runner.js";
+import { runCommandBuffersWithTimeout, type BufferSpawnResult } from "../process/exec-runner.js";
 import {
   runCommandWithTimeout,
   type BufferedCommandResult,
@@ -156,20 +156,23 @@ export function withForegroundGitMaintenance(argv: string[]): string[] {
     : argv;
 }
 
+export type GitCommandOptions = Pick<
+  CommandOptions,
+  | "baseEnv"
+  | "env"
+  | "input"
+  | "timeoutMs"
+  | "signal"
+  | "killProcessTree"
+  | "maxOutputBytes"
+  | "terminateOnOutputLimit"
+>;
+export type GitCommandBytesResult = BufferSpawnResult & { timeoutMs: number };
+
 export async function executeGitCommand(
   cwd: string,
   args: string[],
-  options: Pick<
-    CommandOptions,
-    | "baseEnv"
-    | "env"
-    | "input"
-    | "timeoutMs"
-    | "signal"
-    | "killProcessTree"
-    | "maxOutputBytes"
-    | "terminateOnOutputLimit"
-  > = {},
+  options: GitCommandOptions = {},
 ): Promise<GitCommandResult> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = ["git", "-C", cwd, ...args];
@@ -184,8 +187,8 @@ export async function executeGitCommand(
 export async function executeGitCommandBytes(
   cwd: string,
   args: string[],
-  options: Parameters<typeof executeGitCommand>[2] = {},
-) {
+  options: GitCommandOptions = {},
+): Promise<GitCommandBytesResult> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = ["git", "-C", cwd, ...args];
   const result = await runCommandBuffersWithTimeout(

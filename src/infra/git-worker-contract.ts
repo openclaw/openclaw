@@ -2,8 +2,8 @@ import type {
   GitWorktreeEffects,
   GitWorktreeOperations,
 } from "../agents/worktrees/git-worktree-operations.js";
-import type { runGit, runGitBytes } from "../agents/worktrees/git.js";
 import type { BufferedCommandOptions, BufferedCommandResult } from "../process/exec.js";
+import type { GitCommandBytesResult, GitCommandOptions } from "./git-exec.js";
 import type { GitReadOperations } from "./git-read-operations.js";
 
 export type GitWorkerOperations = GitReadOperations & GitWorktreeOperations;
@@ -18,12 +18,12 @@ export type GitWorkerEffects = GitWorktreeEffects & {
 export type GitWorkerEffect = {
   [K in keyof GitWorkerEffects]: { type: K; input: GitWorkerEffects[K]["input"] };
 }[keyof GitWorkerEffects];
-type GitWorkerTextOptions = Omit<NonNullable<Parameters<typeof runGit>[2]>, "signal" | "beforeRun">;
+type GitWorkerTextOptions = Omit<GitCommandOptions, "signal">;
 type GitWorkerBufferOptions = Omit<BufferedCommandOptions, "signal">;
 export type GitWorkerGitCommands = {
   "git.text": {
     input: { cwd: string; args: string[]; options: GitWorkerTextOptions };
-    output: Awaited<ReturnType<typeof runGitBytes>>;
+    output: GitCommandBytesResult;
   };
   "git.buffer": {
     input: { cwd: string; args: string[]; options: GitWorkerBufferOptions };
