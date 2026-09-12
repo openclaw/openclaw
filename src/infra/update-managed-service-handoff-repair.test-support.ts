@@ -132,6 +132,12 @@ export async function managedRepairUpdaterScript(params: {
   await fs.symlink(path.resolve("dist"), path.join(candidate, "dist"), "dir");
   const repairModule = new URL("../cli/update-cli/update-command-repair.ts", import.meta.url).href;
   const admissionModule = new URL("../cli/update-cli/update-command-run.ts", import.meta.url).href;
+  const executorModule = new URL("../cli/update-cli/update-command-executor.ts", import.meta.url)
+    .href;
+  const nativeModule = new URL(
+    "../cli/update-cli/update-command-service-command.ts",
+    import.meta.url,
+  ).href;
   const sentinelModule = new URL("./update-control-plane-sentinel.ts", import.meta.url).href;
   const installRoot = params.phase === "verifying" ? candidate : params.root;
   return `void (async () => {
@@ -142,6 +148,8 @@ export async function managedRepairUpdaterScript(params: {
     process.stderr.write("repair-boundary: loading admission\\n");
     const { runUpdateCommandRepair } = await import(${JSON.stringify(repairModule)});
     const { admitUpdateCommandRun } = await import(${JSON.stringify(admissionModule)});
+    const { withUpdateCommandExecutor } = await import(${JSON.stringify(executorModule)});
+    const { isUpdatedInstallGatewayExecutorSupported } = await import(${JSON.stringify(nativeModule)});
     const { UPDATE_RUN_ID_ENV } = await import(${JSON.stringify(sentinelModule)});
     if (process.env[UPDATE_RUN_ID_ENV] !== ${JSON.stringify(params.runId)}) {
       throw new Error("The helper did not transfer the admitted update run.");
@@ -151,7 +159,9 @@ export async function managedRepairUpdaterScript(params: {
     if (run.runId !== ${JSON.stringify(params.runId)}) {
       throw new Error("Repair admission did not preserve the chat update run.");
     }
-    const repair = await runUpdateCommandRepair({
+    const repair = await withUpdateCommandExecutor(run.runId, async executor => {
+      run.executorFence = await executor.enter(${JSON.stringify(params.root)});
+      return await runUpdateCommandRepair({
       root: ${JSON.stringify(installRoot)},
       candidateRoot: ${JSON.stringify(candidate)},
       env: run.env,
@@ -159,11 +169,19 @@ export async function managedRepairUpdaterScript(params: {
       phase: ${JSON.stringify(params.phase)},
       onEvent: ({ type }) => process.stderr.write("repair-boundary: " + type + "\\n"),
       result: { status: "error", mode: "npm", reason: "candidate-validation-failed", steps: [], durationMs: 0 },
-      validate: async () => {
+      validate: async signal => {
+        // This real target-native child requires resumed parent custody and a
+        // released staged root, both before inference and after the repair exits.
+        const supported = await isUpdatedInstallGatewayExecutorSupported({
+          root: ${JSON.stringify(candidate)}, env: run.env, executor: run.executorFence,
+          nodeRunner: process.execPath, signal,
+        });
+        if (!supported) throw new Error("Repair oracle could not reacquire target-native execution.");
         const ok = fs.existsSync(${JSON.stringify(path.join(candidate, "repair-second-exec.txt"))}) &&
           fs.existsSync(${JSON.stringify(path.join(candidate, "repair-second-write.txt"))});
         return { ok, score: ok ? 1 : 0, summary: ok ? "Both repair effects verified." : "Repair effects pending." };
       },
+    });
     });
     process.stdout.write(JSON.stringify({ root: ${JSON.stringify(params.root)}, mode: "npm",
       status: repair.status === "repaired" ? "skipped" : "error", reason: repair.reason || "already-current", steps: [] }));

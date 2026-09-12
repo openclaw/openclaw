@@ -5,11 +5,16 @@ import { describe, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { tryListenOnPort } from "../../infra/ports-probe.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedUpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   repairIsolationConfig,
   repairIsolationProvider,
@@ -71,9 +76,16 @@ describe("staged CLI repair isolation", () => {
       revokeRequester: false,
       revokeAfterValidation: true,
     },
+    {
+      name: "blocks the final repair tool effect after executor revocation",
+      configChange: false,
+      revokeRequester: false,
+      revokeAfterValidation: false,
+      revokeExecutor: true,
+    },
   ])(
     "$name",
-    async ({ configChange, revokeRequester, revokeAfterValidation }) => {
+    async ({ configChange, revokeRequester, revokeAfterValidation, revokeExecutor = false }) => {
       await withOpenClawTestState(
         {
           prefix: "repair-isolation-",
@@ -85,8 +97,27 @@ describe("staged CLI repair isolation", () => {
           },
         },
         async (state) => {
+          const originalRoot = state.path("serving-package");
+          const control = state.path("control");
+          await fs.mkdir(originalRoot);
+          await fs.mkdir(control, { mode: 0o700 });
+          const executorDatabasePath = path.join(control, "managed-update-handoffs.sqlite");
+          const executorIdentity = createManagedHandoffLeaseDatabase(executorDatabasePath)(
+            true,
+            () => captureManagedUpdateLeaseDatabaseIdentity(executorDatabasePath),
+          );
           let requesterRevoked = false;
           const provider = repairIsolationProvider(async () => {
+            if (revokeExecutor) {
+              const leases = openNodeSqliteDatabase(executorDatabasePath);
+              try {
+                leases
+                  .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+                  .run("replacement-executor", originalRoot);
+              } finally {
+                leases.close();
+              }
+            }
             if (revokeRequester) {
               const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
               config.commands.ownerAllowFrom = [];
@@ -151,8 +182,8 @@ describe("staged CLI repair isolation", () => {
                 workspaceDir: string;
               }> = [];
               let proof: RepairProof | undefined;
-              const result = await runUpdateCommandRepair({
-                root: state.path("serving-package"),
+              const repairParams: Parameters<typeof runUpdateCommandRepair>[0] = {
+                root: originalRoot,
                 candidateRoot: candidate,
                 env: state.env,
                 run: updateRun,
@@ -166,8 +197,9 @@ describe("staged CLI repair isolation", () => {
                 },
                 validate: async (_signal, assertCurrent, rehearsal) => {
                   assertCurrent();
-                  // The first oracle follows worker startup and requester registry
-                  // preparation. Neither may migrate or touch serving artifacts.
+                  updateRun.executorFence?.assertCurrent();
+                  // Initial and post-turn checks must preserve the serving files;
+                  // the updater owns its executor again before either oracle.
                   for (const { file, identity } of before) {
                     expect(await fileIdentity(file)).toEqual(identity);
                   }
@@ -187,11 +219,17 @@ describe("staged CLI repair isolation", () => {
                       return undefined;
                     });
                   if (!raw) {
-                    return { ok: false, score: 0, summary: "Candidate repair marker is absent." };
+                    return {
+                      ok: false,
+                      score: 0,
+                      summary: "Candidate repair marker is absent.",
+                    };
                   }
                   proof = JSON.parse(raw) as RepairProof;
                   if (configChange) {
-                    expect(proof.doctor, JSON.stringify(proof.doctor)).toMatchObject({ status: 0 });
+                    expect(proof.doctor, JSON.stringify(proof.doctor)).toMatchObject({
+                      status: 0,
+                    });
                     const copiedConfig: unknown = JSON.parse(
                       await fs.readFile(proof.configPath, "utf8"),
                     );
@@ -219,7 +257,33 @@ describe("staged CLI repair isolation", () => {
                   }
                   return { ok: true, score: 1, summary: "Candidate repair marker verified." };
                 },
-              });
+              };
+              const repair = withUpdateCommandExecutor(
+                run.runId,
+                async (executor) => {
+                  updateRun.executorFence = await executor.enter(originalRoot);
+                  return await runUpdateCommandRepair(repairParams);
+                },
+                { existingAuthority: { ...executorIdentity, installKey: originalRoot } },
+              );
+
+              if (revokeExecutor) {
+                await expect(repair).rejects.toThrow(/ownership|release|executor/i);
+                expect(provider.errors).toEqual([]);
+                expect(
+                  proof,
+                  "A revoked executor must not execute the requested tool",
+                ).toBeUndefined();
+                await expect(
+                  fs.access(path.join(candidate, "repair-proof.json")),
+                ).rejects.toMatchObject({ code: "ENOENT" });
+                for (const { file, identity } of before) {
+                  expect(await fileIdentity(file)).toEqual(identity);
+                }
+                expect(getUpdateRun(run.runId, { env: ledgerEnv })?.status).toBe("running");
+                return;
+              }
+              const result = await repair;
 
               expect(provider.errors).toEqual([]);
               if (revokeRequester) {
@@ -264,11 +328,18 @@ describe("staged CLI repair isolation", () => {
                   ? {
                       status: "aborted",
                       reason: "requester-revoked",
-                      attempts: [],
+                      attempts: [
+                        {
+                          turn: 1,
+                          toolCalls: 1,
+                          validation: { ok: false, stopReason: "requester-revoked" },
+                        },
+                      ],
                       finalValidation: {
                         ok: false,
                         score: 0,
-                        summary: "Candidate repair marker is absent.",
+                        summary: "requester-revoked",
+                        stopReason: "requester-revoked",
                       },
                     }
                   : {
@@ -281,7 +352,7 @@ describe("staged CLI repair isolation", () => {
                 expect.arrayContaining([
                   expect.objectContaining({
                     step: "repairing",
-                    detail: expect.stringContaining("candidate rehearsal"),
+                    detail: expect.stringContaining("update preparation"),
                   }),
                 ]),
               );

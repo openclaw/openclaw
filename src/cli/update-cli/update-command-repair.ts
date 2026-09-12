@@ -61,7 +61,7 @@ export async function runUpdateCommandRepair(params: {
   let completedTurns = 0;
   let activeTurn = 0;
   let lastValidation: UpdateRepairValidation | undefined;
-  const targetClass = params.phase === "validating" ? "candidate rehearsal" : "live";
+  const targetClass = params.phase === "validating" ? "update preparation" : "installed update";
   if (runId) {
     recordUpdateRunPhase(
       runId,
@@ -91,6 +91,7 @@ export async function runUpdateCommandRepair(params: {
       }
       return await prepareUnattendedUpdateRepair({
         runId,
+        executorFence: params.run?.executorFence,
         requester: requesterAuthority?.requester,
         nodeRunner: params.nodeRunner,
         admissionEnv: options.env,

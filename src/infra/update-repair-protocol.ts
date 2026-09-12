@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { updateFailureSchema, type TriageUpdateFailure } from "../commands/triage-update.js";
+import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export const updateRepairBudgetSchema = z.object({
   maxTurns: z.number().int().nonnegative().default(3),
@@ -37,8 +38,30 @@ const event = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("stopped"), status, reason: text.optional() }),
 ]);
+const repairTurnResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("completed"),
+    model: text,
+    provider: text,
+    toolCalls: z.number().int().nonnegative(),
+    summary: text,
+    timedOut: z.boolean(),
+  }),
+  z.object({ status: z.enum(["unavailable", "aborted"]), reason: text }),
+]);
+const repairTurnSchema = z.object({
+  prompt: z.string().max(8192),
+  timeoutMs: z.number().int().positive().max(2_147_483_647),
+  maxToolCalls: z.number().int().positive(),
+});
 export const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("ready"), candidateRehearsal: z.literal(true).optional() }),
+  z.object({
+    type: z.literal("ready"),
+    candidateRehearsal: z.literal(true).optional(),
+    repairTurns: z.literal(true).optional(),
+    executorDelegation: z.literal("pid-start-v1").optional(),
+  }),
+  z.object({ type: z.literal("turn-result"), result: repairTurnResultSchema }),
   z.object({ type: z.literal("validate"), id: turn }),
   z.object({ type: z.literal("cancel-validation"), id: turn }),
   z.object({ type: z.literal("event"), event }),
@@ -56,6 +79,8 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("start"),
     runId: text.optional(),
+    executor: z.unknown().optional(),
+    turn: repairTurnSchema.optional(),
     requester: z
       .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
       .optional(),
@@ -95,6 +120,7 @@ export type UpdateRepairParams = {
   target: UpdateRepairTarget;
   /** Original installation environment for the admitting ledger and requester policy. */
   admissionEnv?: NodeJS.ProcessEnv;
+  executorFence?: UpdateRecoveryFence;
   nodeRunner?: string;
   runId?: string;
   requester?: { channel?: string; accountId?: string; senderId?: string };
@@ -112,3 +138,13 @@ export type UpdateRepairParams = {
   /** The admitting update still owns this repair slot. */
   isCurrent?: () => boolean;
 };
+
+export type UpdateRepairTurnResult = z.infer<typeof repairTurnResultSchema>;
+export type UpdateRepairTurnParams = z.infer<typeof repairTurnSchema> & {
+  signal: AbortSignal;
+  isCurrent?: () => boolean;
+  onRoute: (route: { model: string; provider: string }) => void;
+};
+export type UpdateRepairTurnRunner = (
+  params: UpdateRepairTurnParams,
+) => Promise<UpdateRepairTurnResult>;

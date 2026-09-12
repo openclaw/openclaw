@@ -102,17 +102,9 @@ export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutM
     import("../config/io.js"),
     import("./update-repair-inference.js"),
   ]);
-  try {
-    signal.throwIfAborted();
-    const config = getRuntimeConfig();
-    return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
-  } catch {
-    return {
-      ok: false as const,
-      reason:
-        "The target configuration could not provide a usable inference route. Check model setup.",
-    };
-  }
+  signal.throwIfAborted();
+  const config = getRuntimeConfig();
+  return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
 }
 
 // Operator-owned updates permit prompt-free exec, never past an explicit deny.
