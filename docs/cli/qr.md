@@ -78,6 +78,14 @@ same manual cleanup; Doctor prints the relevant guidance.
 
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
 
+If a Tailscale setup code is generated but the mobile app cannot connect, run
+the read-only [Tailscale pairing preflight](/gateway/tailscale#diagnose-mobile-pairing-through-tailscale)
+before issuing another code:
+
+```bash
+openclaw doctor --lint --only core/doctor/tailscale-pairing --json
+```
+
 ## Auth resolution (no `--remote`)
 
 When no CLI auth override is passed, local gateway auth SecretRefs resolve as follows:

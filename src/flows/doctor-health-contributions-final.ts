@@ -423,6 +423,23 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runDevicePairingHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:tailscale-pairing",
+      label: "Tailscale pairing",
+      healthChecks: {
+        description: "Tailscale publication and Gateway pairing readiness are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectTailscalePairingHealthFindings } =
+            await import("../commands/doctor-tailscale-pairing.js");
+          return collectTailscalePairingHealthFindings({
+            cfg: ctx.cfg,
+            env: ctx.env,
+          });
+        },
+      },
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
       id: "doctor:gateway-daemon",
       label: "Gateway daemon",
       healthCheckIds: ["core/doctor/gateway-daemon"],

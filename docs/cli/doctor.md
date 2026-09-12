@@ -60,6 +60,7 @@ Each entry points at the page that now holds the content.
 - <a id="options" />[Options](/cli/doctor/running#options)
 - <a id="lint-mode" />[Lint mode](/cli/doctor/lint#lint-mode)
 - <a id="structured-health-checks" />[Structured health checks](/cli/doctor/health-contract#structured-health-checks)
+- <a id="tailscale-pairing-preflight" />[Tailscale pairing preflight](/cli/doctor/lint#tailscale-pairing-preflight)
 - <a id="check-selection" />[Check selection](/cli/doctor/lint#check-selection)
 - <a id="post-upgrade-mode" />[Post-upgrade mode](/cli/doctor/lint#post-upgrade-mode)
 - <a id="legacy-state-migration" />[Legacy state migration](/cli/doctor/state-migrations#legacy-state-migration)

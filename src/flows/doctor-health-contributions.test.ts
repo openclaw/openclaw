@@ -183,6 +183,7 @@ const mocks = vi.hoisted(() => ({
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
+  collectTailscalePairingHealthFindings: vi.fn(async () => []),
   collectLegacyCronStoreHealthFindings: vi.fn(async (): Promise<readonly HealthFinding[]> => []),
   collectLegacyWhatsAppCrontabHealthWarning: vi.fn(
     async (): Promise<string | undefined> => undefined,
@@ -595,6 +596,10 @@ vi.mock("../commands/doctor-device-pairing.js", () => ({
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../commands/doctor-tailscale-pairing.js", () => ({
+  collectTailscalePairingHealthFindings: mocks.collectTailscalePairingHealthFindings,
+}));
+
 vi.mock("../commands/doctor/cron/index.js", () => ({
   collectLegacyCronStoreHealthFindings: mocks.collectLegacyCronStoreHealthFindings,
   collectLegacyWhatsAppCrontabHealthWarning: mocks.collectLegacyWhatsAppCrontabHealthWarning,
@@ -887,6 +892,7 @@ describe("doctor health contributions", () => {
     mocks.collectWhatsappResponsivenessHealthFindings.mockReset().mockReturnValue([]);
     mocks.noteWhatsappResponsivenessHealth.mockReset().mockResolvedValue(undefined);
     mocks.collectDevicePairingHealthFindings.mockReset().mockResolvedValue([]);
+    mocks.collectTailscalePairingHealthFindings.mockReset().mockResolvedValue([]);
     mocks.collectLegacyCronStoreHealthFindings.mockReset().mockResolvedValue([]);
     mocks.collectLegacyWhatsAppCrontabHealthWarning.mockReset().mockResolvedValue(undefined);
     mocks.maybeRepairLegacyCronStore.mockReset().mockResolvedValue(undefined);
@@ -3486,6 +3492,50 @@ describe("doctor health contributions", () => {
       healthOk: false,
       env: ctx.env,
     });
+  });
+
+  it("runs Tailscale pairing preflight only when explicitly selected", async () => {
+    const contribution = requireDoctorContribution("doctor:tailscale-pairing");
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const tailscalePairingCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/tailscale-pairing",
+    );
+    expect(tailscalePairingCheck).toMatchObject({
+      defaultEnabled: false,
+      repair: undefined,
+    });
+    expect(tailscalePairingCheck).toBeDefined();
+
+    const ctx = createDoctorLintFixture({ gateway: { mode: "local" } });
+    const checks = [tailscalePairingCheck!];
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectTailscalePairingHealthFindings).not.toHaveBeenCalled();
+
+    await contribution.run(createDoctorHealthFlowContext());
+    expect(mocks.collectTailscalePairingHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/tailscale-pairing"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+    expect(mocks.collectTailscalePairingHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      env: ctx.env,
+    });
+
+    mocks.collectTailscalePairingHealthFindings.mockClear();
+    await expect(
+      runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+    expect(mocks.collectTailscalePairingHealthFindings).toHaveBeenCalledOnce();
   });
 
   it("keeps legacy cron store opt-in for default lint selection", async () => {
