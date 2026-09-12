@@ -1,6 +1,8 @@
 import type { IncomingMessage } from "node:http";
+import { createRequire } from "node:module";
+import path from "node:path";
 import type { Duplex } from "node:stream";
-import { WebSocket, WebSocketServer, type RawData } from "ws";
+import type { RawData } from "ws";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -16,6 +18,13 @@ import {
 } from "./rfb-preauth.js";
 import { createRfbClientMessageFilter } from "./rfb-view-only-filter.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
+
+// Desktop flow control needs the installed ws receiver; Bun's server adapter omits pause/resume.
+const require = createRequire(import.meta.url);
+const { WebSocket, WebSocketServer }: typeof import("ws") = require(
+  path.join(path.dirname(require.resolve("ws/package.json")), "index.js"),
+);
+type WebSocket = import("ws").WebSocket;
 
 export const DESKTOP_OBSERVE_PATH = "/desktop/observe";
 const TOKEN_TTL_MS = 60_000;

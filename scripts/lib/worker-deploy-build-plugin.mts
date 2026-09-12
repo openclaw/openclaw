@@ -62,9 +62,12 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
   );
   const websocketRuntimePaths = new Set(
-    ["packages/gateway-client/src/websocket.ts", "src/gateway/server-runtime-state.ts"].map(
-      (source) => fs.realpathSync(path.resolve(source)),
-    ),
+    [
+      "packages/gateway-client/src/websocket.ts",
+      "src/gateway/desktop/node-stream-broker.ts",
+      "src/gateway/desktop/observe-bridge.ts",
+      "src/gateway/server-runtime-state.ts",
+    ].map((source) => fs.realpathSync(path.resolve(source))),
   );
   const transcriptionWebsocketPath = fs.realpathSync(
     path.resolve("src/realtime-transcription/websocket-session.ts"),
