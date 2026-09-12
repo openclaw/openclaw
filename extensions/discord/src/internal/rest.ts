@@ -7,6 +7,7 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { discordConversationReadAuthority } from "../conversation-read-authority.js";
 import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { serializeRequestBody } from "./rest-body.js";
 import {
@@ -194,7 +195,11 @@ export class RequestClient {
         await this.executeRequest(
           request.method,
           request.path,
-          { data: request.data, query: request.query },
+          {
+            data: request.data,
+            query: request.query,
+            assertConversationReadAuthority: request.assertConversationReadAuthority,
+          },
           request.routeKey,
         ),
     );
@@ -226,21 +231,31 @@ export class RequestClient {
     params: { data?: RequestData; query?: QueuedRequest["query"] },
   ): Promise<unknown> {
     const routeKey = createRouteKey(method, path);
+    // A shared scheduler may drain this request from another action's async
+    // context, including on 429 retries. Capture the originating owner here.
+    const request = {
+      ...params,
+      assertConversationReadAuthority: discordConversationReadAuthority.getStore(),
+    };
     if (!this.options.queueRequests) {
-      return await this.executeRequest(method, path, params, routeKey);
+      return await this.executeRequest(method, path, request, routeKey);
     }
     return await this.scheduler.enqueue({
       method,
       path,
       priority: getRequestPriority(method, path),
-      ...params,
+      ...request,
     });
   }
 
   protected async executeRequest(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: {
+      data?: RequestData;
+      query?: QueuedRequest["query"];
+      assertConversationReadAuthority?: () => void;
+    },
     routeKey = createRouteKey(method, path),
   ): Promise<unknown> {
     const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
@@ -259,12 +274,14 @@ export class RequestClient {
       : controller.signal;
     this.requestControllers.add(controller);
     try {
-      const response = await (this.customFetch ?? fetch)(url, {
-        method,
-        headers,
-        body,
-        signal,
-      });
+      // No async work may separate the live-owner check from this HTTP attempt.
+      params.assertConversationReadAuthority?.();
+      // A shared scheduler may execute under another request's async context.
+      // Restore this queued request's captured owner for transport preflight too.
+      const response = await discordConversationReadAuthority.run(
+        params.assertConversationReadAuthority,
+        () => (this.customFetch ?? fetch)(url, { method, headers, body, signal }),
+      );
       const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);

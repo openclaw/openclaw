@@ -742,6 +742,8 @@ export type ChannelMessageActionContext = {
    * Plugins must use it only for conversation-read visibility policy.
    */
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /** Host-owned read grant: check synchronously before every provider request, including retries. */
+  assertConversationReadAuthority?: () => void;
   sessionKey?: string | null;
   sessionId?: string | null;
   inboundEventKind?: InboundEventKind;
@@ -768,6 +770,22 @@ export type ChannelMessageActionContext = {
   assertDirectAdapterHandoff?: () => void;
   /** Ephemeral-authority sends must not enter replayable recovery. */
   skipQueue?: boolean;
+};
+
+/** Versioned context for host-authorized provider reads; authority is never optional. */
+export type ChannelMessageActionContextV2 = Omit<
+  ChannelMessageActionContext,
+  "assertConversationReadAuthority"
+> & {
+  assertConversationReadAuthority: () => void;
+  /** Resolve host-owned targets within the provider authority scope before handling. */
+  prepareConversationReadTarget: () => Promise<void>;
+};
+
+/** Opt-in read entrypoint kept separate from the source-compatible legacy action handler. */
+export type ChannelMessageReadAuthorityAdapterV2 = {
+  version: 2;
+  handleAction: (ctx: ChannelMessageActionContextV2) => Promise<AgentToolResult<unknown>>;
 };
 
 export type ChannelToolSend = {
@@ -800,8 +818,16 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
-  /** Delegate conversation-read authorization to this adapter for bundled registrations only. */
+  /**
+   * Delegate conversation-read authorization to this adapter for bundled or
+   * loader-verified official registrations. Official external eligibility is
+   * limited to read-only actions; read-capable mutations remain exact-current.
+   * Other installs remain exact-current.
+   * The adapter must enforce provider account, sender, and destination policy.
+   */
   providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
+  /** Versioned provider read entrypoint requiring host authority on every invocation. */
+  conversationReadAuthority?: ChannelMessageReadAuthorityAdapterV2;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {

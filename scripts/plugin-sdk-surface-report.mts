@@ -370,7 +370,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical credential-value functions through the narrow secret-input surface.
       // +1: shared removed-model choice recovery text for channel consumers.
       // +2: shared stored-account key selection and its plugin-owned policy type.
-      4464,
+      // +2: required V2 conversation-read context and versioned adapter contract.
+      4466,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

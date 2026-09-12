@@ -14,6 +14,7 @@ export type RequestQuery = Record<string, string | number | boolean>;
 type ScheduledRequest<TData> = {
   method: string;
   path: string;
+  assertConversationReadAuthority?: () => void;
   data?: TData;
   enqueuedAt: number;
   generation: number;
@@ -124,6 +125,7 @@ export class RestScheduler<TData> {
   enqueue(params: {
     method: string;
     path: string;
+    assertConversationReadAuthority?: () => void;
     data?: TData;
     priority: RequestPriority;
     query?: RequestQuery;

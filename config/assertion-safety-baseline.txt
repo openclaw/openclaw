@@ -2155,7 +2155,7 @@ src/channels/plugins/dm-access.ts	3
 src/channels/plugins/helpers.ts	3
 src/channels/plugins/legacy-config.ts	4
 src/channels/plugins/message-action-discovery.ts	4
-src/channels/plugins/message-action-dispatch.ts	5
+src/channels/plugins/message-action-dispatch.ts	4
 src/channels/plugins/meta-normalization.ts	1
 src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2

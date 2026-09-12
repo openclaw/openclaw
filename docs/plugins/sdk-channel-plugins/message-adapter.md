@@ -48,6 +48,28 @@ filled from another plugin with the same channel ID. Prepared delivery handlers
 created inside a registry scope retain that handle when invoked after the caller
 leaves the scope.
 
+An action adapter can declare `actions.providerOwnedReadGates: true`, or a list
+of action names, to enforce conversation-read authorization itself. Core honors
+this declaration for bundled registrations. Official installs verified by the
+loader against the recorded package source and official catalog are also
+eligible, but only for actions core classifies as read-only and adapters declaring
+`actions.conversationReadAuthority: { version: 2, handleAction }`. The versioned handler receives `ChannelMessageActionContextV2`, which requires the host assertion and `prepareConversationReadTarget` callback; the legacy handler remains source-compatible and cannot receive the new delegation. The V2 handler must await `prepareConversationReadTarget()` inside its request-authority scope before handling the read, preserving host target resolution without unguarded directory requests. Such adapters must carry the
+host-owned `ctx.assertConversationReadAuthority` through their request lifecycle
+and invoke it synchronously immediately before every provider request, including
+authorization lookups, paginated reads, and retries after a backoff or token refresh.
+Never source this assertion from tool arguments. Read-capable actions
+with side effects, including edits, deletes, reactions, pins, poll votes, and file
+downloads, retain the external exact-current gate even with official trust. The
+adapter still owns account, sender, and destination authorization. Other
+registrations, and actions absent from the declaration, retain the host's exact
+current-conversation and account restriction; a plugin name or payload cannot
+grant official trust. For official external registrations, core also checks the
+captured owner before dispatch and before returning data or an error. Disabled,
+revoked, replaced, or re-registered owners cannot return an in-flight result.
+The request check prevents new I/O after revocation; the result fence suppresses
+late data from requests already in progress. Plugins without request fencing keep
+the existing exact-current restriction until they implement the contract.
+
 Declare live and finalizer capabilities precisely - core uses these to decide
 what a channel can do, and drift between the declared and actual behavior is a
 contract test failure:
@@ -142,3 +164,5 @@ deprecated `openclaw/plugin-sdk/inbound-reply-dispatch` compatibility shim.
 Do not use it for new channel code; start with the `message` adapter, receipts,
 and receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-outbound`
 instead.
+
+Official V2 read dry-runs do not perform directory lookups and therefore do not validate mutable target names or ambiguity; actual execution resolves names inside the fenced provider scope.

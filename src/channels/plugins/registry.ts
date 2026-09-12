@@ -27,6 +27,8 @@ export function resolveChannelPluginRegistration(id: ChannelId):
   | {
       plugin: ChannelPlugin;
       origin?: string;
+      trustedOfficialInstall?: boolean;
+      captureReadAuthority?: () => (() => boolean) | undefined;
       resolveChannelRuntime?: NonNullable<
         ReturnType<typeof getLoadedChannelPluginEntryById>
       >["resolveChannelRuntime"];
@@ -39,17 +41,27 @@ export function resolveChannelPluginRegistration(id: ChannelId):
   // Resolve implementation and provenance together. Loaded overrides win and
   // must never borrow bundled authority from the fallback with the same id.
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const loadedEntry =
-    (scopedRegistry ? getLoadedChannelPluginEntryById(resolvedId, scopedRegistry) : undefined) ??
-    getLoadedChannelPluginEntryById(resolvedId);
+  const scopedEntry = scopedRegistry
+    ? getLoadedChannelPluginEntryById(resolvedId, scopedRegistry)
+    : undefined;
+  const loadedEntry = scopedEntry ?? getLoadedChannelPluginEntryById(resolvedId);
   if (loadedEntry) {
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
+    // Root fallback stays addressable, but an explicit scope cannot borrow its
+    // official delegated-read grant when it does not own that channel.
+    const ownsReadAuthority = !scopedRegistry || scopedEntry !== undefined;
     return {
       plugin: loadedEntry.plugin as ChannelPlugin,
       ...(loadedEntry.resolveChannelRuntime
         ? { resolveChannelRuntime: loadedEntry.resolveChannelRuntime }
         : {}),
       ...(origin ? { origin } : {}),
+      ...(ownsReadAuthority && loadedEntry.trustedOfficialInstall === true
+        ? { trustedOfficialInstall: true }
+        : {}),
+      ...(ownsReadAuthority && loadedEntry.captureReadAuthority
+        ? { captureReadAuthority: loadedEntry.captureReadAuthority }
+        : {}),
     };
   }
   const plugin = getBundledChannelPlugin(resolvedId);

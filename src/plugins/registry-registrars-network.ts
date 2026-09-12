@@ -12,6 +12,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import { getPluginHttpRouteViews, replacePluginHttpRoutes } from "./http-route-owner.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import { capturePluginLifecycleAuthority, getPluginRecordRegistry } from "./registry-lifecycle.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
@@ -293,9 +294,35 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
+    // Keep the managed instance wrapper as the registration's exact identity.
+    const registeredPlugin = wrapCurrentPluginInstance(plugin);
+    // Resolve adoption once per invocation, then fence that exact publication.
+    // A new invocation may follow adoption; an in-flight one must not migrate.
+    const captureReadAuthority = () => {
+      const invocationRegistry = getPluginRecordRegistry(registry, record);
+      const entry = invocationRegistry.channels.find((candidate) => candidate.plugin.id === id);
+      const registryCurrent = capturePluginLifecycleAuthority(invocationRegistry, undefined, {
+        scopedRuntime: true,
+      });
+      const ownerCurrent = capturePluginLifecycleAuthority(invocationRegistry, record, {
+        scopedRuntime: true,
+      });
+      const isCurrent = () =>
+        registryCurrent?.() === true &&
+        ownerCurrent?.() === true &&
+        record.trustedOfficialInstall === true &&
+        entry !== undefined &&
+        invocationRegistry.channels.includes(entry) &&
+        entry.pluginId === record.id &&
+        entry.plugin === registeredPlugin &&
+        entry.captureReadAuthority === captureReadAuthority;
+      return isCurrent() ? isCurrent : undefined;
+    };
     const metadata = {
       // Normalization copied the input; teardown must retain its registration owner.
-      plugin: wrapCurrentPluginInstance(plugin),
+      plugin: registeredPlugin,
+      trustedOfficialInstall: record.trustedOfficialInstall,
+      captureReadAuthority,
       pluginName: record.name,
       origin: record.origin,
       source: record.source,

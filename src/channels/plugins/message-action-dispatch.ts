@@ -7,6 +7,12 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { normalizeOptionalAccountId, normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeChatType, type ChatType } from "../chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "./conversation-read-origin.js";
+import {
+  resolveChannelMessageActionReadPolicy,
+  resolveMessageActionReadEnforcement,
+  type ChannelMessageActionReadPolicy,
+  type MessageActionReadEnforcement,
+} from "./message-action-read-policy.js";
 import { resolveChannelPluginRegistration } from "./registry.js";
 import type {
   ChannelMessageActionContext,
@@ -32,125 +38,13 @@ type PreparedMessageActionReadContext = {
   origin: ServerOwnedConversationReadOrigin;
   actionPolicy: ChannelMessageActionReadPolicy;
   enforcement: MessageActionReadEnforcement;
+  assertReadAuthorityCurrent?: () => void;
 };
-
-type ChannelMessageActionReadPolicy =
-  | { readonly kind: "none" }
-  | {
-      readonly kind: "conversation-read";
-      readonly targetlessCache: "deny" | "bundled-current-context";
-    };
-
-const NO_CONVERSATION_READ = { kind: "none" } as const;
-const CONVERSATION_READ = {
-  kind: "conversation-read",
-  targetlessCache: "deny",
-} as const;
-const BUNDLED_CURRENT_CONTEXT_CACHE_READ = {
-  kind: "conversation-read",
-  targetlessCache: "bundled-current-context",
-} as const;
-
-// Exhaustive by design: every new core action must declare its read authority
-// before the dispatcher will compile.
-const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
-  send: NO_CONVERSATION_READ,
-  broadcast: NO_CONVERSATION_READ,
-  poll: NO_CONVERSATION_READ,
-  "poll-vote": CONVERSATION_READ,
-  react: CONVERSATION_READ,
-  reactions: CONVERSATION_READ,
-  read: CONVERSATION_READ,
-  edit: CONVERSATION_READ,
-  unsend: CONVERSATION_READ,
-  reply: NO_CONVERSATION_READ,
-  sendWithEffect: NO_CONVERSATION_READ,
-  renameGroup: NO_CONVERSATION_READ,
-  setGroupIcon: NO_CONVERSATION_READ,
-  addParticipant: NO_CONVERSATION_READ,
-  removeParticipant: NO_CONVERSATION_READ,
-  leaveGroup: NO_CONVERSATION_READ,
-  sendAttachment: NO_CONVERSATION_READ,
-  delete: CONVERSATION_READ,
-  pin: CONVERSATION_READ,
-  unpin: CONVERSATION_READ,
-  "list-pins": CONVERSATION_READ,
-  permissions: CONVERSATION_READ,
-  "thread-create": NO_CONVERSATION_READ,
-  "thread-list": CONVERSATION_READ,
-  "thread-reply": NO_CONVERSATION_READ,
-  search: CONVERSATION_READ,
-  sticker: NO_CONVERSATION_READ,
-  "sticker-search": BUNDLED_CURRENT_CONTEXT_CACHE_READ,
-  "member-info": CONVERSATION_READ,
-  "role-info": CONVERSATION_READ,
-  "emoji-list": CONVERSATION_READ,
-  "emoji-upload": NO_CONVERSATION_READ,
-  "sticker-upload": NO_CONVERSATION_READ,
-  "role-add": NO_CONVERSATION_READ,
-  "role-remove": NO_CONVERSATION_READ,
-  "channel-info": CONVERSATION_READ,
-  "channel-list": CONVERSATION_READ,
-  "channel-create": NO_CONVERSATION_READ,
-  "conversation-open": NO_CONVERSATION_READ,
-  "channel-edit": NO_CONVERSATION_READ,
-  "channel-delete": NO_CONVERSATION_READ,
-  "channel-move": NO_CONVERSATION_READ,
-  "category-create": NO_CONVERSATION_READ,
-  "category-edit": NO_CONVERSATION_READ,
-  "category-delete": NO_CONVERSATION_READ,
-  "topic-create": NO_CONVERSATION_READ,
-  "topic-edit": NO_CONVERSATION_READ,
-  "voice-status": CONVERSATION_READ,
-  "event-list": CONVERSATION_READ,
-  "event-create": NO_CONVERSATION_READ,
-  timeout: NO_CONVERSATION_READ,
-  kick: NO_CONVERSATION_READ,
-  ban: NO_CONVERSATION_READ,
-  "set-profile": NO_CONVERSATION_READ,
-  "set-presence": NO_CONVERSATION_READ,
-  "download-file": CONVERSATION_READ,
-  "upload-file": NO_CONVERSATION_READ,
-} as const satisfies Record<ChannelMessageActionName, ChannelMessageActionReadPolicy>;
-
-function resolveChannelMessageActionReadPolicy(
-  action: unknown,
-): ChannelMessageActionReadPolicy | undefined {
-  if (typeof action !== "string" || !Object.hasOwn(CHANNEL_MESSAGE_ACTION_READ_POLICIES, action)) {
-    return undefined;
-  }
-  return CHANNEL_MESSAGE_ACTION_READ_POLICIES[action as ChannelMessageActionName];
-}
 
 function resolveServerOwnedConversationReadOrigin(
   value: unknown,
 ): ServerOwnedConversationReadOrigin {
   return normalizeConversationReadInvocationOrigin(value) as ServerOwnedConversationReadOrigin;
-}
-
-type MessageActionReadEnforcement =
-  | { kind: "provider-owned" }
-  | {
-      kind: "host-exact-current";
-      pluginTrust: "bundled" | "external";
-    };
-
-function resolveMessageActionReadEnforcement(params: {
-  action: ChannelMessageActionName;
-  actions: ChannelPlugin["actions"];
-  pluginOrigin: string | undefined;
-}): MessageActionReadEnforcement {
-  const providerOwnedReadGates = params.actions?.providerOwnedReadGates;
-  if (
-    params.pluginOrigin === "bundled" &&
-    (providerOwnedReadGates === true || providerOwnedReadGates?.includes(params.action) === true)
-  ) {
-    return { kind: "provider-owned" };
-  }
-  return {
-    kind: "host-exact-current",
-    pluginTrust: params.pluginOrigin === "bundled" ? "bundled" : "external",
-  };
 }
 
 type HostConversationTargetKind =
@@ -545,16 +439,33 @@ function prepareMessageActionReadContext(
     action,
     conversationReadOrigin: origin,
   };
+  const enforcement = resolveMessageActionReadEnforcement({
+    action,
+    actions: registration.plugin.actions,
+    pluginOrigin: registration.origin,
+    pluginTrustedOfficialInstall: registration.trustedOfficialInstall,
+  });
+  let assertReadAuthorityCurrent: (() => void) | undefined;
+  if (
+    actionPolicy.kind === "conversation-read" &&
+    enforcement.kind === "provider-owned" &&
+    registration.origin !== "bundled"
+  ) {
+    const isCurrent = registration.captureReadAuthority?.();
+    assertReadAuthorityCurrent = () => {
+      if (!isCurrent?.()) {
+        throw new Error(`Plugin ${ctx.channel} read authority is no longer active.`);
+      }
+    };
+    assertReadAuthorityCurrent();
+  }
   return {
     actionContext,
     plugin: registration.plugin,
     origin,
     actionPolicy,
-    enforcement: resolveMessageActionReadEnforcement({
-      action,
-      actions: registration.plugin.actions,
-      pluginOrigin: registration.origin,
-    }),
+    enforcement,
+    assertReadAuthorityCurrent,
   };
 }
 
@@ -640,22 +551,15 @@ export function prepareExternalMessageActionTargetForResolution(
   return authorizedActionContext.params;
 }
 
-/** Defers delegated external target interpretation to the attested Gateway boundary. */
+/** Keeps official read lookups within V2; external delegated lookups wait for the Gateway. */
 export function shouldDeferExternalMessageActionTargetResolution(
   ctx: ChannelMessageActionDispatchContext,
+  delegatesToGateway = true,
 ): boolean {
-  return isExternalDelegatedMessageActionRead(prepareMessageActionReadContext(ctx));
-}
-
-function requiresTrustedRequesterSender(
-  ctx: ChannelMessageActionContext,
-  plugin: ChannelPlugin,
-): boolean {
+  const prepared = prepareMessageActionReadContext(ctx);
   return Boolean(
-    plugin?.actions?.requiresTrustedRequesterSender?.({
-      action: ctx.action,
-      toolContext: ctx.toolContext,
-    }),
+    prepared?.assertReadAuthorityCurrent ||
+    (delegatesToGateway && isExternalDelegatedMessageActionRead(prepared)),
   );
 }
 
@@ -671,7 +575,7 @@ export async function dispatchChannelMessageAction(
   }
   const { actionContext, plugin, origin, actionPolicy, enforcement } = prepared;
   const actions = plugin.actions;
-  if (!actions?.handleAction) {
+  if (!actions || (!prepared.assertReadAuthorityCurrent && !actions.handleAction)) {
     return null;
   }
   const authorizedActionContext = attachExternalCurrentTargetSibling({
@@ -691,7 +595,10 @@ export async function dispatchChannelMessageAction(
   // Some plugin actions depend on the sender identity to enforce channel-local
   // trust. Reject tool-driven calls before invoking the action without it.
   if (
-    requiresTrustedRequesterSender(authorizedActionContext, plugin) &&
+    actions.requiresTrustedRequesterSender?.({
+      action: authorizedActionContext.action,
+      toolContext: authorizedActionContext.toolContext,
+    }) &&
     !authorizedActionContext.requesterSenderId?.trim()
   ) {
     throw new Error(
@@ -706,5 +613,35 @@ export async function dispatchChannelMessageAction(
   ) {
     return null;
   }
-  return await actions.handleAction(authorizedActionContext);
+  prepared.assertReadAuthorityCurrent?.();
+  try {
+    if (prepared.assertReadAuthorityCurrent) {
+      if (actions.conversationReadAuthority?.version !== 2) {
+        throw new Error("Versioned conversation read authority adapter is required.");
+      }
+      return await actions.conversationReadAuthority.handleAction({
+        ...authorizedActionContext,
+        // Never accept an assertion supplied by the caller or tool arguments.
+        assertConversationReadAuthority: prepared.assertReadAuthorityCurrent,
+        prepareConversationReadTarget: async () => {
+          const { prepareConversationReadTarget } =
+            await import("../../infra/outbound/message-action-target-resolution.js");
+          await prepareConversationReadTarget(
+            authorizedActionContext,
+            plugin,
+            prepared.assertReadAuthorityCurrent!,
+          );
+        },
+      });
+    }
+    return actions.handleAction
+      ? await actions.handleAction({
+          ...authorizedActionContext,
+          assertConversationReadAuthority: undefined,
+        })
+      : null;
+  } finally {
+    // A replaced/disabled owner cannot publish late read data, including provider errors.
+    prepared.assertReadAuthorityCurrent?.();
+  }
 }

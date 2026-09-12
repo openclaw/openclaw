@@ -27,6 +27,7 @@ import {
   resolveNormalizedTargetInput,
   resolveReservedTargetLiteral,
 } from "./target-normalization.js";
+import { assertTargetResolutionCurrent } from "./target-resolution-authority.js";
 
 /** Directory-backed destination kind used by outbound target resolution. */
 type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
@@ -312,13 +313,16 @@ async function listDirectoryEntries(params: {
   if (!fn) {
     return [];
   }
-  return await fn({
+  assertTargetResolutionCurrent();
+  const entries = await fn({
     cfg: params.cfg,
     accountId: params.accountId ?? undefined,
     query: params.query ?? undefined,
     limit: undefined,
     runtime,
   });
+  assertTargetResolutionCurrent();
+  return entries;
 }
 
 async function getDirectoryEntries(params: {
@@ -331,6 +335,7 @@ async function getDirectoryEntries(params: {
   preferLiveOnMiss?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
+  assertTargetResolutionCurrent();
   const signature = buildTargetResolverSignature(params.channel, params.plugin);
   const listParams = {
     cfg: params.cfg,
@@ -358,6 +363,7 @@ async function getDirectoryEntries(params: {
     ...listParams,
     source: "cache",
   });
+  assertTargetResolutionCurrent();
   if (entries.length > 0 || !params.preferLiveOnMiss) {
     directoryCache.set(cacheKey, entries, params.cfg);
     return entries;
@@ -376,6 +382,7 @@ async function getDirectoryEntries(params: {
     ...listParams,
     source: "live",
   });
+  assertTargetResolutionCurrent();
   directoryCache.set(liveKey, liveEntries, params.cfg);
   directoryCache.set(cacheKey, liveEntries, params.cfg);
   return liveEntries;
@@ -408,6 +415,7 @@ async function resolveMessagingTarget(params: {
   unknownTargetMode?: "error" | "normalized";
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
+  assertTargetResolutionCurrent();
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
     const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
@@ -444,6 +452,7 @@ async function resolveMessagingTarget(params: {
       preferredKind: params.preferredKind,
       plugin,
     });
+    assertTargetResolutionCurrent();
     if (resolvedIdLikeTarget) {
       return {
         ok: true,
@@ -466,6 +475,7 @@ async function resolveMessagingTarget(params: {
     preferLiveOnMiss: true,
     plugin,
   });
+  assertTargetResolutionCurrent();
   const match = resolveMatch({
     channel: params.channel,
     entries,
@@ -501,6 +511,7 @@ async function resolveMessagingTarget(params: {
   if (reservedLiteral) {
     return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
   }
+  assertTargetResolutionCurrent();
   const resolvedFallbackTarget = asResolvedMessagingTarget(
     await maybeResolvePluginMessagingTarget({
       cfg: params.cfg,
@@ -511,6 +522,7 @@ async function resolveMessagingTarget(params: {
       plugin,
     }),
   );
+  assertTargetResolutionCurrent();
   if (resolvedFallbackTarget) {
     return {
       ok: true,

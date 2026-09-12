@@ -6,6 +6,7 @@ import {
   isLoopbackHost,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { discordConversationReadAuthority } from "./conversation-read-authority.js";
 
 const DISCORD_ENDPOINT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const DISCORD_API_URL_ENV = "DISCORD_API_URL";
@@ -132,6 +133,9 @@ function createEndpointFetch(descriptor: DiscordEndpointDescriptor): typeof fetc
     new Set([new URL(descriptor.restApiBaseUrl).origin, new URL(descriptor.gatewayBotUrl).origin]),
   );
   return async (input, init) => {
+    // The REST caller restores the queued request's own authority before entering
+    // this transport. Retain it through asynchronous DNS/dispatcher preparation.
+    const assertReadAuthority = discordConversationReadAuthority.getStore();
     const request = new Request(input, init);
     const target = new URL(request.url);
     assertEndpointHttpTarget(target, descriptor);
@@ -144,6 +148,7 @@ function createEndpointFetch(descriptor: DiscordEndpointDescriptor): typeof fetc
       maxRedirects: 0,
       capture: false,
       auditContext: "discord.endpoint-runtime",
+      beforeRequest: assertReadAuthority,
     });
     try {
       const body = await readResponseWithLimit(

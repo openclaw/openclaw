@@ -11,6 +11,7 @@ import {
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { discordConversationReadAuthority } from "./conversation-read-authority.js";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "./endpoint-runtime.js";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
@@ -184,6 +185,8 @@ export async function requestDiscord<T>(
   token: string,
   options?: DiscordApiRequestOptions,
 ): Promise<T> {
+  const assertCurrent = discordConversationReadAuthority.getStore();
+  assertCurrent?.();
   const endpoint =
     options?.endpointRuntime === undefined ? getDiscordEndpointRuntime() : options.endpointRuntime;
   const fetchImpl = resolveFetch(endpoint?.fetch ?? options?.fetcher ?? fetch);
@@ -199,6 +202,7 @@ export async function requestDiscord<T>(
       const body = normalizeDiscordRequestBody(options?.body, headers);
       const requestSignal = createDiscordRequestSignal(options ?? {});
       try {
+        assertCurrent?.();
         const res = await fetchImpl(
           `${endpoint?.descriptor.restApiBaseUrl ?? DISCORD_API_BASE}${path}`,
           {
@@ -208,6 +212,7 @@ export async function requestDiscord<T>(
             signal: requestSignal.signal,
           },
         );
+        assertCurrent?.();
         if (!res.ok) {
           const text = await readResponseTextLimited(res, DISCORD_API_ERROR_BODY_LIMIT_BYTES).catch(
             () => "",
@@ -234,6 +239,7 @@ export async function requestDiscord<T>(
               ),
           },
         );
+        assertCurrent?.();
         try {
           const text = new TextDecoder("utf-8", { fatal: true }).decode(responseBody);
           if (!text.trim()) {

@@ -15,6 +15,8 @@ export type {
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
+  ChannelMessageActionContextV2,
+  ChannelMessageReadAuthorityAdapterV2,
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,

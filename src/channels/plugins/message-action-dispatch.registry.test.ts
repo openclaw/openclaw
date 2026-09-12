@@ -1,11 +1,25 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type {
+  ChannelMessageActionContextV2,
+  ChannelMessageReadAuthorityAdapterV2,
+} from "../../plugin-sdk/channel-contract.js";
+import { revokePluginRecord } from "../../plugins/registry-lifecycle.js";
+import { createPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
+import {
+  dispatchChannelMessageAction,
+  prepareExternalMessageActionTargetForResolution,
+  shouldDeferExternalMessageActionTargetResolution,
+} from "./message-action-dispatch.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
 
@@ -103,4 +117,372 @@ describe("message action registration ownership", () => {
       expect(handleRootAction).not.toHaveBeenCalled();
     });
   });
+});
+
+describe("official channel delegated read provenance", () => {
+  it("requires host authority for the versioned read entrypoint without changing legacy context", () => {
+    expectTypeOf<ChannelMessageActionContext>().not.toExtend<ChannelMessageActionContextV2>();
+    expectTypeOf<
+      Parameters<ChannelMessageReadAuthorityAdapterV2["handleAction"]>[0]
+    >().toEqualTypeOf<ChannelMessageActionContextV2>();
+    expectTypeOf<ChannelMessageActionContextV2["prepareConversationReadTarget"]>().toEqualTypeOf<
+      () => Promise<void>
+    >();
+    expectTypeOf<ChannelMessageActionContextV2["assertConversationReadAuthority"]>().toEqualTypeOf<
+      () => void
+    >();
+  });
+  function registerChannel(options: {
+    trustedOfficialInstall?: boolean;
+    providerOwnedReadGates?: NonNullable<ChannelPlugin["actions"]>["providerOwnedReadGates"];
+    supportsConversationReadAuthority?: boolean;
+  }) {
+    const owner = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "official-read-owner",
+      origin: "global",
+      trustedOfficialInstall: options.trustedOfficialInstall,
+    });
+    const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => receipt);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "official-read-channel" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["read", "search"] }),
+        providerOwnedReadGates: options.providerOwnedReadGates,
+        ...(options.supportsConversationReadAuthority !== false
+          ? { conversationReadAuthority: { version: 2 as const, handleAction } }
+          : {}),
+        handleAction,
+      },
+    };
+    owner.registry.plugins.push(record);
+    const register = () => {
+      owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({ plugin });
+      setActivePluginRegistry(owner.registry);
+    };
+    register();
+    return { owner, record, plugin, handleAction, register };
+  }
+
+  const context: ChannelMessageActionContext = {
+    cfg: {},
+    channel: "official-read-channel",
+    action: "read",
+    params: { channelId: "configured-other" },
+    accountId: "default",
+    requesterAccountId: "default",
+    conversationReadOrigin: "delegated",
+    toolContext: {
+      currentChannelProvider: "official-read-channel",
+      currentChannelId: "channel:current",
+    },
+  };
+
+  it("dispatches a versioned-only read adapter without requiring a legacy handler", async () => {
+    const { plugin, handleAction } = registerChannel({
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: true,
+    });
+    if (!plugin.actions) {
+      throw new Error("Missing test adapter");
+    }
+    delete plugin.actions.handleAction;
+    await expect(dispatchChannelMessageAction(context)).resolves.toEqual(receipt);
+    expect(handleAction).toHaveBeenCalledTimes(1);
+    expect(handleAction.mock.calls[0]?.[0].assertConversationReadAuthority).toEqual(
+      expect.any(Function),
+    );
+  });
+
+  it.each([
+    {
+      name: "official full declaration",
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: true,
+      allowed: true,
+    },
+    {
+      name: "official read declaration",
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: ["read"],
+      allowed: true,
+    },
+    {
+      name: "official adapter without request fencing",
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: true,
+      supportsConversationReadAuthority: false,
+      allowed: false,
+    },
+    {
+      name: "official undeclared action",
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: ["search"],
+      allowed: false,
+    },
+    {
+      name: "official missing declaration",
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: undefined,
+      allowed: false,
+    },
+    {
+      name: "untrusted self declaration",
+      trustedOfficialInstall: false,
+      providerOwnedReadGates: true,
+      allowed: false,
+    },
+    {
+      name: "legacy missing provenance",
+      trustedOfficialInstall: undefined,
+      providerOwnedReadGates: true,
+      allowed: false,
+    },
+  ] as const)("enforces registered $name across conversations", async (testCase) => {
+    const { handleAction } = registerChannel(testCase);
+    if (testCase.allowed) {
+      // Trusted reads still defer directory I/O until the V2 authority scope.
+      expect(shouldDeferExternalMessageActionTargetResolution(context)).toBe(true);
+      expect(prepareExternalMessageActionTargetForResolution(context)).toEqual(context.params);
+      expect(await dispatchChannelMessageAction(context)).toBe(receipt);
+      expect(handleAction).toHaveBeenCalledOnce();
+    } else {
+      expect(shouldDeferExternalMessageActionTargetResolution(context)).toBe(true);
+      expect(() => prepareExternalMessageActionTargetForResolution(context)).toThrow(
+        "requires the exact current conversation and account",
+      );
+      await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
+        "requires the exact current conversation and account",
+      );
+      expect(handleAction).not.toHaveBeenCalled();
+    }
+  });
+
+  it("preserves provider account and channel rejection for a trusted official adapter", async () => {
+    const { handleAction } = registerChannel({
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: true,
+    });
+    handleAction.mockImplementation(async (ctx) => {
+      if (ctx.accountId !== "default" || ctx.params.channelId !== "configured-other") {
+        throw new Error("provider denied account or channel");
+      }
+      return receipt;
+    });
+    for (const denied of [
+      { ...context, accountId: "different" },
+      { ...context, params: { channelId: "not-configured" } },
+    ]) {
+      await expect(dispatchChannelMessageAction(denied)).rejects.toThrow(
+        "provider denied account or channel",
+      );
+    }
+    expect(await dispatchChannelMessageAction(context)).toBe(receipt);
+  });
+
+  it.each(
+    (["delegated", "direct-operator"] as const).flatMap((origin) =>
+      [false, true].map((revoked) => ({ origin, revoked })),
+    ),
+  )(
+    "fences $origin provider requests after asynchronous preparation (revoked=$revoked)",
+    async ({ origin, revoked }) => {
+      const fixture = registerChannel({
+        trustedOfficialInstall: true,
+        providerOwnedReadGates: true,
+      });
+      const prepared = createDeferred();
+      const request = vi.fn(() => receipt);
+      const callerAssertion = vi.fn();
+      fixture.handleAction.mockImplementation(async (ctx) => {
+        await prepared.promise;
+        ctx.assertConversationReadAuthority?.();
+        return request();
+      });
+      const read = dispatchChannelMessageAction({
+        ...context,
+        conversationReadOrigin: origin,
+        assertConversationReadAuthority: callerAssertion,
+        params: { ...context.params, assertConversationReadAuthority: callerAssertion },
+      });
+      if (revoked) {
+        revokePluginRecord(fixture.owner.registry, fixture.record);
+      }
+      prepared.resolve();
+      if (revoked) {
+        await expect(read).rejects.toThrow("read authority is no longer active");
+        expect(request).not.toHaveBeenCalled();
+      } else {
+        expect(await read).toBe(receipt);
+        expect(request).toHaveBeenCalledOnce();
+      }
+      expect(callerAssertion).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "poll-vote",
+    "react",
+    "edit",
+    "unsend",
+    "delete",
+    "pin",
+    "unpin",
+    "download-file",
+  ] as const)(
+    "keeps official %s actions behind the existing exact-current gate",
+    async (action) => {
+      const { handleAction } = registerChannel({
+        trustedOfficialInstall: true,
+        providerOwnedReadGates: true,
+      });
+      const mutation = { ...context, action };
+      expect(shouldDeferExternalMessageActionTargetResolution(mutation)).toBe(true);
+      expect(() => prepareExternalMessageActionTargetForResolution(mutation)).toThrow(
+        "requires the exact current conversation and account",
+      );
+      await expect(dispatchChannelMessageAction(mutation)).rejects.toThrow(
+        "requires the exact current conversation and account",
+      );
+      expect(handleAction).not.toHaveBeenCalled();
+
+      expect(
+        await dispatchChannelMessageAction({
+          ...mutation,
+          params: { channelId: "current" },
+        }),
+      ).toBe(receipt);
+      expect(
+        await dispatchChannelMessageAction({
+          ...mutation,
+          conversationReadOrigin: "direct-operator",
+        }),
+      ).toBe(receipt);
+      expect(handleAction).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([false, undefined])(
+    "drops prior official authority when the same owner re-registers with trust=%s",
+    async (trust) => {
+      const fixture = registerChannel({
+        trustedOfficialInstall: true,
+        providerOwnedReadGates: true,
+      });
+      expect(await dispatchChannelMessageAction(context)).toBe(receipt);
+      fixture.handleAction.mockClear();
+      fixture.record.trustedOfficialInstall = trust;
+      fixture.register();
+      await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
+        "requires the exact current conversation and account",
+      );
+      expect(fixture.handleAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not borrow official trust from the root registry for a scoped same-id plugin", async () => {
+    const scoped = registerChannel({ trustedOfficialInstall: false, providerOwnedReadGates: true });
+    const root = registerChannel({ trustedOfficialInstall: true, providerOwnedReadGates: true });
+    await withPluginRuntimeRegistryScope(scoped.owner.registry, async () => {
+      await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
+        "requires the exact current conversation and account",
+      );
+    });
+    expect(scoped.handleAction).not.toHaveBeenCalled();
+    expect(root.handleAction).not.toHaveBeenCalled();
+    expect(await dispatchChannelMessageAction(context)).toBe(receipt);
+  });
+
+  it("ignores official trust claims in plugin payloads and tool arguments", async () => {
+    const fixture = registerChannel({ providerOwnedReadGates: true });
+    Object.assign(fixture.plugin, { trustedOfficialInstall: true });
+    fixture.register();
+    await expect(
+      dispatchChannelMessageAction({
+        ...context,
+        params: { ...context.params, trustedOfficialInstall: true, pluginOrigin: "bundled" },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(fixture.handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not borrow root official read authority when the scoped registry lacks the channel", async () => {
+    const root = registerChannel({ trustedOfficialInstall: true, providerOwnedReadGates: true });
+    await withPluginRuntimeRegistryScope(createTestRegistry([]), async () => {
+      expect(shouldDeferExternalMessageActionTargetResolution(context)).toBe(true);
+      expect(() => prepareExternalMessageActionTargetForResolution(context)).toThrow(
+        "requires the exact current conversation and account",
+      );
+      await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
+        "requires the exact current conversation and account",
+      );
+      expect(root.handleAction).not.toHaveBeenCalled();
+    });
+    expect(await dispatchChannelMessageAction(context)).toBe(receipt);
+  });
+
+  it.each(
+    (["delegated", "direct-operator"] as const).flatMap((origin) =>
+      (
+        [
+          "replace",
+          "replace-error",
+          "reactivate",
+          "remove",
+          "disable",
+          "revoke",
+          "trust-downgrade",
+          "reregister",
+        ] as const
+      ).map((change) => ({ origin, change })),
+    ),
+  )(
+    "rejects an in-flight $origin official read after owner $change",
+    async ({ origin, change }) => {
+      const fixture = registerChannel({
+        trustedOfficialInstall: true,
+        providerOwnedReadGates: true,
+      });
+      const pending = createDeferred<typeof receipt>();
+      fixture.handleAction.mockReturnValueOnce(pending.promise);
+      const read = dispatchChannelMessageAction({ ...context, conversationReadOrigin: origin });
+      expect(fixture.handleAction).toHaveBeenCalledOnce();
+      switch (change) {
+        case "replace":
+        case "replace-error":
+          setActivePluginRegistry(createTestRegistry([]));
+          break;
+        case "reactivate":
+          setActivePluginRegistry(fixture.owner.registry);
+          break;
+        case "remove":
+          fixture.owner.registry.plugins.splice(0);
+          break;
+        case "disable":
+          fixture.record.enabled = false;
+          break;
+        case "revoke":
+          revokePluginRecord(fixture.owner.registry, fixture.record);
+          break;
+        case "trust-downgrade":
+          fixture.record.trustedOfficialInstall = false;
+          break;
+        case "reregister":
+          fixture.owner
+            .createApi(fixture.record, { config: {}, registrationMode: "full" })
+            .registerChannel({ plugin: fixture.plugin });
+          break;
+      }
+      if (change === "replace-error") {
+        pending.reject(new Error("provider error with stale data"));
+      } else {
+        pending.resolve(receipt);
+      }
+      await expect(read).rejects.toThrow("read authority is no longer active");
+    },
+  );
 });
