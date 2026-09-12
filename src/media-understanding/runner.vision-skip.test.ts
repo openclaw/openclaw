@@ -33,6 +33,12 @@ const plantedVisionSentinel = "PLANTED_VISION_DESC_zq7x";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async (_params: unknown) => catalog));
 
+// These cases own native-vision routing; model compression policy has its own
+// resize-boundary suite and must not bootstrap real provider runtimes here.
+vi.mock("../agents/image-compression-policy.js", () => ({
+  resolveImageCompressionModelPolicy: vi.fn(async () => ({})),
+}));
+
 vi.mock("../agents/model-auth.js", async () => {
   const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
   return createAvailableModelAuthMockModule();
