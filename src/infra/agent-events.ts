@@ -11,6 +11,7 @@ import {
   getAgentRunContext,
   getAgentRunContextOwnership,
   getAgentRunLifecycleGeneration,
+  recordAgentRunModel,
   registerAgentRunSequenceResetHandler,
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
@@ -252,6 +253,21 @@ function enrichAgentEvent(
     return undefined;
   }
   const routing = context ?? captured?.routing;
+  if (event.stream === "lifecycle" && event.data.phase === "model") {
+    const { provider, model } = event.data;
+    if (provider === null && model === null) {
+      recordAgentRunModel(event.runId, undefined);
+    } else if (
+      typeof provider === "string" &&
+      provider.trim() &&
+      typeof model === "string" &&
+      model.trim()
+    ) {
+      recordAgentRunModel(event.runId, { provider, model });
+    } else {
+      return undefined;
+    }
+  }
   let data = event.data;
   if (routing && event.stream === "lifecycle") {
     if (routing.completionSource) {

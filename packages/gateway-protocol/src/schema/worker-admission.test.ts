@@ -490,6 +490,8 @@ describe("worker protocol schemas", () => {
       approval("requested", "pending"),
       approval("resolved", "approved"),
       lifecycle("start", { startedAt: 1 }),
+      lifecycle("model", { provider: "p", model: "m" }),
+      lifecycle("model", { provider: null, model: null }),
       lifecycle("fallback", {
         ...models,
         reasonSummary: "x",
@@ -532,6 +534,11 @@ describe("worker protocol schemas", () => {
       params(approval("requested", "approved")),
       params(lifecycle("end", { endedAt: 4, error: "stopped" })),
       params(fallbackStep("retrying")),
+      params(lifecycle("model", { provider: "p", model: null })),
+      params(lifecycle("model", { provider: null, model: "m" })),
+      params(lifecycle("model", { provider: "p" })),
+      params(lifecycle("model", { provider: "", model: "m" })),
+      params(lifecycle("model", { provider: "p", model: "m", extra: true })),
       params({ ...assistant, seq: 8 }),
       params(assistant, { sessionKey: "x" }),
       {

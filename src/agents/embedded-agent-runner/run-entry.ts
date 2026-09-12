@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import { captureAgentRunLifecycleGeneration, emitAgentEvent } from "../../infra/agent-events.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
@@ -378,6 +379,14 @@ function buildTerminal(params: {
 export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
+  const publishModel = (provider: string | null, model: string | null) =>
+    emitAgentEvent({
+      ...params.identity,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "model", provider, model },
+    });
   const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
     identity: params.identity,
     config: params.selection.cfg,
@@ -567,24 +576,29 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           }
           return classified.value;
         };
-        const result = await params.runCandidate(provider, model, {
-          assistantErrorTranscript,
-          classifyResult,
-          allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
-          isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-          isFallbackRetry,
-          modelRoutingProvenance: options.modelRoutingProvenance,
-          contextEngineLogicalTurnLease,
-          onContextEngineTurnCandidate: (facts) => {
-            contextEngineTurnCandidate = facts;
-            unsettledContextEngineTurnAttempt = facts;
-          },
-        });
-        return {
-          result,
-          classification: classifyResult(result),
-          turnAttempt: contextEngineTurnCandidate,
-        };
+        publishModel(provider, model);
+        try {
+          const result = await params.runCandidate(provider, model, {
+            assistantErrorTranscript,
+            classifyResult,
+            allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+            isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
+            isFallbackRetry,
+            modelRoutingProvenance: options.modelRoutingProvenance,
+            contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: (facts) => {
+              contextEngineTurnCandidate = facts;
+              unsettledContextEngineTurnAttempt = facts;
+            },
+          });
+          return {
+            result,
+            classification: classifyResult(result),
+            turnAttempt: contextEngineTurnCandidate,
+          };
+        } finally {
+          publishModel(null, null);
+        }
       },
     });
     const abortFields =

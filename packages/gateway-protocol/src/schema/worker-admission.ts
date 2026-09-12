@@ -520,6 +520,19 @@ const WorkerLiveLifecycleStartPayloadSchema = workerLiveObject({
   startedAt: LiveIntegerSchema,
 });
 
+const WorkerLiveLifecycleModelPayloadSchema = Type.Union([
+  workerLiveObject({
+    phase: Type.Literal("model"),
+    provider: LiveIdentifierSchema,
+    model: LiveIdentifierSchema,
+  }),
+  workerLiveObject({
+    phase: Type.Literal("model"),
+    provider: Type.Null(),
+    model: Type.Null(),
+  }),
+]);
+
 const WorkerLiveFallbackAttemptSchema = workerLiveObject({
   provider: LiveIdentifierSchema,
   model: LiveIdentifierSchema,
@@ -618,6 +631,7 @@ const WorkerLiveLifecycleTerminalPayloadSchema = Type.Union([
 
 const WorkerLiveLifecyclePayloadSchema = Type.Union([
   WorkerLiveLifecycleStartPayloadSchema,
+  WorkerLiveLifecycleModelPayloadSchema,
   WorkerLiveLifecycleFallbackPayloadSchema,
   WorkerLiveLifecycleFallbackClearedPayloadSchema,
   WorkerLiveLifecycleFallbackStepPayloadSchema,

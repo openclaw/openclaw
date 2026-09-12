@@ -1,4 +1,5 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerInferenceModelRef } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   mergeAgentRunAttemptTerminal,
   normalizeAgentRunAttemptTerminal,
@@ -156,7 +157,10 @@ type WorkerLiveRuntime = {
   emitTerminal: () => Promise<void>;
 };
 
-export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
+export function createWorkerLiveRuntime(
+  client: WorkerLiveClient,
+  modelRef: WorkerInferenceModelRef,
+): WorkerLiveRuntime {
   let previewEnabled = true;
   const enqueueLive = (event: WorkerLiveEvent) => {
     if (previewEnabled) {
@@ -222,9 +226,17 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   const handleSessionEvent = (event: AgentSessionEvent) => {
     if (event.type === "agent_start") {
       enqueueLive({ kind: "lifecycle", payload: { phase: "start", startedAt } });
+      enqueueLive({
+        kind: "lifecycle",
+        payload: { phase: "model", provider: modelRef.provider, model: modelRef.model },
+      });
       return;
     }
     if (event.type === "message_start" && event.message.role === "assistant") {
+      enqueueLive({
+        kind: "lifecycle",
+        payload: { phase: "model", provider: event.message.provider, model: event.message.model },
+      });
       assistantMessageIndex += 1;
       streamedText = "";
       streamedPhase = undefined;

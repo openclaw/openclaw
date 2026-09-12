@@ -5259,6 +5259,7 @@ export const en: TranslationMap & {
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       loadingModels: "Loading models…",
+      modelPending: "Model pending",
       modelsUnavailable: "Models unavailable",
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",
       checkingProviderModels: "{providers}: checking models…",

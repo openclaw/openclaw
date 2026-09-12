@@ -6,6 +6,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
@@ -49,6 +50,17 @@ export function handleMessageStart(
     return;
   }
 
+  if (msg.provider && msg.model) {
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      sessionKey: ctx.params.sessionKey,
+      sessionId: ctx.params.sessionId,
+      agentId: ctx.params.agentId,
+      lifecycleGeneration: ctx.params.lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "model", provider: msg.provider, model: msg.model },
+    });
+  }
   // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;

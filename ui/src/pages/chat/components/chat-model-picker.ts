@@ -76,9 +76,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     params.selectedModelValue === ""
       ? defaultModelOption
       : params.modelOptions.find((option) => option.value === params.selectedModelValue);
-  const triggerModelOption = params.triggerModelValue
-    ? params.modelOptions.find((option) => option.value === params.triggerModelValue)
-    : activeModelOption;
+  const triggerModelOption =
+    params.triggerModelValue !== undefined
+      ? params.modelOptions.find((option) => option.value === params.triggerModelValue)
+      : activeModelOption;
   const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
   const selectedContextWindowOption = params.contextWindow?.options.find(
     (option) => option.id === params.contextWindow?.selected,

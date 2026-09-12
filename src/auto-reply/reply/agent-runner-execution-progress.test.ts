@@ -691,14 +691,16 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
       await executeTestTurn({ opts: { runId: "run-deferred-diagnostic" } });
 
-      const lifecycleEvent = requireRecord(
-        requireMockCallArgWithFields(
-          emitAgentEvent,
-          { runId: "run-deferred-diagnostic", stream: "lifecycle" },
-          "agent event",
-        ),
-        "agent event",
-      );
+      const terminalEvents = emitAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) =>
+            event.runId === "run-deferred-diagnostic" &&
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error"),
+        );
+      expect(terminalEvents).toHaveLength(1);
+      const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
       expectRecordFields(requireRecord(lifecycleEvent.data, "lifecycle data"), {
         phase: "error",
         error: deferredError,
@@ -734,14 +736,16 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
       expect(result.kind).toBe("success");
       expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
-      const lifecycleEvent = requireRecord(
-        requireMockCallArgWithFields(
-          emitAgentEvent,
-          { runId: "run-tool-diagnostic", stream: "lifecycle" },
-          "agent event",
-        ),
-        "agent event",
-      );
+      const terminalEvents = emitAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) =>
+            event.runId === "run-tool-diagnostic" &&
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error"),
+        );
+      expect(terminalEvents).toHaveLength(1);
+      const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
       const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
       expectRecordFields(lifecycleData, {
         phase: "end",
@@ -872,10 +876,15 @@ describe("executeAgentTurn: lifecycle progress", () => {
     );
 
     expect(result.kind).toBe("success");
-    expectNoMockCallWithFields(emitAgentEvent, {
-      runId: "run-complete",
-      stream: "lifecycle",
-    });
+    const terminalEvents = emitAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event.runId === "run-complete" &&
+          event.stream === "lifecycle" &&
+          (event.data.phase === "end" || event.data.phase === "error"),
+      );
+    expect(terminalEvents).toEqual([]);
   });
 
   it("preserves GPT ack-turn final prose without reply-side truncation", async () => {

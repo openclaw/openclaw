@@ -678,6 +678,7 @@ export async function admitChatSend(params: {
     respond(true, payload, undefined, { runId: clientRunId });
   };
   claimAgentRunContext(clientRunId, {
+    agentId: selectedAgent.agentId ?? agentId,
     sessionKey,
     sessionId: admittedSessionId,
     lifecycleGeneration,

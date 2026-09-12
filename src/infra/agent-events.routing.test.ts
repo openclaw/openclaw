@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, test } from "vitest";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -13,10 +13,13 @@ import {
   withAgentRunLifecycleGeneration,
   type AgentEventRuntimePayload,
 } from "./agent-events.js";
+import { registerAgentRunCapacityWait } from "./agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentRunContext,
+  readAgentRunIndexVersion,
+  resolveProjectedAgentRunModel,
   registerAgentRunContext,
   releaseAgentRunContext,
 } from "./agent-run-registry.js";
@@ -243,5 +246,91 @@ describe("agent event routing after cancellation", () => {
         sessionId: "admitted-after",
       });
     }
+  });
+});
+
+describe("live agent model projection", () => {
+  beforeEach(() => resetAgentEventsForTest());
+  test.each(["agent:main:chat", "global"])(
+    "projects only the executing model for exact session %s",
+    (sessionKey) => {
+      const scope = { agentId: "main", sessionId: "session", sessionKey };
+      claimAgentRunContext("admission", scope);
+      expect(resolveProjectedAgentRunModel(scope)).toBeNull();
+      registerAgentRunContext("foreground", scope);
+      emitAgentEvent({
+        runId: "foreground",
+        stream: "lifecycle",
+        data: { phase: "model", provider: "provider", model: "current" },
+      });
+      for (const [runId, extra] of [
+        ["queued", {}],
+        ["hidden", { isControlUiVisible: false }],
+        ["maintenance", { projectSessionLifecycle: false }],
+        ["reset", { sessionId: "previous" }],
+        ["other-agent", { agentId: "other" }],
+      ] as const) {
+        registerAgentRunContext(runId, { ...scope, projectSessionActive: true, ...extra });
+      }
+      registerAgentRunCapacityWait("queued", getAgentEventLifecycleGeneration());
+      expect(resolveProjectedAgentRunModel(scope)).toEqual({
+        provider: "provider",
+        model: "current",
+      });
+      registerAgentRunContext("overlap", { ...scope, projectSessionActive: true });
+      expect(resolveProjectedAgentRunModel(scope)).toBeNull();
+      clearAgentRunContext("overlap");
+      clearAgentRunContext("foreground");
+      expect(resolveProjectedAgentRunModel(scope)).toBeNull();
+      clearAgentRunContext("queued");
+      clearAgentRunContext("admission");
+      expect(resolveProjectedAgentRunModel(scope)).toBeUndefined();
+    },
+  );
+
+  test("projects model events only into their current run owner", () => {
+    const runId = "model-run";
+    registerAgentRunContext(runId, {
+      agentId: "main",
+      sessionKey: "agent:main:chat",
+      sessionId: "model-session",
+      projectSessionActive: true,
+    });
+    const generation = getAgentEventLifecycleGeneration();
+    const version = readAgentRunIndexVersion();
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "model", provider: "primary", model: "first" },
+    });
+    expect(getAgentRunContext(runId)).toMatchObject({
+      activeModel: { provider: "primary", model: "first" },
+    });
+    expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "model", provider: "fallback", model: "second" },
+    });
+    expect(getAgentRunContext(runId)).toMatchObject({
+      activeModel: { provider: "fallback", model: "second" },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "model", provider: null, model: null },
+    });
+    expect(getAgentRunContext(runId)).not.toHaveProperty("activeModel");
+
+    rotateAgentEventLifecycleGeneration();
+    clearAgentRunContext(runId, generation);
+    registerAgentRunContext(runId, { sessionKey: "agent:main:replacement" });
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration: generation,
+      stream: "lifecycle",
+      data: { phase: "model", provider: "stale", model: "stale" },
+    });
+    expect(getAgentRunContext(runId)).not.toHaveProperty("activeModel");
   });
 });
