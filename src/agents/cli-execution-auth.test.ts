@@ -12,7 +12,10 @@ vi.mock("./auth-profiles/store-runtime.js", () => ({
 }));
 
 vi.mock("./auth-profiles/order.js", () => ({
-  resolveAuthProfileOrder: () => mocks.order,
+  resolveAuthProfileOrderWithMetadata: () => ({
+    profileIds: mocks.order,
+    hasExplicitOrder: false,
+  }),
 }));
 
 import { resolveCliExecutionAuthProfileId } from "./cli-execution-auth.js";

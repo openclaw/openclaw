@@ -63,16 +63,6 @@ describe("executeAgentTurn: CLI credential selection", () => {
       expected: canonicalProfile,
     },
     {
-      name: "preserves native login for automatic canonical credentials",
-      selected: canonicalProfile,
-      source: "auto",
-      primary: "anthropic",
-      provider: "claude-cli",
-      backend: "claude-cli",
-      profiles: [canonicalProfile],
-      expected: undefined,
-    },
-    {
       name: "preserves a selected native login even when a managed account exists",
       selected: nativeProfile,
       source: "user",
