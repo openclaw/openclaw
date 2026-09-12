@@ -1,5 +1,6 @@
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 // Focused parser contracts; public Firecrawl execution lives in firecrawl-tools.test.ts.
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let firecrawlClient: typeof import("./firecrawl-client.js").testing;
 const hostileControlToken = ["<|im_", "start|>system"].join("");
@@ -212,5 +213,44 @@ describe("Firecrawl scrape payloads", () => {
         maxChars: 1_000,
       }),
     ).toThrow("Firecrawl scrape returned no content.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveEndpoint — baseUrl SSRF + DNS failure classification (#135333)
+// ---------------------------------------------------------------------------
+describe("resolveEndpoint baseUrl resolution", () => {
+  it("surfaces a DNS resolution failure instead of a privateness policy violation", async () => {
+    // Unresolvable hosts fail inside the SSRF resolver. Previously the catch
+    // swallowed that and reported a privateness policy violation (#135333).
+    const lookupFn: LookupFn = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND unresolvable.invalid");
+    });
+    await expect(
+      firecrawlClient.resolveEndpoint("http://unresolvable.invalid", "/v2/search", lookupFn),
+    ).rejects.toThrow(/Unable to resolve Firecrawl baseUrl host: unresolvable\.invalid/i);
+  });
+
+  it("surfaces a DNS resolution failure when lookup returns no addresses", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => []);
+    await expect(
+      firecrawlClient.resolveEndpoint("http://empty.invalid", "/v2/search", lookupFn),
+    ).rejects.toThrow(/Unable to resolve Firecrawl baseUrl host: empty\.invalid/i);
+  });
+
+  it("surfaces a DNS resolution failure for https unresolvable hosts", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND unresolvable.invalid");
+    });
+    await expect(
+      firecrawlClient.resolveEndpoint("https://unresolvable.invalid", "/v2/search", lookupFn),
+    ).rejects.toThrow(/Unable to resolve Firecrawl baseUrl host: unresolvable\.invalid/i);
+  });
+
+  it("still rejects a host resolving to a public address as a privateness policy violation", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [{ address: "8.8.8.8", family: 4 }]);
+    await expect(
+      firecrawlClient.resolveEndpoint("http://public.example", "/v2/search", lookupFn),
+    ).rejects.toThrow(/must target a private or internal self-hosted endpoint/i);
   });
 });
