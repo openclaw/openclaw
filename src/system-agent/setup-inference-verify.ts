@@ -13,10 +13,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  resolveSystemAgentExecutionRoute,
   sameDefaultInferenceRoute,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import { resolveLoadedHelperExecutionRoute } from "./revalidate-inference-owner.js";
 import {
   type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
@@ -346,9 +346,6 @@ export async function verifySetupInferenceConfig(params: {
     let configuredRoute:
       | NonNullable<Awaited<ReturnType<typeof resolveSystemAgentConfiguredRouteFromConfig>>>
       | undefined;
-    let executionRoute:
-      | NonNullable<Awaited<ReturnType<typeof resolveSystemAgentConfiguredRouteFromConfig>>>
-      | undefined;
     let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
     if (requiresExecutionOwner) {
       configuredRoute =
@@ -360,7 +357,7 @@ export async function verifySetupInferenceConfig(params: {
           error: "The verified inference route could not be resolved for owner validation.",
         };
       }
-      executionRoute = resolveSystemAgentExecutionRoute(configuredRoute);
+      const executionRoute = resolveLoadedHelperExecutionRoute(configuredRoute, deps);
       plan =
         executionRoute.runner === "embedded"
           ? {

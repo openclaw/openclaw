@@ -27,10 +27,12 @@ import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  resolveSystemAgentExecutionRoute,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
-import { loadSetupInferencePluginGeneration } from "./revalidate-inference-owner.js";
+import {
+  loadSetupInferencePluginGeneration,
+  resolveLoadedHelperExecutionRoute,
+} from "./revalidate-inference-owner.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   createSetupInferenceCandidateStager,
@@ -473,7 +475,7 @@ async function activateSetupInferenceUnredacted(
       routeDeps,
     );
     const stagedExecutionRoute = stagedConfiguredExecutionRoute
-      ? resolveSystemAgentExecutionRoute(stagedConfiguredExecutionRoute)
+      ? resolveLoadedHelperExecutionRoute(stagedConfiguredExecutionRoute, deps)
       : null;
     if (
       !stagedRoute ||

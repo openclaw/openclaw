@@ -6391,14 +6391,20 @@ describe("verifySetupInference", () => {
   it("binds a declared Codex fallback through the effective OpenClaw runtime", async () => {
     const savedHarnesses = listRegisteredAgentHarnesses();
     clearAgentHarnesses();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      supports: (ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
-        ctx.modelProvider?.requestTransportOverrides === "present"
-          ? { supported: false, fallbackRuntime: "openclaw" }
-          : { supported: true },
-      runAttempt: vi.fn() as never,
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: (ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
+            ctx.modelProvider?.requestTransportOverrides === "present"
+              ? { supported: false, fallbackRuntime: "openclaw" }
+              : { supported: true },
+          runAttempt: vi.fn() as never,
+        },
+        { ownerPluginId: "codex" },
+      );
+      return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? createEmptyPluginRegistry();
     });
     try {
       const profileId = "openai:verified";
@@ -6512,6 +6518,7 @@ describe("verifySetupInference", () => {
           authProfileIdSource: "user",
         }),
       );
+      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalled();
       expect(captureOwnerPluginArtifacts).toHaveBeenCalledWith(
         expect.objectContaining({
           executionRoute: expect.objectContaining({ agentHarnessRuntimeOverride: "openclaw" }),
@@ -6519,6 +6526,7 @@ describe("verifySetupInference", () => {
       );
     } finally {
       restoreRegisteredAgentHarnesses(savedHarnesses);
+      mocks.loadAgentRuntimePluginRegistryHandle.mockReset();
     }
   });
 

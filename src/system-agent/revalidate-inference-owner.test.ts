@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
+import {
+  clearAgentHarnesses,
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+} from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import {
   createPluginMetadataSnapshot,
@@ -60,6 +64,7 @@ const registeredHarnesses = listRegisteredAgentHarnesses();
 
 afterEach(() => {
   restoreRegisteredAgentHarnesses(registeredHarnesses);
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReset();
 });
 
 describe("revalidateSetupInferenceOwner", () => {
@@ -184,14 +189,21 @@ describe("revalidateSetupInferenceOwner", () => {
   );
 
   it("passes a declared OpenClaw fallback into owner revalidation", async () => {
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      supports: (ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
-        ctx.modelProvider?.requestTransportOverrides === "present"
-          ? { supported: false, fallbackRuntime: "openclaw" }
-          : { supported: true },
-      runAttempt: vi.fn() as never,
+    clearAgentHarnesses();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: (ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
+            ctx.modelProvider?.requestTransportOverrides === "present"
+              ? { supported: false, fallbackRuntime: "openclaw" }
+              : { supported: true },
+          runAttempt: vi.fn() as never,
+        },
+        { ownerPluginId: "codex" },
+      );
+      return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? createEmptyPluginRegistry();
     });
     const binding = {} as SystemAgentVerifiedInferenceBinding;
     const createSystemAgentVerifiedInferenceBinding = vi.fn(async () => binding);
@@ -211,6 +223,7 @@ describe("revalidateSetupInferenceOwner", () => {
       }),
     ).resolves.toBe(binding);
 
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalled();
     expect(createSystemAgentVerifiedInferenceBinding).toHaveBeenCalledWith(
       expect.objectContaining({
         configuredRoute: expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),

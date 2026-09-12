@@ -1,6 +1,7 @@
 // Rebuilds an exact verified inference owner after a successful live probe.
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -81,12 +82,71 @@ export function loadSetupInferencePluginGeneration(params: {
   });
 }
 
+export function withConfiguredHelperRuntime<T>(
+  route: SystemAgentConfiguredRoute,
+  deps: Pick<RevalidationDeps, "resolvePluginMetadataSnapshot"> | undefined,
+  run: () => T,
+): T {
+  const configuredRuntime =
+    route.runner === "embedded" ? route.agentHarnessRuntimeOverride?.trim() : undefined;
+  if (!configuredRuntime || configuredRuntime === "auto" || configuredRuntime === "openclaw") {
+    return run();
+  }
+  const generation = loadSetupInferencePluginGeneration({
+    config: route.runConfig,
+    workspaceDir: resolveAgentWorkspaceDir(route.runConfig, route.agentId, process.env),
+    selection: {
+      provider: parseRef(route.modelLabel).provider,
+      modelId: route.model,
+      runtime: configuredRuntime,
+      agentId: route.agentId,
+    },
+    resolvePluginMetadataSnapshot: deps?.resolvePluginMetadataSnapshot,
+  });
+  return withPluginRuntimeGenerationScope(generation, run);
+}
+
+export function resolveLoadedHelperExecutionRoute(
+  route: SystemAgentConfiguredRoute,
+  deps?: Pick<RevalidationDeps, "resolvePluginMetadataSnapshot">,
+): SystemAgentConfiguredRoute {
+  const configuredRuntime =
+    route.runner === "embedded" ? route.agentHarnessRuntimeOverride?.trim() : undefined;
+  if (
+    !configuredRuntime ||
+    configuredRuntime === "auto" ||
+    configuredRuntime === "openclaw" ||
+    getRegisteredAgentHarness(configuredRuntime)
+  ) {
+    return resolveSystemAgentExecutionRoute(route);
+  }
+  return withConfiguredHelperRuntime(route, deps, () => resolveSystemAgentExecutionRoute(route));
+}
+
 export async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
   ownerPluginIds?: readonly string[];
   deps: RevalidationDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
+  const configuredRuntime =
+    params.route.runner === "embedded"
+      ? params.route.agentHarnessRuntimeOverride?.trim()
+      : undefined;
+  if (configuredRuntime && configuredRuntime !== "auto" && configuredRuntime !== "openclaw") {
+    return await withConfiguredHelperRuntime(params.route, params.deps, () => {
+      const executionRoute = resolveSystemAgentExecutionRoute(params.route);
+      return (
+        params.deps.createSystemAgentVerifiedInferenceBinding ??
+        createSystemAgentVerifiedInferenceBinding
+      )({
+        configuredRoute: params.route,
+        executionRoute,
+        auth: params.auth,
+        deps: params.deps,
+      });
+    });
+  }
   const executionRoute = resolveSystemAgentExecutionRoute(params.route);
   const executionHarnessId =
     executionRoute.runner === "embedded"
