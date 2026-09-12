@@ -1,0 +1,18 @@
+{
+  "ghsa_id": "GHSA-rfgv-xxqx-mfg5",
+  "state": "published",
+  "withdrawn_at": null,
+  "severity": "high",
+  "summary": "undici vulnerable to Denial of Service via unrequested WebSocket subprotocol",
+  "vulnerabilities": [
+    {
+      "package": {
+        "ecosystem": "npm",
+        "name": "undici"
+      },
+      "vulnerable_version_range": ">= 6.7.0 < 6.28.1; 7.0.0 < 7.29.1; 8.0.0 < 8.10.2",
+      "patched_versions": "6.28.1; 7.29.1; 8.10.2",
+      "vulnerable_functions": []
+    }
+  ]
+}

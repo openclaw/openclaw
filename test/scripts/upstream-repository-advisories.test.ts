@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchPublishedRepositoryAdvisories } from "../../scripts/lib/upstream-repository-advisories.mts";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
+// Published nodejs/undici repository payload; the global GHSA endpoint returned 404.
+const undiciAdvisory = JSON.parse(
+  readFileSync(new URL("../fixtures/undici-ghsa-rfgv-xxqx-mfg5.json", import.meta.url), "utf8"),
+);
 const REGISTRY = "https://registry.npmjs.org";
 const REPOSITORY = "fixture/packages";
 const ADVISORY_ID = "GHSA-2222-3333-4444";
@@ -93,6 +98,83 @@ afterEach(() => {
 });
 
 describe("published upstream repository advisories", () => {
+  it("recovers only explicit Undici intervals while retaining raw unresolved coverage", async () => {
+    const source = createSourceFetch({
+      manifest: (url) => manifest(url, "https://github.com/nodejs/undici"),
+      page: () => Response.json([undiciAdvisory]),
+      reviewed: () => Response.json({ message: "Not Found" }, { status: 404 }),
+    });
+    const report = await scan(source.fetchImpl, {
+      undici: ["6.6.9", "6.7.0", "6.28.0", "6.28.1", "7.0.0", "7.29.0", "8.0.0", "8.10.1"],
+    });
+    expect(report.advisories).toMatchObject([
+      {
+        id: "GHSA-rfgv-xxqx-mfg5",
+        packageName: "undici",
+        severity: "high",
+        vulnerable_versions: ">=6.7.0 <6.28.1",
+        matchedVersions: ["6.28.0", "6.7.0"],
+      },
+    ]);
+    expect(report.coverage).toMatchObject({
+      status: "partial",
+      reconciliations: [],
+      issues: [
+        {
+          subject: "undici#GHSA-rfgv-xxqx-mfg5",
+          reason: "invalid-range",
+          rawRange: undiciAdvisory.vulnerabilities[0].vulnerable_version_range,
+        },
+        { subject: "undici#GHSA-rfgv-xxqx-mfg5", reason: "request-failed" },
+      ],
+    });
+    expect(source.calls.some(({ url }) => url.pathname === "/advisories/GHSA-rfgv-xxqx-mfg5")).toBe(
+      true,
+    );
+  });
+
+  it("does not use partially recovered repository syntax as reviewed clearance", async () => {
+    const source = createSourceFetch({
+      page: () =>
+        Response.json([
+          advisory("< 7.0.0", {
+            ghsa_id: undiciAdvisory.ghsa_id,
+            vulnerabilities: [vulnerability("< 7.0.0", "undici")],
+          }),
+        ]),
+      reviewed: () =>
+        Response.json({
+          ...undiciAdvisory,
+          published_at: "2026-09-04T00:00:00Z",
+          github_reviewed_at: "2026-09-05T00:00:00Z",
+        }),
+    });
+    const report = await scan(source.fetchImpl, { undici: ["6.28.0", "6.28.1"] });
+    expect(report.advisories).toMatchObject([{ matchedVersions: ["6.28.0", "6.28.1"] }]);
+    expect(report.coverage).toMatchObject({
+      status: "partial",
+      reconciliations: [],
+      issues: [{ subject: "undici#GHSA-rfgv-xxqx-mfg5", reason: "invalid-advisory" }],
+    });
+  });
+
+  it.each([
+    ">= 6.7.0 < 6.28.1; except 6.28.0",
+    ">= 6.7.0 < 6.28.1; 7.0.0 < 7.29.1 trailing",
+    ">= 6.7.0 < 6.28.1; ",
+    ">= 6.28.1 < 6.7.0; 7.0.0 < 7.29.1",
+    ">= 06.7.0 < 6.28.1; 7.0.0 < 7.29.1",
+    "= 6.7.0 < 6.28.1; 7.0.0 < 7.29.1",
+  ])("does not extract intervals from unsupported prose or malformed trains (%s)", async (raw) => {
+    const source = createSourceFetch({ page: () => Response.json([advisory(raw)]) });
+    const report = await scan(source.fetchImpl, { fixture: ["6.28.0"] });
+    expect(report.advisories).toEqual([]);
+    expect(report.coverage).toMatchObject({
+      status: "partial",
+      issues: [{ subject: `fixture#${ADVISORY_ID}`, reason: "invalid-range" }],
+    });
+  });
+
   it("discovers exact scoped versions once and verifies a shared repository before scanning", async () => {
     const source = createSourceFetch({
       manifest: (url) =>
