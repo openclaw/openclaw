@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type {
   ChatAccountSelection,
   UserModelAccount,
@@ -194,7 +195,11 @@ export class NewSessionModelControl {
           : "ready"
         : "loading",
     });
-    return loadModelCatalog(client, { ...scope, signal: controller.signal }).then(
+    return loadModelCatalog(client, {
+      ...scope,
+      signal: controller.signal,
+      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+    }).then(
       (result) => {
         if (!ownsRequest()) {
           return undefined;

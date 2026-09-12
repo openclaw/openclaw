@@ -150,13 +150,14 @@ export async function preflightUpdateCommandSchemas(params: {
           const { preflightConfiguredNpmPluginTargets } =
             await import("./update-command-plugin-preflight.js");
           const context = admission.contexts.at(-1)!;
-          await preflightConfiguredNpmPluginTargets({
+          const pluginWarnings = await preflightConfiguredNpmPluginTargets({
             config: context.configSnapshot.sourceConfig,
             env: context.env,
             targetVersion: params.packageTargetVersion ?? null,
             channel,
             timeoutMs: updateStepTimeoutMs,
           });
+          preflightNotes.push(...pluginWarnings.map((warning) => warning.message));
         }
       }
     } catch (error) {

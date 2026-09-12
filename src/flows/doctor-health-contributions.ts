@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { emitDoctorNotes } from "../commands/doctor/emit-notes.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
@@ -560,7 +561,11 @@ async function runDoctorHealthContributionList(
         return;
       }
     } catch (error) {
-      if (contribution.required || error instanceof DoctorStateMigrationRefusalError) {
+      if (
+        contribution.required ||
+        error instanceof DoctorStateMigrationRefusalError ||
+        error instanceof ConfigWritePostCommitError
+      ) {
         throw error;
       }
       const { note } = await loadNoteModule();

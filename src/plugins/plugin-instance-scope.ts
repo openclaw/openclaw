@@ -19,6 +19,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
+  adopt<T>(value: T): T;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,

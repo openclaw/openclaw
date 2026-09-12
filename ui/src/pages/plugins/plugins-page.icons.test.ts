@@ -102,7 +102,7 @@ describe("PluginsPage icon routing", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
   });
 
-  it("prefers installed package icons over legacy art in unified catalog cards", async () => {
+  it("renders installed package icons or a placeholder when unavailable in unified catalog cards", async () => {
     const createObjectURL = vi.fn(() => "blob:package-icon");
     vi.stubGlobal(
       "URL",
@@ -218,9 +218,10 @@ describe("PluginsPage icon routing", () => {
         page.querySelector('[data-plugin-id="ch_brave"] img.plugins-icon')?.getAttribute("src"),
       ).toBe("blob:package-icon"),
     );
-    expect(page.querySelector('[data-plugin-id="ch_discord"] img')?.getAttribute("src")).toBe(
-      "/plugin-art/discord.webp",
-    );
+    expect(page.querySelector('[data-plugin-id="ch_discord"] img')).toBeNull();
+    expect(
+      page.querySelector('[data-plugin-id="ch_discord"] .plugin-catalog-card__art svg'),
+    ).not.toBeNull();
   });
 
   it("fetches package icons for installed settings rows", async () => {

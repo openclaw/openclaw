@@ -318,13 +318,6 @@ export function renderWhereChip(params: {
         }
         params.onPopoverShow();
       }}
-      @wa-after-show=${(event: Event) => {
-        if (event.target === event.currentTarget && event.currentTarget instanceof HTMLElement) {
-          event.currentTarget
-            .querySelector<HTMLInputElement>('input[type="search"]')
-            ?.focus({ preventScroll: true });
-        }
-      }}
       @wa-hide=${(event: Event) => {
         if (event.target === event.currentTarget) {
           params.onPopoverHide();
