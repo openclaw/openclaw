@@ -268,6 +268,19 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 - `keyPath`: filesystem path to the TLS private key file; keep permission-restricted.
 - `caPath`: optional CA bundle path for client verification or custom trust chains.
 
+With automatic reload enabled, the Gateway watches the certificate, key, and CA
+files at their accepted paths. Replacing their contents renews all Gateway HTTPS
+listeners without disconnecting existing connections. The complete material is
+validated first; a missing, unreadable, or mismatched pair keeps the previous
+certificate serving and logs the failure. Renewal never generates missing files.
+Background observation follows atomic symlink and projected-directory replacements too.
+Changing TLS configuration or file paths still requires a Gateway restart.
+
+`gateway.reload.mode: "off"` pauses certificate renewal too. Re-enabling reload
+checks the current files, including renewals made while paused. Discovery and new
+pairing payloads use the served fingerprint. Saved remote certificate pins remain
+operator-controlled: update them before reconnecting with a renewed certificate.
+
 Client commands such as `triage`, `gateway status`, and `gateway probe` only read the public certificate to determine a local TLS pin. They never generate or repair TLS files and do not need the server private key or CA bundle. Without `certPath`, they inspect `gateway/tls/gateway-cert.pem` under the state directory. A missing or unreadable certificate supplies no implicit pin; normal connection trust checks still apply. Start the Gateway to generate a missing pair, or provide the configured certificate files before connecting.
 
 ### `gateway.reload`

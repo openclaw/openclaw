@@ -64,7 +64,8 @@ export async function requestGatewayLocalHttpProbe(params: {
         ...(params.signal ? { signal: params.signal } : {}),
         // Self-signed local Gateway certificates are trusted only by the exact
         // configured pin below; never accept them on ordinary HTTPS requests.
-        ...(params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
+        // A reused socket still carries its old certificate after listener renewal.
+        ...(params.tlsFingerprint ? { rejectUnauthorized: false, agent: false } : {}),
       },
       (res) => {
         if (params.tlsFingerprint) {
@@ -117,25 +118,17 @@ export function createConfiguredGatewayLocalProbe(
   config: OpenClawConfig,
 ): ConfiguredGatewayLocalProbe {
   const tlsConfig = config.gateway?.tls;
-  let tlsFingerprint: string | undefined;
-  let tlsFingerprintLoad: Promise<string | undefined> | null = null;
 
   const resolveTlsFingerprint = async (): Promise<string | undefined> => {
     if (tlsConfig?.enabled !== true) {
       return undefined;
     }
-    if (!tlsFingerprint) {
-      tlsFingerprintLoad ??= import("../infra/tls/gateway.js")
-        .then(({ loadGatewayTlsServerRuntime }) =>
-          loadGatewayTlsServerRuntime({ ...tlsConfig, autoGenerate: false }),
-        )
-        .then((gatewayTls) => gatewayTls.fingerprintSha256)
-        .catch(() => undefined);
-      const gatewayTls = await tlsFingerprintLoad;
-      tlsFingerprintLoad = null;
-      tlsFingerprint = gatewayTls;
-    }
-    return tlsFingerprint;
+    // Supervisor probes outlive renewals. Read only the current public certificate,
+    // never the server private key or a pin cached for a previous certificate.
+    const certificate = await import("../infra/tls/gateway.js")
+      .then(({ inspectGatewayTlsCertificate }) => inspectGatewayTlsCertificate(tlsConfig))
+      .catch(() => undefined);
+    return certificate?.ok ? certificate.value.fingerprintSha256 : undefined;
   };
 
   return {

@@ -172,6 +172,8 @@ export function startGatewayConfigReloader(opts: {
   testDebounceMs?: number;
   /** Per-instance test hook for synchronizing filesystem edits with watcher startup. */
   onWatcherReady?: () => void;
+  /** Source acceptance controls ancillary reload owners even when runtime application is off. */
+  onReloadEnabledChange?: (enabled: boolean) => void;
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
@@ -742,6 +744,7 @@ export function startGatewayConfigReloader(opts: {
       // Persisted content changed even when the runtime skipped applying it
       // (writer intent, reload mode off): change listeners still refresh.
       const notifyCommitted = () => {
+        opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
         if (changedPaths.length > 0) {
           opts.onConfigCandidateCommitted?.({
             path: opts.watchPath,
@@ -1687,6 +1690,7 @@ export function startGatewayConfigReloader(opts: {
     currentReapplyRuntimeOverlays =
       initialCandidate?.reapplyRuntimeOverlays ?? ((config) => config);
     settings = resolveSettings(currentConfig);
+    opts.onReloadEnabledChange?.(settings.mode !== "off");
     currentSnapshotSlot = readLatestConfigSnapshotAuditRecord();
     // A write captured during validation owns the newer audit baseline.
     if (sourceObservation.epoch === 0) {

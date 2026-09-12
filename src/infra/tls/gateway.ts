@@ -216,7 +216,7 @@ export async function inspectGatewayTlsCertificate(
   }
 }
 
-/** Server startup only: load or provision TLS material and return listener options. */
+/** Server lifecycle only: load TLS material; startup may also provision a missing pair. */
 export async function loadGatewayTlsServerRuntime(
   cfg: GatewayTlsConfig | undefined,
   log?: GatewayTlsLog,
@@ -284,6 +284,9 @@ export async function loadGatewayTlsServerRuntime(
       };
     }
 
+    const tlsOptions: tls.TlsOptions = { cert, key, ca, minVersion: "TLSv1.3" };
+    // Reject incomplete renewals before any listener can adopt mismatched material.
+    tls.createSecureContext(tlsOptions);
     return {
       enabled: true,
       required: true,
@@ -291,12 +294,7 @@ export async function loadGatewayTlsServerRuntime(
       keyPath,
       caPath,
       fingerprintSha256,
-      tlsOptions: {
-        cert,
-        key,
-        ca,
-        minVersion: "TLSv1.3",
-      },
+      tlsOptions,
     };
   } catch (error) {
     return {

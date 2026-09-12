@@ -486,6 +486,59 @@ describe("startGatewayDiscovery", () => {
   });
 
   it.each(["ready", "pending"] as const)(
+    "replaces a %s advertisement when the served TLS fingerprint changes",
+    async (phase) => {
+      useDevelopmentDiscoveryEnv();
+      vi.useFakeTimers();
+      process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
+      const oldAdvertisement = createDeferredCore<{ stop: () => void }>();
+      const oldStop = vi.fn();
+      const nextStop = vi.fn();
+      const advertise = vi
+        .fn<PluginGatewayDiscoveryServiceRegistration["service"]["advertise"]>()
+        .mockImplementationOnce(() =>
+          phase === "pending" ? oldAdvertisement.promise : Promise.resolve({ stop: oldStop }),
+        )
+        .mockResolvedValue({ stop: nextStop });
+      const starting = startDiscovery({
+        discovery: { mdns: { mode: "full" }, wideArea: { domain: "openclaw.internal." } },
+        gatewayTls: { enabled: true, fingerprintSha256: "old-fingerprint" },
+        gatewayDiscoveryServices: [makeDiscoveryService({ id: "bonjour", advertise })],
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      const discovery = await starting;
+      try {
+        await discovery.update({ gatewayTlsFingerprintSha256: "next-fingerprint" });
+        expect(advertise).toHaveBeenCalledTimes(2);
+        expect(advertise).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            gatewayTlsEnabled: true,
+            gatewayTlsFingerprintSha256: "next-fingerprint",
+            minimal: false,
+          }),
+        );
+        expect(latestZoneParams().gatewayTlsFingerprintSha256).toBe("next-fingerprint");
+        expect(oldStop).toHaveBeenCalledTimes(phase === "ready" ? 1 : 0);
+
+        oldAdvertisement.resolve({ stop: oldStop });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(oldStop).toHaveBeenCalledOnce();
+        expect(nextStop).not.toHaveBeenCalled();
+
+        await discovery.update({ gatewayTlsFingerprintSha256: "next-fingerprint" });
+        expect(advertise).toHaveBeenCalledTimes(2);
+        expect(mocks.writeWideAreaGatewayZone).toHaveBeenCalledTimes(2);
+      } finally {
+        oldAdvertisement.resolve({ stop: oldStop });
+        await vi.advanceTimersByTimeAsync(0);
+        await discovery.stop();
+      }
+      expect(oldStop).toHaveBeenCalledOnce();
+      expect(nextStop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["ready", "pending"] as const)(
     "retains an unchanged %s advertisement across selective replacement",
     async (phase) => {
       useDevelopmentDiscoveryEnv();

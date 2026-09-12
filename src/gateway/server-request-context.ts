@@ -250,9 +250,9 @@ export function createGatewayRequestContext(
         ? []
         : (runtimeState.configReloader.getDeferredChannelReloads?.() ?? []),
     getGatewayMethodRegistry: runtime.getAttachedGatewayMethodRegistry,
-    gatewayTlsFingerprint: runtime.gatewayTls.enabled
-      ? runtime.gatewayTls.fingerprintSha256
-      : undefined,
+    get gatewayTlsFingerprint() {
+      return runtime.gatewayTls.enabled ? runtime.gatewayTls.fingerprintSha256 : undefined;
+    },
     controlUiSessionPullRequests: runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: runtimeState.sessionViewerPresence,
     sessionCompanion: runtime.sessionCompanion,

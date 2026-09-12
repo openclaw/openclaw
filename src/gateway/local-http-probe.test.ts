@@ -20,10 +20,8 @@ test("probes configured local TLS readiness with its exact certificate pin", asy
   await withTestDir({ prefix: "openclaw-local-http-probe-" }, async (directory) => {
     const certPath = path.join(directory, "gateway-cert.pem");
     const keyPath = path.join(directory, "gateway-key.pem");
-    await Promise.all([
-      writeFile(certPath, TEST_TLS_CERT_PEM),
-      writeFile(keyPath, TEST_TLS_KEY_PEM),
-    ]);
+    // Client probes need only the public certificate; the configured private key is absent.
+    await writeFile(certPath, TEST_TLS_CERT_PEM);
     const paths: string[] = [];
     const server = createServer(
       { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },

@@ -18,6 +18,7 @@ import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generati
 
 type DiscoveryUpdate = {
   mdnsMode?: MdnsDiscoveryMode;
+  gatewayTlsFingerprintSha256?: string;
   gatewayDiscoveryServices?: readonly PluginGatewayDiscoveryServiceRegistration[];
 };
 export type GatewayDiscovery = {
@@ -26,6 +27,7 @@ export type GatewayDiscovery = {
 };
 type DiscoveryGeneration = {
   mode: MdnsDiscoveryMode;
+  tlsFingerprint?: string;
   services: Map<
     PluginGatewayDiscoveryServiceRegistration,
     { started?: boolean; stop?: () => void | Promise<void> }
@@ -47,6 +49,7 @@ export async function startGatewayDiscovery(params: {
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<GatewayDiscovery> {
   let mode = params.discovery?.mdns?.mode ?? "minimal";
+  let tlsFingerprint = params.gatewayTls?.fingerprintSha256;
   const wideAreaDomain = params.discovery?.wideArea?.domain;
   let services = params.gatewayDiscoveryServices ?? [];
   let claim = params.pluginRuntimeClaim;
@@ -128,7 +131,7 @@ export async function startGatewayDiscovery(params: {
       machineDisplayName: params.machineDisplayName,
       gatewayPort: params.port,
       gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
-      gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+      gatewayTlsFingerprintSha256: generation.tlsFingerprint,
       gatewayDirectReachable: params.gatewayDirectReachable === true,
       sshPort: minimal ? undefined : (parseTcpPort(process.env.OPENCLAW_SSH_PORT) ?? undefined),
       tailnetDns,
@@ -246,20 +249,28 @@ export async function startGatewayDiscovery(params: {
   const update: GatewayDiscovery["update"] = (next, nextClaim = claim) => {
     const nextMode = "mdnsMode" in next ? (next.mdnsMode ?? "minimal") : mode;
     const nextServices = next.gatewayDiscoveryServices ?? services;
+    const nextTlsFingerprint = next.gatewayTlsFingerprintSha256 ?? tlsFingerprint;
     if (
       closed ||
-      (current && mode === nextMode && services === nextServices && claim === nextClaim)
+      (current &&
+        mode === nextMode &&
+        services === nextServices &&
+        claim === nextClaim &&
+        tlsFingerprint === nextTlsFingerprint)
     ) {
       return Promise.resolve();
     }
     const previous = current;
-    const retained = mode === nextMode ? previous?.services : undefined;
+    const retained =
+      mode === nextMode && tlsFingerprint === nextTlsFingerprint ? previous?.services : undefined;
     mode = nextMode;
+    tlsFingerprint = nextTlsFingerprint;
     services = nextServices;
     claim = nextClaim;
     // Exact retained registrations keep acquired and pending handles across publication.
     const generation = (current = {
       mode,
+      tlsFingerprint,
       services: new Map(services.map((entry) => [entry, retained?.get(entry) ?? {}])),
       claim,
       waiting: false,
