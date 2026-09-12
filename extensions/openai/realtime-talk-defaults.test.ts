@@ -54,7 +54,7 @@ describe("OpenAI Talk account defaults", () => {
       model: "gpt-live-1",
     },
   ])(
-    "starts Talk with the $account default and matching auth",
+    "starts audio-only browser Talk with the $account default and matching auth",
     async ({ apiProfile, oauth, configuredKey, model }) => {
       const cfg = {
         agents: { list: [{ id: "voice-agent", agentDir: "/tmp/openclaw-voice-agent" }] },
@@ -85,6 +85,7 @@ describe("OpenAI Talk account defaults", () => {
         cfg,
         agentId: "voice-agent",
         surface: "browser-session",
+        requiredCapabilities: { supportsVideoFrames: false },
         providers: [provider],
         providerConfigs: { openai: configuredKey ? { apiKey: "test-api-key-platform" } : {} },
       });
@@ -116,6 +117,12 @@ describe("OpenAI Talk account defaults", () => {
   );
 
   it.each([
+    {
+      name: "browser discovery",
+      context: { surface: "browser-session" as const },
+      rawConfig: {},
+      model: "gpt-realtime-2.1",
+    },
     {
       name: "manual replies",
       context: { autoRespondToAudio: false },

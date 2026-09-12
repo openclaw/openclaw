@@ -131,12 +131,12 @@ function resolveOpenAIRealtimeVoiceConfig(
   if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
     return config;
   }
-  // Live delegates natively; GA still owns manually triggered replies and video.
+  // Browser discovery preserves camera support until a caller requests audio only.
   if (
     config.azureEndpoint ||
     config.azureDeployment ||
     autoRespondToAudio === false ||
-    requiredCapabilities?.supportsVideoFrames === true
+    (requiredCapabilities?.supportsVideoFrames ?? surface === "browser-session")
   ) {
     return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
   }

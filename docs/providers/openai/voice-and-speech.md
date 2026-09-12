@@ -191,19 +191,24 @@ sidebarTitle: "Voice and speech"
 
     #### GPT-Live API
 
-    Talk selects GPT-Live automatically when no model is configured. An OpenAI
-    Platform key, API-key profile, or `OPENAI_API_KEY` selects `gpt-live-1` with
-    `marin`; a ChatGPT-only account selects `gpt-live-1-codex` with `cove`.
-    `talk.catalog` reports the default for the selected agent's accounts.
-    A configured Platform credential takes precedence over ChatGPT sign-in,
-    including when that credential needs repair.
+    Audio-only Talk clients and Gateway relay sessions select GPT-Live when no
+    model is configured. An OpenAI Platform key, API-key profile, or
+    `OPENAI_API_KEY` selects `gpt-live-1` with `marin`; a ChatGPT-only account
+    selects `gpt-live-1-codex` with `cove`. A configured Platform credential
+    takes precedence over ChatGPT sign-in, including when that credential needs repair.
 
-    Explicit model choices and voices supported by that model stay in effect. Talk requests requiring
-    video or forced agent-consult replies retain `gpt-realtime-2.1` when no
-    model is pinned. Direct tool bridges, including Discord's wake-name and
-    agent-proxy modes, and Azure deployments retain their existing defaults.
-    Installing an update does not rewrite saved configuration or switch an
-    active session; unpinned Talk sessions use the new default when started.
+    The camera-capable Control UI and browser discovery retain `gpt-realtime-2.1`.
+    Audio-only browser clients explicitly negotiate without camera frames to use
+    the account-aware default. `talk.catalog` describes the configured Talk
+    agent's default for its discovery surface; a session scoped to another agent
+    resolves that agent's accounts when it starts.
+
+    Explicit model choices and voices supported by that model stay in effect;
+    an explicit GPT-Live model is audio-only. Requests requiring video or forced
+    agent-consult replies retain `gpt-realtime-2.1` when no model is pinned.
+    Direct tool bridges, including Discord's wake-name and agent-proxy modes,
+    and Azure deployments retain their existing defaults. Installing an update
+    does not rewrite saved configuration or switch an active session.
 
     Set `talk.realtime.model` explicitly to `gpt-live-1` for the public
     [GPT-Live API](https://developers.openai.com/api/docs/guides/live). GPT-Live
