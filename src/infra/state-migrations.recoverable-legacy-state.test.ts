@@ -218,11 +218,29 @@ describe("legacy agent directory migration", () => {
             legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
           });
 
+        await fs.mkdir(canonicalDir, { recursive: true });
         expect(getAgentDir()).toBe(legacyDir);
-        await expect(fs.stat(canonicalDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.readdir(canonicalDir)).resolves.toEqual([]);
+        if (process.platform !== "win32") {
+          await fs.chmod(canonicalDir, 0o2750);
+        }
+        const sourceRoot = await fs.realpath(legacyDir);
         const detected = await detect();
         expect(detected.agentDir.targetDir).toBe(canonicalDir);
-        await migrateLegacyAgentDir(detected, () => 1234);
+        const migrated = await migrateLegacyAgentDir(detected, () => 1234);
+        expect(migrated.warnings).toEqual([]);
+        if (process.platform !== "win32") {
+          expect((await fs.stat(canonicalDir)).mode & 0o7777).toBe(0o2750);
+        }
+        const receipt = await fs.readFile(
+          path.join(canonicalDir, ".legacy-agent-dir-migration.json"),
+          "utf8",
+        );
+        expect(JSON.parse(receipt)).toEqual({
+          version: 1,
+          source: sourceRoot,
+          target: await fs.realpath(canonicalDir),
+        });
         expect(getAgentDir()).toBe(canonicalDir);
         await expect(fs.readFile(path.join(canonicalDir, "bin/fd"), "utf8")).resolves.toBe(
           "legacy binary",
@@ -240,6 +258,101 @@ describe("legacy agent directory migration", () => {
           "legacy binary",
         );
         await expect(fs.stat(legacyDir)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+  });
+
+  it("preserves an unrecognized destination receipt and reports incomplete cutover", async () => {
+    await withOpenClawTestState(
+      { label: "standalone-agent-receipt-collision", agentEnv: "clear" },
+      async (state) => {
+        await state.writeText("agent/bin/fd", "legacy binary");
+        const receiptPath = state.statePath("agents/main/agent/.legacy-agent-dir-migration.json");
+        await state.writeText(
+          "agents/main/agent/.legacy-agent-dir-migration.json",
+          "unrecognized receipt payload",
+        );
+        const detected = await detectLegacyStateMigrations({
+          cfg: { agents: { entries: { main: {} } } },
+          env: state.env,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+
+        const result = await migrateLegacyAgentDir(detected, () => 1234);
+
+        await expect(fs.readFile(receiptPath, "utf8")).resolves.toBe(
+          "unrecognized receipt payload",
+        );
+        expect(result.warningDisposition).toBe("recoverable");
+        expect(result.warnings).toContainEqual(expect.stringContaining(receiptPath));
+        await expect(fs.readFile(path.join(state.agentDir(), "bin/fd"), "utf8")).resolves.toBe(
+          "legacy binary",
+        );
+        expect(getAgentDir()).toBe(state.agentDir());
+      },
+    );
+  });
+
+  it("keeps standalone state after an incomplete migration, including a source-carried receipt", async () => {
+    await withOpenClawTestState(
+      { label: "standalone-agent-incomplete", agentEnv: "clear" },
+      async (state) => {
+        await state.writeText("agent/bin/fd", "legacy binary");
+        const legacyDir = state.statePath("agent");
+        const canonicalDir = state.agentDir();
+        await fs.mkdir(canonicalDir, { recursive: true });
+        const receiptName = ".legacy-agent-dir-migration.json";
+        const receiptBytes =
+          JSON.stringify({
+            version: 1,
+            source: await fs.realpath(legacyDir),
+            target: await fs.realpath(canonicalDir),
+          }) + "\n";
+        await fs.writeFile(path.join(legacyDir, receiptName), receiptBytes);
+        const detected = await detectLegacyStateMigrations({
+          cfg: { agents: { entries: { main: {} } } },
+          env: state.env,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+        const rename = fsSync.renameSync;
+        const sourceBin = path.join(await fs.realpath(legacyDir), "bin");
+        vi.spyOn(fsSync, "renameSync").mockImplementation((source, target) => {
+          if (source === sourceBin) {
+            throw new Error("synthetic binary move failure");
+          }
+          rename(source, target);
+        });
+
+        const result = await migrateLegacyAgentDir(detected, () => 1234);
+
+        expect(result.warnings).toContainEqual(
+          expect.stringContaining("synthetic binary move failure"),
+        );
+        expect(getAgentDir()).toBe(legacyDir);
+        await expect(fs.readFile(path.join(legacyDir, "bin/fd"), "utf8")).resolves.toBe(
+          "legacy binary",
+        );
+        await expect(fs.stat(path.join(canonicalDir, receiptName))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.readFile(path.join(legacyDir, receiptName), "utf8")).resolves.toBe(
+          receiptBytes,
+        );
+        vi.restoreAllMocks();
+        const completed = await migrateLegacyAgentDir(detected, () => 5678);
+        expect(completed.warnings).toContainEqual(expect.stringContaining(receiptName));
+        const quarantines = (await fs.readdir(state.stateDir)).filter((name) =>
+          name.startsWith("agent.legacy-"),
+        );
+        expect(quarantines).toHaveLength(1);
+        await expect(
+          fs.readFile(
+            state.statePath(expectDefined(quarantines[0], "receipt quarantine"), receiptName),
+            "utf8",
+          ),
+        ).resolves.toBe(receiptBytes);
+        await state.writeText("agent/bin/fd", "recreated binary");
+        expect(getAgentDir()).toBe(canonicalDir);
       },
     );
   });

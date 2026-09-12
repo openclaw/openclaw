@@ -10,6 +10,10 @@ import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import {
+  LEGACY_AGENT_DIR_RECEIPT,
+  recordCompletedLegacyAgentDirMigration,
+} from "./state-migrations.agent-dir-receipt.js";
+import {
   ensureMigrationDir,
   migrationFileExists,
   readSessionStoreJson5,
@@ -448,7 +452,12 @@ export async function migrateLegacyAgentDir(
       };
     }
     for (const entry of fs.readdirSync(sourceRoot)) {
-      merge(path.join(sourceRoot, entry), path.join(targetRoot, entry), entry);
+      // A source-carried receipt is payload, never evidence of this migration's completion.
+      if (entry === LEGACY_AGENT_DIR_RECEIPT) {
+        conflicts.push(entry);
+      } else {
+        merge(path.join(sourceRoot, entry), path.join(targetRoot, entry), entry);
+      }
     }
     if (conflicts.length > 0) {
       // Recovery copies stay in the state root, including for external or aliased agentDir targets.
@@ -465,11 +474,13 @@ export async function migrateLegacyAgentDir(
         );
       }
     } else {
-      removeDirIfEmpty(sourceRoot);
+      fs.rmdirSync(sourceRoot);
     }
+    recordCompletedLegacyAgentDirMigration(sourceRoot, targetRoot);
+    changes.push(`Completed legacy agent directory migration → ${targetDir}`);
   } catch (error) {
     warnings.push(
-      `Could not finish legacy agent migration; preserved remaining source at ${legacyDir}: ${String(error)}. Rerun openclaw doctor --fix after resolving this error.`,
+      `Could not finish legacy agent migration: ${String(error)}. Any remaining source is preserved at ${legacyDir}. Rerun openclaw doctor --fix after resolving this error.`,
     );
   }
 

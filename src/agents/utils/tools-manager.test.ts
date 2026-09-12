@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -72,8 +80,36 @@ describe("ensureTool", () => {
   it.each([
     { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
     { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
-    { name: "both present", legacy: "payload", canonical: "payload", selected: "canonical" },
-    { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "canonical" },
+    { name: "both present", legacy: "payload", canonical: "payload", selected: "legacy" },
+    { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "legacy" },
+    {
+      name: "completed migration",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "valid",
+      selected: "canonical",
+    },
+    {
+      name: "incomplete receipt",
+      legacy: "payload",
+      canonical: "empty",
+      receipt: "partial",
+      selected: "legacy",
+    },
+    {
+      name: "another source's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-source",
+      selected: "legacy",
+    },
+    {
+      name: "another target's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-target",
+      selected: "legacy",
+    },
     { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
     { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
   ])("reuses managed binaries across agent directory migration: $name", async (testCase) => {
@@ -99,6 +135,25 @@ describe("ensureTool", () => {
       } else if (contents === "empty") {
         mkdirSync(directory, { recursive: true });
       }
+    }
+
+    if (testCase.receipt) {
+      writeFileSync(
+        join(canonicalDir, ".legacy-agent-dir-migration.json"),
+        testCase.receipt === "partial"
+          ? '{"version":1'
+          : JSON.stringify({
+              version: 1,
+              source:
+                testCase.receipt === "other-source"
+                  ? join(home, "other-agent")
+                  : realpathSync(legacyDir),
+              target:
+                testCase.receipt === "other-target"
+                  ? join(home, "other-target")
+                  : realpathSync(canonicalDir),
+            }) + "\n",
+      );
     }
 
     const { getAgentDir } = await import("../config.js");
