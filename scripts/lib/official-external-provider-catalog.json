@@ -1698,6 +1698,62 @@
       }
     },
     {
+      "name": "@openclaw/radius-provider",
+      "description": "OpenClaw Radius model gateway provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "radius",
+          "label": "Radius"
+        },
+        "providers": [
+          {
+            "id": "radius",
+            "name": "Radius",
+            "docs": "/providers/radius",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "RADIUS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "oauth",
+                "choiceId": "radius",
+                "appGuidedAuth": "oauth",
+                "choiceLabel": "Radius (browser sign-in)",
+                "groupId": "radius",
+                "groupLabel": "Radius",
+                "groupHint": "Browser sign-in or API key"
+              },
+              {
+                "method": "api-key",
+                "choiceId": "radius-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Radius API key",
+                "groupId": "radius",
+                "groupLabel": "Radius",
+                "groupHint": "Browser sign-in or API key",
+                "optionKey": "radiusApiKey",
+                "cliFlag": "--radius-api-key",
+                "cliOption": "--radius-api-key <key>",
+                "cliDescription": "Radius organization API key"
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/radius-provider",
+          "npmSpec": "@openclaw/radius-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.4"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tencent-provider",
       "description": "OpenClaw Tencent Cloud provider plugin (TokenHub + Token Plan)",
       "source": "official",

@@ -31,6 +31,8 @@ minimumReleaseAgeExclude:
   - "grammy@1.46.0"
   # GHSA-prgh-xp8r-p3m5 / GHSA-v53p-9fqp-m79j security fixes; remove after 2026-09-18.
   - "nodemailer@10.0.8"
+  # GHSA-r7fv-28h4-cvq7 security fix; remove after 2026-09-18 04:04 UTC.
+  - "markdown-it@15.0.2"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated

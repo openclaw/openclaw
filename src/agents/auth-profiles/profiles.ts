@@ -418,7 +418,14 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const owners =
       params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir);
-    const profilesByOwner = new Map(owners.map((owner) => [owner, new Set(profileIds)]));
+    // The explicit main directory can name the shared store. Visiting both aliases
+    // would compare already-deleted credentials against the same captured generation.
+    const profilesByOwner = new Map(
+      owners.map((owner) => [
+        isSharedMainAuthProfileAgentDir(owner) ? undefined : owner,
+        new Set(profileIds),
+      ]),
+    );
     for (const profileId of profileIds) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,

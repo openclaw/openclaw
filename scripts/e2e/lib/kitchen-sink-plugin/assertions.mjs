@@ -326,6 +326,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "hosted media resolver registration missing resolver",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
+    "invalid widget presenter registration",
     "node invoke policy registration missing commands",
     "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",

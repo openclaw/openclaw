@@ -1,6 +1,9 @@
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
+import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
+import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import { registerConfigCli } from "../../cli/config-cli.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configLock from "../../config/write-lock.js";
@@ -10,6 +13,98 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 
 describe("models.authLogout with a concurrent registered config set", () => {
+  it("removes an explicitly selected saved profile once when main aliases the shared store", async () => {
+    const state = await createOpenClawTestState({
+      label: "models-auth-selected-profile-removal",
+      env: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      },
+    });
+    const token = "selected-removal-gateway-token";
+    const profileId = "openai:selected";
+    const selected = { type: "token", provider: "openai", token: "synthetic-selected" };
+    const kept = { type: "token", provider: "openai", token: "synthetic-kept" };
+    try {
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: { [profileId]: selected, "openai:kept": kept },
+      });
+      await state.writeAuthProfiles(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: { type: "token", provider: "openai", token: "synthetic-other-owner" },
+          },
+        },
+        "other",
+      );
+      expect(resolveAuthProfileDatabasePath(state.agentDir())).toBe(resolveSharedAuthStorePath());
+      const otherBefore = loadPersistedAuthProfileStore(state.agentDir("other"));
+      const { client, server } = await startGatewayWithClient({
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { workspace: state.workspaceDir },
+              other: { workspace: state.workspaceDir },
+            },
+          },
+          plugins: { enabled: false },
+          gateway: { mode: "local", auth: { mode: "token", token } },
+        },
+        configPath: state.configPath,
+        token,
+        scopes: ["operator.admin"],
+      });
+      try {
+        await server.startupSettled;
+        expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles[profileId]).toEqual(
+          selected,
+        );
+        const outcome = await client
+          .request("models.authLogout", {
+            provider: "openai",
+            agentId: "main",
+            profileIds: [profileId],
+          })
+          .then(
+            (value) => ({ ok: true, value }),
+            (error: unknown) => ({ ok: false, error }),
+          );
+        const remaining = loadPersistedAuthProfileStore(state.agentDir());
+        expect(
+          outcome,
+          JSON.stringify({ remainingProfileIds: Object.keys(remaining?.profiles ?? {}) }),
+        ).toEqual({
+          ok: true,
+          value: {
+            provider: "openai",
+            removedProfiles: [profileId],
+            abortedRunIds: [],
+            // This minimal Gateway owns deletion but has no published model runtime to refresh.
+            warning:
+              "Model auth changes were saved, but the Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
+          },
+        });
+        expect(remaining?.profiles[profileId]).toBeUndefined();
+        expect(remaining?.profiles["openai:kept"]).toEqual(kept);
+        expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toBeUndefined();
+        expect(loadPersistedAuthProfileStore(state.agentDir("other"))).toEqual(otherBefore);
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close();
+      }
+    } finally {
+      await state.cleanup();
+    }
+  });
+
   it.each([
     {
       name: "preserves a replacement key and refuses stale removal",

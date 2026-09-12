@@ -332,6 +332,14 @@ describe("persistPluginInstall enablement", () => {
         recordPluginManifestInstallOwner(
           {
             id: "needs-config",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "config",
+            rootDir: "/tmp/needs-config",
+            source: "/tmp/needs-config/index.ts",
             manifestPath: "/tmp/needs-config/openclaw.plugin.json",
             configSchema: {
               type: "object",
@@ -440,6 +448,14 @@ describe("persistPluginInstall enablement", () => {
         recordPluginManifestInstallOwner(
           {
             id: "needs-config",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "config",
+            rootDir: "/tmp/needs-config",
+            source: "/tmp/needs-config/index.ts",
             manifestPath: "/tmp/needs-config/openclaw.plugin.json",
             configSchema: {
               type: "object",

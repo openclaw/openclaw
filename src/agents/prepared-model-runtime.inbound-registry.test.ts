@@ -524,9 +524,15 @@ describe("prepared reply dispatch runtime", () => {
     const workspaceDir = "/tmp/dynamic-auth-workspace";
     const catalogGenerationRegistries: unknown[] = [];
     const dynamicPreparationRegistries: unknown[] = [];
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
-      (params) => params.reusableRegistry ?? createEmptyPluginRegistry(),
-    );
+    // Keep this refresh fixture's selected scope distinct from its generic inbound owner.
+    const inboundRegistry = createEmptyPluginRegistry();
+    const selectedRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
+      if (params.reusableRegistry && params.reusableRegistry !== inboundRegistry) {
+        return params.reusableRegistry;
+      }
+      return params.selections ? selectedRegistry : inboundRegistry;
+    });
     mocks.buildPreparedModelCatalogSnapshot.mockImplementation(async () => {
       catalogGenerationRegistries.push(getPluginRuntimeGenerationRegistry());
       return { entries: [], routeVariants: [] };

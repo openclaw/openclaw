@@ -15,6 +15,7 @@ import {
 } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -59,6 +60,8 @@ vi.mock("./models-config.js", () => ({
 function installReplyEntryMocks() {
   vi.doMock("../plugins/runtime.js", () => ({
     getActivePluginRegistry: () => null,
+    // Generation checks still observe canonical registry publication and invalidation.
+    getActivePluginRegistryVersion,
     getActivePluginRegistryWorkspaceDir: () => undefined,
     getPluginRegistryForContext: () => emptyPluginRegistry,
     requireActivePluginRegistry: () => emptyPluginRegistry,

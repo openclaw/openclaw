@@ -1,10 +1,14 @@
 import { backup, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { setSqliteBusyTimeout } from "../src/infra/sqlite-busy-timeout.js";
 import { withStateSchemaFence } from "../src/infra/state-database-coordinator.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "../src/infra/update-run-driver.js";
 import { createUpdateRun, finishUpdateRun } from "../src/infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../src/infra/update-run-timeouts.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../src/state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
@@ -387,6 +391,7 @@ describe("Gateway external shared-state ownership", () => {
       const finishedAtMs = publishAfterMs - publicationGraceMs;
       const writer = new DatabaseSync(databasePath);
       try {
+        setSqliteBusyTimeout(writer, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
         // Deliver an aged terminal fixture through a separate connection, like the old CLI.
         writer
           .prepare(`UPDATE update_runs SET status = 'succeeded', phase = 'finished',

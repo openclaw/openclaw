@@ -134,6 +134,11 @@ describe("provider public artifacts", () => {
   });
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
+    // Exercise this checkout's policy rather than a previously built plugin artifact.
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve(
+      import.meta.dirname,
+      "../../extensions",
+    );
     const surface = resolveBundledProviderPolicySurface("openai");
     expect(surface?.normalizeConfig).toBeTypeOf("function");
     expect(surface?.projectConfiguredModelRow).toBeTypeOf("function");
@@ -157,6 +162,7 @@ describe("provider public artifacts", () => {
     expect(surface?.resolveModelRoutes?.({ provider: "openai", modelId: "gpt-5.5" })).toEqual({
       kind: "routes",
       defaultRuntimeId: "codex",
+      preferredAuthRequirement: "subscription",
       routes: [
         {
           api: "openai-responses",
