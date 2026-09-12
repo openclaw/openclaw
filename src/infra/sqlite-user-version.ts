@@ -1,11 +1,49 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 type SqliteUserVersionReader = {
   prepare: (sql: string) => { get: () => unknown };
 };
+
+export type SqliteSchemaHeader = {
+  userVersion: number;
+  writerAppVersion?: string;
+};
+
+export function readSqliteWriterAppVersion(database: DatabaseSync): string | undefined {
+  try {
+    // Schema metadata inspection also accepts older or newer metadata contracts.
+    const row = executeSqliteQueryTakeFirstSync(
+      database,
+      getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "schema_meta">>(database)
+        .selectFrom("schema_meta")
+        .select("app_version")
+        .where("meta_key", "=", "primary")
+        .limit(1),
+    );
+    return typeof row?.app_version === "string" && row.app_version.length > 0
+      ? row.app_version
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Read both metadata values from one fresh SQLite read transaction, including WAL. */
+export function readSqliteSchemaHeader(database: DatabaseSync): SqliteSchemaHeader {
+  database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+  return runSqliteDeferredTransactionSync(database, () => {
+    const userVersion = readSqliteUserVersion(database);
+    const writerAppVersion = readSqliteWriterAppVersion(database);
+    return { userVersion, ...(writerAppVersion ? { writerAppVersion } : {}) };
+  });
+}
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
 

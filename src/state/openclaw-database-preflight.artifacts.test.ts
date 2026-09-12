@@ -122,6 +122,40 @@ function sourceArtifacts(paths: string[], allowReadMarks: string[] = []): unknow
 }
 
 describe("schema preflight source artifacts", () => {
+  it("retains the source-reader lock tolerance beyond the runtime busy timeout", async () => {
+    const root = tempDirs.make("openclaw-header-lock-tolerance-");
+    const pathname = path.join(root, "agent.sqlite");
+    const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
+    writer.exec(`
+      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
+      INSERT INTO schema_meta VALUES ('primary', 'before-lock');
+      PRAGMA user_version = ${supportedVersions.agent};
+      BEGIN EXCLUSIVE;
+      UPDATE schema_meta SET app_version = 'after-lock';
+    `);
+    let released = false;
+    const release = setTimeout(() => {
+      writer.exec("COMMIT;");
+      released = true;
+    }, 8_000);
+    try {
+      const result = await preflightOpenClawDatabaseSchemas({
+        env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
+        supportedVersions,
+        configuredAgentDatabaseCandidatePaths: [pathname],
+      });
+      expect(result).toEqual({ incompatible: [], indeterminate: [] });
+      expect(hasSchemaRefusal(result)).toBe(false);
+      expect(released).toBe(true);
+    } finally {
+      clearTimeout(release);
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK;");
+      }
+      writer.close();
+    }
+  }, 20_000);
+
   it.each([0, 8 * 1024 * 1024])(
     "reads fresh WAL metadata without copying %i bytes of unrelated payload",
     async (payloadBytes) => {

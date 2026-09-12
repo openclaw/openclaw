@@ -9,22 +9,24 @@ import {
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCoordinator } from "./sqlite-coordinator.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
-import { readSqliteSchemaHeader, type SqliteSchemaHeader } from "./sqlite-schema-header.js";
 import {
   withSqliteSourceHandle,
   withSqliteSourceHandleAsync,
   withSqliteSourceReadDatabase,
 } from "./sqlite-source-handle.js";
+import { readSqliteSchemaHeader, type SqliteSchemaHeader } from "./sqlite-user-version.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
 const SQLITE_HEADER_BYTES = 20;
+const SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS = 30_000;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
@@ -466,7 +468,9 @@ async function createOnlineReadOnlyBackup(
     }
     const source = openNodeSqliteDatabase(pathname, { readOnly: true });
     try {
-      source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+      source.exec(
+        `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
+      );
       source.prepare("PRAGMA schema_version;").get();
       await sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath));
       source.exec("ROLLBACK;");
@@ -638,7 +642,7 @@ export function readSqliteSchemaHeaderFromSnapshot(
       signal?.throwIfAborted();
       const database = openNodeSqliteDatabase(prepared.location, { readOnly: true });
       try {
-        database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+        setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
         return readSqliteSchemaHeader(database);
       } finally {
         database.close();
@@ -659,7 +663,7 @@ export function inspectSqliteSchemaHeaderInProcess(pathname: string, stagingRoot
       try {
         return withSqliteSourceReadDatabase(canonicalPath, (database) => {
           try {
-            database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+            setSqliteBusyTimeout(database, SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS);
             return readSqliteSchemaHeader(database);
           } catch (error) {
             readError = error;

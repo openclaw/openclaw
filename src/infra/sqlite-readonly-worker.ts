@@ -11,7 +11,7 @@ import {
   SQLITE_READONLY_CHILD_ARG,
 } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import type { SqliteSchemaHeader } from "./sqlite-schema-header.js";
+import type { SqliteSchemaHeader } from "./sqlite-user-version.js";
 
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const SQLITE_INSPECTION_TIMEOUT_MS = 30_000;
