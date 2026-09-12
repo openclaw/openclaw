@@ -507,7 +507,7 @@ export async function startStaticFileServer(params: {
   logStream.on("error", (error) => {
     logStreamError ??= error;
   });
-  const fileName = params.filePath.split(/[/\\]/u).at(-1) ?? "artifact";
+  const fileName = encodeURIComponent(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
   const fileStat = statSync(params.filePath);
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {

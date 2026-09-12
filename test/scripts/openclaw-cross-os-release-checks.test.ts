@@ -1594,30 +1594,39 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveStaticFileContentType("openclaw-2026.4.14.tgz")).toBe("application/octet-stream");
   });
 
-  it("streams release artifacts from the static file server", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-"));
-    const filePath = join(dir, "openclaw-2026.4.14.tgz");
-    const logPath = join(dir, "server.log");
-    let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
+  it.each([
+    { fileName: "openclaw-2026.4.14.tgz", requestPath: "/openclaw-2026.4.14.tgz" },
+    { fileName: "openclaw release.tgz", requestPath: "/openclaw%20release.tgz" },
+    { fileName: "openclaw-🦞.tgz", requestPath: "/openclaw-%F0%9F%A6%9E.tgz" },
+    { fileName: "openclaw#release.tgz", requestPath: "/openclaw%23release.tgz" },
+  ])(
+    "streams release artifacts from the static file server: $fileName",
+    async ({ fileName, requestPath }) => {
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-"));
+      const filePath = join(dir, fileName);
+      const logPath = join(dir, "server.log");
+      let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
 
-    try {
-      const payload = Buffer.from(`artifact-head\n${"x".repeat(1024 * 1024)}\nartifact-tail`);
-      writeFileSync(filePath, payload);
+      try {
+        const payload = Buffer.from(`artifact-head\n${"x".repeat(1024 * 1024)}\nartifact-tail`);
+        writeFileSync(filePath, payload);
 
-      server = await startStaticFileServer({ filePath, logPath });
-      const response = await fetch(server.url);
-      const body = Buffer.from(await response.arrayBuffer());
+        server = await startStaticFileServer({ filePath, logPath });
+        const response = await fetch(server.url);
+        const body = Buffer.from(await response.arrayBuffer());
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-length")).toBe(String(payload.length));
-      expect(response.headers.get("content-type")).toBe("application/octet-stream");
-      expect(body.equals(payload)).toBe(true);
-      expect(readFileSync(logPath, "utf8")).toContain(`GET /${filePath.split(/[/\\]/u).at(-1)}`);
-    } finally {
-      await server?.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-length")).toBe(String(payload.length));
+        expect(response.headers.get("content-type")).toBe("application/octet-stream");
+        expect(body.equals(payload)).toBe(true);
+        await server.close();
+        expect(readFileSync(logPath, "utf8")).toContain(`GET ${requestPath}`);
+      } finally {
+        await server?.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("closes static release artifact sockets left by aborted clients", async () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-close-"));
