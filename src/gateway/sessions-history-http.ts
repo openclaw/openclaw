@@ -103,8 +103,7 @@ function resolveLimit(req: IncomingMessage): Result<number | undefined, string> 
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 function resolveSessionHistoryHttpClient(
