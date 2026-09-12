@@ -464,5 +464,8 @@ export async function resolveMessagingToolDeliveryEvidence(params: {
     return await Promise.race([verification, verificationAborted]);
   } finally {
     clearTimeout(timer);
+    // Verification owns this controller so a successful match also cancels
+    // any concurrent provider lookups that lost the race.
+    verificationDeadline.abort();
   }
 }

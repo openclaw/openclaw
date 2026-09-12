@@ -237,4 +237,52 @@ describe("resolveMessagingToolDeliveryEvidence", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(500);
   });
+
+  it("cancels losing recipient lookups after a successful match", async () => {
+    let pendingLookupCancelled = false;
+    const resolveEquivalentTarget = vi.fn(
+      async (target: { to?: string }, _deliveryTarget: unknown, signal?: AbortSignal) => {
+        if (target.to === "D000000001") {
+          return "user:U000000001";
+        }
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            pendingLookupCancelled = true;
+            resolve();
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => {
+              pendingLookupCancelled = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return undefined;
+      },
+    );
+
+    await expect(
+      resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "test-requester",
+        result: {
+          ...result,
+          messagingToolSentTargets: [
+            ...result.messagingToolSentTargets,
+            { ...result.messagingToolSentTargets[0], to: "D000000002" },
+          ],
+        },
+        deliveryTarget,
+        resolveEquivalentTarget,
+      }),
+    ).resolves.toEqual({
+      hasFinalMessagingToolDelivery: true,
+      hasMessagingToolDelivery: true,
+    });
+
+    expect(pendingLookupCancelled).toBe(true);
+  });
 });
