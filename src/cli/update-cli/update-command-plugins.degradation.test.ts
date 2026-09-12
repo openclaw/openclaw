@@ -17,164 +17,172 @@ import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 
 describe("post-core plugin payload degradation", () => {
   it.each([
-    ["missing-owner", "unsafe", "unowned-plugin-payload"],
-    ["consent", "unsafe", "capability-consent-required"],
-    ["integrity", "unsafe", "integrity-drift"],
-    ["unclassified", "unsafe", "convergence-failed"],
-    ["unknown-requirement", "unsafe", "plugin-requirement-unknown"],
-    ["required", "unsafe", "required-plugin-unavailable"],
-    ["mixed", "unsafe", "unowned-plugin-payload"],
-    ["repaired-advisory", "optional-repair-needed", undefined],
-    ["optional", "optional-repair-needed", undefined],
-    ["invalid-config", "core-critical", "invalid-config"],
-    ["authority", undefined, undefined],
-  ] as const)("classifies %s without granting repair authority", async (failure, kind, reason) => {
-    await withOpenClawTestState({ label: `plugin-assessment-${failure}` }, async (state) => {
-      await state.writeConfig({ plugins: { enabled: false } });
-      const refusal = new Error("original updater authority refused");
-      const installPath = state.path("fixture");
-      const smokeFailure = {
-        pluginId: "fixture",
-        reason:
-          failure === "missing-owner"
-            ? ("missing-install-path" as const)
-            : ("missing-extension-entry" as const),
-        detail: "unavailable",
-        ...(failure === "missing-owner" ? {} : { installPath }),
-      };
-      const convergeCohort = cohort.convergePluginReleaseCohort;
-      const cohortSpy =
-        failure === "integrity" || failure === "repaired-advisory"
-          ? vi
-              .spyOn(cohort, "convergePluginReleaseCohort")
-              .mockImplementationOnce(async (options) => {
-                if (failure === "integrity") {
-                  await options.onIntegrityDrift?.({
-                    pluginId: "fixture",
-                    spec: "fixture@1.0.0",
-                    expectedIntegrity: "sha512-known",
-                    actualIntegrity: "sha512-changed",
-                    dryRun: false,
-                  });
-                }
-                const result = await convergeCohort(options);
-                return failure === "repaired-advisory"
-                  ? {
-                      ...result,
-                      missingPayloads: [
-                        {
-                          pluginId: "repaired",
-                          installPath: state.path("repaired"),
-                          reason: "missing-package-dir",
-                        },
-                      ],
-                      repairedMissingPayloadIds: new Set(["repaired"]),
-                      repairOutcomes: [
-                        { pluginId: "repaired", status: "updated", message: "Payload restored" },
-                      ],
-                    }
-                  : result;
-              })
-          : undefined;
-      const spy = vi
-        .spyOn(convergence, "runPostCorePluginConvergence")
-        .mockImplementationOnce(async () => {
-          if (failure === "authority") {
-            throw refusal;
-          }
-          return {
-            changes: [],
-            warnings:
-              failure === "unclassified"
-                ? []
-                : [
-                    {
-                      pluginId: "fixture",
-                      reason: "missing payload",
-                      message: "unavailable",
-                      guidance: [],
-                    },
-                  ],
-            installRecords: {},
-            errored: true,
-            smokeFailures:
-              failure === "unclassified"
-                ? []
-                : [
-                    smokeFailure,
-                    ...(failure === "mixed"
-                      ? [
-                          {
-                            pluginId: "another",
-                            reason: "missing-install-path" as const,
-                            detail: "No isolation root",
-                          },
-                        ]
-                      : []),
-                  ],
-            outcomes:
-              failure === "consent"
-                ? [
-                    {
-                      pluginId: "fixture",
-                      status: "error",
-                      code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-                      message: "Consent required",
-                    },
-                  ]
-                : [],
-          };
-        });
-      try {
-        const prepared = await preparePostCorePluginConfig({ requestedChannel: null });
-        const params = {
-          root: state.root,
-          channel: "stable" as const,
-          ...prepared,
-          ...(failure === "invalid-config"
-            ? { configSnapshot: { ...prepared.configSnapshot, valid: false } }
-            : {}),
-          ...(failure === "unknown-requirement"
-            ? {}
-            : {
-                pluginRequirements: {
-                  fixture: failure === "required" ? ("required" as const) : ("optional" as const),
-                },
-              }),
-          timeoutMs: 1_000,
-          json: true,
+    ["missing-owner", true, "error", "unsafe", "unowned-plugin-payload"],
+    ["missing-owner", false, "warning", "unsafe", "unowned-plugin-payload"],
+    ["consent", true, "error", "unsafe", "capability-consent-required"],
+    ["consent", false, "error", "unsafe", "capability-consent-required"],
+    ["integrity", true, "error", "unsafe", "integrity-drift"],
+    ["integrity", false, "warning", "unsafe", "integrity-drift"],
+    ["unclassified", true, "error", "unsafe", "convergence-failed"],
+    ["unclassified", false, "ok", "no-payload-repair", undefined],
+    ["unknown-requirement", true, "error", "unsafe", "plugin-requirement-unknown"],
+    ["unknown-requirement", false, "warning", "unsafe", "plugin-requirement-unknown"],
+    ["required", true, "error", "unsafe", "required-plugin-unavailable"],
+    ["required", false, "warning", "unsafe", "required-plugin-unavailable"],
+    ["mixed", true, "error", "unsafe", "unowned-plugin-payload"],
+    ["repaired-advisory", true, "error", "optional-repair-needed", undefined],
+    ["optional", true, "error", "optional-repair-needed", undefined],
+    ["optional", false, "warning", "optional-repair-needed", undefined],
+    ["invalid-config", true, "error", "core-critical", "invalid-config"],
+    ["authority", true, undefined, undefined, undefined],
+  ] as const)(
+    "classifies %s with convergence errored=%s and legacy status=%s",
+    async (failure, errored, status, kind, reason) => {
+      await withOpenClawTestState({ label: `plugin-assessment-${failure}` }, async (state) => {
+        await state.writeConfig({ plugins: { enabled: false } });
+        const refusal = new Error("original updater authority refused");
+        const installPath = state.path("fixture");
+        const smokeFailure = {
+          pluginId: "fixture",
+          reason:
+            failure === "missing-owner"
+              ? ("missing-install-path" as const)
+              : ("missing-extension-entry" as const),
+          detail: "unavailable",
+          ...(failure === "missing-owner" ? {} : { installPath }),
         };
-        const update = updatePluginsAfterCoreUpdate(params);
-        if (failure === "authority") {
-          await expect(update).rejects.toBe(refusal);
-        } else {
-          const result = await update;
-          expect(result).toMatchObject({
-            status: kind === "optional-repair-needed" ? "warning" : "error",
-            assessment: { kind, ...(reason ? { reason } : {}) },
+        const convergeCohort = cohort.convergePluginReleaseCohort;
+        const cohortSpy =
+          failure === "integrity" || failure === "repaired-advisory"
+            ? vi
+                .spyOn(cohort, "convergePluginReleaseCohort")
+                .mockImplementationOnce(async (options) => {
+                  if (failure === "integrity") {
+                    await options.onIntegrityDrift?.({
+                      pluginId: "fixture",
+                      spec: "fixture@1.0.0",
+                      expectedIntegrity: "sha512-known",
+                      actualIntegrity: "sha512-changed",
+                      dryRun: false,
+                    });
+                  }
+                  const result = await convergeCohort(options);
+                  return failure === "repaired-advisory"
+                    ? {
+                        ...result,
+                        missingPayloads: [
+                          {
+                            pluginId: "repaired",
+                            installPath: state.path("repaired"),
+                            reason: "missing-package-dir",
+                          },
+                        ],
+                        repairedMissingPayloadIds: new Set(["repaired"]),
+                        repairOutcomes: [
+                          { pluginId: "repaired", status: "updated", message: "Payload restored" },
+                        ],
+                      }
+                    : result;
+                })
+            : undefined;
+        const spy = vi
+          .spyOn(convergence, "runPostCorePluginConvergence")
+          .mockImplementationOnce(async () => {
+            if (failure === "authority") {
+              throw refusal;
+            }
+            return {
+              changes: [],
+              warnings:
+                failure === "unclassified"
+                  ? []
+                  : [
+                      {
+                        pluginId: "fixture",
+                        reason: "missing payload",
+                        message: "unavailable",
+                        guidance: [],
+                      },
+                    ],
+              installRecords: {},
+              errored,
+              smokeFailures:
+                failure === "unclassified"
+                  ? []
+                  : [
+                      smokeFailure,
+                      ...(failure === "mixed"
+                        ? [
+                            {
+                              pluginId: "another",
+                              reason: "missing-install-path" as const,
+                              detail: "No isolation root",
+                            },
+                          ]
+                        : []),
+                    ],
+              outcomes:
+                failure === "consent"
+                  ? [
+                      {
+                        pluginId: "fixture",
+                        status: "error",
+                        code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+                        message: "Consent required",
+                      },
+                    ]
+                  : [],
+            };
           });
-          if (kind === "optional-repair-needed") {
+        try {
+          const prepared = await preparePostCorePluginConfig({ requestedChannel: null });
+          const params = {
+            root: state.root,
+            channel: "stable" as const,
+            ...prepared,
+            ...(failure === "invalid-config"
+              ? { configSnapshot: { ...prepared.configSnapshot, valid: false } }
+              : {}),
+            ...(failure === "unknown-requirement"
+              ? {}
+              : {
+                  pluginRequirements: {
+                    fixture: failure === "required" ? ("required" as const) : ("optional" as const),
+                  },
+                }),
+            timeoutMs: 1_000,
+            json: true,
+          };
+          const update = updatePluginsAfterCoreUpdate(params);
+          if (failure === "authority") {
+            await expect(update).rejects.toBe(refusal);
+          } else {
+            const result = await update;
             expect(result).toMatchObject({
-              reason: "plugin-payload-repair-pending",
-              assessment: { failures: [smokeFailure] },
+              status,
+              assessment: { kind, ...(reason ? { reason } : {}) },
             });
+            expect(result.reason).toBe(failure === "invalid-config" ? "invalid-config" : undefined);
+            if (kind === "optional-repair-needed") {
+              expect(result.assessment).toMatchObject({ failures: [smokeFailure] });
+            }
+            if (failure === "repaired-advisory") {
+              expect(result.npm.outcomes).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ pluginId: "repaired", status: "error" }),
+                  expect.objectContaining({ pluginId: "repaired", status: "updated" }),
+                  expect.objectContaining({ pluginId: "fixture", status: "error" }),
+                ]),
+              );
+            }
           }
-          if (failure === "repaired-advisory") {
-            expect(result.npm.outcomes).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({ pluginId: "repaired", status: "error" }),
-                expect.objectContaining({ pluginId: "repaired", status: "updated" }),
-                expect.objectContaining({ pluginId: "fixture", status: "error" }),
-              ]),
-            );
-          }
+        } finally {
+          spy.mockRestore();
+          cohortSpy?.mockRestore();
         }
-      } finally {
-        spy.mockRestore();
-        cohortSpy?.mockRestore();
-      }
-    });
-  });
+      });
+    },
+  );
 });
 
 describe("failed cohort repair requirement assessment", () => {
@@ -240,10 +248,11 @@ describe("failed cohort repair requirement assessment", () => {
                   enabled: false,
                   config: { retained: "authored" },
                 });
+                expect(result.reason).toBeUndefined();
                 expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
                 expect(await fs.readFile(dataPath, "utf8")).toBe("newer data survives");
                 expect(result).toMatchObject({
-                  status: "error",
+                  status: "warning",
                   assessment: {
                     kind: "unsafe",
                     reason:

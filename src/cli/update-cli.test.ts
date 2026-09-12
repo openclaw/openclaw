@@ -4416,6 +4416,9 @@ describe("update-cli", () => {
 
       expect(result).toEqual({
         status: errored ? "error" : "warning",
+        assessment: errored
+          ? { kind: "unsafe", reason: "convergence-failed" }
+          : { kind: "no-payload-repair" },
         changed: false,
         warnings: [...warnings, notice],
         sync: {

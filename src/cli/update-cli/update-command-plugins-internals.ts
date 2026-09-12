@@ -8,7 +8,8 @@ export type PostCorePluginUpdateResult = NonNullable<
 >;
 
 // Producer evidence only. This does not assert activation, final config validity,
-// or authority to execute a repair. Unknown installation requirements stay blocked.
+// or authority to execute a repair. Unknown installation requirements stay unsafe.
+// Legacy status/reason remain independent until callers qualify their policy cutover.
 export type PluginUpdateAssessment =
   | { kind: "no-payload-repair" }
   | { kind: "optional-repair-needed"; failures: PluginPayloadSmokeFailure[] }

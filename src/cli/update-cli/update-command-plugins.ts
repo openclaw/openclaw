@@ -1,4 +1,5 @@
 // Plugin synchronization and convergence after the core update.
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../commands/doctor/shared/configured-runtime-plugin-installs.js";
@@ -444,18 +445,21 @@ export async function updatePluginsAfterCoreUpdate(params: {
     integrityDrift: integrityDrifts.length > 0,
     requirements,
   });
+  // Keep the established caller status contract. Assessment is separate evidence;
+  // consuming it to change restart/finalization requires a qualified caller cutover.
   const status =
-    assessment.kind === "unsafe" || assessment.kind === "core-critical"
+    convergence.errored ||
+    pluginUpdateOutcomes.some(
+      (outcome) =>
+        outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+    )
       ? "error"
-      : warnings.length > 0 || assessment.kind === "optional-repair-needed"
+      : warnings.length > 0
         ? "warning"
         : "ok";
   const result: ProducedPluginUpdateResult = {
     status,
     assessment,
-    ...(assessment.kind === "optional-repair-needed"
-      ? { reason: "plugin-payload-repair-pending" }
-      : {}),
     changed: pluginsChanged,
     warnings,
     sync: {
