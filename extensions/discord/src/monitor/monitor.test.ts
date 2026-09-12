@@ -225,7 +225,7 @@ describe("discord component interactions", () => {
           { pluginRoot },
         ).ok,
       ).toBe(true);
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [createButtonEntry({ callbackData: "qabind:refresh" })],
         modals: [],
       });
@@ -311,7 +311,7 @@ describe("discord component interactions", () => {
   });
 
   it("routes button clicks with reply references", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry()],
       modals: [],
     });
@@ -334,7 +334,7 @@ describe("discord component interactions", () => {
   });
 
   it("records DM component interactions with user originating targets", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry()],
       modals: [],
     });
@@ -375,7 +375,7 @@ describe("discord component interactions", () => {
         callbackData: "/update",
         callbackDataKind,
       });
-      registerDiscordComponentEntries({ entries: [entry], modals: [] });
+      await registerDiscordComponentEntries({ entries: [entry], modals: [] });
       const ctx = createComponentContext();
       ctx.cfg.commands = { text: false };
       const button = createDiscordComponentButton(ctx);
@@ -435,7 +435,7 @@ describe("discord component interactions", () => {
     if (!entry) {
       throw new Error("Expected an update button registration");
     }
-    registerDiscordComponentEntries({ entries: rendered.entries, modals: rendered.modals });
+    await registerDiscordComponentEntries({ entries: rendered.entries, modals: rendered.modals });
     const currentOwner = testCase.revoke ? "987654321" : "123456789";
     ctx.cfg.commands.ownerAllowFrom = [`discord:${currentOwner}`];
     const button = createDiscordComponentButton(ctx);
@@ -473,7 +473,7 @@ describe("discord component interactions", () => {
   });
 
   it("preserves selected values for select fallback when no plugin handler matches", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [
         {
           id: "sel_1",
@@ -502,7 +502,7 @@ describe("discord component interactions", () => {
   });
 
   it("uses selected command action values for select fallback", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [
         {
           id: "sel_1",
@@ -534,7 +534,7 @@ describe("discord component interactions", () => {
   });
 
   it("dispatches selected callback action values to plugin interactive handlers", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [
         {
           id: "sel_1",
@@ -571,7 +571,7 @@ describe("discord component interactions", () => {
   });
 
   it("keeps reusable buttons active after use", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry({ reusable: true })],
       modals: [],
     });
@@ -600,7 +600,7 @@ describe("discord component interactions", () => {
   });
 
   it("blocks buttons when allowedUsers does not match", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry({ allowedUsers: ["999"] })],
       modals: [],
     });
@@ -626,7 +626,7 @@ describe("discord component interactions", () => {
   });
 
   it("blocks buttons from guilds removed from the allowlist", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry()],
       modals: [],
     });
@@ -677,7 +677,7 @@ describe("discord component interactions", () => {
   });
 
   async function runModalSubmission(params?: { reusable?: boolean }) {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [],
       modals: [createModalEntry({ reusable: params?.reusable ?? false })],
     });
@@ -698,7 +698,7 @@ describe("discord component interactions", () => {
     interactionId: string;
     guildEntries: Record<string, DiscordGuildEntryResolved>;
   }) {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry()],
       modals: [],
     });
@@ -739,7 +739,7 @@ describe("discord component interactions", () => {
     interactionId: string;
     expectedAuthorized: boolean;
   }) {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [],
       modals: [createModalEntry()],
     });
@@ -812,7 +812,7 @@ describe("discord component interactions", () => {
   });
 
   it("routes plugin Discord interactions in group DMs by channel id instead of sender id", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
     });
@@ -853,7 +853,7 @@ describe("discord component interactions", () => {
   });
 
   it("marks built-in Group DM component fallbacks with group metadata", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry()],
       modals: [],
     });
@@ -892,7 +892,7 @@ describe("discord component interactions", () => {
   });
 
   it("blocks Group DM modal triggers before showing the modal", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry({ kind: "modal-trigger", modalId: "mdl_1" })],
       modals: [createModalEntry()],
     });
@@ -923,7 +923,7 @@ describe("discord component interactions", () => {
   });
 
   it("does not fall through to Claw when a plugin Discord interaction already replied", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
     });
@@ -956,7 +956,7 @@ describe("discord component interactions", () => {
   ])(
     "sends $visibility plugin replies as new messages after component acknowledgment",
     async ({ ephemeral }) => {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [createButtonEntry({ callbackData: "codex:approve" })],
         modals: [],
       });
@@ -992,7 +992,7 @@ describe("discord component interactions", () => {
   );
 
   it("lets plugin Discord interactions clear components after acknowledging", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
     });
@@ -1039,7 +1039,7 @@ describe("discord component interactions", () => {
   });
 
   it("falls through to built-in Discord component routing when a plugin declines handling", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
     });
@@ -1060,7 +1060,7 @@ describe("discord component interactions", () => {
   });
 
   it("resolves plugin binding approvals without falling through to Claw", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [
         createButtonEntry({
           callbackData: buildPluginBindingApprovalCustomId("approval-1", "allow-once"),
