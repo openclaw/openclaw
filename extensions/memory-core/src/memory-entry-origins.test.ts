@@ -61,12 +61,15 @@ describe("memory entry origins", () => {
     };
   }
 
-  it("lazily restores the additive origins table without changing the agent schema version", () => {
+  it("lazily restores the additive origins table without changing the agent schema version", async () => {
+    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toBe(0);
+    await expect(fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).rejects.toThrow();
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const version = db.prepare("PRAGMA user_version").get();
     db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toBe(0);
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
     ).toBeUndefined();
@@ -198,6 +201,15 @@ describe("memory entry origins", () => {
     const priorEntry = "- Keep the original deployment target.";
     const original = [origin("candidate", "session-2"), origin("prior", "session-1")];
     recordMemoryEntryOrigins({ agentId: "main", origins: original });
+    for (const filter of [
+      { entryKeys: [] },
+      { entryKeys: ["candidate"], sessionIds: [] },
+      { entryKeys: ["missing"] },
+      { entryKeys: ["candidate"], sessionIds: ["session-1"] },
+    ]) {
+      expect(deleteMemoryEntryOrigins({ agentId: "main", ...filter })).toBe(0);
+    }
+    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
     const rollback = reserveMemoryEntryOrigins({
       agentIds: ["main"],
       previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,

@@ -233,7 +233,24 @@ export function deleteMemoryEntryOrigins(params: {
   entryKeys: readonly string[];
   sessionIds?: readonly string[];
 }): number {
-  if (listMemoryEntryOrigins(params).length === 0) {
+  if (params.entryKeys.length === 0 || params.sessionIds?.length === 0) {
+    return 0;
+  }
+  const existing = withOpenClawAgentDatabaseReadOnly(({ db }) => {
+    if (!ensuredDatabases.has(db) && !tableExists(db, "memory_entry_origins")) {
+      return false;
+    }
+    let query = getNodeSqliteKysely<MemoryOriginDatabase>(db)
+      .selectFrom("memory_entry_origins")
+      .select("entry_key")
+      .where("agent_id", "=", params.agentId)
+      .where("entry_key", "in", params.entryKeys);
+    if (params.sessionIds) {
+      query = query.where("session_id", "in", params.sessionIds);
+    }
+    return executeSqliteQuerySync(db, query.limit(1)).rows.length > 0;
+  }, params);
+  if (!existing.found || !existing.value) {
     return 0;
   }
   const db = openMemoryOriginDatabase(params.agentId);
