@@ -90,7 +90,7 @@ import {
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
-  captureSystemAgentOwnerPluginArtifacts,
+  captureSystemAgentOwnerPluginArtifacts as captureEffectiveOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
@@ -6461,8 +6461,8 @@ describe("verifySetupInference", () => {
         },
       );
       const captureOwnerPluginArtifacts = vi.fn(
-        (params: Parameters<typeof captureSystemAgentOwnerPluginArtifacts>[0]) =>
-          captureSystemAgentOwnerPluginArtifacts(params),
+        (params: Parameters<typeof captureEffectiveOwnerPluginArtifacts>[0]) =>
+          captureEffectiveOwnerPluginArtifacts(params),
       );
 
       const result = await verifySetupInference({

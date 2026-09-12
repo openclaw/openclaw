@@ -49,9 +49,7 @@ function embeddedRoute(
       },
       models: {
         providers: {
-          openai: {
-            ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
-          },
+          openai: typeof timeoutSeconds === "number" ? { timeoutSeconds } : {},
         },
       },
     },

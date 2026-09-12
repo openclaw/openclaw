@@ -87,10 +87,6 @@ export async function revalidateSetupInferenceOwner(params: {
   ownerPluginIds?: readonly string[];
   deps: RevalidationDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
-  const configuredHarnessId =
-    params.route.runner === "embedded"
-      ? params.route.agentHarnessRuntimeOverride?.trim()
-      : undefined;
   const executionRoute = resolveSystemAgentExecutionRoute(params.route);
   const executionHarnessId =
     executionRoute.runner === "embedded"
