@@ -78,6 +78,12 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
         .toContain("Some models could not be refreshed");
+      await expect.poll(() => effort.isVisible()).toBe(true);
+      await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
+      expect(await effortPicker.getAttribute("aria-hidden")).toBe("false");
+      expect(await effortPicker.getAttribute("class")).not.toContain(
+        "chat-controls__effort-picker--reserved",
+      );
     });
   });
 
