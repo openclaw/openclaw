@@ -87,6 +87,11 @@ close and the inactivity backstop remain independent of it.
 | `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
 | `always`      | Consult before every substantive answer.                                                        |
 
+While a native consult is running, another request shares its result only when
+its question, context, response style, and confirmation ID match. A different
+request receives a busy error without starting another consult; the realtime
+model should retry it after the active consult finishes.
+
 When a host tool run reports cancellation, the realtime model receives a
 cancelled result and the phone call stays open. Timeouts and other tool failures
 remain errors; ending the phone session suppresses pending consult results.

@@ -14,6 +14,7 @@ import {
   calculateMulawRms,
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
+  parseRealtimeVoiceAgentConsultArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   readRealtimeVoiceConsultQuestion,
@@ -292,6 +293,7 @@ type RealtimeConsultSession = {
 
 type NativeConsultState = {
   owner: ActiveRealtimeVoiceBridge;
+  requestKey?: string;
   startedAt: number;
   promise: Promise<unknown>;
   cancellation: Promise<void>;
@@ -2121,8 +2123,23 @@ export class RealtimeCallHandler {
         return;
       }
 
+      let requestKey: string | undefined;
+      try {
+        requestKey = JSON.stringify(parseRealtimeVoiceAgentConsultArgs(args));
+      } catch {
+        // Transcript settling can supply a missing question, but cannot establish
+        // equivalence with another pending provider request.
+      }
       const existingNativeConsult = this.nativeConsultsInFlightByCallId.get(callId);
       if (existingNativeConsult) {
+        if (requestKey === undefined || requestKey !== existingNativeConsult.requestKey) {
+          await submitFinalToolResult({
+            status: "busy",
+            error:
+              "OpenClaw is still consulting on a different request. This request has not started. Wait for that consult to finish, then retry this request.",
+          });
+          return;
+        }
         console.log(
           `[voice-call] realtime tool call sharing in-flight agent consult callId=${callId} ageMs=${Date.now() - existingNativeConsult.startedAt}`,
         );
@@ -2146,6 +2163,7 @@ export class RealtimeCallHandler {
       });
       const state: NativeConsultState = {
         owner: bridge,
+        requestKey,
         startedAt,
         promise: consult,
         cancellation,
