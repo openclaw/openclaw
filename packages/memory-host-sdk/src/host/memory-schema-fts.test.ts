@@ -53,4 +53,47 @@ describe("memory index FTS lifecycle", () => {
       db.close();
     }
   });
+
+  it.each([
+    {
+      name: "statement break",
+      ftsTable: "ok USING fts5(text); DROP TABLE memory_index_chunks; CREATE VIRTUAL TABLE z",
+    },
+    { name: "schema-qualified", ftsTable: "aux.chunks_fts" },
+    { name: "quoted identifier", ftsTable: '"evil"' },
+  ])("rejects $name FTS table names before interpolating SQL", ({ ftsTable }) => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+      db.prepare(
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run("c1", "keep.md", "memory", 1, 1, "h", "m", "hello", "[]", 1);
+
+      expect(() =>
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true, ftsTable }),
+      ).toThrow(/not a safe SQL identifier/);
+
+      expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([{ id: "c1" }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects unsafe embedding cache table names before interpolating SQL", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      expect(() =>
+        ensureMemoryIndexSchema({
+          db,
+          cacheEnabled: true,
+          ftsEnabled: false,
+          embeddingCacheTable: "cache; DROP TABLE memory_index_chunks; --",
+        }),
+      ).toThrow(/not a safe SQL identifier/);
+    } finally {
+      db.close();
+    }
+  });
 });
