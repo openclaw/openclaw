@@ -1,5 +1,8 @@
 // Fast-path argv parser for `openclaw gateway ...` without full Commander registration.
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "../daemon/windows-task-supervisor-contract.js";
+import {
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "../daemon/windows-task-supervisor-contract.js";
 import {
   consumeRootCommandOptionToken,
   getCommandArgsWithRootOptions,
@@ -117,7 +120,7 @@ export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] |
     commandPath: ["gateway"],
     // Supervisor commands use full parsing but still need Gateway startup selection.
     booleanFlags: [...GATEWAY_RUN_BOOLEAN_FLAGS, WINDOWS_TASK_SUPERVISOR_FLAG],
-    valueFlags: [...GATEWAY_RUN_VALUE_FLAGS],
+    valueFlags: [...GATEWAY_RUN_VALUE_FLAGS, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG],
     maxPositionals: depth - 1,
     mode: "command-path",
   });

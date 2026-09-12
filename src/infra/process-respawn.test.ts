@@ -1,5 +1,9 @@
 // Covers process respawn behavior across supervisors.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  formatWindowsTaskSupervisorChildArgument,
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+} from "../daemon/windows-task-supervisor-contract.js";
 import { captureFullEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
@@ -259,6 +263,35 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(result.mode).toBe("supervised");
     expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the task-supervisor restart code without launching a detached handoff", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.argv = [...originalArgv, formatWindowsTaskSupervisorChildArgument(305419896)];
+
+    expect(restartGatewayProcessWithFreshPid()).toEqual({
+      mode: "supervised",
+      exitCode: 305419896,
+    });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a task-supervisor child without its private restart marker", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.argv = [...originalArgv, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG];
+
+    expect(restartGatewayProcessWithFreshPid()).toEqual({
+      mode: "failed",
+      detail: "Windows task supervisor restart marker is missing or invalid",
+    });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   });
 
   it("keeps generic service markers out of non-Windows supervisor detection", () => {
