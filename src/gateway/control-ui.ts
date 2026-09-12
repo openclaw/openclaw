@@ -40,6 +40,7 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import { gatewayAvatarImageRevision } from "./assistant-avatar-cache.js";
@@ -158,20 +159,23 @@ function rewriteControlUiIndexHtmlAssetHrefs(
   buildId?: string,
 ): string {
   const normalized = normalizeControlUiBasePath(basePath);
-  let next = html
-    .replaceAll('src="./assets/', `src="${normalized}/assets/`)
-    .replaceAll('href="./assets/', `href="${normalized}/assets/`);
+  const replacements = new Map<string, string>([
+    ['src="./assets/', `src="${normalized}/assets/`],
+    ['href="./assets/', `href="${normalized}/assets/`],
+  ]);
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
     const version =
       buildId && isControlUiVersionedPublicAsset(asset) ? `?v=${encodeURIComponent(buildId)}` : "";
     const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}${version}"`;
     // Vite's portable ./ base emits relative hrefs, which the browser starts
     // resolving against a nested route before the UI can correct them.
-    next = next.replaceAll(`href="./${asset}"`, assetHref);
-    next = next.replaceAll(`href="/${asset}"`, assetHref);
-    next = next.replaceAll(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
+    replacements.set(`href="./${asset}"`, assetHref);
+    replacements.set(`href="/${asset}"`, assetHref);
+    replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
-  return next;
+  // Copy the document once instead of once per matching asset.
+  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
+  return html.replace(pattern, (match) => replacements.get(match) ?? match);
 }
 
 type ControlUiAvatarMeta = {
