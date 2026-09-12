@@ -296,6 +296,16 @@ function setCliBackendForPrepareTest(
   });
 }
 
+function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
+  return {
+    command,
+    args: ["--print"],
+    output: "jsonl",
+    input: "stdin",
+    sessionMode: "existing",
+  };
+}
+
 function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { pluginId: string }) {
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
@@ -408,13 +418,7 @@ describe("prepareCliRunContext", () => {
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs: ({ baseArgs }) => baseArgs,
       projectNativeToolAuthority,
-      config: {
-        command: "native-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("native-cli"),
     });
     const context = await fixture.prepare({ provider: "native-cli", ...overrides });
     const capture = expectDefined(context.preparedBackend.mcpClientGrantCapture, "native capture");
@@ -4274,13 +4278,7 @@ describe("prepareCliRunContext", () => {
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs: ({ baseArgs }) => baseArgs,
       projectNativeToolAuthority,
-      config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("claude"),
     });
 
     await fixture.prepare({
@@ -4386,13 +4384,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
     setCliRunnerPrepareTestDeps({ resolveMcpLoopbackPolicyTools });
 
@@ -4709,13 +4701,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
 
     const context = await fixture.prepare({
@@ -4738,13 +4724,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
 
     const context = await fixture.prepare({
@@ -4772,13 +4752,7 @@ describe("prepareCliRunContext", () => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "prepare-execution",
         prepareExecution,
-        config: {
-          command: "settings-cli",
-          args: ["--print"],
-          output: "jsonl",
-          input: "stdin",
-          sessionMode: "existing",
-        },
+        config: createJsonlStdinBackendConfig("settings-cli"),
       });
 
       const cleanupScope = createAgentCleanupScope();
@@ -4806,13 +4780,7 @@ describe("prepareCliRunContext", () => {
       id: "selectable-cli",
       pluginId: "selectable-plugin",
       nativeToolMode: "selectable",
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
 
     await expect(
@@ -4834,13 +4802,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "prepare-execution",
       prepareExecution,
-      config: {
-        command: "settings-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("settings-cli"),
     });
 
     const context = await fixture.prepare({
@@ -4959,13 +4921,7 @@ describe("prepareCliRunContext", () => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "prepare-execution",
         prepareExecution,
-        config: {
-          command: "claude",
-          args: ["--print"],
-          output: "jsonl",
-          input: "stdin",
-          sessionMode: "existing",
-        },
+        config: createJsonlStdinBackendConfig("claude"),
       });
 
       const context = await fixture.prepare({
@@ -5011,13 +4967,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "prepare-execution",
       prepareExecution,
-      config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("claude"),
     });
     const finalizePromptForResolvedTools = vi.fn(
       ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
@@ -5070,13 +5020,7 @@ describe("prepareCliRunContext", () => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "prepare-execution",
         prepareExecution,
-        config: {
-          command: "claude",
-          args: ["--print"],
-          output: "jsonl",
-          input: "stdin",
-          sessionMode: "existing",
-        },
+        config: createJsonlStdinBackendConfig("claude"),
       });
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(() => ({
