@@ -6,7 +6,11 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements runtime.messaging.shared behavior.
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
+import {
+  mergeDiscordAccountConfig,
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccountAllowFrom,
+} from "../accounts.js";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
@@ -17,6 +21,10 @@ import {
   type DiscordGuildEntryResolved,
 } from "../monitor/allow-list.js";
 import type { DiscordReactOpts } from "../send.types.js";
+import {
+  isDiscordAllowlistedDirectMessage,
+  readDiscordChannelRecipientIds,
+} from "./runtime.messaging.dm-read-authorization.js";
 import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
@@ -123,6 +131,7 @@ type DiscordReadTargetContext = {
   parentId?: string;
   parentName?: string;
   parentSlug?: string;
+  recipientIds?: string[];
   scope?: "channel" | "thread";
 };
 
@@ -305,6 +314,11 @@ export function createDiscordMessagingActionContext(params: {
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);
+  const dmAllowFrom =
+    resolveDiscordAccountAllowFrom({
+      cfg: params.cfg,
+      accountId: resolvedReactionAccountId,
+    }) ?? [];
   const isCurrentReadTarget = (channelId: string): boolean => {
     const requesterAccountId = currentReadContext?.requesterAccountId?.trim();
     const currentChannelId = currentReadContext?.currentChannelId?.trim();
@@ -404,6 +418,10 @@ export function createDiscordMessagingActionContext(params: {
     }
     if (channelName) {
       target.channelName = channelName;
+    }
+    const recipientIds = readDiscordChannelRecipientIds(channelInfo);
+    if (recipientIds) {
+      target.recipientIds = recipientIds;
     }
     if (isDiscordThreadChannel(channelInfo)) {
       target.scope = "thread";
@@ -556,6 +574,17 @@ export function createDiscordMessagingActionContext(params: {
       if (
         (directOperator && isExpandedReadTargetEnabled(null, target, false)) ||
         (currentConversation && isExpandedReadTargetEnabled(null, target, true))
+      ) {
+        return;
+      }
+      if (
+        directDmEnabled &&
+        isDiscordAllowlistedDirectMessage({
+          allowFrom: dmAllowFrom,
+          channelType: target.channelType,
+          guildId: target.guildId,
+          recipientIds: target.recipientIds,
+        })
       ) {
         return;
       }
