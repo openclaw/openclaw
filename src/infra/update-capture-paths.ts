@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
-import { isPathInside } from "./path-guards.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
@@ -30,10 +28,9 @@ function hasPrivacyMarker(directory: string): boolean {
     if (!before.isFile()) {
       throw new Error("Marker must be a regular file");
     }
-    const canonicalDirectory = resolvePathViaExistingAncestorSync(directory);
     const opened = openRootFileSync({
-      absolutePath: path.join(canonicalDirectory, UPDATE_CAPTURE_PRIVACY_MARKER),
-      rootPath: canonicalDirectory,
+      absolutePath: markerPath,
+      rootPath: directory,
       boundaryLabel: "private update capture marker",
       maxBytes: MARKER_BYTES.length,
     });
@@ -63,75 +60,112 @@ function hasPrivacyMarker(directory: string): boolean {
   }
 }
 
-function isMarkedCapturePath(candidate: string): boolean {
-  // Only selected ancestors. Never parse workspace manifests or enumerate roots.
-  let marked = false;
-  for (let ancestor = candidate; ; ancestor = path.dirname(ancestor)) {
-    if (hasPrivacyMarker(ancestor)) {
-      marked = true;
-    }
-    if (path.dirname(ancestor) === ancestor) {
-      return marked;
-    }
-  }
-}
-
 const CAPTURE_SUFFIX = ".update-captures";
 
 export function resolveUpdateCaptureRoot(stateDir: string): string {
   return `${path.resolve(stateDir)}${CAPTURE_SUFFIX}`;
 }
 
-function isPairedCapturePath(candidate: string): boolean {
-  // Only inspect the selected path's ancestors, not other profiles or a global registry.
-  // The sibling directory anchors the reserved layout; it is not writer authority.
-  for (
-    let ancestor = candidate;
-    path.dirname(ancestor) !== ancestor;
-    ancestor = path.dirname(ancestor)
-  ) {
-    const name = path.basename(ancestor);
-    if (name.length <= CAPTURE_SUFFIX.length || !name.endsWith(CAPTURE_SUFFIX)) {
-      continue;
-    }
-    try {
-      if (fs.statSync(ancestor.slice(0, -CAPTURE_SUFFIX.length)).isDirectory()) {
-        return true;
+type CapturePath = { path: string; directory: boolean };
+
+function resolveCapturePath(
+  sourcePath: string,
+  entries = new Map<string, boolean>(),
+): CapturePath | undefined {
+  const activeLinks = new Set<string>();
+  function resolve(
+    candidate: string,
+    inspected: Map<string, boolean>,
+    depth: number,
+  ): CapturePath | undefined {
+    const root = path.parse(candidate).root;
+    let current: CapturePath = { path: root, directory: true };
+    inspected.set(root, true);
+    const separators = path.sep === "\\" ? /[\\/]/ : /\//;
+    for (const component of candidate.slice(root.length).split(separators)) {
+      if (!current.directory) {
+        return undefined;
       }
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
-        throw error;
+      const entry = path.resolve(current.path, component);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(entry);
+      } catch (error) {
+        if (
+          hasErrnoCode(error, "ENOENT") ||
+          hasErrnoCode(error, "ENOTDIR") ||
+          hasErrnoCode(error, "ELOOP")
+        ) {
+          return undefined;
+        }
+        throw new Error("Private update capture marker is unreadable; export refused.", {
+          cause: error,
+        });
+      }
+      if (stat.isSymbolicLink()) {
+        inspected.set(entry, false);
+        if (activeLinks.has(entry) || depth === 40) {
+          return undefined;
+        }
+        activeLinks.add(entry);
+        const link = fs.readlinkSync(entry);
+        const targetEntries = new Map<string, boolean>();
+        // Keep target components in filesystem order: an earlier link changes what '..' means.
+        const target = resolve(
+          path.isAbsolute(link) ? link : current.path + path.sep + link,
+          targetEntries,
+          depth + 1,
+        );
+        activeLinks.delete(entry);
+        if (!target) {
+          return undefined;
+        }
+        for (const [targetPath, realDirectory] of targetEntries) {
+          inspected.set(targetPath, realDirectory);
+        }
+        current = target;
+      } else {
+        current = { path: entry, directory: stat.isDirectory() };
+        inspected.set(entry, current.directory);
       }
     }
+    return current;
   }
-  return false;
+  return resolve(
+    path.isAbsolute(sourcePath) ? sourcePath : process.cwd() + path.sep + sourcePath,
+    entries,
+    0,
+  );
 }
 
-/** Exact managed roots, not a basename filter that hides unrelated workspace files. */
-export function isUpdateCapturePath(sourcePath: string, stateDir: string): boolean {
-  const roots = new Set([
-    resolveUpdateCaptureRoot(stateDir),
-    resolveUpdateCaptureRoot(resolvePathViaExistingAncestorSync(stateDir)),
-  ]);
-  const candidate = path.resolve(sourcePath);
-  const canonical = resolvePathViaExistingAncestorSync(sourcePath);
-  // A valid child marker or legacy root must not hide a malformed ancestor.
-  // Evaluate both alias spellings before any exclusion can short-circuit.
-  const marked = isMarkedCapturePath(candidate);
-  const canonicalMarked = canonical !== candidate && isMarkedCapturePath(canonical);
-  const isSelectedStateCapture = [...roots].some((root) => {
-    const resolvedRoot = resolvePathViaExistingAncestorSync(root);
-    return [root, resolvedRoot].some(
-      (boundary) => isPathInside(boundary, candidate) || isPathInside(boundary, canonical),
-    );
-  });
+function isPairedCapturePath(directory: string): boolean {
+  const name = path.basename(directory);
   return (
-    marked ||
-    canonicalMarked ||
-    isSelectedStateCapture ||
-    isPairedCapturePath(candidate) ||
-    isPairedCapturePath(canonical)
+    name.length > CAPTURE_SUFFIX.length &&
+    name.endsWith(CAPTURE_SUFFIX) &&
+    resolveCapturePath(directory.slice(0, -CAPTURE_SUFFIX.length))?.directory === true
   );
+}
+
+/** One admission decision over real ancestors and safely resolved link targets. */
+export function isUpdateCapturePath(sourcePath: string, stateDir: string): boolean {
+  const entries = new Map<string, boolean>();
+  resolveCapturePath(sourcePath, entries);
+  const captureRoot = resolveUpdateCaptureRoot(stateDir);
+  const resolvedRoot = resolveCapturePath(captureRoot)?.path;
+  let captured = false;
+  for (const [entryPath, realDirectory] of entries) {
+    // Logical names establish legacy ownership; only real directories can carry markers.
+    if (realDirectory) {
+      captured = hasPrivacyMarker(entryPath) || captured;
+    }
+    captured =
+      entryPath === captureRoot ||
+      entryPath === resolvedRoot ||
+      isPairedCapturePath(entryPath) ||
+      captured;
+  }
+  return captured;
 }
 
 export function assertNotUpdateCapturePath(sourcePath: string, stateDir: string): void {

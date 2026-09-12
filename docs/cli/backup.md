@@ -96,8 +96,7 @@ SQLite snapshots, Git backups, and support exports. Selecting a containing or
 nested workspace does not override this rule. Selecting a capture file as config
 or as a database backup source refuses the backup. Other states' captures are
 recognized by the exact sibling layout: `<owner>/` beside
-`<owner>.update-captures/`, with an existing owner directory. Canonical path
-aliases receive the same protection. Unrelated similarly named workspace
+`<owner>.update-captures/`, with an existing owner directory, including a resolved directory link. Unrelated similarly named workspace
 directories remain included; a suffix alone does not establish ownership.
 
 Marked private directories remain excluded after their owner is removed or
@@ -105,10 +104,18 @@ renamed, or the marked directory is moved or copied. Keep the marker with the
 whole directory. Files copied out without it are not recognized by this rule.
 The fixed `.openclaw-private-update-capture` file contains exactly
 `openclaw-private-update-capture-v1` followed by a newline. Export checks inspect
-only selected paths and their ancestors, including canonical aliases. They do
-not parse workspace manifests or scan for other state roots. A malformed or
-unreadable marker refuses export of that selection; a support bundle reports
-the refusal without including that input.
+each path component with `lstat` and resolve symbolic links with cycle and depth
+limits. A resolved target's real ancestors receive the same marker checks as
+the selected path. Links to marked directories are omitted; malformed or
+unreadable real markers refuse export. Loops and dangling links have no resolved
+target and remain link entries, unless a real selected ancestor excludes them.
+Ordinary unmarked links keep their original target text without copying target
+contents through the link.
+
+Explicit content exports, including SQLite snapshots, check the selected archive
+path and actual content source through the same classifier. A support bundle
+reports refused inputs without including their contents. These checks do not
+parse workspace manifests or scan for other state roots.
 
 The marker is an exclusion instruction, not proof of artifact ownership or
 permission to reopen, adopt, or delete it. Producers must durably write it before
