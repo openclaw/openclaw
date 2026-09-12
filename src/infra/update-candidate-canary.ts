@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -11,7 +11,6 @@ import {
   redactSupportDiagnosticLine,
   redactSupportString,
 } from "../logging/diagnostic-support-redaction.js";
-import { signalProcessTree } from "../process/kill-tree.js";
 import {
   parseOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
@@ -19,8 +18,10 @@ import {
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { terminateCanary, waitBounded } from "./update-candidate-process.js";
 import {
   prepareUpdateCandidateRehearsal,
+  UpdateCandidateRehearsalInUseError,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
@@ -67,57 +68,6 @@ type CanaryResult = {
       reason: "doctor-failed" | "runtime-verification-failed";
     }
 );
-
-async function waitBounded<T>(
-  promise: Promise<T>,
-  milliseconds: number,
-  signal?: AbortSignal,
-): Promise<{ status: "completed"; value: T } | { status: "deadline" | "aborted" }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      promise.then((value) => ({ status: "completed" as const, value })),
-      new Promise<{ status: "deadline" | "aborted" }>((resolve) => {
-        timer = setTimeout(() => resolve({ status: "deadline" }), Math.max(0, milliseconds));
-        abort = () => resolve({ status: "aborted" });
-        signal?.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted) {
-          abort();
-        }
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-    if (abort) {
-      signal?.removeEventListener("abort", abort);
-    }
-  }
-}
-
-async function terminateCanary(
-  child: ChildProcess,
-  closed: Promise<unknown>,
-  deadline: number,
-): Promise<void> {
-  if (!child.pid) {
-    return;
-  }
-  const options = { detached: process.platform !== "win32" };
-  const signal = (kind: "SIGTERM" | "SIGKILL") =>
-    new Promise<void>((resolve) => {
-      signalProcessTree(child.pid!, kind, { ...options, onComplete: resolve });
-    });
-  await waitBounded(
-    Promise.all([signal("SIGTERM"), closed]),
-    Math.min(1_000, Math.max(0, deadline - Date.now())),
-  );
-  // A reaped group leader does not prove its descendants have exited.
-  await waitBounded(
-    Promise.all([signal("SIGKILL"), closed]),
-    Math.min(1_000, Math.max(0, deadline - Date.now())),
-  );
-}
 
 /** Rehearse the exact candidate against private SQLite snapshots while the serving generation stays up. */
 export async function validateUpdateCandidateCanary(params: {
@@ -172,13 +122,24 @@ export async function validateUpdateCandidateCanary(params: {
   };
   const launch = (entry: string, args: string[]) => {
     params.assertCurrent?.();
-    const child = spawn(params.nodeRunner ?? process.execPath, [entry, ...args], {
-      cwd: params.root,
-      env,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    if (!rehearsal) {
+      throw new Error("Candidate rehearsal is unavailable");
+    }
+    const releaseProcess = rehearsal.retainProcess();
+    const child = (() => {
+      try {
+        return spawn(params.nodeRunner ?? process.execPath, [entry, ...args], {
+          cwd: params.root,
+          env,
+          detached: process.platform !== "win32",
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+      } catch (error) {
+        releaseProcess();
+        throw error;
+      }
+    })();
     let stdout = "";
     let firstStderrLine: string | undefined;
     let stdoutBytes = 0;
@@ -263,6 +224,7 @@ export async function validateUpdateCandidateCanary(params: {
     return {
       child,
       closed,
+      releaseProcess,
       hasExited: () => exited,
       stdout: () => stdout,
       firstStderrLine: () => firstStderrLine,
@@ -399,6 +361,7 @@ export async function validateUpdateCandidateCanary(params: {
         timedOut = outcome.status === "deadline";
       } finally {
         await terminateCanary(running.child, running.closed, deadline);
+        running.releaseProcess();
         if (doctorResultPath) {
           doctorReceipt = await consumeUpdatePostInstallDoctorResult(
             doctorResultPath,
@@ -602,6 +565,7 @@ export async function validateUpdateCandidateCanary(params: {
       params.onStep?.(step);
     } finally {
       await terminateCanary(running.child, running.closed, deadline);
+      running.releaseProcess();
     }
     return {
       status: "ok",
@@ -662,6 +626,7 @@ export async function validateUpdateCandidateCanary(params: {
     };
   } finally {
     if (!params.rehearsal && rehearsal) {
+      const ownedRehearsal = rehearsal;
       for (const directory of rehearsal.cleanupDirectories) {
         await cleanupUpdateTemporaryDirectory({
           directory,
@@ -670,6 +635,17 @@ export async function validateUpdateCandidateCanary(params: {
             directory === rehearsal.stateDir
               ? "candidate rehearsal cleanup"
               : "candidate inventory cleanup",
+          cleanup: async () => {
+            try {
+              await ownedRehearsal.cleanup(directory);
+            } catch (error) {
+              if (!(error instanceof UpdateCandidateRehearsalInUseError)) {
+                throw error;
+              }
+              // Live writers retain custody; do not recommend removing their state.
+              capture(error.message);
+            }
+          },
           onWarning: (step) => {
             steps.push(step);
             params.onStep?.(step);

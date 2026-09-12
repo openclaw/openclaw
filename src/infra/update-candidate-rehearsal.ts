@@ -25,6 +25,13 @@ import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
+export class UpdateCandidateRehearsalInUseError extends Error {
+  constructor() {
+    super("Candidate process exit is unconfirmed; preserving private rehearsal state");
+    this.name = "UpdateCandidateRehearsalInUseError";
+  }
+}
+
 export type UpdateCandidateRehearsal = {
   sourceConfig: OpenClawConfig;
   sourceConfigHash: string | null | undefined;
@@ -35,7 +42,9 @@ export type UpdateCandidateRehearsal = {
   port: number;
   snapshotCapacity: UpdateSnapshotCapacity;
   cleanupDirectories: string[];
-  cleanup: () => Promise<void>;
+  /** Release only after the candidate's process tree has been confirmed stopped. */
+  retainProcess: () => () => void;
+  cleanup: (directory?: string) => Promise<void>;
 };
 
 function isolatedConfig(
@@ -195,8 +204,17 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
-  const cleanup = async () => {
-    for (const directory of cleanupDirectories) {
+  const activeProcesses = new Set<symbol>();
+  const cleanup = async (selectedDirectory?: string) => {
+    if (activeProcesses.size > 0) {
+      throw new UpdateCandidateRehearsalInUseError();
+    }
+    if (selectedDirectory !== undefined && !cleanupDirectories.includes(selectedDirectory)) {
+      throw new Error("Cleanup directory is not owned by this rehearsal");
+    }
+    for (const directory of selectedDirectory !== undefined
+      ? [selectedDirectory]
+      : cleanupDirectories) {
       await fs.rm(directory, { recursive: true, force: true });
     }
   };
@@ -230,6 +248,16 @@ export async function prepareUpdateCandidateRehearsal(params: {
       snapshotCapacity,
       cleanupDirectories,
       cleanup,
+      retainProcess: () => {
+        if (activeProcesses.size > 0) {
+          throw new UpdateCandidateRehearsalInUseError();
+        }
+        const processLease = Symbol("candidate process");
+        activeProcesses.add(processLease);
+        return () => {
+          activeProcesses.delete(processLease);
+        };
+      },
     };
   } catch (error) {
     await cleanup();

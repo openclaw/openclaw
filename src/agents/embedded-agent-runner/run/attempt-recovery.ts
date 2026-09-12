@@ -17,7 +17,11 @@ import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
-import { hasAsyncActivity, isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
+import {
+  hasAsyncActivity,
+  hasAttemptTerminalState,
+  isCurrentAttemptReplaySafe,
+} from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
 import { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -130,6 +134,16 @@ export async function recoverEmbeddedRunAttempt(input: {
     attempt.preflightRecovery?.source === "mid-turn" &&
     midTurnBatchSettled &&
     !hasAsyncActivity(attempt.toolMetas);
+  // Provider and transport overflows can also follow committed side effects.
+  // Settlement permits continuation of those results, never original-prompt replay.
+  // Existing delivery, delegated completion, and intentional termination retain ownership.
+  // The parked Code Mode exception remains exclusive to the mid-turn precheck.
+  const canContinueSettledOverflow =
+    (settledEvidence.allToolsProvenSettled &&
+      !hasAsyncActivity(attempt.toolMetas) &&
+      !hasAttemptTerminalState(attempt) &&
+      !settledEvidence.intentionalTermination) ||
+    canContinueSettledMidTurnOverflow;
   const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
@@ -351,7 +365,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     });
     return retry({ lastRetryFailoverReason: failureReason });
   }
-  if (!currentAttemptReplaySafe && !canContinueSettledMidTurnOverflow) {
+  if (!currentAttemptReplaySafe && !canContinueSettledOverflow) {
     return { action: "proceed" };
   }
 
@@ -368,6 +382,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       ? { message: assistantOverflowCandidate, classification: assistantOverflowClassification }
       : undefined,
     attemptCompactionCount,
+    continueFromCurrentTranscript: canContinueSettledOverflow,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
   });

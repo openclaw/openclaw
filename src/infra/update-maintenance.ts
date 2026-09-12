@@ -14,11 +14,16 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   directory: string;
   root: string;
   name: string;
+  cleanup?: () => Promise<void>;
   onWarning: (step: UpdateStepResult) => void;
 }): Promise<void> {
   const started = Date.now();
   try {
-    await fs.rm(params.directory, { recursive: true, force: true });
+    if (params.cleanup) {
+      await params.cleanup();
+    } else {
+      await fs.rm(params.directory, { recursive: true, force: true });
+    }
   } catch (error) {
     const command = formatUpdateCleanupCommand(params.directory);
     params.onWarning({

@@ -10,7 +10,10 @@ import * as exec from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import {
+  prepareUpdateCandidateRehearsal,
+  UpdateCandidateRehearsalInUseError,
+} from "./update-candidate-rehearsal.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -29,6 +32,100 @@ async function fixture(sizeMiB = 0) {
   db.close();
   return { root, stateDir, file };
 }
+
+async function multiDirectoryRehearsal() {
+  const f = await fixture();
+  const nominated = path.join(f.root, "inventory-temp");
+  await fs.mkdir(nominated);
+  let inventoryAllocated = false;
+  vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => {
+    // Inventory fits here initially; the snapshot must move to the state volume.
+    const availableBytes = targetPath === nominated && inventoryAllocated ? 0 : 1024 ** 3;
+    if (targetPath === nominated) {
+      inventoryAllocated = true;
+    }
+    return { targetPath, checkedPath: targetPath, availableBytes, totalBytes: 1024 ** 3 };
+  });
+  const rehearsal = await prepareUpdateCandidateRehearsal({
+    config: {},
+    stateDir: f.stateDir,
+    candidateRoot: f.root,
+    env: { TMPDIR: nominated },
+  });
+  return { ...f, rehearsal };
+}
+
+it.each(["snapshot", "inventory"])(
+  "preserves both owned directories under a process lease, then cleans only the selected %s",
+  async (selected) => {
+    const { rehearsal, file } = await multiDirectoryRehearsal();
+    const release = rehearsal.retainProcess();
+    try {
+      const directories = rehearsal.cleanupDirectories;
+      expect(directories).toHaveLength(2);
+      expect(new Set(directories).size).toBe(2);
+      const markers = directories.map((directory) => path.join(directory, "owned-evidence"));
+      for (const marker of markers) {
+        await fs.writeFile(marker, "preserved");
+      }
+      const original = await fs.readFile(file);
+
+      await expect(rehearsal.cleanup()).rejects.toBeInstanceOf(UpdateCandidateRehearsalInUseError);
+      for (const directory of directories) {
+        await expect(rehearsal.cleanup(directory)).rejects.toBeInstanceOf(
+          UpdateCandidateRehearsalInUseError,
+        );
+      }
+      for (const marker of markers) {
+        await expect(fs.readFile(marker, "utf8")).resolves.toBe("preserved");
+      }
+
+      release();
+      const directory = directories.find((owned) =>
+        selected === "snapshot" ? owned === rehearsal.stateDir : owned !== rehearsal.stateDir,
+      )!;
+      await rehearsal.cleanup(directory);
+      await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      for (const retained of directories.filter((owned) => owned !== directory)) {
+        await expect(fs.readFile(path.join(retained, "owned-evidence"), "utf8")).resolves.toBe(
+          "preserved",
+        );
+      }
+
+      await rehearsal.cleanup();
+      for (const owned of directories) {
+        await expect(fs.stat(owned)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(fs.readFile(file)).resolves.toEqual(original);
+    } finally {
+      release();
+      await rehearsal.cleanup();
+    }
+  },
+);
+
+it("refuses empty and unowned cleanup targets without removing their contents", async () => {
+  const { rehearsal, stateDir, file } = await multiDirectoryRehearsal();
+  try {
+    const child = path.join(rehearsal.stateDir, "unowned-child");
+    await fs.mkdir(child);
+    const marker = path.join(child, "evidence");
+    await fs.writeFile(marker, "preserved");
+    const original = await fs.readFile(file);
+    for (const directory of ["", stateDir, child]) {
+      await expect(rehearsal.cleanup(directory)).rejects.toThrow(
+        "Cleanup directory is not owned by this rehearsal",
+      );
+    }
+    await expect(fs.readFile(file)).resolves.toEqual(original);
+    await expect(fs.readFile(marker, "utf8")).resolves.toBe("preserved");
+    for (const owned of rehearsal.cleanupDirectories) {
+      expect((await fs.stat(owned)).isDirectory()).toBe(true);
+    }
+  } finally {
+    await rehearsal.cleanup();
+  }
+});
 
 async function withSyntheticSnapshotWorker(
   body: string,

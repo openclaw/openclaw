@@ -7,6 +7,7 @@ import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistan
 import { classifyFailoverSignal } from "../failover/classify.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { createSettledOverflowAttemptRecovery } from "./run.overflow-context-recovery.test-support.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -53,11 +54,13 @@ vi.mock("./tool-result-truncation.js", () => ({
 }));
 
 vi.mock("./run/session-bootstrap.js", async () => {
-  const { buildContextEngineCompactionSessionTarget } = await vi.importActual<
-    typeof import("./run/session-bootstrap.js")
-  >("./run/session-bootstrap.js");
+  const { buildContextEngineCompactionSessionTarget, prepareInitialSessionWriter } =
+    await vi.importActual<typeof import("./run/session-bootstrap.js")>(
+      "./run/session-bootstrap.js",
+    );
   return {
     buildContextEngineCompactionSessionTarget,
+    prepareInitialSessionWriter,
     isNoRealConversationCompactionNoop: mocks.isNoRealConversationCompactionNoop,
     resetNoRealConversationTokenSnapshot: mocks.resetNoRealConversationTokenSnapshot,
   };
@@ -240,6 +243,59 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
   return input;
 }
 
+async function expectCompactionRetry(overrides: RecoveryInputOverrides) {
+  expect(await recoverEmbeddedRunOverflow(makeInput(overrides))).toEqual({ action: "retry" });
+  expect(mocks.compact).toHaveBeenCalledOnce();
+}
+
+function makeSettledOverflowFixture(
+  toolName: "exec" | "write" = "exec",
+  source: "prompt" | "assistant" | "precheck" = "prompt",
+) {
+  const error = new Error("Context length exceeded: estimated input leaves no output budget");
+  const user = {
+    role: "user" as const,
+    content: "Perform the mutation once, then report its recorded result.",
+    timestamp: 1,
+  };
+  const toolAssistant = makeAssistantMessage({ stopReason: "toolUse" });
+  toolAssistant.content = [{ type: "toolCall", id: "mutation-1", name: toolName, arguments: {} }];
+  const toolResult = {
+    role: "toolResult" as const,
+    toolCallId: "mutation-1",
+    toolName,
+    content: [{ type: "text" as const, text: "Mutation completed: counter=1" }],
+    isError: false,
+    timestamp: 2,
+  };
+  const assistant =
+    source === "assistant"
+      ? makeAssistantMessage({ stopReason: "error", errorMessage: error.message })
+      : toolAssistant;
+  const input = makeInput({
+    promptError: source === "assistant" ? null : error,
+    attempt: {
+      terminal: source === "assistant" ? { kind: "ok" } : { kind: "failed", source, error },
+      messagesSnapshot: [
+        user,
+        toolAssistant,
+        toolResult,
+        ...(source === "assistant" ? [assistant] : []),
+      ],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+      replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
+      toolMetas: [{ toolName, toolCallId: "mutation-1", replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      ...(source === "precheck"
+        ? { preflightRecovery: { route: "compact_only", source: "mid-turn" } }
+        : {}),
+    },
+  });
+  return createSettledOverflowAttemptRecovery(input, user, assistant);
+}
+
 describe("recoverEmbeddedRunOverflow", () => {
   beforeEach(() => {
     mocks.compact.mockReset().mockResolvedValue(successfulCompaction());
@@ -260,17 +316,157 @@ describe("recoverEmbeddedRunOverflow", () => {
     mocks.warn.mockReset();
   });
 
+  it.each([
+    { tool: "exec", source: "prompt" },
+    { tool: "write", source: "prompt" },
+    { tool: "exec", source: "assistant" },
+    { tool: "write", source: "assistant" },
+  ] as const)(
+    "continues recorded $tool results after $source overflow without replaying the user prompt",
+    async ({ tool, source }) => {
+      const { input, recover, sessionPromptState, failoverRetryController } =
+        makeSettledOverflowFixture(tool, source);
+
+      expect(await recover()).toMatchObject({ action: "retry" });
+      expect(mocks.compact).toHaveBeenCalledOnce();
+      expect(sessionPromptState.activePrompt).toMatchObject({ persisted: true, internal: true });
+      expect(sessionPromptState.activePrompt.override).toContain(
+        "Do not restart the task or repeat completed actions",
+      );
+      expect(sessionPromptState.activePrompt.override).not.toContain(input.runParams.prompt);
+      expect(sessionPromptState.suppressNextUserMessagePersistence).toBe(true);
+      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["prior compaction", "tool-result truncation", "stale preflight snapshot"])(
+    "continues settled mutations after %s instead of resubmitting the original prompt",
+    async (branch) => {
+      const { input, recover, sessionPromptState } = makeSettledOverflowFixture();
+      if (branch === "prior compaction") {
+        input.attemptCompactionCount = 1;
+      } else {
+        mocks.compact.mockResolvedValueOnce({
+          ok: true,
+          compacted: false,
+          reason: "nothing to compact",
+        });
+        if (branch === "tool-result truncation") {
+          mocks.sessionLikelyHasOversizedToolResults.mockReturnValueOnce(true);
+          mocks.truncateOversizedToolResults.mockReturnValueOnce({
+            truncated: true,
+            truncatedCount: 1,
+          });
+        } else {
+          input.attempt.preflightRecovery = { route: "compact_only" };
+          mocks.isNoRealConversationCompactionNoop.mockReturnValueOnce(true);
+        }
+      }
+
+      expect(await recover()).toMatchObject({ action: "retry" });
+      expect(sessionPromptState.activePrompt).toMatchObject({ persisted: true, internal: true });
+      expect(sessionPromptState.activePrompt.override).not.toContain(input.runParams.prompt);
+      expect(sessionPromptState.suppressNextUserMessagePersistence).toBe(true);
+      expect(input.state.overflowCompactionAttempts).toBe(1);
+      expect(mocks.compact).toHaveBeenCalledTimes(branch === "prior compaction" ? 0 : 1);
+    },
+  );
+
+  it.each<[string, ("prompt" | "assistant")?]>([
+    ["async activity"],
+    ["active tool"],
+    ["incomplete lifecycle"],
+    ["missing result"],
+    ["mismatched result"],
+    ["parked Code Mode"],
+    ["external abort"],
+    ["messaging delivery", "prompt"],
+    ["messaging delivery", "assistant"],
+    ["accepted session spawn", "prompt"],
+    ["accepted session spawn", "assistant"],
+    ["intentional termination", "prompt"],
+    ["intentional termination", "assistant"],
+  ])(
+    "does not recover a side-effectful overflow with %s (%s)",
+    async (guard, source = "prompt") => {
+      const { input, recover, sessionPromptState, failoverRetryController } =
+        makeSettledOverflowFixture("exec", source);
+      const { attempt } = input;
+      const tool = attempt.toolMetas[0]!;
+      if (guard === "async activity") {
+        tool.asyncStarted = true;
+      } else if (guard === "incomplete lifecycle") {
+        attempt.itemLifecycle.completedCount = 0;
+      } else if (guard === "missing result") {
+        attempt.messagesSnapshot = attempt.messagesSnapshot.filter((m) => m.role !== "toolResult");
+      } else if (guard === "mismatched result") {
+        tool.toolName = "write";
+        const result = attempt.messagesSnapshot.find((m) => m.role === "toolResult")!;
+        result.toolName = "write";
+      } else if (guard === "external abort") {
+        attempt.terminal = { kind: "aborted", source: "external" };
+      } else if (guard === "messaging delivery") {
+        attempt.didSendViaMessagingTool = true;
+        attempt.messagingToolSentTexts = ["Mutation completed: counter=1"];
+      } else if (guard === "accepted session spawn") {
+        attempt.acceptedSessionSpawns = [
+          {
+            runId: "child-run",
+            childSessionKey: "agent:main:child",
+            expectsCompletionMessage: true,
+          },
+        ];
+      } else if (guard === "intentional termination") {
+        tool.terminate = true;
+      } else {
+        attempt.itemLifecycle.activeCount = 1;
+        if (guard === "parked Code Mode") {
+          tool.codeModeSuspended = true;
+        }
+      }
+
+      expect(await recover()).toEqual({ action: "proceed" });
+      expect(mocks.compact).not.toHaveBeenCalled();
+      expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
+      expect(sessionPromptState.activePrompt.override).toBeUndefined();
+      expect(sessionPromptState.suppressNextUserMessagePersistence).toBe(false);
+      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains the parked Code Mode exception for a mid-turn precheck", async () => {
+    const { input, recover, sessionPromptState } = makeSettledOverflowFixture("exec", "precheck");
+    input.attempt.itemLifecycle.activeCount = 1;
+    input.attempt.toolMetas[0]!.codeModeSuspended = true;
+
+    expect(await recover()).toMatchObject({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(sessionPromptState.activePrompt.internal).toBe(true);
+  });
+
+  it("does not rotate authentication after a settled mutation and non-overflow failure", async () => {
+    const { input, recover, sessionPromptState, failoverRetryController } =
+      makeSettledOverflowFixture();
+    input.attempt.terminal = {
+      kind: "failed",
+      source: "prompt",
+      error: new Error("401 unauthorized"),
+    };
+
+    expect(await recover()).toEqual({ action: "proceed" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(sessionPromptState.activePrompt.override).toBeUndefined();
+    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("uses the canonical assistant classifier when the text heuristic misses", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",
       errorMessage: "400 Your input exceeds the context window of this model",
     });
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ promptError: null, assistantOverflowCandidate }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
-    expect(mocks.compact).toHaveBeenCalledOnce();
+    await expectCompactionRetry({ promptError: null, assistantOverflowCandidate });
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
@@ -336,12 +532,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       stopReason: "error",
       errorMessage: "413 status code (no body)",
     });
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ promptError: null, assistantOverflowCandidate }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
-    expect(mocks.compact).toHaveBeenCalledOnce();
+    await expectCompactionRetry({ promptError: null, assistantOverflowCandidate });
   });
 
   it("recovers a canonical zero-output length overflow", async () => {
@@ -356,12 +547,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
     });
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ promptError: null, assistantOverflowCandidate }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
-    expect(mocks.compact).toHaveBeenCalledOnce();
+    await expectCompactionRetry({ promptError: null, assistantOverflowCandidate });
   });
 
   it("keeps a whole code point at the context-overflow diagnostic boundary", async () => {
@@ -376,11 +562,9 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it("forwards observed overflow tokens into compaction diagnostics", async () => {
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ promptError: new Error("Context window exceeded: requested 12,000 tokens") }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
+    await expectCompactionRetry({
+      promptError: new Error("Context window exceeded: requested 12,000 tokens"),
+    });
     expect(mocks.compact).toHaveBeenCalledWith(
       expect.objectContaining({
         currentTokenCount: 12_000,
@@ -610,15 +794,10 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it("recovers overflow reported only by the assistant error text", async () => {
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({
-        promptError: null,
-        assistantErrorText: "request_too_large: Request size exceeds model context window",
-      }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
-    expect(mocks.compact).toHaveBeenCalledOnce();
+    await expectCompactionRetry({
+      promptError: null,
+      assistantErrorText: "request_too_large: Request size exceeds model context window",
+    });
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
@@ -666,23 +845,19 @@ describe("recoverEmbeddedRunOverflow", () => {
 
   it("forwards preflight prompt estimates into synthetic overflow compaction", async () => {
     const promptError = overflowError();
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({
-        promptError,
-        attempt: {
-          terminal: { kind: "failed", source: "precheck", error: promptError },
-          preflightRecovery: {
-            route: "compact_then_truncate",
-            source: "mid-turn",
-            estimatedPromptTokens: 268_138,
-            promptBudgetBeforeReserve: 241_616,
-            overflowTokens: 26_522,
-          },
+    await expectCompactionRetry({
+      promptError,
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: promptError },
+        preflightRecovery: {
+          route: "compact_then_truncate",
+          source: "mid-turn",
+          estimatedPromptTokens: 268_138,
+          promptBudgetBeforeReserve: 241_616,
+          overflowTokens: 26_522,
         },
-      }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
+      },
+    });
     expect(mocks.compact).toHaveBeenCalledWith(
       expect.objectContaining({
         tokenBudget: 241_616,
@@ -693,21 +868,17 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it("keeps the raw budget for provider overflow with preflight metadata", async () => {
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({
-        attempt: {
-          preflightRecovery: {
-            route: "compact_then_truncate",
-            source: "mid-turn",
-            estimatedPromptTokens: 268_138,
-            promptBudgetBeforeReserve: 241_616,
-            overflowTokens: 26_522,
-          },
+    await expectCompactionRetry({
+      attempt: {
+        preflightRecovery: {
+          route: "compact_then_truncate",
+          source: "mid-turn",
+          estimatedPromptTokens: 268_138,
+          promptBudgetBeforeReserve: 241_616,
+          overflowTokens: 26_522,
         },
-      }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
+      },
+    });
     expect(mocks.compact).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 200_000 }));
   });
 
@@ -737,11 +908,9 @@ describe("recoverEmbeddedRunOverflow", () => {
   );
 
   it("uses the minimally over-budget count for unparseable overflow text", async () => {
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ promptError: new Error("Context window exceeded for this request") }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
+    await expectCompactionRetry({
+      promptError: new Error("Context window exceeded for this request"),
+    });
     expect(mocks.compact).toHaveBeenCalledWith(
       expect.objectContaining({ currentTokenCount: 200_001 }),
     );

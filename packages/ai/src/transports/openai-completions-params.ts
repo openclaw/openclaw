@@ -78,7 +78,7 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
 
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
+  options: Pick<OpenAICompletionsOptions, "maxTokens"> | undefined,
 ): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
   if (options?.maxTokens) {
     return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
@@ -107,7 +107,7 @@ const MIN_USEFUL_OUTPUT_TOKENS = 16;
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
 // helper avoids undercounting non-Latin prompts enough to trigger server-side
-// context rejections; wrong-high here just trims output a little. Estimate the
+// context rejections. Estimate the
 // final shaped payload, not the raw context, so compat transforms and dropped
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
@@ -203,6 +203,41 @@ function resolveOpenAICompletionsEffectiveContextTokens(
     Number.isFinite(model.contextWindow) &&
     model.contextWindow > 0
     ? model.contextWindow
+    : undefined;
+}
+
+/** Recheck the final payload after hooks; a conservative estimate alone is not an error. */
+export function resolveOpenAICompletionsContextBudgetLimit(
+  model: OpenAIModeModel,
+  params: Record<string, unknown>,
+  options: Pick<OpenAICompletionsOptions, "maxTokens"> | undefined,
+): number | undefined {
+  const caps = [params.max_tokens, params.max_completion_tokens].filter(
+    (value) => value !== undefined,
+  );
+  const cap = caps[0];
+  if (
+    typeof cap !== "number" ||
+    !Number.isSafeInteger(cap) ||
+    cap < 1 ||
+    caps.some((value) => value !== cap)
+  ) {
+    return undefined;
+  }
+  const budget = resolveOpenAICompletionsMaxTokens(model, options);
+  const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
+  if (
+    budget.maxTokens === undefined ||
+    !(budget.maxTokens > cap) ||
+    (budget.clampToModelMaxTokens && modelMaxTokens !== undefined && modelMaxTokens <= cap) ||
+    !detectOpenAICompletionsCompat(model).capabilities.usesExplicitProxyLikeEndpoint
+  ) {
+    return undefined;
+  }
+  const contextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
+  return contextTokens !== undefined &&
+    Math.max(1, contextTokens - estimateOpenAICompletionsInputTokens(params) - 1) === cap
+    ? cap
     : undefined;
 }
 

@@ -10,6 +10,15 @@ function emptyContext(systemPrompt: string | undefined = "system") {
 }
 
 describe("openai completions params", () => {
+  it("preserves an explicitly requested one-token output when input fits", () => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({ provider: "vllm", baseUrl: "http://localhost:8000/v1" }),
+      emptyContext(),
+      { maxTokens: 1 },
+    );
+    expect(params.max_completion_tokens).toBe(1);
+  });
+
   it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
     const params = buildOpenAICompletionsParams(
       {
