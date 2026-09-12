@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
-import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
-import { vi } from "vitest";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  RealtimeVoiceBridgeCallbacks,
+  RealtimeVoiceGatewayControl,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { vi, type Mock } from "vitest";
 import type { ClientOptions } from "ws";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
@@ -90,15 +94,15 @@ export function createHarness(params?: {
       return socket;
     });
   }
-  const onAudio = vi.fn();
-  const onClearAudio = vi.fn();
-  const onTranscript = vi.fn();
-  const onToolCall = vi.fn();
-  const onReady = vi.fn();
-  const onError = vi.fn();
-  const onClose = vi.fn();
-  const onEvent = vi.fn();
-  const logger = { warn: vi.fn() };
+  const onAudio: Mock<RealtimeVoiceBridgeCallbacks["onAudio"]> = vi.fn();
+  const onClearAudio: Mock<RealtimeVoiceBridgeCallbacks["onClearAudio"]> = vi.fn();
+  const onTranscript: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>> = vi.fn();
+  const onToolCall: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onToolCall"]>> = vi.fn();
+  const onReady: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onReady"]>> = vi.fn();
+  const onError: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onError"]>> = vi.fn();
+  const onClose: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onClose"]>> = vi.fn();
+  const onEvent: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onEvent"]>> = vi.fn();
+  const logger: { warn: Mock<PluginLogger["warn"]> } = { warn: vi.fn() };
   const bridge = new OpenAIQuicksilverVoiceBridge(
     {
       providerConfig: {},
