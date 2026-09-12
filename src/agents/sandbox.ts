@@ -48,6 +48,7 @@ export {
 } from "./sandbox/ssh.js";
 export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
+export { resolveSandboxFilePolicyPath } from "./sandbox/file-mutation-identity.js";
 export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";

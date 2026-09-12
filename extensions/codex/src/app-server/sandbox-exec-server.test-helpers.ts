@@ -8,6 +8,8 @@ import type { RawData, WebSocket } from "ws";
 import { websocket } from "./sandbox-exec-server.websocket.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
+const SANDBOX_FILE_POLICY_PATH = Symbol.for("openclaw.sandboxFilePolicyPath");
+
 type RpcResponse = {
   id: number;
   result?: unknown;
@@ -21,6 +23,12 @@ export function createSandboxContext(overrides: {
   finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
   mkdirp?: NonNullable<SandboxContext["fsBridge"]>["mkdirp"];
   readFile?: NonNullable<SandboxContext["fsBridge"]>["readFile"];
+  resolvePolicyPath?: (params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }) => string | Promise<string>;
+  resolvePath?: NonNullable<SandboxContext["fsBridge"]>["resolvePath"];
   remove?: NonNullable<SandboxContext["fsBridge"]>["remove"];
   resolvePinnedMutationTarget?: NonNullable<
     SandboxContext["fsBridge"]
@@ -61,12 +69,15 @@ export function createSandboxContext(overrides: {
         (async () => ({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 })),
     },
     fsBridge: {
-      resolvePath: ({
-        filePath,
-      }: Parameters<NonNullable<SandboxContext["fsBridge"]>["resolvePath"]>[0]) => ({
-        relativePath: filePath,
-        containerPath: filePath,
-      }),
+      resolvePath:
+        overrides.resolvePath ??
+        (({ filePath }: Parameters<NonNullable<SandboxContext["fsBridge"]>["resolvePath"]>[0]) => ({
+          relativePath: filePath,
+          containerPath: filePath,
+        })),
+      ...(overrides.resolvePolicyPath
+        ? { [SANDBOX_FILE_POLICY_PATH]: overrides.resolvePolicyPath }
+        : {}),
       copyFile: overrides.copyFile ?? (async () => undefined),
       readFile: overrides.readFile ?? (async () => Buffer.alloc(0)),
       writeFile: overrides.writeFile ?? (async () => undefined),
