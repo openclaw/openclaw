@@ -57,6 +57,7 @@ import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
+  reloadTaskFlowRegistryFromStore,
   requestFlowCancel,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
@@ -98,7 +99,10 @@ import {
   stopTaskRegistryMaintenance,
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
-import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  type TaskRegistryObserverEvent,
+} from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import { createAcpTaskRecord, createTaskFixture } from "./task-registry.test-support.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
@@ -1906,6 +1910,72 @@ describe("task-registry", () => {
       expect(repaired?.endedAt).toBe(200);
       expect(repaired?.revision).toBe(stale.flow.revision + 1);
     });
+  });
+
+  it("replays a SQLite-restored terminal task without writing or notifying", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        const task = createTaskFixture("subagent", {
+          runId: "run-sqlite-terminal-restore-noop",
+          childSessionKey: "agent:main:subagent:sqlite-terminal-restore-noop",
+          task: "Replay restored terminal projection",
+          deliveryStatus: "pending",
+          startedAt: 100,
+          lastEventAt: 100,
+        });
+        const flow = createTaskFlowForTask({ task });
+        expect(linkTaskToFlowById({ taskId: task.taskId, flowId: flow.flowId })?.parentFlowId).toBe(
+          flow.flowId,
+        );
+
+        finalizeSubagentTask(task, {
+          status: "succeeded",
+          endedAt: 200,
+          lastEventAt: 200,
+          progressSummary: "restored result",
+          terminalSummary: null,
+          suppressDelivery: true,
+        });
+        const persistedFlow = getTaskFlowById(flow.flowId);
+        expect(persistedFlow?.status).toBe("succeeded");
+        const persistedRevision = persistedFlow?.revision;
+        expect(persistedRevision).toBeGreaterThan(flow.revision);
+
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+        reloadTaskFlowRegistryFromStore();
+
+        const restored = requireTaskById(task.taskId);
+        expect(Object.hasOwn(restored, "terminalSummary")).toBe(false);
+        expect(getTaskFlowById(flow.flowId)?.revision).toBe(persistedRevision);
+
+        const events: TaskRegistryObserverEvent[] = [];
+        configureTaskRegistryRuntime({
+          observers: {
+            onEvent: (event) => {
+              events.push(event);
+            },
+          },
+        });
+
+        finalizeSubagentTask(task, {
+          status: "succeeded",
+          endedAt: 200,
+          lastEventAt: 200,
+          progressSummary: "restored result",
+          terminalSummary: null,
+          suppressDelivery: true,
+        });
+
+        const replayed = requireTaskById(task.taskId);
+        expect(Object.hasOwn(replayed, "terminalSummary")).toBe(false);
+        expect(replayed.status).toBe("succeeded");
+        expect(getTaskFlowById(flow.flowId)?.revision).toBe(persistedRevision);
+        expect(events.filter((event) => event.kind === "upserted")).toEqual([]);
+      },
+      { durableStore: true },
+    );
   });
 
   it("reports task update success and retries when task-mirrored flow sync persistence fails", async () => {

@@ -109,9 +109,10 @@ export function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   };
 }
 
-function withoutFlowRevision(flow: TaskFlowRecord): Omit<TaskFlowRecord, "revision"> {
-  const { revision: _revision, ...projection } = flow;
-  return projection;
+function omitUndefinedProperties<T extends object>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, field]) => field !== undefined),
+  ) as T;
 }
 
 /** Mirrored sync must not bump revision when the derived projection is unchanged. */
@@ -119,7 +120,13 @@ export function isEquivalentMirroredFlowProjection(
   current: TaskFlowRecord,
   next: TaskFlowRecord,
 ): boolean {
-  return isDeepStrictEqual(withoutFlowRevision(current), withoutFlowRevision(next));
+  // SQLite restores omit NULL optionals; applyFlowPatch materializes them as
+  // undefined. Drop both revision and undefined keys so those shapes compare equal
+  // while JSON null payloads stay distinct.
+  return isDeepStrictEqual(
+    omitUndefinedProperties({ ...current, revision: undefined }),
+    omitUndefinedProperties({ ...next, revision: undefined }),
+  );
 }
 
 export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {

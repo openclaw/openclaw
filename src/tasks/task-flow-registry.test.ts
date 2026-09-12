@@ -569,6 +569,59 @@ describe("task-flow-registry", () => {
     });
   });
 
+  it("does not rewrite a SQLite-restored terminal mirrored flow without state JSON", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const mirrored = createTaskFlowForTask({
+        task: {
+          ownerKey: "agent:main:main",
+          taskId: "task-restored-terminal",
+          notifyPolicy: "done_only",
+          status: "running",
+          label: "Restore terminal projection",
+          task: "Restore terminal projection",
+          createdAt: 100,
+          lastEventAt: 100,
+        },
+      });
+      expect(Object.hasOwn(mirrored, "stateJson")).toBe(false);
+      expect(Object.hasOwn(mirrored, "controllerId")).toBe(false);
+
+      const terminalTask = {
+        taskId: "task-restored-terminal",
+        parentFlowId: mirrored.flowId,
+        status: "succeeded" as const,
+        notifyPolicy: "done_only" as const,
+        label: "Restore terminal projection",
+        task: "Restore terminal projection",
+        lastEventAt: 200,
+        endedAt: 200,
+      };
+      const terminal = syncFlowFromTaskForTest(terminalTask);
+      if (!terminal) {
+        throw new Error("Expected terminal mirrored flow update");
+      }
+      expect(terminal.status).toBe("succeeded");
+      const persistedRevision = terminal.revision;
+
+      resetTaskFlowRegistryForTests({ persist: false });
+      reloadTaskFlowRegistryFromStore();
+
+      const restored = getTaskFlowById(mirrored.flowId);
+      expect(restored?.status).toBe("succeeded");
+      expect(Object.hasOwn(restored ?? {}, "stateJson")).toBe(false);
+      expect(Object.hasOwn(restored ?? {}, "controllerId")).toBe(false);
+      expect(restored?.revision).toBe(persistedRevision);
+
+      const replayed = syncFlowFromTaskForTest(terminalTask);
+      if (!replayed) {
+        throw new Error("Expected restored mirrored flow replay");
+      }
+      expect(replayed.status).toBe("succeeded");
+      expect(replayed.revision).toBe(persistedRevision);
+      expect(replayed.endedAt).toBe(200);
+    });
+  });
+
   it("preserves explicit json null in state and wait payloads", async () => {
     await withFlowRegistryTempDir(async () => {
       const created = createManagedTaskFlow({
