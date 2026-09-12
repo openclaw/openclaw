@@ -352,6 +352,16 @@ export async function agentExecCommand(
     // Auth, session keys, and SQLite ownership must share one resolved owner.
     // Splitting these paths can select an agent's store but emit a `main` key.
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
+    // A one-shot run with a fresh state directory cannot rebuild the selected
+    // agent's provider-owned generated catalogs, so cached-only models they
+    // advertise would resolve as unknown. Carry the operator's validated
+    // metadata into the run -- never its database or credentials -- while any
+    // catalog the run's own state retains still takes precedence.
+    const catalogHandoffModule = inheritInstalledPlugins
+      ? await import("../agents/plugin-model-catalog-handoff.js")
+      : undefined;
+    const catalogHandoff =
+      await catalogHandoffModule?.capturePluginModelCatalogHandoff(storedAuthAgentDir);
     runtimePaths = await import("../config/paths.js");
     const storedAuthStateDir = runtimePaths.resolveStateDir();
     // Capture cleanup before a child can finish or lose its native owner.
@@ -459,13 +469,20 @@ export async function agentExecCommand(
       pluginInstallContext && pluginInstallRoots
         ? pluginInstallContext.withPluginInstallRoots(pluginInstallRoots, invoke)
         : invoke();
+    const runWithCatalogHandoff = () =>
+      catalogHandoffModule && catalogHandoff
+        ? catalogHandoffModule.withPluginModelCatalogHandoff(
+            catalogHandoff,
+            runWithPluginInstallRoots,
+          )
+        : runWithPluginInstallRoots();
     const runWithAuthScope = () =>
       opts.authEnvOnly === true
-        ? withEnvOnlyAuthProfileStore(runWithPluginInstallRoots)
+        ? withEnvOnlyAuthProfileStore(runWithCatalogHandoff)
         : withAuthProfileStoreAgentDir(
             storedAuthAgentDir,
             storedAuthStateDir,
-            runWithPluginInstallRoots,
+            runWithCatalogHandoff,
           );
     const result = await runtimeCleanup.run(() =>
       toolBudget.run(() =>
