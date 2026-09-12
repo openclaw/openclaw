@@ -612,7 +612,7 @@ async function verifyAndActivateCandidate(
       const committed = await transform({
         base: "source",
         writeOptions: attachRuntimeConfigWriteApplication(
-          { beforeCommit: () => throwIfSetupInferenceCancelled(params) },
+          { assertCurrent: () => throwIfSetupInferenceCancelled(params) },
           application,
         ),
         transform: async (current, context) => {

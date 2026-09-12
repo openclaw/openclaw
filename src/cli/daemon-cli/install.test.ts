@@ -35,6 +35,7 @@ describe("runDaemonInstall", () => {
       await Promise.resolve();
       current = false;
       await params.writeOptions.beforeCommit?.();
+      params.writeOptions.assertCurrent?.();
       committed = true;
     });
     await expect(

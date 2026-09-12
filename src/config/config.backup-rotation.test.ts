@@ -133,24 +133,22 @@ describe("config backup rotation", () => {
           }
           const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
           const readBackups = () =>
-            Promise.all(
-              backupPaths.map(async (backupPath) => {
-                try {
-                  return {
-                    raw: await fs.readFile(backupPath, "utf8"),
-                    mode: (await fs.stat(backupPath)).mode,
-                  };
-                } catch (error) {
-                  if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-                    throw error;
-                  }
-                  return null;
+            backupPaths.map((backupPath) => {
+              try {
+                return {
+                  raw: fsNode.readFileSync(backupPath, "utf8"),
+                  mode: fsNode.statSync(backupPath).mode,
+                };
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+                  throw error;
                 }
-              }),
-            );
+                return null;
+              }
+            });
           let atRevocation: Awaited<ReturnType<typeof readBackups>> | undefined;
           const mutationsAfterRevocation: string[] = [];
-          const afterMutation = async (operation: typeof revokeAfter, target: fsNode.PathLike) => {
+          const afterMutation = (operation: typeof revokeAfter, target: fsNode.PathLike) => {
             if (!String(target).includes(".bak")) {
               return;
             }
@@ -158,7 +156,7 @@ describe("config backup rotation", () => {
               mutationsAfterRevocation.push(operation);
             } else if (operation === revokeAfter) {
               revoke();
-              atRevocation = await readBackups();
+              atRevocation = readBackups();
             }
           };
           const io = createConfigIO({
@@ -168,24 +166,21 @@ describe("config backup rotation", () => {
             pluginValidation: "skip",
             fs: {
               ...fsNode,
-              promises: {
-                ...fsNode.promises,
-                unlink: async (target) => {
-                  await fs.unlink(target);
-                  await afterMutation("unlink", target);
-                },
-                rename: async (source, destination) => {
-                  await fs.rename(source, destination);
-                  await afterMutation("rename", destination);
-                },
-                copyFile: async (source, destination, mode) => {
-                  await fs.copyFile(source, destination, mode);
-                  await afterMutation("copyFile", destination);
-                },
-                chmod: async (target, mode) => {
-                  await fs.chmod(target, mode);
-                  await afterMutation("chmod", target);
-                },
+              unlinkSync: (target) => {
+                fsNode.unlinkSync(target);
+                afterMutation("unlink", target);
+              },
+              renameSync: (source, destination) => {
+                fsNode.renameSync(source, destination);
+                afterMutation("rename", destination);
+              },
+              copyFileSync: (source, destination, mode) => {
+                fsNode.copyFileSync(source, destination, mode);
+                afterMutation("copyFile", destination);
+              },
+              chmodSync: (target, mode) => {
+                fsNode.chmodSync(target, mode);
+                afterMutation("chmod", target);
               },
             },
           });
@@ -200,7 +195,7 @@ describe("config backup rotation", () => {
 
           expect(atRevocation).toBeDefined();
           expect(mutationsAfterRevocation).toEqual([]);
-          expect(await readBackups()).toEqual(atRevocation);
+          expect(readBackups()).toEqual(atRevocation);
           expect(await fs.readFile(configPath, "utf8")).toBe(raw);
         }),
       );

@@ -33,6 +33,95 @@ function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
 }
 
 describe("config cli integration", () => {
+  it.each(["restore", "external replacement", "recovery failure"])(
+    "openclaw config set reports owned root removal with %s",
+    async (recovery) => {
+      const raw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
+      await withConfigFileHarness(
+        "openclaw-config-cli-recovery-",
+        raw,
+        async ({ configPath, tempDir }) => {
+          const includePath = path.join(tempDir, "logging.json");
+          fs.writeFileSync(includePath, '{"level":"info"}\n');
+          const rename = fs.renameSync;
+          vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+            if (to === configPath) {
+              throw Object.assign(new Error("rename denied"), { code: "EPERM" });
+            }
+            return rename(from, to);
+          });
+          const concurrentRaw = '{"gateway":{"mode":"local","port":19003}}\n';
+          let removed = false;
+          const remove = fs.rmSync;
+          vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
+            remove(file, options);
+            if (file === configPath) {
+              removed = true;
+              fs.writeFileSync(includePath, '{"level":"warn"}\n');
+              if (recovery === "external replacement") {
+                fs.writeFileSync(configPath, concurrentRaw);
+              }
+            }
+          });
+          const open = fs.openSync;
+          vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+            if (removed && recovery === "recovery failure" && String(file).endsWith(".tmp")) {
+              throw Object.assign(new Error("recovery stage full"), { code: "ENOSPC" });
+            }
+            return open(file, flags, mode);
+          });
+          await expect(
+            runRegisteredConfigCommand(["config", "set", "messages.responsePrefix", "changed"]),
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+          expect(removed).toBe(true);
+          expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(raw);
+          expect(fs.readFileSync(includePath, "utf8")).toBe('{"level":"warn"}\n');
+          const error = registeredRuntimeErrors.join("\n");
+          expect(error).toContain("Config publication failed after removing");
+          expect(error).toContain(`${configPath}.bak`);
+          expect(error).not.toContain("nothing was changed");
+          expect(error).not.toContain("Re-run the same command");
+          if (recovery === "recovery failure") {
+            expect(fs.existsSync(configPath)).toBe(false);
+            expect(error).toContain("Rollback could not be confirmed");
+          } else {
+            expect(fs.readFileSync(configPath, "utf8")).toBe(
+              recovery === "restore" ? raw : concurrentRaw,
+            );
+          }
+        },
+      );
+    },
+  );
+
+  it("openclaw config set preserves all five backups after five failed stages", async () => {
+    const raw = '{"gateway":{"mode":"local"},"logging":{"level":"info"}}\n';
+    await withConfigFileHarness("openclaw-config-cli-backups-", raw, async ({ configPath }) => {
+      const backups = Array.from({ length: 5 }, (_, i) => `${configPath}.bak${i ? `.${i}` : ""}`);
+      backups.forEach((file, i) => fs.writeFileSync(file, `recovery-${i}`));
+      const open = fs.openSync;
+      vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+        if (String(file).startsWith(`${configPath}.`) && String(file).endsWith(".tmp")) {
+          throw Object.assign(new Error("stage full"), { code: "ENOSPC" });
+        }
+        return open(file, flags, mode);
+      });
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await expect(
+          runRegisteredConfigCommand(["config", "set", "logging.level", "debug"]),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(backups.map((file) => fs.readFileSync(file, "utf8"))).toEqual([
+          "recovery-0",
+          "recovery-1",
+          "recovery-2",
+          "recovery-3",
+          "recovery-4",
+        ]);
+      }
+    });
+  });
+
   it.each([
     {
       name: "empty inline batch",

@@ -64,8 +64,8 @@ const mockLoadPluginManifestRegistry = vi.hoisted(() =>
     plugins: [],
   })),
 );
-const mockMaintainConfigBackups = vi.hoisted(() =>
-  vi.fn<typeof import("./backup-rotation.js").maintainConfigBackups>(async () => {}),
+const mockMaintainConfigBackupsSync = vi.hoisted(() =>
+  vi.fn<typeof import("./backup-rotation.js").maintainConfigBackupsSync>(() => {}),
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({
@@ -93,7 +93,7 @@ vi.mock("./backup-rotation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backup-rotation.js")>();
   return {
     ...actual,
-    maintainConfigBackups: mockMaintainConfigBackups,
+    maintainConfigBackupsSync: mockMaintainConfigBackupsSync,
   };
 });
 
@@ -170,8 +170,8 @@ describe("config io write", () => {
 
   afterEach(() => {
     resetConfigRuntimeState();
-    mockMaintainConfigBackups.mockReset();
-    mockMaintainConfigBackups.mockResolvedValue(undefined);
+    mockMaintainConfigBackupsSync.mockReset();
+    mockMaintainConfigBackupsSync.mockReturnValue(undefined);
   });
 
   afterAll(async () => {
@@ -1822,7 +1822,7 @@ describe("config io write", () => {
         ),
       ).rejects.toThrow("config changed since last load");
 
-      expect(mockMaintainConfigBackups).not.toHaveBeenCalled();
+      expect(mockMaintainConfigBackupsSync).not.toHaveBeenCalled();
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
     },
   );
@@ -1834,8 +1834,8 @@ describe("config io write", () => {
     const io = createFastConfigIO(home);
     const snapshot = await io.readConfigFileSnapshot();
     const concurrentRaw = formatConfig({ gateway: { mode: "local", port: 19001 } });
-    mockMaintainConfigBackups.mockImplementationOnce(async () => {
-      await fs.writeFile(configPath, concurrentRaw, "utf-8");
+    mockMaintainConfigBackupsSync.mockImplementationOnce(() => {
+      fsNode.writeFileSync(configPath, concurrentRaw, "utf-8");
     });
 
     await expect(
@@ -3818,14 +3818,14 @@ describe("config io write", () => {
       });
       const events: string[] = [];
       let active = true;
+      const refusal = new Error("approval expired");
       setRuntimeConfigSnapshotRefreshHandler({
         preflight: () => {
           events.push("preflight");
         },
         refresh: () => true,
       });
-      mockMaintainConfigBackups.mockImplementationOnce(async () => {
-        await Promise.resolve();
+      mockMaintainConfigBackupsSync.mockImplementationOnce(() => {
         events.push("backup");
         active = false;
       });
@@ -3842,8 +3842,10 @@ describe("config io write", () => {
               {
                 beforeCommit: async () => {
                   events.push("commit");
+                },
+                assertCurrent: () => {
                   if (!active) {
-                    throw new Error("approval expired");
+                    throw refusal;
                   }
                 },
               },
@@ -3851,7 +3853,7 @@ describe("config io write", () => {
           ).rejects.toThrow("approval expired");
         },
       );
-      expect(events).toEqual(["preflight", "backup", "commit"]);
+      expect(events).toEqual(["preflight", "commit", "backup"]);
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   }

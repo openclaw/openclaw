@@ -1202,7 +1202,7 @@ async function replaceConfigFileUnlocked(
     );
     const committed = written?.[configWriteCommittedSnapshot];
     writeResult = {
-      persistedHash: committed?.hash ?? written?.persistedHash ?? null,
+      persistedHash: committed?.hash ?? null,
       persistedConfig: committed?.sourceConfig ?? written?.persistedConfig ?? nextConfig,
       persistedSourceConfig: written?.persistedSourceConfig,
     };

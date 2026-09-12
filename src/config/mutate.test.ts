@@ -686,32 +686,42 @@ describe("config mutate helpers", () => {
       }),
   );
 
-  it("replaceConfigFile preserves a legacy void writer's snapshot and write options", async () => {
-    const snapshot = createSnapshot({
-      hash: "hash-1",
-      sourceConfig: { gateway: { auth: { mode: "token" } } },
-    });
+  it.each(["void", "root hash"])(
+    "replaceConfigFile keeps a legacy %s writer revision unknown",
+    async (receipt) => {
+      const snapshot = createSnapshot({
+        hash: "hash-1",
+        sourceConfig: { gateway: { auth: { mode: "token" } } },
+      });
 
-    const result = await replaceConfigFile({
-      baseHash: snapshot.hash,
-      nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
+      if (receipt === "root hash") {
+        ioMocks.writeConfigFile.mockResolvedValue({
+          persistedHash: "root-only-hash",
+          persistedConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
+        });
+      }
 
-    expect(result.persistedHash).toBeNull();
-    expect(result.nextConfig).toEqual({
-      gateway: { auth: { mode: "token", token: "minted" } },
-    });
-    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
-      { gateway: { auth: { mode: "token", token: "minted" } } },
-      {
-        baseSnapshot: snapshot,
-        expectedConfigPath: snapshot.path,
-        afterWrite: { mode: "auto" },
-      },
-    );
-  });
+      const result = await replaceConfigFile({
+        baseHash: snapshot.hash,
+        nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
+        snapshot,
+        writeOptions: { expectedConfigPath: snapshot.path },
+      });
+
+      expect(result.persistedHash).toBeNull();
+      expect(result.nextConfig).toEqual({
+        gateway: { auth: { mode: "token", token: "minted" } },
+      });
+      expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+        { gateway: { auth: { mode: "token", token: "minted" } } },
+        {
+          baseSnapshot: snapshot,
+          expectedConfigPath: snapshot.path,
+          afterWrite: { mode: "auto" },
+        },
+      );
+    },
+  );
 
   it("does not write through a nested single include owned by a root include array", async () => {
     const snapshot = {
