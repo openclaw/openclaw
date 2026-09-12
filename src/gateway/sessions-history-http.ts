@@ -44,7 +44,10 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
-import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
+import {
+  resolveTranscriptPathForComparison,
+  resolveTranscriptUpdatePathForComparison,
+} from "./session-transcript-path.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -461,7 +464,7 @@ export async function handleSessionHistoryHttpRequest(
     const updateMatchesIdentity =
       update.target?.sessionId === historyTarget.sessionId &&
       normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
-    const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
+    const updatePath = resolveTranscriptUpdatePathForComparison(update);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
       return;
     }
