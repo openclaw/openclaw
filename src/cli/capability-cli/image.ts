@@ -180,6 +180,7 @@ async function runImageDescribe(params: {
                 const described = await describePreparedImageWithModel({
                   image: preparedImage,
                   cfg,
+                  agentId,
                   agentDir,
                   provider,
                   model,
@@ -197,6 +198,7 @@ async function runImageDescribe(params: {
                 filePath: resolvedPath,
                 ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
                 cfg,
+                agentId,
                 agentDir,
                 prompt,
                 timeoutMs: params.timeoutMs,
