@@ -455,6 +455,37 @@ describe("gateway bonjour advertiser", () => {
     }
   });
 
+  it("suppresses transient ENODEV mDNS socket warnings while advertising", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const originalConsoleWarn = console.warn;
+    const baseConsoleWarn = vi.fn();
+    console.warn = baseConsoleWarn as typeof console.warn;
+
+    try {
+      const started = await startAdvertiser({
+        gatewayPort: 18789,
+        sshPort: 2222,
+      });
+
+      console.warn(
+        "Encountered MDNS socket error on socket 'br-deadbeef' : Error: send ENODEV 224.0.0.251:5353\n    at Socket.send (node:dgram:123:45)",
+      );
+      console.warn("ordinary console warning");
+
+      expect(baseConsoleWarn).toHaveBeenCalledTimes(1);
+      expect(baseConsoleWarn).toHaveBeenCalledWith("ordinary console warning");
+
+      await started.stop();
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+  });
+
   it("does not monkey-patch responder methods during shutdown", async () => {
     enableAdvertiserUnitMode();
 

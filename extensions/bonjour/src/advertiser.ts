@@ -38,6 +38,8 @@ type BonjourAdvertiserDeps = {
 
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
+const CIAO_MDNS_SOCKET_WARNING_FRAGMENT = "Encountered MDNS socket error on socket";
+const CIAO_TRANSIENT_ENODEV_FRAGMENT = "send ENODEV 224.0.0.251:5353";
 
 const defaultLogger = {
   info: (_msg: string) => {},
@@ -168,18 +170,38 @@ function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
   );
 }
 
+function shouldSuppressCiaoConsoleWarn(args: unknown[]): boolean {
+  return args.some(
+    (arg) =>
+      typeof arg === "string" &&
+      arg.includes(CIAO_MDNS_SOCKET_WARNING_FRAGMENT) &&
+      arg.includes(CIAO_TRANSIENT_ENODEV_FRAGMENT),
+  );
+}
+
 function installCiaoConsoleNoiseFilter(): () => void {
   const previousConsoleLog = console.log as ConsoleLogFn;
-  const wrapper = ((...args: unknown[]) => {
+  const previousConsoleWarn = console.warn;
+  const logWrapper = ((...args: unknown[]) => {
     if (shouldSuppressCiaoConsoleLog(args)) {
       return;
     }
     previousConsoleLog(...args);
   }) as ConsoleLogFn;
-  console.log = wrapper;
+  const warnWrapper = (...args: unknown[]) => {
+    if (shouldSuppressCiaoConsoleWarn(args)) {
+      return;
+    }
+    previousConsoleWarn(...args);
+  };
+  console.log = logWrapper;
+  console.warn = warnWrapper;
   return () => {
-    if (console.log === wrapper) {
+    if (console.log === logWrapper) {
       console.log = previousConsoleLog;
+    }
+    if (console.warn === warnWrapper) {
+      console.warn = previousConsoleWarn;
     }
   };
 }
