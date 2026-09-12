@@ -109,12 +109,7 @@ async function resolveChannelPluginForMode(
   if (!writeSnapshot) {
     return null;
   }
-  // Runtime defaults are not authored plugin enablement intent.
-  const autoEnabled = applyPluginAutoEnable({
-    config: writeSnapshot.snapshot.sourceConfig,
-    env: process.env,
-  });
-  const cfg = autoEnabled.config;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
   const explicitChannel = opts.channel?.trim();
   const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(mode);
   const normalizedChannelId = normalizeChannelId(channelInput);
@@ -144,7 +139,7 @@ async function resolveChannelPluginForMode(
       }),
     );
   }
-  if (autoEnabled.changes.length > 0 || resolved.configChanged) {
+  if (resolved.configChanged) {
     await commitConfigWithPendingPluginInstalls({
       sourceConfig: resolved.cfg,
       baseHash: writeSnapshot.snapshot.hash,
