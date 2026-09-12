@@ -502,11 +502,9 @@ export function buildCliRunResult(params: {
       ? effectiveCliSessionId
       : undefined;
   const terminalInterruption = output.terminalInterruption;
-  // An interrupted process cannot preserve its now-invalid native session binding.
-  const cliSessionBindingCleared =
-    terminalInterruption !== undefined ||
-    sessionBindingDisabled ||
-    unflushedCliSessionId !== undefined;
+  // Interruption alone does not invalidate a native transcript. The bounded
+  // flush probe above decides whether the binding is safe to persist.
+  const cliSessionBindingCleared = sessionBindingDisabled || unflushedCliSessionId !== undefined;
   const persistedCliSessionId = cliSessionBindingCleared ? undefined : effectiveCliSessionId;
   const createdReseedReceipt =
     persistedCliSessionId &&

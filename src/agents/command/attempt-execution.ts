@@ -1251,6 +1251,7 @@ export function runAgentAttempt(params: {
             shouldClearFailedCliSessionBinding({
               error: err,
               binding: failedCliSessionBinding,
+              bindingReplacedDuringRun: failedCliSessionId !== activeCliSessionBinding?.sessionId,
               hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
                 params.sessionKey,
                 mediaTaskIdsBefore,

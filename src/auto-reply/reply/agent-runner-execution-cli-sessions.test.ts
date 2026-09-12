@@ -779,6 +779,48 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(sessionEntry.claudeCliSessionId).toBe("media-session");
   });
 
+  it("preserves a reused binding after an operator aborts a channel turn", async () => {
+    const sessionKey = "agent:main:direct:aborted-run";
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-8",
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockRejectedValueOnce(
+      Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-8";
+    const sessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "aborted-session" } },
+      cliSessionIds: { "claude-cli": "aborted-session" },
+      claudeCliSessionId: "aborted-session",
+    } as SessionEntry;
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(sessionEntry.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("aborted-session");
+    expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBe("aborted-session");
+    expect(sessionEntry.claudeCliSessionId).toBe("aborted-session");
+  });
+
   it("does not attribute media from an earlier admitted turn to a queued failure", async () => {
     const sessionKey = "agent:main:cron:media-job:run:run-queued";
     state.isCliProviderMock.mockReturnValue(true);

@@ -148,6 +148,7 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
 export function shouldClearFailedCliSessionBinding(params: {
   error: unknown;
   binding?: CliSessionBinding;
+  bindingReplacedDuringRun?: boolean;
   hasNewGeneratedMediaTask?: boolean;
 }): boolean {
   if (!normalizeOptionalString(params.binding?.sessionId)) {
@@ -160,8 +161,10 @@ export function shouldClearFailedCliSessionBinding(params: {
   if (isFailoverError(params.error)) {
     return isCliSessionInvalidatingFailoverReason(params.error.reason);
   }
-  // A pre-successor fork abort keeps its one-shot marker for the next turn.
-  return params.binding?.forkNextResume !== true && readErrorName(params.error) === "AbortError";
+  // Operator cancellation stops the process; it does not invalidate the
+  // provider transcript that backed the attempted resume. A replacement
+  // installed mid-run is not established until that run settles, though.
+  return params.bindingReplacedDuringRun === true && readErrorName(params.error) === "AbortError";
 }
 
 /** Stable reason used when recording why a failed reused CLI session was cleared. */

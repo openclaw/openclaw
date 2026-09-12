@@ -636,14 +636,21 @@ describe("cli-session helpers", () => {
     expect(hashCliSessionText("")).toBeUndefined();
   });
 
-  it("shares failed reused-session cleanup policy across CLI entry points", () => {
+  it("preserves reusable bindings for aborts and clears only invalid sessions", () => {
     const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
 
     const binding = { sessionId: "reused" };
     const forkBinding = { sessionId: "fork-source", forkNextResume: true as const };
 
-    expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(true);
+    expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(false);
     expect(shouldClearFailedCliSessionBinding({ error: abort, binding: forkBinding })).toBe(false);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: abort,
+        binding: { sessionId: "replacement" },
+        bindingReplacedDuringRun: true,
+      }),
+    ).toBe(true);
     expect(
       shouldClearFailedCliSessionBinding({
         error: new FailoverError("session expired", {

@@ -1515,7 +1515,7 @@ describe("CLI attempt execution", () => {
     );
   });
 
-  it("clears reused Claude CLI session IDs after AbortError without retrying", async () => {
+  it("preserves and resumes a reused Claude CLI session after AbortError", async () => {
     const sessionKey = "agent:main:direct:cli-abort";
     const cliSessionId = "abort-poisoned-session";
     await writeClaudeCliAssistantTranscript(cliSessionId);
@@ -1537,14 +1537,29 @@ describe("CLI attempt execution", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
-    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      cliSessionId,
+    );
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
 
     const persisted = readSessionStore();
-    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(cliSessionId);
+    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
+
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("continued after abort", cliSessionId));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "continue after abort",
+      runId: "run-cli-abort-resume",
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(firstRunCliAgentArg(1).cliSessionId).toBe(cliSessionId);
   });
 
   it("clears a fork-marked Claude CLI session after terminal failover", async () => {

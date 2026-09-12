@@ -137,6 +137,40 @@ describe("isCliBindingFlushed", () => {
 });
 
 describe("CLI native continuity projection", () => {
+  it.each([
+    { bindingFlushOk: true, expectedSessionId: "interrupted-session" },
+    { bindingFlushOk: false, expectedSessionId: undefined },
+  ])(
+    "uses transcript flush=$bindingFlushOk to settle an interrupted binding",
+    ({ bindingFlushOk, expectedSessionId }) => {
+      const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+      const result = buildCliRunResult({
+        context,
+        output: {
+          text: "partial reply",
+          terminalInterruption: { reason: "aborted" },
+        },
+        effectiveCliSessionId: "interrupted-session",
+        bindingFlushOk,
+        usedHistoryPrompt: false,
+        userTurnHandled: true,
+        sessionBindingDisabled: false,
+        preparedContextAgentMeta: {},
+      });
+      const entry: SessionEntry = {
+        sessionId: context.params.sessionId,
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: "interrupted-session" } },
+      };
+
+      applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
+
+      expect(result.meta.aborted).toBe(true);
+      expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(bindingFlushOk ? undefined : true);
+      expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe(expectedSessionId);
+    },
+  );
+
   it.each(["blocked", "no-native-id", "native", "stateless"])(
     "projects only explicit native continuity from a %s result",
     (kind) => {
