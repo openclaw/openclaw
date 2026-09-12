@@ -13,13 +13,14 @@ export function ensureContextEngineTurnOutboxSchema(db: DatabaseSync): void {
     return;
   }
   const ensure = () => {
+    // sqlite-allow-raw -- Canonical additive DDL only.
     db.exec(
       extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, CONTEXT_ENGINE_TURN_OUTBOX_TABLE, {
         endMarker: "CREATE TABLE IF NOT EXISTS cache_entries (",
         includeEndMarker: false,
         errorMessage: "OpenClaw context-engine turn outbox schema markers are missing.",
       }),
-    ); // sqlite-allow-raw -- Canonical additive DDL only.
+    );
   };
   if (db.isTransaction) {
     ensure();

@@ -31,13 +31,14 @@ function ensureStandingIntentCreatorColumn(db: DatabaseSync): void {
 /** Lazily add the canonical standing-intents tables on first feature use. */
 export function ensureOpenClawAgentStandingIntentsSchema(db: DatabaseSync): void {
   const ensure = () => {
+    // sqlite-allow-raw -- Canonical additive DDL only.
     db.exec(
       extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, STANDING_INTENTS_TABLE, {
         endMarker: "CREATE TABLE IF NOT EXISTS session_transcript_index_state (",
         includeEndMarker: false,
         errorMessage: "OpenClaw standing-intents schema markers are missing.",
       }),
-    ); // sqlite-allow-raw -- Canonical additive DDL only.
+    );
     ensureStandingIntentCreatorColumn(db);
   };
   if (db.isTransaction) {
