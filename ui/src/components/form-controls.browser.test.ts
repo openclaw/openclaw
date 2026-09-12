@@ -175,7 +175,7 @@ describeBrowserLayout("sensitive input visibility", () => {
 });
 
 describeBrowserLayout("settings icon buttons", () => {
-  it("keeps plugin and MCP remove glyphs proportionate to settings buttons", async () => {
+  it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setContent(`
@@ -184,7 +184,7 @@ describeBrowserLayout("settings icon buttons", () => {
           <head><style>${readUiCss()}</style></head>
           <body>
             <div class="settings-row__control">
-              <button class="btn btn--sm btn--icon plugins-remove" type="button">
+              <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
                 <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
               </button>
             </div>
@@ -192,18 +192,20 @@ describeBrowserLayout("settings icon buttons", () => {
         </html>
       `);
 
-      const metrics = await page.locator(".plugins-remove").evaluate((button) => {
-        const glyph = button.querySelector("svg");
-        if (!(glyph instanceof SVGElement)) {
-          throw new Error("Missing remove button glyph");
-        }
-        const buttonRect = button.getBoundingClientRect();
-        const glyphRect = glyph.getBoundingClientRect();
-        return {
-          button: [buttonRect.width, buttonRect.height],
-          glyph: [glyphRect.width, glyphRect.height],
-        };
-      });
+      const metrics = await page
+        .getByRole("button", { name: "Remove synthetic server", exact: true })
+        .evaluate((button) => {
+          const glyph = button.querySelector("svg");
+          if (!(glyph instanceof SVGElement)) {
+            throw new Error("Missing remove button glyph");
+          }
+          const buttonRect = button.getBoundingClientRect();
+          const glyphRect = glyph.getBoundingClientRect();
+          return {
+            button: [buttonRect.width, buttonRect.height],
+            glyph: [glyphRect.width, glyphRect.height],
+          };
+        });
       expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
     } finally {
       await page.close().catch(() => {});
