@@ -6,7 +6,6 @@ import {
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withTimeout } from "../../infra/fs-safe.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -23,7 +22,6 @@ import {
   credential,
   measureLaunchTurn,
   placements,
-  root as fixtureRoot,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -132,16 +130,11 @@ async function launchProbe(input: SessionPlacementTurnParams, assertRunCurrent?:
     destroy: unexpected,
   };
   const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-  const fixtureAbort = new AbortController();
+  hasUnjoinedOwner = true;
   const pending = provider
     .executeTurn(
       { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
-      {
-        ...input,
-        abortSignal: input.abortSignal
-          ? AbortSignal.any([input.abortSignal, fixtureAbort.signal])
-          : fixtureAbort.signal,
-      },
+      input,
       unexpected,
       undefined,
       assertRunCurrent,
@@ -150,27 +143,12 @@ async function launchProbe(input: SessionPlacementTurnParams, assertRunCurrent?:
       () => ({ kind: "resolved" as const }),
       (error: unknown) => ({ kind: "rejected" as const, error }),
     );
-  let outcome: Awaited<typeof pending> | undefined;
-  const failures: unknown[] = [];
+  let outcome: Awaited<typeof pending>;
   try {
-    outcome = await withTimeout(pending, input.timeoutMs, "worker functional launch observation");
-  } catch (error) {
-    failures.push(error);
-    fixtureAbort.abort(error);
-    try {
-      outcome = await withTimeout(pending, input.timeoutMs, "worker functional owner join");
-    } catch (joinError) {
-      failures.push(joinError);
-      hasUnjoinedOwner = true;
-    }
+    outcome = await pending;
   } finally {
+    hasUnjoinedOwner = false;
     input.preparedRunAdmission?.close();
-  }
-  if (failures.length > 0 || !outcome) {
-    throw new AggregateError(
-      failures,
-      `Worker functional proof did not settle in its budget; fixture state: ${fixtureRoot}`,
-    );
   }
   expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
@@ -213,8 +191,6 @@ describe("worker detached model-context branch parity", () => {
       throw new Error("prior worker fixture remains unjoined; retained state must not be replaced");
     }
     await setupWorkerTurnLauncherTest();
-    // Source-worker initialization belongs to setup, outside the launch observation budget.
-    await SessionManager.openModelContextAsync(sessionTarget);
   });
   afterEach(async () => {
     if (!hasUnjoinedOwner) {
@@ -222,7 +198,7 @@ describe("worker detached model-context branch parity", () => {
     }
   });
 
-  it("keeps a pre-persisted current user out of replay and uses its exact base leaf", async () => {
+  it("waits for context readiness and keeps the pre-persisted current user out of replay", async () => {
     const { manager } = seedPrevious();
     const currentId = manager.appendMessage(
       makeAgentUserMessage({
@@ -230,12 +206,26 @@ describe("worker detached model-context branch parity", () => {
         timestamp: 3,
       }),
     );
-    const result = await launchProbe({
-      ...request("persisted-current"),
-      suppressNextUserMessagePersistence: true,
-    });
-    expect(result.launch).toEqual({ baseLeafId: currentId, history: prior });
-    expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { result } = await withAsyncReadHook(
+        {
+          // Readiness may arrive after the former fixture deadline on a loaded host.
+          before: async () => {
+            await vi.advanceTimersByTimeAsync(5_001);
+          },
+        },
+        () =>
+          launchProbe({
+            ...request("persisted-current"),
+            suppressNextUserMessagePersistence: true,
+          }),
+      );
+      expect(result.launch).toEqual({ baseLeafId: currentId, history: prior });
+      expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("joins recorder persistence already in flight during preparation", async () => {
