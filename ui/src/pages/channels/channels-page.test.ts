@@ -32,7 +32,17 @@ function stubHangingFetch() {
         if (!signal) {
           throw new Error("Expected Nostr profile request to carry an AbortSignal");
         }
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => {
+            const reason: unknown = signal.reason;
+            if (!(reason instanceof DOMException)) {
+              throw new Error("Expected profile timeout to abort with a DOMException");
+            }
+            reject(reason);
+          },
+          { once: true },
+        );
       }),
   );
   vi.stubGlobal("fetch", fetchMock);
