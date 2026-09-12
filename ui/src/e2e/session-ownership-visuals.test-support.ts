@@ -10,6 +10,21 @@ import {
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+// Pre-compact baseline: 18px faces in a 28px stack, not the earlier 14px/20px predecessor.
+export const preCompactOwnerStackStyles = `
+          .session-owner-stack {
+            width: 28px; flex: 0 1 auto; align-items: center; justify-content: flex-end;
+          }
+          .session-owner-stack__back { top: auto; left: 0; }
+          .session-owner-stack__back .viewer-avatar,
+          .session-owner-stack__overflow { width: 18px; height: 18px; font-size: 8px; }
+          .session-owner-stack__front {
+            position: relative; top: auto; left: auto; width: 18px; height: 18px;
+            border-color: hsl(var(--owner-hue) 52% 18% / 0.9);
+            box-shadow: 0 1px 2px rgb(0 0 0 / 0.24); font-size: 10px;
+          }
+`;
+
 export function createSessionOwnershipProofContext(
   owner: { readonly artifactDir: string; readonly browser: Browser },
   directory: "drafts-ux" | "session-owner-stack",

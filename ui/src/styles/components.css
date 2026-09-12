@@ -170,25 +170,27 @@ openclaw-session-owner-chip {
 .session-owner-stack {
   position: relative;
   display: inline-flex;
-  width: 28px;
+  width: 20px;
   height: 20px;
-  align-items: center;
-  justify-content: flex-end;
+  flex: none;
 }
 
+/* Keep both faces inside the single-owner 20px circle, not just its square
+   bounds, so the activity ring clears the diagonal stack as well. */
 .session-owner-stack__back {
   position: absolute;
-  left: 0;
+  top: 1.2px;
+  left: 1.2px;
   display: inline-flex;
 }
 
 .session-owner-stack__back .viewer-avatar,
 .session-owner-stack__overflow {
-  width: 18px;
-  height: 18px;
+  width: 12px;
+  height: 12px;
   border: 1px solid var(--sidebar-bg, var(--bg));
   border-radius: var(--radius-full);
-  font-size: 8px;
+  font-size: 6px;
 }
 
 .session-owner-stack__overflow {
@@ -202,10 +204,15 @@ openclaw-session-owner-chip {
 }
 
 .session-owner-stack__front {
-  position: relative;
+  position: absolute;
   z-index: 1;
-  width: 18px;
-  height: 18px;
+  top: 5.1px;
+  left: 5.1px;
+  width: 14px;
+  height: 14px;
+  border-color: var(--sidebar-bg, var(--bg));
+  box-shadow: none;
+  font-size: 8px;
 }
 
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
@@ -231,7 +238,6 @@ openclaw-session-owner-chip {
   justify-content: center;
   width: 16px;
   height: 16px;
-  transition: transform var(--duration-fast) ease;
 }
 
 .channel-avatar {
@@ -258,20 +264,12 @@ openclaw-session-owner-chip {
   color: inherit;
 }
 
-/* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
-   SVGs) must shrink to keep its corners inside it. A 16px square scaled below
-   0.75 clears its 21px inner circle; 20px circular avatars fill their lead. */
-.session-glyph--running .session-glyph__content {
-  transform: scale(0.72);
-}
-
-.session-glyph--circular.session-glyph--running .session-glyph__content {
-  transform: none;
-}
+/* Keep page icons at their resting size. Every artwork-bearing glyph uses
+   the same 25px ring; uniformity takes precedence over square-corner padding. */
 
 .session-glyph__ring {
   position: absolute;
-  inset: -2px;
+  inset: -2.5px;
   box-sizing: border-box;
   border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-top-color: var(--accent);

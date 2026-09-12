@@ -34,9 +34,8 @@ function renderRunRing(ring: SessionGlyphRing, queued: boolean, label: string): 
 /**
  * Persistent artwork in the sidebar's leading slot (owner avatar, page icon,
  * attention glyph). Callers can carry run state as a ring when that surface
- * owns activity in the leading slot. Circular content already fits the ring;
- * arbitrary square icons and thumbnails scale down so their corners stay
- * inside it.
+ * owns activity in the leading slot. Artwork keeps its resting size and every
+ * artwork-bearing row uses the same ring diameter.
  */
 export function renderSessionGlyph(options: {
   content: SessionGlyphContent;
@@ -57,7 +56,7 @@ export function renderSessionGlyph(options: {
     ring = "circle",
   } = options;
   // A glyph-less row still owns its run state in the lead slot; the bare
-  // modifier lets CSS draw a compact ring there instead of a 24px empty circle.
+  // modifier lets CSS draw a compact ring there instead of a full-size empty circle.
   const modifiers = `${circular ? " session-glyph--circular" : ""}${running ? " session-glyph--running" : ""}${content === nothing ? " session-glyph--bare" : ""}`;
   const glyph = html`<span class="session-glyph${modifiers}">
     <span class="session-glyph__content">${content}</span>

@@ -50,7 +50,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         { identity: { type: "agent" as const, id: "research" }, label: "Research" },
       ],
     },
-  ])("keeps $name legible as an equal peer behind the owner", async (fixture) => {
+  ])("fits $name diagonally inside the single-owner footprint", async (fixture) => {
     const chip = await mountOwnerChip(fixture);
     const stack = chip.querySelector<HTMLElement>(".session-owner-stack");
     const back = chip.querySelector<HTMLElement>(fixture.backSelector);
@@ -67,12 +67,22 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
       frontSize: [frontBounds.width, frontBounds.height],
       stackSize: [stackBounds.width, stackBounds.height],
     }).toEqual({
-      backSize: [18, 18],
-      frontSize: [18, 18],
-      stackSize: [28, 20],
+      backSize: [12, 12],
+      frontSize: [14, 14],
+      stackSize: [20, 20],
     });
-    expect(backBounds.right - frontBounds.left).toBe(8);
-    expect(frontBounds.left - backBounds.left).toBe(10);
+    expect(backBounds.top).toBeLessThan(frontBounds.top);
+    expect(backBounds.left).toBeLessThan(frontBounds.left);
+    expect(backBounds.right).toBeGreaterThan(frontBounds.left);
+    // Both circular faces must fit the same 20px disc as a single owner, not
+    // merely its square bounding box (which would let the ring cross a face).
+    for (const bounds of [backBounds, frontBounds]) {
+      const centerDistance = Math.hypot(
+        bounds.x + bounds.width / 2 - (stackBounds.x + stackBounds.width / 2),
+        bounds.y + bounds.height / 2 - (stackBounds.y + stackBounds.height / 2),
+      );
+      expect(centerDistance + bounds.width / 2).toBeLessThanOrEqual(10.05);
+    }
   });
 
   it("keeps the single-owner row avatar at its established size", async () => {
