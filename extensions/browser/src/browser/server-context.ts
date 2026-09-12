@@ -277,11 +277,15 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
               let activeRunning: boolean;
               let activeTabCount = 0;
 
-              if (capabilities.usesChromeMcp) {
+              if (capabilities.usesChromeMcp || capabilities.mode === "local-extension") {
                 try {
-                  activeRunning = await profileCtx.isTransportAvailable(300, signal, {
-                    onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
-                  });
+                  activeRunning = await profileCtx.isTransportAvailable(
+                    capabilities.usesChromeMcp ? 300 : current.resolved.remoteCdpTimeoutMs,
+                    signal,
+                    {
+                      onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+                    },
+                  );
                 } catch {
                   activeRunning = false;
                 }
@@ -301,14 +305,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
                   })
                     ? 200
                     : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning =
-                    capabilities.mode === "local-extension"
-                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
-                      : await isChromeReachable(
-                          activeProfile.cdpUrl,
-                          probeTimeoutMs,
-                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                        );
+                  activeRunning = await isChromeReachable(
+                    activeProfile.cdpUrl,
+                    probeTimeoutMs,
+                    resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
+                  );
                   if (activeRunning) {
                     const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
                     activeTabCount = tabs.filter((tab) => tab.type === "page").length;
