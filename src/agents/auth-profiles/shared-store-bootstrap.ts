@@ -126,6 +126,8 @@ export function inspectSharedAuthLegacyRowsReadOnly(
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
   }
+  let outcome: { value: SharedAuthLegacyRows } | { cause: unknown };
+  let cleanupChecked = false;
   try {
     let database: DatabaseSync;
     try {
@@ -134,14 +136,39 @@ export function inspectSharedAuthLegacyRowsReadOnly(
       throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
     }
     try {
-      return readSharedAuthLegacyRowsFromDatabase(database);
-    } catch (error) {
-      throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
+      outcome = { value: readSharedAuthLegacyRowsFromDatabase(database) };
+    } catch (cause) {
+      outcome = { cause };
     } finally {
       database.close();
     }
+    if (prepared && !prepared.cleanup()) {
+      // The exit retry is best-effort, not proof that this private copy was removed.
+      const readFailure =
+        "cause" in outcome
+          ? `${outcome.cause instanceof Error ? outcome.cause.message : String(outcome.cause)}; `
+          : "";
+      throw new SharedAuthStoreSourceInspectionError(
+        sourcePath,
+        "read",
+        new Error(
+          `${readFailure}State database snapshot cleanup failed: ${path.dirname(prepared.location)}. Check directory permissions and available storage before retrying.`,
+          "cause" in outcome ? outcome : undefined,
+        ),
+      );
+    }
+    cleanupChecked = true;
+    if ("cause" in outcome) {
+      throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", outcome.cause);
+    }
+    return outcome.value;
   } finally {
-    prepared?.cleanup();
+    // Guarantee snapshot cleanup when opening or closing fails before the
+    // diagnostic check runs. The exit retry is best-effort and cannot recover
+    // a directory that cleanup() was never called on.
+    if (!cleanupChecked) {
+      prepared?.cleanup();
+    }
   }
 }
 
