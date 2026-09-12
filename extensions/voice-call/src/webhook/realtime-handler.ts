@@ -292,6 +292,7 @@ type RealtimeConsultSession = {
 
 type NativeConsultState = {
   owner: ActiveRealtimeVoiceBridge;
+  bridgeCallId: string;
   startedAt: number;
   promise: Promise<unknown>;
   cancellation: Promise<void>;
@@ -388,6 +389,9 @@ export class RealtimeCallHandler {
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
   private readonly consultSessionsByCallId = new Map<string, RealtimeConsultSession>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
+  // Serialization tail for distinct native consults on one call: each queued
+  // invocation waits for the previous turn so it dispatches with its own args.
+  private readonly nativeConsultQueueTailByCallId = new Map<string, Promise<void>>();
   private readonly terminationAttempts = new Set<Promise<void>>();
   private readonly admissions = new Set<Promise<void>>();
   private closePromise: Promise<void> | null = null;
@@ -1632,6 +1636,7 @@ export class RealtimeCallHandler {
       }
       this.activeBridgesByCallId.delete(key);
     }
+    this.nativeConsultQueueTailByCallId.delete(callId);
   }
 
   private clearActiveTelephonyBinding(callId: string, binding: RealtimeTelephonyBinding): void {
@@ -2060,7 +2065,7 @@ export class RealtimeCallHandler {
       }
 
       const existingNativeConsult = this.nativeConsultsInFlightByCallId.get(callId);
-      if (existingNativeConsult) {
+      if (existingNativeConsult && existingNativeConsult.bridgeCallId === bridgeCallId) {
         console.log(
           `[voice-call] realtime tool call sharing in-flight agent consult callId=${callId} ageMs=${Date.now() - existingNativeConsult.startedAt}`,
         );
@@ -2073,82 +2078,108 @@ export class RealtimeCallHandler {
         return;
       }
 
-      const abortController = new AbortController();
-      let releaseCancellation = () => {};
-      const cancellation = new Promise<void>((resolve) => {
-        releaseCancellation = resolve;
+      // Distinct consult invocations never inherit the in-flight result: they
+      // serialize behind the current consult and dispatch with their own args.
+      // One in-flight consult per call stays the owner of cancellation and
+      // user-transcript consumption.
+      let releaseConsultTurn = () => {};
+      const consultTurn = new Promise<void>((resolve) => {
+        releaseConsultTurn = resolve;
       });
-      let completeConsult = (_result: unknown) => {};
-      const consult = new Promise<unknown>((resolve) => {
-        completeConsult = resolve;
-      });
-      const state: NativeConsultState = {
-        owner: bridge,
-        startedAt,
-        promise: consult,
-        cancellation,
-        cancelled: false,
-        // Provider continuity owns the consult lifetime, not only its eventual result.
-        cancel: () => {
-          abortController.abort(new Error("Realtime native consult owner was cancelled."));
-          releaseCancellation();
-        },
-      };
-      this.nativeConsultsInFlightByCallId.set(callId, state);
-      void (async () => {
-        try {
-          await submitWorkingResponse();
-          if (state.cancelled) {
-            return undefined;
-          }
-          await Promise.race([
-            this.waitForConsultTranscriptSettle(callId, userTranscriptOwner, startedAt),
-            state.cancellation,
-          ]);
-          if (state.cancelled) {
-            return undefined;
-          }
-          const context = {
-            partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
-            abortSignal: abortController.signal,
-          };
-          state.partialUserTranscript = context.partialUserTranscript;
-          const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
-          console.log(
-            `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
-          );
-          return !handler
-            ? { error: `Tool "${name}" not available` }
-            : await handler(handlerArgs, callId, context);
-        } catch (error) {
-          return buildRealtimeVoiceAgentErrorProviderResult(error);
-        }
-      })().then(completeConsult);
-      try {
-        const outcome = await waitForNativeConsult(state);
-        if (outcome.kind === "cancelled") {
+      const previousConsultTurn = this.nativeConsultQueueTailByCallId.get(callId);
+      this.nativeConsultQueueTailByCallId.set(callId, consultTurn);
+      if (existingNativeConsult && previousConsultTurn) {
+        console.log(
+          `[voice-call] realtime tool call queueing behind in-flight agent consult callId=${callId} ageMs=${Date.now() - existingNativeConsult.startedAt}`,
+        );
+        await submitWorkingResponse();
+        await previousConsultTurn;
+        if (this.activeBridgesByCallId.get(callId) !== bridge) {
           return;
         }
-        const result = outcome.result;
-        const failed = hasResultError(result);
-        const error = failed ? formatErrorMessage(result.error ?? "unknown") : undefined;
-        console.log(
-          `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
-        );
-        await submitFinalToolResult(result);
-        if (!failed) {
-          this.consumePartialUserTranscript(
-            callId,
-            userTranscriptOwner,
-            state.partialUserTranscript,
-          );
-        }
-      } finally {
-        if (this.nativeConsultsInFlightByCallId.get(callId) === state) {
-          this.nativeConsultsInFlightByCallId.delete(callId);
-        }
       }
-      return;
+
+      try {
+        const abortController = new AbortController();
+        let releaseCancellation = () => {};
+        const cancellation = new Promise<void>((resolve) => {
+          releaseCancellation = resolve;
+        });
+        let completeConsult = (_result: unknown) => {};
+        const consult = new Promise<unknown>((resolve) => {
+          completeConsult = resolve;
+        });
+        const state: NativeConsultState = {
+          owner: bridge,
+          bridgeCallId,
+          startedAt,
+          promise: consult,
+          cancellation,
+          cancelled: false,
+          // Provider continuity owns the consult lifetime, not only its eventual result.
+          cancel: () => {
+            abortController.abort(new Error("Realtime native consult owner was cancelled."));
+            releaseCancellation();
+          },
+        };
+        this.nativeConsultsInFlightByCallId.set(callId, state);
+        void (async () => {
+          try {
+            await submitWorkingResponse();
+            if (state.cancelled) {
+              return undefined;
+            }
+            await Promise.race([
+              this.waitForConsultTranscriptSettle(callId, userTranscriptOwner, startedAt),
+              state.cancellation,
+            ]);
+            if (state.cancelled) {
+              return undefined;
+            }
+            const context = {
+              partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
+              abortSignal: abortController.signal,
+            };
+            state.partialUserTranscript = context.partialUserTranscript;
+            const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
+            console.log(
+              `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
+            );
+            return !handler
+              ? { error: `Tool "${name}" not available` }
+              : await handler(handlerArgs, callId, context);
+          } catch (error) {
+            return buildRealtimeVoiceAgentErrorProviderResult(error);
+          }
+        })().then(completeConsult);
+        try {
+          const outcome = await waitForNativeConsult(state);
+          if (outcome.kind === "cancelled") {
+            return;
+          }
+          const result = outcome.result;
+          const failed = hasResultError(result);
+          const error = failed ? formatErrorMessage(result.error ?? "unknown") : undefined;
+          console.log(
+            `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
+          );
+          await submitFinalToolResult(result);
+          if (!failed) {
+            this.consumePartialUserTranscript(
+              callId,
+              userTranscriptOwner,
+              state.partialUserTranscript,
+            );
+          }
+        } finally {
+          if (this.nativeConsultsInFlightByCallId.get(callId) === state) {
+            this.nativeConsultsInFlightByCallId.delete(callId);
+          }
+        }
+        return;
+      } finally {
+        releaseConsultTurn();
+      }
     }
     console.log(
       `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,

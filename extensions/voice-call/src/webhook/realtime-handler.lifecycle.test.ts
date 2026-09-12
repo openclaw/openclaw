@@ -840,6 +840,130 @@ describe("RealtimeCallHandler lifecycle", () => {
     },
   );
 
+  it("dispatches each distinct concurrent native consult with its own question", async () => {
+    let onToolCall:
+      | ((event: { itemId: string; callId: string; name: string; args: unknown }) => void)
+      | undefined;
+    const submitToolResult = vi.fn();
+    const createBridgeForCall = vi.fn(
+      (request: {
+        onToolCall?: (event: {
+          itemId: string;
+          callId: string;
+          name: string;
+          args: unknown;
+        }) => void;
+      }) => {
+        onToolCall = request.onToolCall;
+        return createBridge(vi.fn(), {
+          supportsToolResultContinuation: true,
+          submitToolResult,
+        });
+      },
+    );
+    const call: CallRecord = {
+      callId: "call-concurrent-consult",
+      providerCallId: "CA-concurrent-consult",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001111",
+      to: "+15550002222",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+    };
+    const handler = new RealtimeCallHandler(
+      createRealtimeConfig(),
+      {
+        processEvent: vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" })),
+        updateCallMetadata,
+        endCall: vi.fn(async () => ({ success: true })),
+        getCallByProviderCallId: vi.fn(() => call),
+      } as unknown as CallManager,
+      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
+      "/voice/webhook",
+      noOpStreamDisconnectLifecycle,
+    );
+    const questions = [
+      "Return 2025 sales for Dataset A.",
+      "Correction: return all-time sales for Dataset B instead.",
+      "Also list the required fields for a new customer record.",
+    ];
+    const dispatched: string[] = [];
+    let releaseConsults = () => {};
+    const consultGate = new Promise<void>((resolve) => {
+      releaseConsults = resolve;
+    });
+    handler.registerToolHandler("openclaw_agent_consult", async (args) => {
+      const question = String((args as { question?: string }).question);
+      dispatched.push(question);
+      await consultGate;
+      return { text: `ANSWER FOR: ${question}` };
+    });
+    const { streamUrl } = handler.issueStreamSession();
+    const server = await startUpgradeWsServer({
+      urlPath: new URL(streamUrl).pathname,
+      onUpgrade: (request, socket, head) => {
+        handler.handleWebSocketUpgrade(request, socket, head);
+      },
+    });
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-concurrent-consult", callSid: "CA-concurrent-consult" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(createBridgeForCall).toHaveBeenCalledTimes(1);
+      });
+
+      onToolCall?.({
+        itemId: "item-consult-1",
+        callId: "tool-consult-1",
+        name: "openclaw_agent_consult",
+        args: { question: questions[0] },
+      });
+      await vi.waitFor(() => {
+        expect(dispatched).toEqual([questions[0]]);
+      });
+      onToolCall?.({
+        itemId: "item-consult-2",
+        callId: "tool-consult-2",
+        name: "openclaw_agent_consult",
+        args: { question: questions[1] },
+      });
+      onToolCall?.({
+        itemId: "item-consult-3",
+        callId: "tool-consult-3",
+        name: "openclaw_agent_consult",
+        args: { question: questions[2] },
+      });
+      releaseConsults();
+
+      const finalResults = () =>
+        submitToolResult.mock.calls.filter(
+          (entry) => !(entry[2] as { willContinue?: boolean } | undefined)?.willContinue,
+        );
+      await vi.waitFor(() => {
+        expect(dispatched).toEqual(questions);
+        expect(finalResults()).toHaveLength(questions.length);
+      });
+      expect(finalResults().map((entry) => (entry[1] as { text?: string }).text)).toEqual(
+        questions.map((question) => `ANSWER FOR: ${question}`),
+      );
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
   it("does not start a native consult after teardown during transcript settling", async () => {
     let onToolCall:
       | ((event: { itemId: string; callId: string; name: string; args: unknown }) => void)
