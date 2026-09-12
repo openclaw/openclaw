@@ -42,10 +42,18 @@ export function projectUpstreamProviderCatalogSnapshot(params: {
     const decorated = params.decorateModel ? params.decorateModel(projected) : projected;
     // SAFETY: Normalization preserves the projector's validated transport and model shape.
     const model = normalizeModelCompat(decorated) as ProjectedUpstreamProviderCatalogModel;
-    // Replace lifecycle with the same accepted row; rejected metadata leaves its seed untouched.
+    const seed = params.seed.get(model.id.toLowerCase());
+    const status =
+      upstreamModel.status === "deprecated" || upstreamModel.status === "preview"
+        ? upstreamModel.status
+        : seed?.status;
+    const replacedBy =
+      typeof upstreamModel.replacedBy === "string" ? upstreamModel.replacedBy : seed?.replacedBy;
+    // Preserve provider-owned lifecycle when upstream metadata omits it.
     snapshot.set(model.id.toLowerCase(), {
       model,
-      ...(upstreamModel.status === "deprecated" ? { status: "deprecated" } : {}),
+      ...(status ? { status } : {}),
+      ...(replacedBy ? { replacedBy } : {}),
     });
   }
   return snapshot;
