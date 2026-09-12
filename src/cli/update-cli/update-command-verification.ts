@@ -254,7 +254,7 @@ async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParam
       health.channelProbeErrors?.length ||
       health.staleGatewayPids.length > 0)
   ) {
-    return { health, readyz: false, readyzStatus: undefined, launchAgentRecovery };
+    return { health, readyz: false, http: undefined, launchAgentRecovery };
   }
   const context = await resolveGatewayRestartProbeContext(params.serviceEnv);
   assertCurrent();
@@ -299,7 +299,7 @@ async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParam
   if (remainingMs() === 0) {
     health = { ...health, healthy: false, waitOutcome: "timeout" };
   }
-  return { health, readyz, readyzStatus: http.readyz, launchAgentRecovery };
+  return { health, readyz, http, launchAgentRecovery };
 }
 
 /** Verify core activation while preserving plugin failures as separate notices. */
@@ -313,7 +313,7 @@ export async function verifyUpdatedGateway(
 ): Promise<UpdateRepairValidation & { pluginWarnings?: PluginUpdateWarning[] }> {
   const startedAtMs = Date.now();
   const { proofOptions, assertCurrent } = captureUpdateGatewayReadinessOwner(params);
-  const { health, readyz, readyzStatus, launchAgentRecovery } = await observeUpdateGatewayReadiness({
+  const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
     ...params,
     assertCurrent,
   });
@@ -393,9 +393,10 @@ export async function verifyUpdatedGateway(
     };
   }
   recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
+  const httpFailed = http !== undefined && !readyz;
   const diagnosticLines: [string, ...string[]] = [
     "Gateway did not become healthy after restart.",
-    ...(!readyz ? ["Gateway /readyz did not return HTTP 200."] : []),
+    ...(httpFailed ? ["Gateway /readyz did not return HTTP 200."] : []),
     ...(health.healthy && params.requireRunningService
       ? ["Gateway responded, but the managed service did not report running after restart."]
       : []),
@@ -419,7 +420,7 @@ export async function verifyUpdatedGateway(
         ? "plugin-errors"
         : health.channelProbeErrors?.length
           ? "channel-errors"
-          : !readyz
+          : httpFailed
             ? "readyz-unhealthy"
             : !serviceRunning
               ? "service-not-running"
@@ -439,11 +440,11 @@ export async function verifyUpdatedGateway(
       message: `Expected Gateway build ${health.buildIdMismatch.expected}; observed ${health.buildIdMismatch.actual ?? "unavailable"}.`,
     });
   }
-  if (!readyz) {
+  if (httpFailed) {
     facts.push({
       check: "readyz",
       code: "readyz-unhealthy",
-      message: `Gateway readiness endpoint returned HTTP ${readyzStatus ?? "unavailable"}; expected HTTP 200.`,
+      message: `Gateway readiness endpoint returned HTTP ${http.readyz ?? "unavailable"}; expected HTTP 200.`,
     });
   }
   if (!serviceRunning) {
@@ -480,7 +481,7 @@ export async function verifyUpdatedGateway(
   }
   recordVerificationStep(
     normalizeUpdateFailureFacts(facts, params.serviceEnv),
-    !readyz ? "Gateway /readyz did not return HTTP 200." : reason,
+    httpFailed ? "Gateway /readyz did not return HTTP 200." : reason,
   );
   if (params.opts.json) {
     defaultRuntime.error(diagnosticLines.join("\n"));
