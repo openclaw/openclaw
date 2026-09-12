@@ -1,5 +1,5 @@
 // before_model_resolve hook
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 
 export type PluginHookBeforeModelResolveAttachment = {
   kind: "image" | "video" | "audio" | "document" | "other";
