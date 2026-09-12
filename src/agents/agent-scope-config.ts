@@ -1,4 +1,5 @@
 /** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
+import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -14,6 +15,8 @@ import type {
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { isMissingPathError } from "../infra/errno.js";
+import { hasCompletedLegacyAgentDirMigration } from "../infra/state-migrations.agent-dir-receipt.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
@@ -594,21 +597,52 @@ export function tryResolveConfiguredAgentWorkspaceDir(
   return configured ? stripNullBytes(resolveUserPath(configured, env)) : undefined;
 }
 
+// Agent state uses the configured agentDir or <state>/agents/<id>/agent.
+// Default resolution stays canonical for runtime, validation, and migration.
+export function resolveEffectiveAgentDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  deps?: {
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+    legacyStandaloneRead?: boolean;
+  },
+): string {
+  const id = normalizeAgentId(agentId);
+  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
+  const env = deps?.env ?? process.env;
+  if (configured) {
+    return resolveUserPath(configured, env, deps?.homedir);
+  }
+  const stateDir = resolveStateDir(env, deps?.homedir);
+  const agentDir = path.join(stateDir, "agents", id, "agent");
+  // Shipped 2026.9.x standalone SDKs keep nonempty <state>/agent until Doctor records completion.
+  // Remove this pre-migration read after the migration ships in a release.
+  if (deps?.legacyStandaloneRead) {
+    const legacyDir = path.join(stateDir, "agent");
+    try {
+      if (
+        fs.readdirSync(legacyDir).length > 0 &&
+        !hasCompletedLegacyAgentDirMigration(legacyDir, agentDir)
+      ) {
+        return legacyDir;
+      }
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
+  }
+  return agentDir;
+}
+
 export function resolveAgentDir(
   cfg: OpenClawConfig,
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
-) {
-  const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
-  if (configured) {
-    const agentDir = resolveUserPath(configured, env);
-    registerResolvedAgentDir({ agentId: id, agentDir, env });
-    return agentDir;
-  }
-  const root = resolveStateDir(env);
-  const agentDir = path.join(root, "agents", id, "agent");
-  registerResolvedAgentDir({ agentId: id, agentDir, env });
+): string {
+  const agentDir = resolveEffectiveAgentDir(cfg, agentId, { env });
+  registerResolvedAgentDir({ agentId, agentDir, env });
   return agentDir;
 }
 

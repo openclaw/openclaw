@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
@@ -731,7 +732,7 @@ async function detectAndRunMigrations(params: {
     cfg: params.cfg,
     env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
   });
-  await runLegacyStateMigrations({ detected, now: params.now });
+  return runLegacyStateMigrations({ detected, now: params.now });
 }
 
 async function withStateDir<T>(root: string, run: () => Promise<T>): Promise<T> {
@@ -1427,7 +1428,7 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("generic");
   });
 
-  it("migrates legacy agent dir with conflict fallback", async () => {
+  it("preserves conflicting agent files and records a recoverable quarantine", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     writeLegacyAgentFiles(root, {
       "foo.txt": "legacy",
@@ -1438,11 +1439,22 @@ describe("doctor legacy state migrations", () => {
     fs.mkdirSync(targetAgentDir, { recursive: true });
     fs.writeFileSync(path.join(targetAgentDir, "foo.txt"), "new", "utf-8");
 
-    await detectAndRunMigrations({ root, cfg, now: () => 123 });
+    const result = await detectAndRunMigrations({ root, cfg, now: () => 123 });
 
     expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe("legacy2");
-    const backupDir = path.join(root, "agents", "main", "agent.legacy-123");
-    expect(fs.existsSync(path.join(backupDir, "foo.txt"))).toBe(true);
+    expect(fs.readFileSync(path.join(targetAgentDir, "foo.txt"), "utf-8")).toBe("new");
+    const backups = fs.readdirSync(root).filter((name) => name.startsWith("agent.legacy-"));
+    expect(backups).toHaveLength(1);
+    const backupDir = path.join(
+      fs.realpathSync(root),
+      expectDefined(backups[0], "conflict quarantine"),
+    );
+    expect(fs.readdirSync(backupDir)).toEqual(["foo.txt"]);
+    expect(fs.readFileSync(path.join(backupDir, "foo.txt"), "utf-8")).toBe("legacy");
+    expect(result.stepReceipts.find((receipt) => receipt.id === "agent-dir")).toMatchObject({
+      outcome: "warning",
+      warnings: [expect.stringContaining(path.join(backupDir, "foo.txt"))],
+    });
   });
 
   it("auto-migrates legacy agent dir on startup", async () => {

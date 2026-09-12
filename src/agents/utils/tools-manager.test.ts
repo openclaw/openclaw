@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileLockOptions } from "../../infra/file-lock.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -68,6 +77,100 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
+  it.each([
+    { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
+    { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
+    { name: "both present", legacy: "payload", canonical: "payload", selected: "legacy" },
+    { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "legacy" },
+    {
+      name: "completed migration",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "valid",
+      selected: "canonical",
+    },
+    {
+      name: "incomplete receipt",
+      legacy: "payload",
+      canonical: "empty",
+      receipt: "partial",
+      selected: "legacy",
+    },
+    {
+      name: "another source's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-source",
+      selected: "legacy",
+    },
+    {
+      name: "another target's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-target",
+      selected: "legacy",
+    },
+    { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
+    { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
+  ])("reuses managed binaries across agent directory migration: $name", async (testCase) => {
+    const home = expectDefined(tempAgentDir, "test home");
+    const stateDir = join(home, "state");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    vi.stubEnv("OPENCLAW_OFFLINE", "1");
+    const canonicalDir = join(stateDir, "agents", "main", "agent");
+    const legacyDir = join(stateDir, "agent");
+    const binaryName = process.platform === "win32" ? "fd.exe" : "fd";
+    for (const { directory, contents } of [
+      { directory: legacyDir, contents: testCase.legacy },
+      { directory: canonicalDir, contents: testCase.canonical },
+    ]) {
+      if (contents === "payload") {
+        const binaryPath = join(directory, "bin", binaryName);
+        mkdirSync(dirname(binaryPath), { recursive: true });
+        writeFileSync(binaryPath, "managed binary");
+      } else if (contents === "empty") {
+        mkdirSync(directory, { recursive: true });
+      }
+    }
+
+    if (testCase.receipt) {
+      writeFileSync(
+        join(canonicalDir, ".legacy-agent-dir-migration.json"),
+        testCase.receipt === "partial"
+          ? '{"version":1'
+          : JSON.stringify({
+              version: 1,
+              source:
+                testCase.receipt === "other-source"
+                  ? join(home, "other-agent")
+                  : realpathSync(legacyDir),
+              target:
+                testCase.receipt === "other-target"
+                  ? join(home, "other-target")
+                  : realpathSync(canonicalDir),
+            }) + "\n",
+      );
+    }
+
+    const { getAgentDir } = await import("../config.js");
+    const { resolveAgentDir } = await import("../agent-scope-config.js");
+    const { ensureTool } = await import("./tools-manager.js");
+    const selectedDir = testCase.selected === "legacy" ? legacyDir : canonicalDir;
+    const selectedContents = testCase.selected === "legacy" ? testCase.legacy : testCase.canonical;
+
+    await expect(ensureTool("fd", true)).resolves.toBe(
+      selectedContents === "payload" ? join(selectedDir, "bin", binaryName) : undefined,
+    );
+    expect(getAgentDir()).toBe(selectedDir);
+    expect(resolveAgentDir({}, "main")).toBe(canonicalDir);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(existsSync(join(home, ".openclaw", "agent"))).toBe(false);
+  });
+
   it("single-flights concurrent installs of the same tool", async () => {
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});

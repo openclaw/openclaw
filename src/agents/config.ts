@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveAmbientOwnerAgentId, resolveEffectiveAgentDir } from "./agent-scope-config.js";
 
 // =============================================================================
 // Package Detection
@@ -109,27 +110,15 @@ export const PACKAGE_MANIFEST_VERSION: string = pkg.version || "0.0.0";
 
 const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_AGENT_DIR`;
 
-function expandTildePath(path: string): string {
-  if (path === "~") {
-    return homedir();
-  }
-  if (path.startsWith("~/")) {
-    return homedir() + path.slice(1);
-  }
-  return path;
-}
-
-// =============================================================================
-// User Config Paths (~/.openclaw/agent/*)
-// =============================================================================
-
-/** Get the agent config directory (e.g., ~/.openclaw/agent/) */
+/** Standalone SDK default; configured sessions pass their resolved agentDir. */
 export function getAgentDir(): string {
   const envDir = process.env[ENV_AGENT_DIR];
   if (envDir) {
-    return expandTildePath(envDir);
+    return envDir.replace(/^~(?=\/|$)/, () => homedir());
   }
-  return join(homedir(), CONFIG_DIR_NAME, "agent");
+  return resolveEffectiveAgentDir({}, resolveAmbientOwnerAgentId({}), {
+    legacyStandaloneRead: true,
+  });
 }
 
 /** Get path to managed binaries directory (fd, rg) */

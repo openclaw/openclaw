@@ -3,14 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getAgentDir } from "../agents/config.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
 } from "../plugins/doctor-contract-module.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { detectLegacyStateMigrations } from "./state-migrations.doctor.js";
+import { migrateLegacyAgentDir } from "./state-migrations.legacy-sessions.js";
 import {
   createLegacyStateMigrationStepReceipt,
   throwIfDoctorStateMigrationRefused,
@@ -195,6 +199,326 @@ describe("recoverable legacy state", () => {
       );
       await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("retained source");
       vi.restoreAllMocks();
+    });
+  });
+});
+
+describe("legacy agent directory migration", () => {
+  it("keeps standalone state until Doctor migrates it and reports recreated legacy state", async () => {
+    await withOpenClawTestState(
+      { label: "standalone-agent-cutover", agentEnv: "clear" },
+      async (state) => {
+        await state.writeText("agent/bin/fd", "legacy binary");
+        const legacyDir = state.statePath("agent");
+        const canonicalDir = state.agentDir();
+        const detect = () =>
+          detectLegacyStateMigrations({
+            cfg: { agents: { entries: { main: {} } } },
+            env: state.env,
+            legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+          });
+
+        await fs.mkdir(canonicalDir, { recursive: true });
+        expect(getAgentDir()).toBe(legacyDir);
+        await expect(fs.readdir(canonicalDir)).resolves.toEqual([]);
+        if (process.platform !== "win32") {
+          await fs.chmod(canonicalDir, 0o2750);
+        }
+        const sourceRoot = await fs.realpath(legacyDir);
+        const detected = await detect();
+        expect(detected.agentDir.targetDir).toBe(canonicalDir);
+        const migrated = await migrateLegacyAgentDir(detected, () => 1234);
+        expect(migrated.warnings).toEqual([]);
+        if (process.platform !== "win32") {
+          expect((await fs.stat(canonicalDir)).mode & 0o7777).toBe(0o2750);
+        }
+        const receipt = await fs.readFile(
+          path.join(canonicalDir, ".legacy-agent-dir-migration.json"),
+          "utf8",
+        );
+        expect(JSON.parse(receipt)).toEqual({
+          version: 1,
+          source: sourceRoot,
+          target: await fs.realpath(canonicalDir),
+        });
+        expect(getAgentDir()).toBe(canonicalDir);
+        await expect(fs.readFile(path.join(canonicalDir, "bin/fd"), "utf8")).resolves.toBe(
+          "legacy binary",
+        );
+
+        await state.writeText("agent/bin/fd", "recreated binary");
+        expect(getAgentDir()).toBe(canonicalDir);
+        const leftover = await detect();
+        expect(leftover.agentDir.hasLegacy).toBe(true);
+        expect(leftover.preview).toContainEqual(expect.stringContaining(legacyDir));
+        const result = await migrateLegacyAgentDir(leftover, () => 5678);
+        expect(result.warningDisposition).toBe("recoverable");
+        expect(result.warnings).toContainEqual(expect.stringContaining("quarantined legacy copy"));
+        await expect(fs.readFile(path.join(canonicalDir, "bin/fd"), "utf8")).resolves.toBe(
+          "legacy binary",
+        );
+        await expect(fs.stat(legacyDir)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+  });
+
+  it("preserves an unrecognized destination receipt and reports incomplete cutover", async () => {
+    await withOpenClawTestState(
+      { label: "standalone-agent-receipt-collision", agentEnv: "clear" },
+      async (state) => {
+        await state.writeText("agent/bin/fd", "legacy binary");
+        const receiptPath = state.statePath("agents/main/agent/.legacy-agent-dir-migration.json");
+        await state.writeText(
+          "agents/main/agent/.legacy-agent-dir-migration.json",
+          "unrecognized receipt payload",
+        );
+        const detected = await detectLegacyStateMigrations({
+          cfg: { agents: { entries: { main: {} } } },
+          env: state.env,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+
+        const result = await migrateLegacyAgentDir(detected, () => 1234);
+
+        await expect(fs.readFile(receiptPath, "utf8")).resolves.toBe(
+          "unrecognized receipt payload",
+        );
+        expect(result.warningDisposition).toBe("recoverable");
+        expect(result.warnings).toContainEqual(expect.stringContaining(receiptPath));
+        await expect(fs.readFile(path.join(state.agentDir(), "bin/fd"), "utf8")).resolves.toBe(
+          "legacy binary",
+        );
+        expect(getAgentDir()).toBe(state.agentDir());
+      },
+    );
+  });
+
+  it("keeps standalone state after an incomplete migration, including a source-carried receipt", async () => {
+    await withOpenClawTestState(
+      { label: "standalone-agent-incomplete", agentEnv: "clear" },
+      async (state) => {
+        await state.writeText("agent/bin/fd", "legacy binary");
+        const legacyDir = state.statePath("agent");
+        const canonicalDir = state.agentDir();
+        await fs.mkdir(canonicalDir, { recursive: true });
+        const receiptName = ".legacy-agent-dir-migration.json";
+        const receiptBytes =
+          JSON.stringify({
+            version: 1,
+            source: await fs.realpath(legacyDir),
+            target: await fs.realpath(canonicalDir),
+          }) + "\n";
+        await fs.writeFile(path.join(legacyDir, receiptName), receiptBytes);
+        const detected = await detectLegacyStateMigrations({
+          cfg: { agents: { entries: { main: {} } } },
+          env: state.env,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+        const rename = fsSync.renameSync;
+        const sourceBin = path.join(await fs.realpath(legacyDir), "bin");
+        vi.spyOn(fsSync, "renameSync").mockImplementation((source, target) => {
+          if (source === sourceBin) {
+            throw new Error("synthetic binary move failure");
+          }
+          rename(source, target);
+        });
+
+        const result = await migrateLegacyAgentDir(detected, () => 1234);
+
+        expect(result.warnings).toContainEqual(
+          expect.stringContaining("synthetic binary move failure"),
+        );
+        expect(getAgentDir()).toBe(legacyDir);
+        await expect(fs.readFile(path.join(legacyDir, "bin/fd"), "utf8")).resolves.toBe(
+          "legacy binary",
+        );
+        await expect(fs.stat(path.join(canonicalDir, receiptName))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.readFile(path.join(legacyDir, receiptName), "utf8")).resolves.toBe(
+          receiptBytes,
+        );
+        vi.restoreAllMocks();
+        const completed = await migrateLegacyAgentDir(detected, () => 5678);
+        expect(completed.warnings).toContainEqual(expect.stringContaining(receiptName));
+        const quarantines = (await fs.readdir(state.stateDir)).filter((name) =>
+          name.startsWith("agent.legacy-"),
+        );
+        expect(quarantines).toHaveLength(1);
+        await expect(
+          fs.readFile(
+            state.statePath(expectDefined(quarantines[0], "receipt quarantine"), receiptName),
+            "utf8",
+          ),
+        ).resolves.toBe(receiptBytes);
+        await state.writeText("agent/bin/fd", "recreated binary");
+        expect(getAgentDir()).toBe(canonicalDir);
+      },
+    );
+  });
+
+  it.each(["external", "ancestor-symlink"])(
+    "keeps conflict quarantines confined to state for an %s agent directory",
+    async (layout) => {
+      await withOpenClawTestState({ label: "agent-quarantine-boundary" }, async (state) => {
+        const outside = path.join(state.root, "external");
+        const physicalTarget = path.join(outside, "agent");
+        await fs.mkdir(path.join(physicalTarget, "bin"), { recursive: true });
+        await fs.writeFile(path.join(physicalTarget, "bin/rg"), "current binary");
+        let targetDir = physicalTarget;
+        if (layout === "ancestor-symlink") {
+          const alias = state.statePath("linked");
+          await fs.symlink(outside, alias, process.platform === "win32" ? "junction" : "dir");
+          targetDir = path.join(alias, "agent");
+        }
+        await state.writeText("agent/bin/rg", "legacy binary");
+        await state.writeText("agent/bin/fd", "missing binary");
+        const detected = await detectLegacyStateMigrations({
+          cfg: { agents: { entries: { main: { agentDir: targetDir } } } },
+          env: state.env,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+
+        const result = await migrateLegacyAgentDir(detected, () => 1234);
+
+        const quarantines = (await fs.readdir(state.stateDir)).filter((name) =>
+          name.startsWith("agent.legacy-"),
+        );
+        expect(quarantines).toHaveLength(1);
+        const stateRoot = await fs.realpath(state.stateDir);
+        const quarantine = path.join(
+          stateRoot,
+          expectDefined(quarantines[0], "confined quarantine"),
+        );
+        expect(await fs.realpath(path.dirname(quarantine))).toBe(stateRoot);
+        expect(await fs.realpath(quarantine)).toBe(quarantine);
+        expect(
+          (await fs.readdir(outside)).filter((name) => name.startsWith("agent.legacy-")),
+        ).toEqual([]);
+        await expect(fs.readFile(path.join(quarantine, "bin/rg"), "utf8")).resolves.toBe(
+          "legacy binary",
+        );
+        await expect(fs.readFile(path.join(physicalTarget, "bin/rg"), "utf8")).resolves.toBe(
+          "current binary",
+        );
+        await expect(fs.readFile(path.join(physicalTarget, "bin/fd"), "utf8")).resolves.toBe(
+          "missing binary",
+        );
+        expect(result.warningDisposition).toBe("recoverable");
+        expect(result.warnings).toEqual([expect.stringContaining(path.join(quarantine, "bin/rg"))]);
+      });
+    },
+  );
+
+  it.each(["custom-agent", "agent"])(
+    "honors the configured agent directory %s",
+    async (directory) => {
+      await withOpenClawTestState({ label: "legacy-agent-configured" }, async (state) => {
+        await state.writeText("agent/settings.json", "legacy settings");
+        const targetDir = state.statePath(directory);
+        const detected = await detectLegacyStateMigrations({
+          cfg: { agents: { entries: { main: { agentDir: targetDir } } } },
+          env: state.env,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+        expect(detected.agentDir.targetDir).toBe(targetDir);
+        expect(detected.agentDir.hasLegacy).toBe(directory !== "agent");
+        const result = await migrateLegacyAgentDir(detected, () => 1234);
+        expect(result.warnings).toEqual([]);
+        await expect(fs.readFile(path.join(targetDir, "settings.json"), "utf8")).resolves.toBe(
+          "legacy settings",
+        );
+      });
+    },
+  );
+
+  it("merges nested binaries, keeps destination bytes, and quarantines only conflicts once", async () => {
+    await withOpenClawTestState({ label: "legacy-agent-merge" }, async (state) => {
+      await state.writeText("agent/bin/rg", "legacy binary");
+      await state.writeText("agent/bin/fd", "identical binary");
+      await state.writeText("agent/bin/nested/tool", "missing tool");
+      await state.writeText("agents/main/agent/bin/rg", "current binary");
+      await state.writeText("agents/main/agent/bin/fd", "identical binary");
+      const detect = () =>
+        detectLegacyStateMigrations({
+          cfg: { agents: { entries: { main: {} } } },
+          env: state.env,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+
+      const result = await migrateLegacyAgentDir(await detect(), () => 1234);
+
+      await expect(fs.readFile(state.agentDir() + "/bin/nested/tool", "utf8")).resolves.toBe(
+        "missing tool",
+      );
+      await expect(fs.readFile(state.agentDir() + "/bin/rg", "utf8")).resolves.toBe(
+        "current binary",
+      );
+      await expect(fs.readFile(state.agentDir() + "/bin/fd", "utf8")).resolves.toBe(
+        "identical binary",
+      );
+      const agentRoot = await fs.realpath(state.stateDir);
+      const quarantines = (await fs.readdir(agentRoot)).filter((name) =>
+        name.startsWith("agent.legacy-"),
+      );
+      expect(quarantines).toHaveLength(1);
+      const quarantine = path.join(agentRoot, expectDefined(quarantines[0], "conflict quarantine"));
+      await expect(fs.readFile(path.join(quarantine, "bin/rg"), "utf8")).resolves.toBe(
+        "legacy binary",
+      );
+      expect(await fs.readdir(path.join(quarantine, "bin"))).toEqual(["rg"]);
+      expect(result).toMatchObject({ warningDisposition: "recoverable" });
+      expect(result.warnings).toEqual([expect.stringContaining(path.join(quarantine, "bin/rg"))]);
+      expect(result.changes).toContainEqual(expect.stringContaining(path.join("bin", "nested")));
+      await expect(fs.stat(state.statePath("agent"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      // An older binary can recreate an identical file between Doctor runs.
+      await state.writeText("agent/bin/fd", "identical binary");
+      const repeated = await migrateLegacyAgentDir(await detect(), () => 5678);
+      expect(repeated.warnings).toEqual([]);
+      expect(
+        (await fs.readdir(agentRoot)).filter((name) => name.startsWith("agent.legacy-")),
+      ).toEqual(quarantines);
+    });
+  });
+
+  it("reports old quarantine artifacts without requiring a new legacy payload or deleting data", async () => {
+    await withOpenClawTestState({ label: "legacy-agent-quarantine" }, async (state) => {
+      await state.writeText("agent.legacy-1234/bin/rg", "preserved binary");
+      await state.writeText("agents/main/agent.legacy-1234/bin/rg", "older layout binary");
+      const detected = await detectLegacyStateMigrations({
+        cfg: { agents: { entries: { main: {} } } },
+        env: state.env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      expect(detected.agentDir.hasLegacy).toBe(false);
+      expect(
+        detected.notices?.filter((notice) => notice.includes("older than 30 days")),
+      ).toHaveLength(2);
+      await expect(fs.readFile(state.statePath("agent.legacy-1234/bin/rg"), "utf8")).resolves.toBe(
+        "preserved binary",
+      );
+      await expect(
+        fs.readFile(state.statePath("agents/main/agent.legacy-1234/bin/rg"), "utf8"),
+      ).resolves.toBe("older layout binary");
+    });
+  });
+
+  it("does not create another quarantine when an old runtime recreates identical binaries", async () => {
+    await withOpenClawTestState({ label: "legacy-agent-repeat" }, async (state) => {
+      await state.writeText("agent/bin/fd", "identical binary");
+      await state.writeText("agents/main/agent/bin/fd", "identical binary");
+      await state.writeText("agent.legacy-1234/bin/rg", "preserved binary");
+      const detected = await detectLegacyStateMigrations({
+        cfg: { agents: { entries: { main: {} } } },
+        env: state.env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      await migrateLegacyAgentDir(detected, () => 5678);
+      expect(
+        (await fs.readdir(state.stateDir)).filter((name) => name.startsWith("agent.legacy-")),
+      ).toEqual(["agent.legacy-1234"]);
+      await expect(fs.stat(state.statePath("agent"))).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });
