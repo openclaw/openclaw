@@ -11524,12 +11524,12 @@ struct ChatViewModelTests {
             sessionEntry(
                 key: "main",
                 updatedAt: 1,
-                model: "gpt-5.6-luna",
+                model: "gpt-5.6-sol",
                 modelProvider: "openai",
                 thinkingLevel: "ultra",
                 thinkingLevels: solLevels))
         let models = [
-            modelChoice(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true),
+            modelChoice(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true),
             modelChoice(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true),
             modelChoice(id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai", reasoning: true),
         ]
@@ -11551,7 +11551,7 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         try await waitUntil("Sol Ultra metadata loaded") {
             await MainActor.run {
-                vm.modelSelectionID == "openai/gpt-5.6-luna" &&
+                vm.modelSelectionID == "openai/gpt-5.6-sol" &&
                     vm.thinkingLevel == "ultra" &&
                     vm.thinkingLevelOptions.map(\.id) == solLevels.map(\.id)
             }
@@ -11603,12 +11603,12 @@ struct ChatViewModelTests {
             sessionEntry(
                 key: "main",
                 updatedAt: 1,
-                model: "gpt-5.6-luna",
+                model: "gpt-5.6-sol",
                 modelProvider: "openai",
                 thinkingLevel: "ultra",
                 thinkingLevels: levels))
         let models = [
-            modelChoice(id: "gpt-5.6-luna", name: "Sol", provider: "openai", reasoning: true),
+            modelChoice(id: "gpt-5.6-sol", name: "Sol", provider: "openai", reasoning: true),
             modelChoice(id: "legacy-reasoning", name: "Legacy", provider: "openai", reasoning: true),
         ]
         let (transport, vm) = await makeViewModel(
@@ -11641,7 +11641,7 @@ struct ChatViewModelTests {
             sessionEntry(
                 key: "main",
                 updatedAt: 1,
-                model: "gpt-5.6-luna",
+                model: "gpt-5.6-sol",
                 modelProvider: "openai",
                 thinkingLevel: "ultra",
                 thinkingLevels: solLevels))
@@ -11654,7 +11654,7 @@ struct ChatViewModelTests {
                 thinkingLevel: "max",
                 thinkingLevels: lunaLevels))
         let models = [
-            modelChoice(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true),
+            modelChoice(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true),
             modelChoice(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true),
         ]
         let (transport, vm) = await makeViewModel(

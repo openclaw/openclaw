@@ -183,7 +183,7 @@ describe("guided onboarding inference composition", () => {
       });
       expect(mockOpenAi.requestBodies).toHaveLength(1);
       expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({
-        model: "gpt-5.6-sol",
+        model: "gpt-6-astra",
       });
       const notes = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
       const inferenceReadyIndex = notes.findIndex((call) => call[1] === "Inference ready");

@@ -41,8 +41,8 @@ describe("Codex supervision actions", () => {
     const startupConfig = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": {} },
+          model: { primary: "openai/gpt-6-astra" },
+          models: { "openai/gpt-6-astra": {} },
         },
       },
     } satisfies OpenClawConfig;
@@ -56,7 +56,7 @@ describe("Codex supervision actions", () => {
     });
 
     expect(getProvider()?.resolveCreateSession?.({ agentId: "main" })).toEqual({
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       agentRuntime: "codex",
     });
   });
