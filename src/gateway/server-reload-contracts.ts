@@ -63,6 +63,8 @@ export type GatewayRestartTransactionResult = {
 export type GatewayRestartRequestOptions = {
   retainDebtAcrossConfigChanges?: boolean;
   prepareRuntimeConfig?: () => Promise<OpenClawConfig>;
+  /** Holds emission until the initiating RPC has enqueued its response. */
+  beforeRestartEmission?: () => Promise<void>;
   debtConfig?: OpenClawConfig;
 };
 
