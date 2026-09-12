@@ -270,7 +270,9 @@ describe("bootstrap publication atomicity", () => {
       seedWorkspaceBootstrap({ dir: tempDir, content, existingFile: "conflict", stateOptions }),
     ).rejects.toBeInstanceOf(WorkspaceBootstrapSeedConflictError);
     expect(
-      readWorkspaceStateSnapshot(tempDir, stateOptions).setup.bootstrapSeededAt,
+      // readWorkspaceStateSnapshot is synchronous on this base and awaited on newer ones; resolve both.
+      (await Promise.resolve(readWorkspaceStateSnapshot(tempDir, stateOptions))).setup
+        .bootstrapSeededAt,
     ).toBeUndefined();
 
     await expect(seedWorkspaceBootstrap({ dir: tempDir, content, stateOptions })).resolves.toBe(
