@@ -298,11 +298,13 @@ export async function applyShortTermPromotions(
     return isPromotionOriginBlocked(candidate)
       ? reject(candidate.key, "origin", `origin filter (${candidate.provenance?.originClass})`)
       : options.consolidation && (!latest || !isConsolidationCandidateEligible(candidate))
-        ? reject(
-            candidate.key,
-            "consolidation origin/session",
-            "consolidation origin/session filter",
-          )
+        ? latest
+          ? reject(
+              candidate.key,
+              "consolidation origin/session",
+              "consolidation origin/session filter",
+            )
+          : false
         : isContaminatedDreamingSnippet(candidate.snippet)
           ? reject(candidate.key, "contamination", "contamination filter")
           : candidate.promotedAt || latest?.promotedAt
