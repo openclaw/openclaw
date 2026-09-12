@@ -442,17 +442,35 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     }
     return text + source.slice(cursor, end);
   };
+  const fenceEndingAtOrAfter = (position: number) => {
+    let low = 0;
+    let high = fences.length;
+    // The scanner emits disjoint fences in source order, including an open final fence.
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      const range = expectDefined(fences[middle], "Discord fence range");
+      if (range.end < position) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return fences[low];
+  };
   // A partial closing line is still inside the fence until its original text is consumed.
-  const fenceAt = (position: number) =>
-    fences.find(
-      (range) =>
-        range.bodyStart - 1 <= position &&
-        (position < range.end || (position === range.end && range.closeStart === range.end)),
-    );
+  const fenceAt = (position: number) => {
+    const range = fenceEndingAtOrAfter(position);
+    return range &&
+      range.bodyStart - 1 <= position &&
+      (position < range.end || (position === range.end && range.closeStart === range.end))
+      ? range
+      : undefined;
+  };
   const cutBoundary = (start: number, end: number) => {
     const safe = boundary(start, end);
     // Keep marker lines intact and leave an opening fence with its body.
-    for (const range of fences) {
+    const range = fenceEndingAtOrAfter(safe);
+    if (range) {
       if (start < range.start && range.start < safe && safe <= range.bodyStart) {
         return range.start;
       }
