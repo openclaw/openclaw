@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveEffectiveAgentDir,
+  tryResolveAmbientOwnerAgentId,
+} from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
@@ -87,6 +91,7 @@ import {
 import { migrationFileExists, readSessionStoreJson5, safeReadDir } from "./state-migrations.fs.js";
 import {
   inspectLegacyAgentDir,
+  legacyAgentQuarantineNotices,
   migrateLegacyAgentDir,
   migrateLegacySessions,
 } from "./state-migrations.legacy-sessions.js";
@@ -450,9 +455,14 @@ export async function detectLegacyStateMigrations(params: {
     );
 
   const legacyAgentDir = path.join(stateDir, "agent");
-  const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
+  const targetAgentDir = resolveEffectiveAgentDir(params.cfg, targetAgentId, {
+    env,
+    homedir: params.homedir,
+  });
   const legacyAgentDirInspection = inspectLegacyAgentDir(legacyAgentDir);
-  const hasLegacyAgentDir = legacyAgentDirInspection.status === "payload";
+  const hasLegacyAgentDir =
+    legacyAgentDirInspection.status === "payload" &&
+    path.resolve(legacyAgentDir) !== path.resolve(targetAgentDir);
   const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
   const hasPluginStateSidecar = migrationFileExists(pluginStateSidecarPath);
   const hasPendingPluginStateSidecarArchive = hasPendingSqliteSidecarArchive(
@@ -913,7 +923,7 @@ export async function detectLegacyStateMigrations(params: {
       ...(legacyAgentDirInspection.status === "failed" ? [legacyAgentDirInspection.warning] : []),
       ...deferredWarnings,
     ],
-    notices: deferredNotices,
+    notices: [...deferredNotices, ...legacyAgentQuarantineNotices(targetAgentDir)],
     preview,
   };
 }

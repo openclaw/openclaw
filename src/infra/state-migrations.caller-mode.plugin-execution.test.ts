@@ -21,6 +21,7 @@ import {
   planLegacyStateMigrationsReadOnly,
   runLegacyStateMigrations,
 } from "./state-migrations.doctor.js";
+import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "./state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
@@ -246,7 +247,7 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
     expect(fs.existsSync(mutationPath)).toBe(false);
   });
 
-  it("executes selected external migrations and later core steps in live Doctor", async () => {
+  it("continues to post-session repairs after quarantining a legacy agent collision in live Doctor", async () => {
     const fixture = await makeFixture();
     const pluginId = "external-doctor-owner";
     const pluginRoot = path.join(fixture.root, pluginId);
@@ -257,6 +258,11 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
     fs.mkdirSync(pluginRoot);
     fs.mkdirSync(legacyAgentDir);
     fs.writeFileSync(path.join(legacyAgentDir, "settings.json"), "{}\n");
+    fs.mkdirSync(path.join(legacyAgentDir, "bin"));
+    fs.writeFileSync(path.join(legacyAgentDir, "bin", "rg"), "legacy binary");
+    const targetBin = path.join(fixture.stateDir, "agents", "main", "agent", "bin");
+    fs.mkdirSync(targetBin, { recursive: true });
+    fs.writeFileSync(path.join(targetBin, "rg"), "current binary");
     fs.writeFileSync(
       path.join(pluginRoot, "openclaw.plugin.json"),
       `${JSON.stringify({
@@ -347,8 +353,10 @@ module.exports = { stateMigrations: [{
       outcome: "completed",
     });
     expect(result.stepReceipts.find((receipt) => receipt.id === "agent-dir")).toMatchObject({
-      outcome: "completed",
+      outcome: "warning",
+      warnings: [expect.stringContaining(path.join("bin", "rg"))],
     });
+    expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
     expect(
       result.stepReceipts.find((receipt) => receipt.id === "orphan-session-keys")?.source,
     ).toContainEqual({

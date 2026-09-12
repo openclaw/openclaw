@@ -574,18 +574,8 @@ export function listLegacySessionKeys(params: {
   return legacy;
 }
 
-export function emptyDirOrMissing(dir: string): boolean {
-  if (!existsDir(dir)) {
-    return true;
-  }
-  return safeReadDir(dir).length === 0;
-}
-
 export function removeDirIfEmpty(dir: string) {
-  if (!existsDir(dir)) {
-    return;
-  }
-  if (!emptyDirOrMissing(dir)) {
+  if (!existsDir(dir) || safeReadDir(dir).length > 0) {
     return;
   }
   try {

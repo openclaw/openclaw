@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileLockOptions } from "../../infra/file-lock.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -68,6 +69,33 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
+  it("reuses managed binaries from the canonical agent directory after migration", async () => {
+    const home = expectDefined(tempAgentDir, "test home");
+    const stateDir = join(home, "state");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    vi.stubEnv("OPENCLAW_OFFLINE", "1");
+    const binaryPath = join(
+      stateDir,
+      "agents",
+      "main",
+      "agent",
+      "bin",
+      process.platform === "win32" ? "fd.exe" : "fd",
+    );
+    mkdirSync(dirname(binaryPath), { recursive: true });
+    writeFileSync(binaryPath, "migrated binary");
+
+    const { ensureTool } = await import("./tools-manager.js");
+
+    await expect(ensureTool("fd", true)).resolves.toBe(binaryPath);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(existsSync(join(home, ".openclaw", "agent"))).toBe(false);
+  });
+
   it("single-flights concurrent installs of the same tool", async () => {
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});

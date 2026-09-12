@@ -594,21 +594,29 @@ export function tryResolveConfiguredAgentWorkspaceDir(
   return configured ? stripNullBytes(resolveUserPath(configured, env)) : undefined;
 }
 
+// Agent state uses the configured agentDir or <state>/agents/<id>/agent.
+// Validation and migration share this read-only lookup; runtime registration stays separate.
+export function resolveEffectiveAgentDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
+): string {
+  const id = normalizeAgentId(agentId);
+  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
+  const env = deps?.env ?? process.env;
+  if (configured) {
+    return resolveUserPath(configured, env, deps?.homedir);
+  }
+  return path.join(resolveStateDir(env, deps?.homedir), "agents", id, "agent");
+}
+
 export function resolveAgentDir(
   cfg: OpenClawConfig,
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
-) {
-  const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
-  if (configured) {
-    const agentDir = resolveUserPath(configured, env);
-    registerResolvedAgentDir({ agentId: id, agentDir, env });
-    return agentDir;
-  }
-  const root = resolveStateDir(env);
-  const agentDir = path.join(root, "agents", id, "agent");
-  registerResolvedAgentDir({ agentId: id, agentDir, env });
+): string {
+  const agentDir = resolveEffectiveAgentDir(cfg, agentId, { env });
+  registerResolvedAgentDir({ agentId, agentDir, env });
   return agentDir;
 }
 

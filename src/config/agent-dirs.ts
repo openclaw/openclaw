@@ -2,11 +2,9 @@ import fs from "node:fs";
 // Resolves agent-specific config and workspace directories.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
 import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveUserPath } from "../utils.js";
-import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
 type DuplicateAgentDir = {
@@ -90,22 +88,6 @@ function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   }
 
   return [...ids];
-}
-
-function resolveEffectiveAgentDir(
-  cfg: OpenClawConfig,
-  agentId: string,
-  deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
-): string {
-  const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir;
-  const trimmed = configured?.trim();
-  const env = deps?.env ?? process.env;
-  if (trimmed) {
-    return resolveUserPath(trimmed, env, deps?.homedir);
-  }
-  const root = resolveStateDir(env, deps?.homedir);
-  return path.join(root, "agents", id, "agent");
 }
 
 /** Finds agent ids whose effective agentDir would share auth/session state. */
