@@ -1699,6 +1699,70 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it.each(
+    (["profile", "provider"] as const).flatMap((scope) =>
+      [false, true].map((replaceDuringCleanup) => ({ scope, replaceDuringCleanup })),
+    ),
+  )(
+    "removes a legacy-main $scope once after config cleanup (replacement=$replaceDuringCleanup)",
+    async ({ scope, replaceDuringCleanup }) => {
+      await withAuthProfileTestState("openclaw-auth-remove-shared-alias-", async ({ agentDir }) => {
+        const profileId = "openai:default";
+        const original = {
+          type: "token" as const,
+          provider: "openai",
+          token: "synthetic-original",
+        };
+        const replacement = { ...original, token: "synthetic-replacement" };
+        const unrelated = createApiKeyCredential("other", "synthetic-other");
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: { [profileId]: original, "other:default": unrelated },
+          },
+          agentDir,
+        );
+        expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
+        const beforeRemove = vi.fn(async () => {
+          expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(original);
+          if (replaceDuringCleanup) {
+            saveAuthProfileStore(
+              {
+                version: AUTH_STORE_VERSION,
+                profiles: { [profileId]: replacement, "other:default": unrelated },
+              },
+              agentDir,
+            );
+          }
+        });
+        const onIncomplete = vi.fn(async () => {});
+
+        const removed = await removeAuthProfilesAcrossOwnerStores({
+          agentDir,
+          profileIds: [profileId],
+          ...(scope === "provider" ? { provider: "openai" } : {}),
+          beforeRemove,
+          onIncomplete,
+        });
+
+        expect(removed).toBe(!replaceDuringCleanup);
+        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId]);
+        for (const owner of [agentDir, undefined]) {
+          const persisted = loadPersistedAuthProfileStore(owner);
+          expect(persisted?.profiles[profileId]).toEqual(
+            replaceDuringCleanup ? replacement : undefined,
+          );
+          expect(persisted?.profiles["other:default"]).toEqual(unrelated);
+        }
+        if (replaceDuringCleanup) {
+          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(new Map([[profileId, replacement]]));
+        } else {
+          expect(onIncomplete).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
   it("removes an inherited profile from the owning main store too", async () => {
     await withAuthProfileTestState("openclaw-auth-remove-owner-", async ({ agentDirFor }) => {
       const mainAgentDir = agentDirFor("main");
