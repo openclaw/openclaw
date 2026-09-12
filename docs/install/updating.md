@@ -209,6 +209,13 @@ in that chat as the Gateway observes the recorded milestones:
 3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
 4. The final report, including successful updates.
 
+External update and restart notices go only to destinations listed in
+`commands.ownerAllowFrom`. Selecting a non-owner chat in the Control UI does not
+authorize notices to that contact. If no owner destination resolves, OpenClaw
+logs the skipped notice and keeps the update outcome in the run record and
+Control UI; it does not redirect the notice to another chat or wake the rejected
+session with diagnostics.
+
 Managed systemd or launchd updates can stop the Gateway before an intermediate
 notice is delivered. The complete four-message sequence is not guaranteed for
 those installations; the durable run report remains available after reconnect.

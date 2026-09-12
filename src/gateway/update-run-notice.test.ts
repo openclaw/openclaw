@@ -37,7 +37,7 @@ describe("host-owned update notices", () => {
         updatedAt: 1,
       });
       const run = createUpdateRun({ trigger: "chat", origin: { sessionKey: target.sessionKey } });
-      const notify = createUpdateRunNotifier(run, {}, {});
+      const notify = createUpdateRunNotifier(run, () => ({}), {});
       if (replaced) {
         await upsertSessionEntryCore(target, {
           sessionId: target.sessionId,

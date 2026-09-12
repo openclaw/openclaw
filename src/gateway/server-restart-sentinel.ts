@@ -65,7 +65,10 @@ import {
 import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
-import { resolveUpdateRunNoticeTarget } from "./update-run-notice-target.js";
+import {
+  recordUpdateRunNoticeSkipped,
+  resolveUpdateRunNoticeTarget,
+} from "./update-run-notice-target.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
@@ -485,6 +488,15 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (!routedSessionKey) {
+      if (
+        updateRun?.trigger === "control-ui" &&
+        !updateRun.origin.sessionKey &&
+        !updateRun.origin.deliveryContext
+      ) {
+        recordUpdateRunNoticeSkipped(updateRun.runId, "no delivery target");
+        await clearRestartSentinelIfRevision(sentinelRevision);
+        return { status: "ran" as const };
+      }
       const targetlessCliOutcome =
         payload.kind === "update" &&
         updateRun?.trigger === "cli" &&
@@ -523,6 +535,12 @@ async function loadRestartSentinelStartupTask(params: {
       explicitDeliveryContext: sessionKey ? payload.deliveryContext : undefined,
       threadId: sessionKey ? payload.threadId : undefined,
     });
+    if (target.kind === "none") {
+      recordUpdateRunNoticeSkipped(updateRunId, target.reason);
+      // A diagnostic wake would bypass the same owner-only notice decision.
+      await clearRestartSentinelIfRevision(sentinelRevision);
+      return { status: "ran" as const };
+    }
     const route = target.kind === "route" ? target.route : undefined;
     const deliveryContext =
       normalizeDeliveryContext(route) ?? (sessionKey ? wakeDeliveryContext : undefined);
