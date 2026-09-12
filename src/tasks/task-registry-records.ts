@@ -32,9 +32,7 @@ export function cloneTaskRecord(record: TaskRecord): TaskRecord {
 }
 
 function omitUndefinedProperties(value: object): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, field]) => field !== undefined),
-  );
+  return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
 }
 
 /** Restored or replayed projections must not persist when they already match durable state. */

@@ -110,14 +110,12 @@ export function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
 }
 
 function omitUndefinedProperties(value: object): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, field]) => field !== undefined),
-  );
+  return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
 }
 
 function canonicalizeMirroredFlowProjection(flow: TaskFlowRecord): Record<string, unknown> {
-  const { revision: _revision, ...rest } = flow;
-  const canonical = omitUndefinedProperties(rest);
+  const { revision: _revision, ...projection } = flow;
+  const canonical = omitUndefinedProperties(projection);
   // Mirrored sync writes waitJson: null; older rows stored SQL NULL and restore
   // without the field. Treat those as the same cleared wait state.
   if (canonical.waitJson === null) {
