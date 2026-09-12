@@ -237,7 +237,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     meta: string | undefined,
     commandBearing: boolean,
   ) => {
-    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    // Command-bearing summaries stay visible at ordinary verbosity so users can
+    // follow (and interrupt) what the agent executes; verbose "full" additionally
+    // forwards raw outputs. Verbose "off" keeps summaries fully hidden.
+    const visibleMeta = params.verboseLevel !== "off" || !commandBearing ? meta : undefined;
     const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
       markdown: useMarkdown,
     });

@@ -687,30 +687,48 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["exec", "server.exec"])(
-    "hides command metadata for %s unless full verbose mode is enabled",
-    async (toolName) => {
-      const onToolResult = vi.fn();
-      const toolHarness = createSubscribedSessionHarness({
-        runId: "run-exec-on",
-        verboseLevel: "on",
-        onToolResult,
-      });
+  it("shows the exec title in tool summaries at verbose on", async () => {
+    const onToolResult = vi.fn();
+    const toolHarness = createSubscribedSessionHarness({
+      runId: "run-exec-on",
+      verboseLevel: "on",
+      onToolResult,
+    });
 
-      toolHarness.emit({
-        type: "tool_execution_start",
-        toolName,
-        toolCallId: "tool-exec-on",
-        args: { command: "echo private-sentinel" },
-      });
+    toolHarness.emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec-on",
+      args: { command: "echo private-sentinel", title: "smoke echo" },
+    });
 
-      await Promise.resolve();
+    await Promise.resolve();
 
-      const payload = toolResultPayloadAt(onToolResult, 0);
-      expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
-      expect(payload?.text).not.toContain("private-sentinel");
-    },
-  );
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("smoke echo");
+    expect(payload?.text).not.toContain("private-sentinel");
+  });
+
+  it("keeps namespaced exec summaries visible at verbose on", async () => {
+    const onToolResult = vi.fn();
+    const toolHarness = createSubscribedSessionHarness({
+      runId: "run-exec-on",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    toolHarness.emit({
+      type: "tool_execution_start",
+      toolName: "server.exec",
+      toolCallId: "tool-exec-on",
+      args: { command: "echo private-sentinel", title: "smoke echo" },
+    });
+
+    await Promise.resolve();
+
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("Server.exec");
+  });
 
   it("includes browser action metadata in tool summaries", async () => {
     const onToolResult = vi.fn();
