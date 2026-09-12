@@ -16,13 +16,19 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
 it("isolates supplied connections and rolls back compound task, flow, delivery, and binding writes", async () => {
   // Cold evaluation proves the dependency boundary even if setup previously loaded a store.
   vi.resetModules();
-  const [tasks, flows, { OPENCLAW_STATE_SCHEMA_SQL }, { runSqliteImmediateTransactionSync }] =
-    await Promise.all([
-      import("./task-registry.store.kernel.js"),
-      import("./task-flow-registry.store.kernel.js"),
-      import("../state/openclaw-state-schema.js"),
-      import("../infra/sqlite-transaction.js"),
-    ]);
+  const [
+    tasks,
+    flows,
+    { OPENCLAW_STATE_SCHEMA_SQL },
+    { runSqliteImmediateTransactionSync },
+    { enableNodeSqliteKyselyStatementCache },
+  ] = await Promise.all([
+    import("./task-registry.store.kernel.js"),
+    import("./task-flow-registry.store.kernel.js"),
+    import("../state/openclaw-state-schema.js"),
+    import("../infra/sqlite-transaction.js"),
+    import("../infra/kysely-sync.js"),
+  ]);
   const first = new DatabaseSync(":memory:");
   const second = new DatabaseSync(":memory:");
   const task: TaskRecord = {
@@ -64,6 +70,7 @@ it("isolates supplied connections and rolls back compound task, flow, delivery, 
   });
   try {
     for (const db of [first, second]) {
+      enableNodeSqliteKyselyStatementCache(db);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
       runSqliteImmediateTransactionSync(db, () => {
         tasks.upsertTaskWithDeliveryStateInDatabase(
@@ -86,6 +93,44 @@ it("isolates supplied connections and rolls back compound task, flow, delivery, 
     expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "cron", "source-a")).toEqual([
       task,
     ]);
+
+    const otherTask: TaskRecord = {
+      ...task,
+      taskId: "task-b",
+      runtime: "subagent",
+      sourceId: "source-b",
+      ownerKey: "owner-b",
+    };
+    const otherFlow: TaskFlowRecord = { ...flow, flowId: "flow-b", ownerKey: "owner-b" };
+    runSqliteImmediateTransactionSync(first, () => {
+      tasks.upsertTaskRunRowInDatabase({ db: first }, tasks.bindTaskRecord(otherTask));
+      flows.upsertTaskFlowRowInDatabase(first, flows.bindTaskFlowRecord(otherFlow));
+    });
+    expect(tasks.readTaskRecord(first, otherTask.taskId)).toEqual(otherTask);
+    expect(tasks.readTaskRecord(first, "missing")).toBeUndefined();
+    expect(tasks.readTaskRecord(first, task.taskId)).toEqual(task);
+    expect(flows.readTaskFlowRecord(first, otherFlow.flowId)).toEqual(otherFlow);
+    expect(flows.readTaskFlowRecord(first, "missing")).toBeUndefined();
+    expect(flows.readTaskFlowRecord(first, flow.flowId)).toEqual(flow);
+    expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "cron")).toEqual([task]);
+    expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "subagent")).toEqual([
+      otherTask,
+    ]);
+    expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "cron", "")).toEqual([]);
+    expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "subagent", "source-a")).toEqual(
+      [],
+    );
+    expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "cron", "source-b")).toEqual([]);
+    expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "subagent", "source-b")).toEqual(
+      [otherTask],
+    );
+    expect(tasks.listTaskRecordsByOwnerKeyInDatabase(first, "owner-b")).toEqual([otherTask]);
+    expect(tasks.listTaskRecordsByOwnerKeyInDatabase(first, "missing")).toEqual([]);
+    expect(tasks.listTaskRecordsByOwnerKeyInDatabase(first, task.ownerKey)).toEqual([task]);
+    runSqliteImmediateTransactionSync(first, () => {
+      tasks.deleteTaskRowsWithDeliveryState(first, otherTask.taskId);
+      flows.deleteTaskFlowRowInDatabase(first, otherFlow.flowId);
+    });
 
     const before = snapshot();
     const replacement = { ...task, task: "Updated task", detail: null };
