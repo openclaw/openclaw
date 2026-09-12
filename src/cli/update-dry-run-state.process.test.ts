@@ -551,7 +551,14 @@ process.stdin.resume();
         "--json",
       ]);
 
-      expect(result.error).toBeUndefined();
+      expect(
+        result.error,
+        formatCliProcessFailure({
+          reason: `rejected ${command} arguments`,
+          stdout: result.stdout ?? "",
+          stderr: result.stderr ?? "",
+        }),
+      ).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(
         /--timeout must be a positive integer/iu,
