@@ -254,6 +254,7 @@ export function renderAgentOverview(params: {
     ${renderSettingsSection(
       {
         title: t("agents.overview.modelSelection"),
+        notice: renderPanelRefreshStatus({ status: params.modelCatalogStatus }),
         actions: html`
           <button
             type="button"
@@ -274,9 +275,6 @@ export function renderAgentOverview(params: {
         `,
       },
       html`
-        ${renderPanelRefreshStatus({
-          status: params.modelCatalogStatus,
-        })}
         ${renderSettingsRow({
           title: isDefault
             ? t("agents.overview.primaryModelDefault")
