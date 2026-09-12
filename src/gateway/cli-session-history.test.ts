@@ -14,7 +14,7 @@ import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
   readClaudeCliFallbackSeed,
@@ -3152,6 +3152,46 @@ describe("readClaudeCliFallbackSeed", () => {
     expect(fallbackSeed.recentTurns).toHaveLength(3);
     expectFields(fallbackSeed.recentTurns[0], { role: "user" });
     expectFields(fallbackSeed.recentTurns[2], { role: "user" });
+  });
+
+  it("resolves transcripts under $CLAUDE_CONFIG_DIR/projects when configured", async () => {
+    const configDir = path.join(tmpRoot, "claude-config");
+    const configProjectsDir = path.join(configDir, "projects", "demo-workspace");
+    await fs.mkdir(configProjectsDir, { recursive: true });
+    const file = path.join(configProjectsDir, `${SESSION_ID}.jsonl`);
+    await fs.writeFile(
+      file,
+      `${JSON.stringify({
+        type: "user",
+        uuid: "u-cfg",
+        message: { role: "user", content: "config-dir prompt" },
+      })}\n${JSON.stringify({
+        type: "assistant",
+        uuid: "a-cfg",
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "config-dir reply" }],
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    // With CLAUDE_CONFIG_DIR set, the seed must be found under configDir.
+    const seed = withEnv({ CLAUDE_CONFIG_DIR: configDir, HOME: homeDir }, () =>
+      readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID, homeDir }),
+    );
+    const fallbackSeed = requireFallbackSeed(seed, "config-dir session");
+    expect(fallbackSeed.recentTurns).toHaveLength(2);
+    expectFields(fallbackSeed.recentTurns[0], { role: "user" });
+    expectFields(fallbackSeed.recentTurns[1], { role: "assistant" });
+
+    // Without CLAUDE_CONFIG_DIR, the same session must NOT resolve under
+    // <homeDir>/.claude/projects — proving the file lives only under configDir.
+    const seedWithoutConfig = withEnv({ CLAUDE_CONFIG_DIR: undefined, HOME: homeDir }, () =>
+      readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID, homeDir }),
+    );
+    expect(seedWithoutConfig).toBeUndefined();
   });
 
   it("preserves reseed envelopes in fallback model context", async () => {

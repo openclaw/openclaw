@@ -29,7 +29,8 @@ import {
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
-const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
+const CLAUDE_HOME_DIRNAME = ".claude";
+const CLAUDE_PROJECTS_DIRNAME = "projects";
 
 export type ClaudeCliProjectEntry = {
   type?: unknown;
@@ -78,8 +79,15 @@ function resolveHistoryHomeDir(homeDir?: string): string {
   return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
 }
 
+// Claude Code stores project transcripts under $CLAUDE_CONFIG_DIR/projects
+// when CLAUDE_CONFIG_DIR is set (the upstream "Respect CLAUDE_CONFIG_DIR
+// everywhere" convention) and otherwise under ~/.claude/projects. This matches
+// the session catalog's configuredClaudeConfigDir resolution.
 function resolveClaudeProjectsDir(homeDir?: string): string {
-  return path.join(resolveHistoryHomeDir(homeDir), CLAUDE_PROJECTS_RELATIVE_DIR);
+  const configuredDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return configuredDir
+    ? path.join(path.resolve(configuredDir), CLAUDE_PROJECTS_DIRNAME)
+    : path.join(resolveHistoryHomeDir(homeDir), CLAUDE_HOME_DIRNAME, CLAUDE_PROJECTS_DIRNAME);
 }
 
 function normalizeClaudeCliSessionId(value: string): string | undefined {
