@@ -39,7 +39,7 @@ Recovery continues the existing transcript with an instruction to preserve compl
 
 A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream.
 
-Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A long `Retry-After` value alone does not establish usage-window exhaustion: temporary throttles still honor the provider's minimum wait.
+Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A `Retry-After` floor longer than 60 seconds does the same whenever another auth profile or a fallback model is configured, because subscription 429s often carry the reset time only in that header. With no alternative configured, the run still honors the provider's minimum wait.
 
 The [model failover controller](/concepts/model-failover#model-fallback) owns this recovery budget. Once it is exhausted, OpenClaw follows eligible auth-profile or model fallback paths, or surfaces the final failure. Native harnesses may retry individual requests internally before returning a terminal failure to OpenClaw; those internal retries are separate from OpenClaw's continuation budget.
 
