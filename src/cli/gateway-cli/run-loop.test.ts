@@ -1691,45 +1691,51 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("bounds abandoned cleanup after a managed update parks the native service", async () => {
-    vi.clearAllMocks();
-    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
-    setPlatform("linux");
-    consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({
-      force: true,
-      reason: "update.run",
-      successorOwner: managedUpdateSuccessorOwner,
-    });
-    cancelManagedServiceUpdateHandoff.mockResolvedValue("restart-after-exit");
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, runtime } = await createSignaledLoopHarness();
-      close.mockReturnValue(new Promise<void>(() => {}));
-      vi.useFakeTimers();
-      try {
-        captureSignal("SIGUSR1")();
-        await vi.advanceTimersByTimeAsync(9_999);
-        expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
-          managedUpdateSuccessorOwner,
-        );
-        expect(close).toHaveBeenCalledOnce();
-        expect(runtime.exit).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
-        expect(start).toHaveBeenCalledOnce();
-        expect(commitManagedServiceUpdateHandoff).toHaveBeenCalledWith(
-          managedUpdateSuccessorOwner,
-          "restore",
-        );
-        expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
-          "gateway.restart_shutdown_timeout",
-          undefined,
-        );
-      } finally {
-        vi.clearAllTimers();
-        vi.useRealTimers();
-      }
-    });
-  });
+  it.each([true, false])(
+    "bounds abandoned cleanup after managed parking (restore commit=%s)",
+    async (restoreCommitted) => {
+      vi.clearAllMocks();
+      process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+      setPlatform("linux");
+      consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({
+        force: true,
+        reason: "update.run",
+        successorOwner: managedUpdateSuccessorOwner,
+      });
+      cancelManagedServiceUpdateHandoff
+        .mockResolvedValueOnce("restart-after-exit")
+        .mockResolvedValue("restored-in-process");
+      commitManagedServiceUpdateHandoff.mockResolvedValueOnce(restoreCommitted);
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, start, runtime } = await createSignaledLoopHarness();
+        close.mockReturnValue(new Promise<void>(() => {}));
+        vi.useFakeTimers();
+        try {
+          captureSignal("SIGUSR1")();
+          await vi.advanceTimersByTimeAsync(9_999);
+          expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
+            managedUpdateSuccessorOwner,
+          );
+          expect(close).toHaveBeenCalledOnce();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+          expect(start).toHaveBeenCalledOnce();
+          expect(commitManagedServiceUpdateHandoff).toHaveBeenCalledWith(
+            managedUpdateSuccessorOwner,
+            "restore",
+          );
+          expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+            "gateway.restart_shutdown_timeout",
+            undefined,
+          );
+        } finally {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
 
   it("retains external supervisor recovery when timeout prevents a restart handoff", async () => {
     vi.clearAllMocks();
