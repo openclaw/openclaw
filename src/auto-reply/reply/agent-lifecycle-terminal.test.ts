@@ -44,6 +44,73 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(JSON.stringify(event)).not.toContain(rawDiagnostic);
   });
 
+  it("keeps the auth-refresh observation for a summary-only OAuth failure", () => {
+    emitAgentEvent.mockClear();
+    // An OpenAI non-JSON HTTP 401 refresh response yields a bounded summary and
+    // status with no recognized reason; OAuthRefreshFailureError preserves that
+    // shape. The Control UI still needs the observation to classify the error
+    // and render provider/status details.
+    const summary = "OpenAI Codex token refresh failed (HTTP 401).";
+    const oauthError = new OAuthRefreshFailureError({
+      provider: "openai",
+      message: `OAuth token refresh failed for openai: ${summary}`,
+      reason: null,
+      status: 401,
+      summary,
+    });
+    const error = new Error("wrapped OAuth refresh failure", { cause: oauthError });
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId: "oauth-refresh-failure-summary-only",
+      getLifecycleGeneration: () => "test-generation",
+      resolveTerminationFields: () => ({}),
+    });
+
+    terminal.emit("error", error);
+
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    expect(event.data.error).toBe(`⚠️ ${summary}`);
+    expect(event.data.errorObservation).toEqual({
+      provider: "openai",
+      providerRuntimeFailureKind: "auth_refresh",
+      httpStatus: 401,
+    });
+  });
+
+  it.each([
+    { reason: "auth", status: 401 },
+    { reason: "session_expired", status: 410 },
+  ] as const)(
+    "publishes claude-cli re-auth recovery text for a %o login expiry",
+    ({ reason, status }) => {
+      emitAgentEvent.mockClear();
+      const raw = "Failed to authenticate: OAuth session expired and could not be refreshed";
+      const error = new FailoverError(raw, {
+        reason,
+        provider: "claude-cli",
+        model: "claude-opus-5",
+        status,
+        rawError: raw,
+      });
+      const terminal = createAgentLifecycleTerminalBackstop({
+        runId: "claude-cli-login-expired",
+        getLifecycleGeneration: () => "test-generation",
+        resolveTerminationFields: () => ({}),
+      });
+
+      terminal.emit("error", error);
+
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toBe(
+        "\u26a0\ufe0f Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+      );
+      expect(event.data.errorObservation).toMatchObject({
+        provider: "claude-cli",
+        providerRuntimeFailureKind: "auth_refresh",
+      });
+      expect(event.data.error).not.toBe(raw);
+    },
+  );
+
   it.each(["typed", "raw"] as const)(
     "publishes bounded selected-profile recovery from %s failures without discovering providers",
     (kind) => {

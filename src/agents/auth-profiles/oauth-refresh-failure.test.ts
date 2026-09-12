@@ -252,6 +252,35 @@ describe("oauth refresh failure hints", () => {
     });
   });
 
+  it("classifies structured claude-cli 410 session expiry as a provider refresh failure", () => {
+    const error = new FailoverError(
+      "Failed to authenticate: OAuth session expired and could not be refreshed",
+      {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "claude-opus-5",
+        status: 410,
+        rawError: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      },
+    );
+
+    expect(classifyOAuthRefreshFailureError(error)).toEqual({
+      provider: "claude-cli",
+      reason: "revoked",
+    });
+  });
+
+  it("keeps an expired claude-cli conversation session out of the login recovery path", () => {
+    const error = new FailoverError("HTTP 404: session not found", {
+      reason: "session_expired",
+      provider: "claude-cli",
+      model: "claude-opus-5",
+      status: 410,
+    });
+
+    expect(classifyOAuthRefreshFailureError(error)).toBeNull();
+  });
+
   it("does not classify a 401 auth failure without claude-cli prefix as a refresh failure", () => {
     // A generic 401 from another provider should NOT be treated as an OAuth
     // refresh failure — it lacks the "claude-cli" provider prefix.
