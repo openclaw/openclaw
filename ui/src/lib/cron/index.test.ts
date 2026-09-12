@@ -696,9 +696,9 @@ describe("cron controller", () => {
       delivery: { mode: "none" },
     });
     expect(requestPatch(call)).not.toHaveProperty("deleteAfterRun");
-    expect(state.cronEditingJobId).toBe("job-1");
+    expect(state.cronEditingJob?.id).toBe("job-1");
     expect(state.cronEditingJob?.name).toBe("Existing job");
-    expect(state.cronEditingConfigRevision).toBe("config-revision-1");
+    expect(state.cronEditingJob?.configRevision).toBe("config-revision-1");
   });
 
   it("requires a loaded config revision before form saves and toggles", async () => {
@@ -715,7 +715,7 @@ describe("cron controller", () => {
     saveState.cronForm.name = "Unsafe edit";
 
     await expect(addCronJob(saveState)).resolves.toEqual({ saved: false });
-    expect(saveState.cronEditingJobId).toBe(job.id);
+    expect(saveState.cronEditingJob?.id).toBe(job.id);
     expect(saveState.cronError).toContain("configuration revision");
     expect(request).not.toHaveBeenCalled();
 
@@ -784,9 +784,7 @@ describe("cron controller", () => {
       }),
     );
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
-    expect(state.cronEditingJobId).toBe(staleJob.id);
     expect(state.cronEditingJob).toEqual(authoritativeJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-newest");
     expect(state.cronJobs).toEqual([listedJob]);
     expect(state.cronForm.name).toBe("Authoritative name");
     expect(state.cronForm.description).toBe("third writer definition");
@@ -852,9 +850,7 @@ describe("cron controller", () => {
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
     expect(state.cronJobs).toEqual([]);
     expect(state.cronJobsTotal).toBe(0);
-    expect(state.cronEditingJobId).toBe(authoritativeJob.id);
     expect(state.cronEditingJob).toEqual(authoritativeJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-current");
     expect(state.cronForm.name).toBe("Authoritative name");
     expect(state.cronForm.description).toBe("latest definition");
 
@@ -866,7 +862,6 @@ describe("cron controller", () => {
     expect(updateRevisions).toEqual(["revision-stale", "revision-current"]);
     expect(state.cronJobs).toEqual([]);
     expect(state.cronEditingJob).toEqual(savedJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-saved");
   });
 
   it("keeps a stale form paired with its frozen revision when conflict refresh fails", async () => {
@@ -912,14 +907,14 @@ describe("cron controller", () => {
     await expect(addCronJob(state)).resolves.toEqual({ saved: false });
 
     expect(state.cronForm.name).toBe("My stale edit");
-    expect(state.cronEditingConfigRevision).toBe("revision-stale");
+    expect(state.cronEditingJob?.configRevision).toBe("revision-stale");
     expect(state.cronError).toContain("could not be loaded");
 
     firstList.resolve(cronJobsListResponse([listedJob], { snapshotRevision: "newer-list" }));
     await inFlightList;
     expect(state.cronJobs).toEqual([listedJob]);
     expect(state.cronForm.name).toBe("My stale edit");
-    expect(state.cronEditingConfigRevision).toBe("revision-stale");
+    expect(state.cronEditingJob?.configRevision).toBe("revision-stale");
 
     await expect(addCronJob(state)).resolves.toEqual({ saved: false });
     expect(updateRevisions).toEqual(["revision-stale", "revision-stale"]);
@@ -960,7 +955,6 @@ describe("cron controller", () => {
 
     expect(state.cronJobs).toEqual([updatedJob]);
     expect(state.cronEditingJob).toEqual(updatedJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-saved");
   });
 
   it("commits authoritative toggle state and advances an open editor revision", async () => {
@@ -1003,7 +997,6 @@ describe("cron controller", () => {
     });
     expect(state.cronJobs).toEqual([updatedJob]);
     expect(state.cronEditingJob).toEqual(updatedJob);
-    expect(state.cronEditingConfigRevision).toBe("revision-toggled");
     expect(state.cronForm.name).toBe("Unsaved rename");
 
     listResponse.resolve(cronJobsListResponse([updatedJob]));
@@ -1047,7 +1040,6 @@ describe("cron controller", () => {
 
     expect(state.cronJobs).toEqual([remainingJob]);
     expect(state.cronJobsTotal).toBe(1);
-    expect(state.cronEditingJobId).toBeNull();
     expect(state.cronEditingJob).toBeNull();
     expect(state.cronRunsJobId).toBeNull();
     expect(state.cronRuns).toEqual([]);
@@ -1127,9 +1119,7 @@ describe("cron controller", () => {
 
     startCronEdit(state, job);
 
-    expect(state.cronEditingJobId).toBe("job-9");
     expect(state.cronEditingJob).toEqual(job);
-    expect(state.cronEditingConfigRevision).toBe("config-revision-1");
     expect(state.cronRunsJobId).toBe("job-9");
     expect(state.cronForm.name).toBe("Weekly report");
     expect(state.cronForm.sessionKey).toBe("agent:ops:main");
@@ -1531,7 +1521,7 @@ describe("cron controller", () => {
       expect(state.cronJobs).toEqual(originalInventory);
       expect(state.cronCreateOpen).toBe(method === "cron.add");
       if (method === "cron.update") {
-        expect(state.cronEditingJobId).toBe(existingJob.id);
+        expect(state.cronEditingJob?.id).toBe(existingJob.id);
         expect(state.cronEditingJob?.trigger).toEqual(existingJob.trigger);
       }
     },
@@ -2160,9 +2150,7 @@ describe("cron controller", () => {
 
     cancelCronEdit(state, scenario.selectedAgentId);
 
-    expect(state.cronEditingJobId).toBeNull();
     expect(state.cronEditingJob).toBeNull();
-    expect(state.cronEditingConfigRevision).toBeNull();
     expect(state.cronForm).toEqual({
       ...DEFAULT_CRON_FORM,
       agentId: scenario.selectedAgentId,
@@ -2191,9 +2179,7 @@ describe("cron controller", () => {
     startCronEdit(state, sourceJob);
     startCronClone(state, sourceJob);
 
-    expect(state.cronEditingJobId).toBeNull();
     expect(state.cronEditingJob).toBeNull();
-    expect(state.cronEditingConfigRevision).toBeNull();
     expect(state.cronRunsJobId).toBe("job-1");
     expect(state.cronForm.name).toBe("Daily ping copy");
     expect(state.cronForm.payloadText).toBe("ping");

@@ -143,7 +143,7 @@ The audit states are distinct:
   yield a present invoker and enforced or attribution-only coverage.
 - **unknown**: a supported handoff was missing, stale, fake, reused, mixed, or
   otherwise failed host validation. Unknown never means allowed.
-- **unsupported**: a named path has no Phase 0 authoritative integration and
+- **unsupported**: a named path has no authoritative ingress-resolver integration and
   explicitly passes `channelIngress: "unsupported"`. Unsupported never means
   allowed and is not a shortcut for incomplete wiring.
 
@@ -296,3 +296,9 @@ diagnostic ids.
 pnpm test src/channels/message-access/message-access.test.ts src/plugin-sdk/channel-ingress-runtime.test.ts
 pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD
 ```
+
+## Related
+
+- [Channel inbound API](/plugins/sdk-channel-inbound) — the receive path that consumes this resolver result as `channelIngress`
+- [Channel outbound API](/plugins/sdk-channel-outbound) — the send side of the same channel plugin
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough

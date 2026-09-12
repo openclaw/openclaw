@@ -32,6 +32,7 @@ const { registerBrowserElementCommands } = await import("./register.element.js")
 
 function createElementProgram(): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
+  browser.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
   registerBrowserElementCommands(browser, parentOpts);
   return program;
 }
@@ -151,7 +152,9 @@ describe("browser element commands", () => {
     await program.parseAsync(argv, { from: "user" });
 
     expect(getLastActionBody()).toMatchObject(expectedBody);
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({
+      timeoutMs: 126_250,
+    });
   });
 
   it("rejects a blank required ref before dispatch", async () => {
@@ -164,6 +167,37 @@ describe("browser element commands", () => {
     const capture = getBrowserCliRuntimeCapture();
     expect(capture.runtimeErrors.join("\n")).toContain("ref is required");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "click",
+      argv: ["browser", "click", "ref-1", "--button", "auxiliary"],
+    },
+    {
+      name: "click-coords",
+      argv: ["browser", "click-coords", "10", "20", "--button", "Left"],
+    },
+  ])("rejects an invalid --button for $name before dispatch", async ({ argv }) => {
+    const program = createElementProgram();
+
+    await expect(program.parseAsync(argv, { from: "user" })).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
+
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "click", argv: ["browser", "click", "ref-1"] },
+    { name: "click-coords", argv: ["browser", "click-coords", "10", "20"] },
+  ])("leaves button undefined for $name when omitted", async ({ argv }) => {
+    const program = createElementProgram();
+
+    await program.parseAsync(argv, { from: "user" });
+
+    expect(getLastActionBody()?.button).toBeUndefined();
   });
 
   it("rejects non-decimal coordinate values before dispatch", async () => {
@@ -213,6 +247,6 @@ describe("browser element commands", () => {
     const timeoutRequest = timeoutCall?.[1] as { body?: { timeoutMs?: number } } | undefined;
     const timeoutOptions = timeoutCall?.[2] as { timeoutMs?: number } | undefined;
     expect(timeoutRequest?.body?.timeoutMs).toBe(20_000);
-    expect(timeoutOptions?.timeoutMs).toBe(25_250);
+    expect(timeoutOptions?.timeoutMs).toBe(126_250);
   });
 });

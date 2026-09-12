@@ -4,6 +4,7 @@ import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.j
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
@@ -460,8 +461,8 @@ describe("task-executor", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
 
@@ -1000,10 +1001,10 @@ describe("task-executor", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_IOERR: cancellation flow restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -1172,10 +1173,10 @@ describe("task-executor", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_IOERR: provisional cancellation restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 

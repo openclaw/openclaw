@@ -9,9 +9,16 @@ import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
 
 type ToolsEffectiveDependencies = NonNullable<Parameters<typeof createToolsEffectiveHandlers>[0]>;
-type RuntimeModelContext = Awaited<
-  ReturnType<ToolsEffectiveDependencies["resolveEffectiveToolInventoryRuntimeModelContextAsync"]>
+type AcquiredRuntimeModelContext = Awaited<
+  ReturnType<ToolsEffectiveDependencies["acquireEffectiveToolInventoryRuntimeModelContext"]>
 >;
+type RuntimeModelContext = Parameters<Parameters<AcquiredRuntimeModelContext["run"]>[0]>[0];
+
+function createAcquiredRuntimeModelContext(
+  context: RuntimeModelContext,
+): AcquiredRuntimeModelContext {
+  return { run: (project) => project(context), release: vi.fn() };
+}
 
 const resolveEffectiveToolInventoryRuntimeModelContextMock = vi.hoisted(() =>
   vi.fn((_params?: unknown): RuntimeModelContext => ({
@@ -90,9 +97,11 @@ const runtimeMocks = vi.hoisted(() => ({
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
   resolveEffectiveToolInventoryRuntimeModelContext:
     resolveEffectiveToolInventoryRuntimeModelContextMock,
-  resolveEffectiveToolInventoryRuntimeModelContextAsync: vi.fn<
-    ToolsEffectiveDependencies["resolveEffectiveToolInventoryRuntimeModelContextAsync"]
-  >(async (params) => resolveEffectiveToolInventoryRuntimeModelContextMock(params)),
+  acquireEffectiveToolInventoryRuntimeModelContext: vi.fn<
+    ToolsEffectiveDependencies["acquireEffectiveToolInventoryRuntimeModelContext"]
+  >(async (params) =>
+    createAcquiredRuntimeModelContext(resolveEffectiveToolInventoryRuntimeModelContextMock(params)),
+  ),
 }));
 
 const nodePluginToolSnapshotMocks = vi.hoisted(() => ({
@@ -115,8 +124,8 @@ const toolsEffectiveDependencies: ToolsEffectiveDependencies = {
   resolveAgentDir: runtimeMocks.resolveAgentDir,
   resolveAgentWorkspaceDir: runtimeMocks.resolveAgentWorkspaceDir,
   resolveEffectiveToolInventory: runtimeMocks.resolveEffectiveToolInventory,
-  resolveEffectiveToolInventoryRuntimeModelContextAsync:
-    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+  acquireEffectiveToolInventoryRuntimeModelContext:
+    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext,
   resolveReplyToMode: runtimeMocks.resolveReplyToMode,
   resolveRuntimeConfigCacheKey: runtimeMocks.resolveRuntimeConfigCacheKey,
   resolveSessionAgentId: runtimeMocks.resolveSessionAgentId,
@@ -320,6 +329,13 @@ describe("tools.effective handler", () => {
         maxTokens: 8_192,
       },
     });
+    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext
+      .mockReset()
+      .mockImplementation(async (params) =>
+        createAcquiredRuntimeModelContext(
+          resolveEffectiveToolInventoryRuntimeModelContextMock(params),
+        ),
+      );
     runtimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
       fingerprint: "mcp:1:test",
       serverNames: [] as string[],
@@ -583,29 +599,29 @@ describe("tools.effective handler", () => {
     runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
       throw new Error("synchronous model context should not be used");
     });
-    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync.mockResolvedValue({
-      modelApi: "openai-responses",
-      runtimeModel: {
-        id: "gpt-4.1",
-        name: "GPT 4.1",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 8_192,
-      },
-    });
+    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext.mockResolvedValue(
+      createAcquiredRuntimeModelContext({
+        modelApi: "openai-responses",
+        runtimeModel: {
+          id: "gpt-4.1",
+          name: "GPT 4.1",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 8_192,
+        },
+      }),
+    );
 
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
 
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(
-      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
-    ).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
     expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).not.toHaveBeenCalled();
   });
 
@@ -613,17 +629,15 @@ describe("tools.effective handler", () => {
     runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
       throw new Error("synchronous model context should not be used");
     });
-    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync.mockResolvedValue(
-      {} as never,
+    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext.mockResolvedValue(
+      createAcquiredRuntimeModelContext({}),
     );
 
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
 
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(
-      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
-    ).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
     expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).not.toHaveBeenCalled();
   });
 
@@ -776,12 +790,8 @@ describe("tools.effective handler", () => {
       workspaceDir: "/tmp/sandbox-copy",
       cfg: {},
     });
-    expect(
-      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
-    ).toHaveBeenCalledTimes(2);
-    expect(
-      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
-    ).toHaveBeenLastCalledWith(
+    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenLastCalledWith(
       expect.objectContaining({
         workspaceDir: "/tmp/sandbox-copy",
         modelProvider: "openai",
@@ -790,15 +800,28 @@ describe("tools.effective handler", () => {
     );
   });
 
-  it("does not project warm MCP tools filtered out by final policy", async () => {
-    mockWarmMcpTool();
-    runtimeMocks.applyFinalEffectiveToolPolicy.mockReturnValueOnce([]);
-
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-
-    expectPayloadGroupIds(respond, ["core"]);
-  });
+  it.each(["empty", "filtered"])(
+    "preserves base output without another model acquisition for %s MCP tools",
+    async (kind) => {
+      const base = {
+        ...makeCoreInventory(),
+        notices: [{ id: "base-notice", severity: "info", message: "Keep the base notice" }],
+      };
+      runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
+      mockMcpConfigSummary();
+      mockWarmMcpRuntime(makeMcpCatalog());
+      runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce(
+        kind === "empty" ? [] : [makeMcpTool()],
+      );
+      if (kind === "filtered") {
+        runtimeMocks.applyFinalEffectiveToolPolicy.mockReturnValueOnce([]);
+      }
+      const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+      await invoke();
+      expect(firstRespondCall(respond)?.[1]).toEqual(base);
+      expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledOnce();
+    },
+  );
 
   it("quarantines warm MCP tools with schemas the runtime cannot project", async () => {
     mockWarmMcpTool({ type: "array", items: { type: "string" } });

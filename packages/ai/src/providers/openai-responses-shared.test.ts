@@ -5,6 +5,7 @@ import type {
   Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -146,7 +147,7 @@ describe("convertResponsesToolPayload", () => {
       },
     ] satisfies Tool[];
 
-    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel }).tools;
+    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel });
 
     expect(converted).toEqual([
       {
@@ -179,7 +180,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool.strict).toBe(false);
@@ -201,7 +202,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: proxyOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool).not.toHaveProperty("strict");
@@ -224,7 +225,7 @@ describe("convertResponsesToolPayload", () => {
     } satisfies Tool;
 
     expect(
-      convertResponsesToolPayload([zeta, alpha]).tools.map(
+      convertResponsesToolPayload([zeta, alpha]).map(
         (tool) => expectResponsesFunctionTool(tool).name,
       ),
     ).toEqual(["alpha", "zeta"]);
@@ -250,7 +251,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     expect(converted).toEqual([
       {
@@ -575,14 +576,7 @@ describe("convertResponsesMessages", () => {
               },
             ],
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_abc|fc_prior",
-            toolName: "price_lookup",
-            content: [{ type: "text", text: "$83.95" }],
-            isError: false,
-            timestamp: 2,
-          },
+          makeTextToolResult("call_abc|fc_prior", "price_lookup", "$83.95", false, 2),
         ],
       } satisfies Context,
       allowedToolCallProviders,
@@ -2184,14 +2178,7 @@ describe("processResponsesStream", () => {
         systemPrompt: "",
         messages: [
           output,
-          {
-            role: "toolResult",
-            toolCallId: "call_weather|fc_weather",
-            toolName: "weather",
-            content: [{ type: "text", text: "Rain" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1),
         ],
       } satisfies Context,
       testAllowedToolCallProviders,

@@ -1,5 +1,7 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -24,10 +26,13 @@ export async function preflightUpdateCommandSchemas(params: {
   shouldRestart: boolean;
   updateStepTimeoutMs: number;
   invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   channel: UpdateChannel;
   devTarget?: DevUpdateTarget;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
+  packageTargetVersion?: string;
+  packageInstallSpec?: string | null;
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: (reason: string, message?: string) => Promise<void>;
 }): Promise<
@@ -67,6 +72,7 @@ export async function preflightUpdateCommandSchemas(params: {
         timeoutMs: updateStepTimeoutMs,
         invocationCwd,
         managedServiceRootRedirect,
+        legacyConfigPlan: params.legacyConfigPlan,
       });
       const target =
         updateInstallKind === "git"
@@ -87,6 +93,27 @@ export async function preflightUpdateCommandSchemas(params: {
         target.schemaVersions,
         admission.contexts,
       );
+      if (opts.dryRun && updateInstallKind === "package") {
+        if (
+          params.packageInstallSpec &&
+          !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec)
+        ) {
+          preflightNotes.push(
+            "Configured plugin availability will be checked against the staged package before rehearsal or activation; this preview does not stage the target.",
+          );
+        } else {
+          const { preflightConfiguredNpmPluginTargets } =
+            await import("./update-command-plugin-preflight.js");
+          const context = admission.contexts.at(-1)!;
+          await preflightConfiguredNpmPluginTargets({
+            config: context.configSnapshot.sourceConfig,
+            env: context.env,
+            targetVersion: params.packageTargetVersion ?? null,
+            channel,
+            timeoutMs: updateStepTimeoutMs,
+          });
+        }
+      }
     } catch (error) {
       if (!opts.dryRun) {
         if (error instanceof UpdatePreMutationError) {

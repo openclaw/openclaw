@@ -62,6 +62,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubSearchResults: [
       {
         score: 0.9,
+        registry: "https://clawhub.ai",
         slug: "github",
         displayName: "GitHub",
         summary: "Previous result",
@@ -554,12 +555,18 @@ describe("loadSkillCard", () => {
           description: "Trust card fixture",
           skillKey: "agentreceipt",
           source: "workspace",
+          bundled: false,
           filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
           baseDir: "/tmp/workspace/skills/agentreceipt",
           always: false,
           disabled: false,
           blockedByAllowlist: false,
+          blockedByAgentFilter: false,
           eligible: true,
+          platformIncompatible: false,
+          modelVisible: true,
+          userInvocable: true,
+          commandVisible: true,
           requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
           missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
           configChecks: [],
@@ -607,12 +614,18 @@ describe("loadSkillCard", () => {
           description: "Trust card fixture",
           skillKey: "agentreceipt",
           source: "workspace",
+          bundled: false,
           filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
           baseDir: "/tmp/workspace/skills/agentreceipt",
           always: false,
           disabled: false,
           blockedByAllowlist: false,
+          blockedByAgentFilter: false,
           eligible: true,
+          platformIncompatible: false,
+          modelVisible: true,
+          userInvocable: true,
+          commandVisible: true,
           requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
           missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
           configChecks: [],
@@ -624,6 +637,8 @@ describe("loadSkillCard", () => {
             slug: "agentreceipt",
             installedVersion: "1.2.3",
             installedAt: 123,
+            originPath: "/tmp/workspace/skills/agentreceipt/.clawhub/origin.json",
+            lockPath: "/tmp/workspace/.clawhub/lock.json",
           },
           skillCard: {
             present: true,
@@ -647,6 +662,8 @@ describe("loadSkillCard", () => {
             slug: "agentreceipt",
             installedVersion: "1.2.4",
             installedAt: 456,
+            originPath: "/tmp/workspace/skills/agentreceipt/.clawhub/origin.json",
+            lockPath: "/tmp/workspace/.clawhub/lock.json",
           },
         },
       ],
@@ -666,12 +683,17 @@ describe("loadSkillCard", () => {
 });
 
 describe("searchClawHub", () => {
-  it("skips the RPC when the query is empty", async () => {
+  it("requests the discovery feed when the query is empty", async () => {
     const { state, request } = createState();
+    request.mockResolvedValue({ results: [] });
 
     await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
 
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "skills.search",
+      { query: undefined, limit: 20 },
+      { signal: undefined },
+    );
   });
 
   it("returns search results and forwards cancellation", async () => {
@@ -681,6 +703,7 @@ describe("searchClawHub", () => {
       results: [
         {
           score: 0.95,
+          registry: "https://clawhub.ai",
           slug: "github-new",
           displayName: "GitHub New",
           summary: "Fresh result",
@@ -841,7 +864,6 @@ describe("skill mutations", () => {
           name: "GitHub",
           installId: "install-123",
           dangerouslyForceUnsafeInstall: true,
-          timeoutMs: 120000,
         },
       ],
       expectedMessage: "Installed from registry",
@@ -1214,7 +1236,6 @@ describe("skill mutations", () => {
       name: "GitHub",
       installId: "install-123",
       dangerouslyForceUnsafeInstall: true,
-      timeoutMs: 120000,
     });
   });
 
@@ -1295,7 +1316,6 @@ describe("skill mutations", () => {
         name: "GitHub",
         installId: "install-123",
         dangerouslyForceUnsafeInstall: false,
-        timeoutMs: 120000,
       },
     },
     {

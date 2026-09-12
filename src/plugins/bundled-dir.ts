@@ -111,7 +111,10 @@ export function resolveSourceCheckoutDependencyDiagnostic(
       continue;
     }
     const extensionsDir = path.join(packageRoot, "extensions");
-    if (!hasUsableBundledPluginTree(extensionsDir)) {
+    if (
+      !isPluginInPackageBundledRoots({ rootDir: extensionsDir, packageRoot }) ||
+      !hasUsableBundledPluginTree(extensionsDir)
+    ) {
       continue;
     }
     if (pluginCacheExistsSync(path.join(packageRoot, "node_modules", ".pnpm"))) {
@@ -165,7 +168,7 @@ export function isPluginInPackageBundledRoots(params: {
     );
 }
 
-function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
+export function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   // In pnpm source checkouts, prefer the built bundled plugin runtime when it
   // exists so dist gateway runs avoid loading TS plugin entrypoints through jiti.
@@ -173,11 +176,15 @@ function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefin
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   if (isSourceCheckoutRoot(packageRoot)) {
     return [builtExtensionsDir, runtimeExtensionsDir, path.join(packageRoot, "extensions")].find(
-      hasUsableBundledPluginTree,
+      (rootDir) =>
+        isPluginInPackageBundledRoots({ rootDir, packageRoot }) &&
+        hasUsableBundledPluginTree(rootDir),
     );
   }
   return pluginCacheExistsSync(builtExtensionsDir)
-    ? [runtimeExtensionsDir, builtExtensionsDir].find(pluginCacheExistsSync)
+    ? [runtimeExtensionsDir, builtExtensionsDir].find((rootDir) =>
+        isPluginInPackageBundledRoots({ rootDir, packageRoot }),
+      )
     : undefined;
 }
 

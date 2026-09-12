@@ -87,6 +87,7 @@ export const GATEWAY_CLIENT_CAPS = {
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TERMINAL_SESSION_METADATA: "terminal-session-metadata",
+  TERMINAL_UPLOAD_PATH_STYLE: "terminal-upload-path-style",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
   USAGE_REFRESHING: "usage-refreshing",

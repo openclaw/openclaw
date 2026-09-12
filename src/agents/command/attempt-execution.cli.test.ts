@@ -894,6 +894,39 @@ describe("CLI attempt execution", () => {
     });
   }
 
+  it.each([true, false, "auto"] as const)(
+    "forwards resolved fast mode %s and its logical turn clock to CLI execution",
+    async (fastMode) => {
+      const sessionKey = "agent:main:fast-cli";
+      const sessionEntry = makeSessionEntry("session-fast-cli");
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("fast result"));
+
+      await runAgentAttempt({
+        providerOverride: "claude-cli",
+        modelOverride: "opus",
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        agentDir,
+        workspaceDir: tmpDir,
+        body: "fast mode",
+        runId: "fast-cli-run",
+        fastMode,
+        fastModeStartedAtMs: 1000,
+        fastModeAutoOnSeconds: 15,
+      });
+
+      expect(firstRunCliAgentArg()).toMatchObject({
+        fastMode,
+        fastModeStartedAtMs: 1000,
+        fastModeAutoOnSeconds: 15,
+      });
+    },
+  );
+
   it.each(["assistant_output_started", "tool_execution_started"] as const)(
     "keeps CLI admission separate from observed %s",
     async (phase) => {
@@ -1412,11 +1445,17 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe("stale-cli-session");
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("preserves and resumes a valid Claude CLI binding after format failover", async () => {
@@ -1626,7 +1665,7 @@ describe("CLI attempt execution", () => {
       forkedCliSessionId,
     );
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(forkedCliSessionId);
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(forkedCliSessionId);
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
@@ -1991,14 +2030,14 @@ describe("CLI attempt execution", () => {
       sessionId: "session-cli",
     });
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "session-cli",
     });
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {
@@ -3682,61 +3721,6 @@ describe("CLI attempt execution", () => {
       },
       senderId: "sender-embedded",
       toolOverrides: { webSearch: false },
-    });
-  });
-
-  it("adds Git attribution only to provider-bound CLI and plugin prompts", async () => {
-    const attribution =
-      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
-    const sessionKey = "agent:main:direct:coauthor-runtime-prompts";
-    const sessionEntry = makeSessionEntry("coauthor-runtime-prompts");
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli result"));
-
-    await runStoredAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      sessionEntry,
-      sessionKey,
-      body: "commit from CLI",
-      runId: "run-cli-coauthor-prompt",
-      opts: { gitCoauthorAttribution: attribution },
-      sessionStore,
-    });
-
-    const cliArg = firstRunCliAgentArg();
-    const attributionSuffix = `\n\n${attribution}`;
-    expect(cliArg.prompt).toEqual(expect.stringContaining("commit from CLI"));
-    expect(String(cliArg.prompt).endsWith(attributionSuffix)).toBe(true);
-    expect(cliArg.transcriptPrompt).toBe(String(cliArg.prompt).slice(0, -attributionSuffix.length));
-
-    const codexSessionKey = "agent:main:direct:coauthor-codex-prompt";
-    const codexSessionEntry = makeSessionEntry("coauthor-codex-prompt");
-    const codexSessionStore: Record<string, SessionEntry> = {
-      [codexSessionKey]: codexSessionEntry,
-    };
-    await writeSessionStoreSeed(codexSessionStore);
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      meta: { durationMs: 1 },
-    } satisfies EmbeddedAgentRunResult);
-
-    await runStoredAttempt({
-      agentHarnessRuntimeOverride: "codex",
-      body: "commit from Codex",
-      sessionEntry: codexSessionEntry,
-      sessionKey: codexSessionKey,
-      runId: "run-codex-coauthor-prompt",
-      opts: { gitCoauthorAttribution: attribution },
-      sessionStore: codexSessionStore,
-    });
-
-    const codexArg = firstEmbeddedAgentArg();
-    expectRecordFields(codexArg, {
-      agentHarnessId: undefined,
-      agentHarnessRuntimeOverride: "codex",
-      prompt: `commit from Codex\n\n${attribution}`,
-      transcriptPrompt: "commit from Codex",
     });
   });
 

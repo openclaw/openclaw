@@ -1,6 +1,3 @@
-/**
- * Assertions for the subagent follow-up reactivation broadcast path.
- */
 import { expect } from "vitest";
 
 /** Checks both run replacement and the session-change broadcast emitted after steer. */
@@ -26,36 +23,18 @@ export function expectSubagentFollowupReactivation(params: {
     persistenceFailure: "throw",
     ...(params.task ? { task: params.task } : {}),
   });
-  const call = (
-    params.broadcastToConnIds as {
-      mock?: {
-        calls?: Array<
-          [
-            string,
-            {
-              sessionKey?: string;
-              reason?: string;
-              status?: string;
-              startedAt?: number;
-              endedAt?: number;
-            },
-            Set<string>,
-            { agentId?: string; dropIfSlow?: boolean },
-          ]
-        >;
-      };
-    }
-  ).mock?.calls?.[0];
-  expect(call?.[0]).toBe("sessions.changed");
-  expect(call?.[1]?.sessionKey).toBe(params.childSessionKey);
-  expect(call?.[1]?.reason).toBe("send");
-  expect(call?.[1]?.status).toBe(params.status);
-  expect(call?.[1]?.startedAt).toBe(123);
-  expect(call?.[1]?.endedAt).toBeUndefined();
-  expect(call?.[2]).toEqual(new Set(["conn-1"]));
-  expect(call?.[3]).toEqual({
-    agentId: "main",
-    dropIfSlow: true,
-    sessionKeys: [params.childSessionKey],
-  });
+  expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(
+    1,
+    "sessions.changed",
+    expect.objectContaining({
+      sessionKey: params.childSessionKey,
+      reason: "send",
+      status: params.status,
+      startedAt: 123,
+      endedAt: null,
+      runtimeMs: 10,
+    }),
+    new Set(["conn-1"]),
+    { agentId: "main", dropIfSlow: true, sessionKeys: [params.childSessionKey] },
+  );
 }

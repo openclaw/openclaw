@@ -219,119 +219,121 @@ openclaw tasks notify <lookup> state_changes
 
 ## CLI reference
 
-<AccordionGroup>
-  <Accordion title="tasks list">
-    ```bash
-    openclaw tasks list [--runtime <acp|subagent|cron|cli>] [--status <status>] [--json]
-    ```
+### tasks list
 
-    Output columns: Task, Kind, Status, Delivery, Run, Child Session, Summary. Bare `openclaw tasks` behaves like `openclaw tasks list`.
+```bash
+openclaw tasks list [--runtime <acp|subagent|cron|cli>] [--status <status>] [--json]
+```
 
-  </Accordion>
-  <Accordion title="tasks show">
-    ```bash
-    openclaw tasks show <lookup> [--json]
-    ```
+Output columns: Task, Kind, Status, Delivery, Run, Child Session, Summary. Bare `openclaw tasks` behaves like `openclaw tasks list`.
 
-    The lookup token accepts a task ID, run ID, or session key. Shows the full record including timing, delivery state, error, and terminal summary.
+### tasks show
 
-  </Accordion>
-  <Accordion title="tasks cancel">
-    ```bash
-    openclaw tasks cancel <lookup>
-    ```
+```bash
+openclaw tasks show <lookup> [--json]
+```
 
-    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Ordinary Gateway-owned CLI tasks also require the owning Gateway to be running. Cancellation aborts only the selected live run and its pending approvals, and reports success only after that run settles as `cancelled`. Background `exec` tasks keep their process-control cancellation path. Delivery notifications are sent when applicable.
+The lookup token accepts a task ID, run ID, or session key. Shows the full record including timing, delivery state, error, and terminal summary.
 
-    Missing, already-terminal, ownerless, or unconfirmed runs do not report a new cancellation success. If a crash or restart removed the live owner, keep the Gateway running so its existing maintenance can reconcile the task as `lost`. Use `openclaw tasks audit` and `openclaw tasks maintenance` to inspect the record; offline maintenance cannot establish Gateway liveness. See [task maintenance](/cli/tasks#maintenance).
+### tasks cancel
 
-  </Accordion>
-  <Accordion title="tasks retry | dismiss">
-    ```bash
-    openclaw tasks retry <lookup> [lookup...]
-    openclaw tasks dismiss <lookup> [lookup...]
-    ```
+```bash
+openclaw tasks cancel <lookup>
+```
 
-    These commands recover blocked subagent completion deliveries. Each request
-    accepts 1-10 task lookups. Retry preserves the canonical result and starts a
-    new fenced queue generation; dismiss keeps the task blocked and records that
-    the operator intentionally stopped delivery.
+For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Ordinary Gateway-owned CLI tasks also require the owning Gateway to be running. Cancellation aborts only the selected live run and its pending approvals, and reports success only after that run settles as `cancelled`. Background `exec` tasks keep their process-control cancellation path. Delivery notifications are sent when applicable.
 
-  </Accordion>
-  <Accordion title="tasks notify">
-    ```bash
-    openclaw tasks notify <lookup> <done_only|state_changes|silent>
-    ```
-  </Accordion>
-  <Accordion title="tasks audit">
-    ```bash
-    openclaw tasks audit [--severity <warn|error>] [--code <name>] [--limit <n>] [--json]
-    ```
+Missing, already-terminal, ownerless, or unconfirmed runs do not report a new cancellation success. If a crash or restart removed the live owner, keep the Gateway running so its existing maintenance can reconcile the task as `lost`. Use `openclaw tasks audit` and `openclaw tasks maintenance` to inspect the record; offline maintenance cannot establish Gateway liveness. See [task maintenance](/cli/tasks#maintenance).
 
-    Surfaces operational issues for tasks **and** TaskFlows in one report. Findings also appear in `openclaw status` when issues are detected.
+<a id="tasks-retry-dismiss" />
 
-    Task findings:
+### tasks retry and dismiss
 
-    | Finding                   | Severity   | Trigger                                                                                                      |
-    | ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
-    | `stale_queued`            | warn       | Queued for more than 10 minutes                                                                              |
-    | `stale_running`           | error      | Running for more than 30 minutes                                                                             |
-    | `lost`                    | warn/error | Runtime-backed task ownership disappeared; retained lost tasks warn until `cleanupAfter`, then become errors |
-    | `delivery_failed`         | warn       | Delivery failed and notify policy is not `silent`                                                            |
-    | `missing_cleanup`         | warn       | Terminal task with no cleanup timestamp                                                                      |
-    | `inconsistent_timestamps` | warn       | Timeline violation (for example ended before started)                                                        |
+```bash
+openclaw tasks retry <lookup> [lookup...]
+openclaw tasks dismiss <lookup> [lookup...]
+```
 
-    TaskFlow findings:
+These commands recover blocked subagent completion deliveries. Each request
+accepts 1-10 task lookups. Retry preserves the canonical result and starts a
+new fenced queue generation; dismiss keeps the task blocked and records that
+the operator intentionally stopped delivery.
 
-    | Finding                | Severity   | Trigger                                                                    |
-    | ---------------------- | ---------- | --------------------------------------------------------------------------- |
-    | `restore_failed`       | error      | Flow registry restore from SQLite failed                                    |
-    | `stale_running`        | error      | Running flow has not advanced for more than 30 minutes                      |
-    | `stale_waiting`        | warn       | Waiting flow has not advanced for more than 30 minutes                      |
-    | `stale_blocked`        | warn       | Blocked flow has not advanced for more than 30 minutes                      |
-    | `cancel_stuck`         | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
-    | `missing_linked_tasks` | warn/error | Stale managed flow with no linked tasks or wait state                       |
-    | `blocked_task_missing` | warn       | Blocked flow points at a task id that no longer exists                      |
-    | `inconsistent_timestamps` | warn    | Flow timestamps are not in chronological order                              |
+### tasks notify
 
-  </Accordion>
-  <Accordion title="tasks maintenance">
-    ```bash
-    openclaw tasks maintenance [--json]
-    openclaw tasks maintenance --apply [--json]
-    ```
+```bash
+openclaw tasks notify <lookup> <done_only|state_changes|silent>
+```
 
-    Use this to preview or apply reconciliation, cleanup stamping, and pruning for tasks, TaskFlow state, and stale automation run session registry rows.
+### tasks audit
 
-    Reconciliation is runtime-aware:
+```bash
+openclaw tasks audit [--severity <warn|error>] [--code <name>] [--limit <n>] [--json]
+```
 
-    - ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
-    - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
-    - Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
-    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check; standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.
+Surfaces operational issues for tasks **and** TaskFlows in one report. Findings also appear in `openclaw status` when issues are detected.
 
-    Completion cleanup is also runtime-aware:
+Task findings:
 
-    - Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
-    - Isolated automation completion best-effort closes tracked browser tabs/processes for the run's session before the run fully tears down.
-    - Isolated automation delivery waits out descendant subagent follow-up when needed and suppresses stale parent acknowledgement text instead of announcing it.
-    - Subagent completion delivery uses the child's latest visible assistant text only. Tool/toolResult output is not promoted into child result text. Terminal failed runs announce failure status without replaying captured reply text.
-    - Cleanup failures do not mask the real task outcome.
+| Finding                   | Severity   | Trigger                                                                                                      |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
+| `stale_queued`            | warn       | Queued for more than 10 minutes                                                                              |
+| `stale_running`           | error      | Running for more than 30 minutes                                                                             |
+| `lost`                    | warn/error | Runtime-backed task ownership disappeared; retained lost tasks warn until `cleanupAfter`, then become errors |
+| `delivery_failed`         | warn       | Delivery failed and notify policy is not `silent`                                                            |
+| `missing_cleanup`         | warn       | Terminal task with no cleanup timestamp                                                                      |
+| `inconsistent_timestamps` | warn       | Timeline violation (for example ended before started)                                                        |
 
-    When applying maintenance, OpenClaw also removes stale `cron:<jobId>:run:<runId>` session registry rows older than 7 days, while preserving rows for currently running automation jobs and leaving other session rows untouched.
+TaskFlow findings:
 
-  </Accordion>
-  <Accordion title="tasks flow list | show | cancel">
-    ```bash
-    openclaw tasks flow list [--status <status>] [--json]
-    openclaw tasks flow show <lookup> [--json]
-    openclaw tasks flow cancel <lookup>
-    ```
+| Finding                   | Severity   | Trigger                                                                       |
+| ------------------------- | ---------- | ----------------------------------------------------------------------------- |
+| `restore_failed`          | error      | Flow registry restore from SQLite failed                                      |
+| `stale_running`           | error      | Running flow has not advanced for more than 30 minutes                        |
+| `stale_waiting`           | warn       | Waiting flow has not advanced for more than 30 minutes                        |
+| `stale_blocked`           | warn       | Blocked flow has not advanced for more than 30 minutes                        |
+| `cancel_stuck`            | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
+| `missing_linked_tasks`    | warn/error | Stale managed flow with no linked tasks or wait state                         |
+| `blocked_task_missing`    | warn       | Blocked flow points at a task id that no longer exists                        |
+| `inconsistent_timestamps` | warn       | Flow timestamps are not in chronological order                                |
 
-    The flow lookup token accepts a flow id or owner key. Use these when the orchestrating [Task Flow](/automation/taskflow) is the thing you care about rather than one individual background task record.
+### tasks maintenance
 
-  </Accordion>
-</AccordionGroup>
+```bash
+openclaw tasks maintenance [--json]
+openclaw tasks maintenance --apply [--json]
+```
+
+Use this to preview or apply reconciliation, cleanup stamping, and pruning for tasks, TaskFlow state, and stale automation run session registry rows.
+
+Reconciliation is runtime-aware:
+
+- ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
+- Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
+- Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
+- CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check; standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.
+
+Completion cleanup is also runtime-aware:
+
+- Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
+- Isolated automation completion best-effort closes tracked browser tabs/processes for the run's session before the run fully tears down.
+- Isolated automation delivery waits out descendant subagent follow-up when needed and suppresses stale parent acknowledgement text instead of announcing it.
+- Subagent completion delivery uses the child's latest visible assistant text only. Tool/toolResult output is not promoted into child result text. Terminal failed runs announce failure status without replaying captured reply text.
+- Cleanup failures do not mask the real task outcome.
+
+When applying maintenance, OpenClaw also removes stale `cron:<jobId>:run:<runId>` session registry rows older than 7 days, while preserving rows for currently running automation jobs and leaving other session rows untouched.
+
+<a id="tasks-flow-list-show-cancel" />
+
+### tasks flow list, show, and cancel
+
+```bash
+openclaw tasks flow list [--status <status>] [--json]
+openclaw tasks flow show <lookup> [--json]
+openclaw tasks flow cancel <lookup>
+```
+
+The flow lookup token accepts a flow id or owner key. Use these when the orchestrating [Task Flow](/automation/taskflow) is the thing you care about rather than one individual background task record.
 
 ## Chat task board (`/tasks`)
 
@@ -347,7 +349,7 @@ The web Control UI has a **Tasks** page in the sidebar with live active and rece
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
-Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header.
+Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header. Session label and category edits preserve task pagination when session access stays the same. Sharing, role, and session identity changes can still require a fresh page.
 
 Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
 
@@ -377,7 +379,7 @@ Set `OPENCLAW_STATE_DIR` to move the whole state root (default `~/.openclaw`) el
 
 The registry loads into memory on first use and persists every write back to SQLite, so records survive gateway restarts. WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
 
-Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.sqlite`) are imported into the shared database by `openclaw doctor`.
+The shared database replaced the `tasks/runs.sqlite` and `flows/registry.sqlite` sidecar stores in `v2026.5.30-beta.1`, stable from `v2026.6.1`. If either sidecar is still present under the state root, `openclaw doctor` imports its rows into the shared database. Installs from `v2026.6.1` onward never create these files.
 
 ### Automatic maintenance
 
@@ -407,27 +409,28 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
 
 ## How tasks relate to other systems
 
-<AccordionGroup>
-  <Accordion title="Tasks and Task Flow">
-    [Task Flow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw tasks flow` to inspect the orchestrating flow.
+### Tasks and Task Flow
 
-  </Accordion>
-  <Accordion title="Tasks and automations">
-    Automation job definitions, runtime execution state, and run history live in OpenClaw's shared SQLite state database. **Every** automation run creates a task record - both main-session and isolated - with `silent` notify policy, so automation runs are tracked without generating task notifications of their own.
+[Task Flow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw tasks flow` to inspect the orchestrating flow.
 
-    See [Automations](/automation/cron-jobs).
+### Tasks and automations
 
-  </Accordion>
-  <Accordion title="Tasks and heartbeat">
-    Heartbeat runs are main-session turns - they do not create task records. When a task completes, it can trigger a heartbeat wake so you see the result promptly.
+Automation job definitions, runtime execution state, and run history live in OpenClaw's shared SQLite state database. **Every** automation run creates a task record - both main-session and isolated - with `silent` notify policy, so automation runs are tracked without generating task notifications of their own.
 
-    See [Heartbeat](/gateway/heartbeat).
+See [Automations](/automation/cron-jobs).
 
-  </Accordion>
-  <Accordion title="Tasks and sessions">
-    A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Its `agentId` identifies the agent executing the work, while the requester and owner fields preserve launch and control context. Sessions are conversation context; tasks are activity tracking on top of that.
-  </Accordion>
-  <Accordion title="Tasks and agent runs">
+### Tasks and heartbeat
+
+Heartbeat runs are main-session turns - they do not create task records. When a task completes, it can trigger a heartbeat wake so you see the result promptly.
+
+See [Heartbeat](/gateway/heartbeat).
+
+### Tasks and sessions
+
+A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Its `agentId` identifies the agent executing the work, while the requester and owner fields preserve launch and control context. Sessions are conversation context; tasks are activity tracking on top of that.
+
+### Tasks and agent runs
+
 A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.
 
 When execution identity collection is enabled, OpenClaw also binds the exact
@@ -437,8 +440,6 @@ remains correlation, task/flow status remains authoritative, and a missing or
 mismatched binding never changes execution or settlement. `openclaw audit
 --execution <id> --explain` adapts the existing rows without copying task or
 flow content into the generic decision-fact table.
-</Accordion>
-</AccordionGroup>
 
 ## Related
 
@@ -447,3 +448,5 @@ flow content into the generic decision-fact table.
 - [Heartbeat](/gateway/heartbeat) - periodic main-session turns
 - [Automations](/automation/cron-jobs) - scheduling background work
 - [Task Flow](/automation/taskflow) - flow orchestration above tasks
+- [Sub-agents](/tools/subagents) - child agents spawned from a session
+- [Music generation](/tools/music-generation) - generate music via `music_generate` across the supported provider workflows

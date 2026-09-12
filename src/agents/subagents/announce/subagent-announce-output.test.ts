@@ -1,6 +1,7 @@
 // Subagent announce output tests cover transcript reads, completion extraction,
 // compact stats, and wait-outcome text used in announce messages.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
   testing,
   buildCompactAnnounceStatsLine,
@@ -321,10 +322,7 @@ describe("readSubagentOutput", () => {
   it("does not keep earlier visible progress across a trailing tool-only turn", async () => {
     installOutputDeps({
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Mapped the code path." }],
-        },
+        textAssistant("Mapped the code path."),
         {
           role: "assistant",
           stopReason: "toolUse",
@@ -451,12 +449,7 @@ describe("readSubagentOutput", () => {
 
   it("reads recovered output from the private SQLite transcript before gateway history", async () => {
     const deps = installOutputDeps({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "stale visible output" }],
-        },
-      ],
+      messages: [textAssistant("stale visible output")],
       transcriptMessages: [
         {
           role: "assistant",
@@ -492,12 +485,7 @@ describe("readSubagentOutput", () => {
 
   it("does not read visible gateway history when a private transcript is empty", async () => {
     const deps = installOutputDeps({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "stale visible output" }],
-        },
-      ],
+      messages: [textAssistant("stale visible output")],
       transcriptMessages: [],
     });
 

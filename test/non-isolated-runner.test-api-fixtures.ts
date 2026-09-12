@@ -18,7 +18,6 @@ const remainingKeys = [
   "openclaw.diagnosticRunActivityTestApi",
 ].filter((key) => Object.hasOwn(globalThis, Symbol.for(key)));
 expect(remainingKeys, "completed-file test API publications").toEqual([]);
-expect(Object.hasOwn(globalThis, "openclawOpenAIResponsesTransportTestApi")).toBe(false);
 for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
@@ -32,7 +31,6 @@ ${observeCleanup}
 const { createBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.test-support.ts")});
 const { isBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.wrapper.ts")});
 const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
-const { testing: responses } = await import(${sourcePath("agents/openai-transport-stream.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
 const { resetProcessRegistryForTests } = await import(${sourcePath("agents/bash-process-registry.test-support.ts")});
 const { createProcessSessionFixture } = await import(${sourcePath("agents/bash-process-registry.test-helpers.ts")});
@@ -54,8 +52,6 @@ describe("${generation} test API consumers", () => {
     expect(blocked.message).toBe(message);
     expect(isBeforeToolCallBlockedError(blocked)).toBe(true);
     expect(isBeforeToolCallBlockedError(new Error(message))).toBe(false);
-    expect(responses.isInvalidEncryptedContentError({ code: "invalid_encrypted_content" })).toBe(true);
-    expect(responses.isInvalidEncryptedContentError(new Error("unrelated"))).toBe(false);
     registry.addSession(createProcessSessionFixture({ id: "captured", backgrounded: true }));
     replacement.addSession(createProcessSessionFixture({ id: "replacement", backgrounded: true }));
     try {

@@ -87,6 +87,7 @@ describe("update triage child lifecycle", () => {
 
   it("keeps artifact paths in local output and returns the partial-export outcome", async () => {
     const { target, promptPath } = await createInstalledTriage();
+    const runCommand = vi.spyOn(exec, "runCommandWithTimeout");
     const runtime = { log: vi.fn(), error: vi.fn() };
     const result = await runUpdateFailureTriage({
       failure: { error: "Update could not install the package" },
@@ -96,9 +97,11 @@ describe("update triage child lifecycle", () => {
     });
     expect(result).toMatchObject({
       status: "completed",
-      contextPath: expect.any(String),
       hint: expect.stringContaining("Diagnostics export unavailable: Snapshot unavailable"),
     });
+    expect(runCommand).toHaveBeenCalledOnce();
+    const args = runCommand.mock.calls[0]![0];
+    expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
     expect("hint" in result && result.hint).not.toContain(target.root);
     expect(runtime.log).toHaveBeenCalledWith(
       JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),
@@ -228,9 +231,11 @@ describe("update triage child lifecycle", () => {
         OPENCLAW_WORKSPACE_DIR: workspaceDir,
       };
       const credential = "synthetic-triage-bearer-value";
-      vi.spyOn(exec, "runCommandWithTimeout").mockRejectedValueOnce(
-        new Error(`ENOSPC Authorization: Bearer ${credential}\n${"detail ".repeat(1000)}`),
-      );
+      const runCommand = vi
+        .spyOn(exec, "runCommandWithTimeout")
+        .mockRejectedValueOnce(
+          new Error(`ENOSPC Authorization: Bearer ${credential}\n${"detail ".repeat(1000)}`),
+        );
       const runtime = { log: vi.fn(), error: vi.fn() };
       const result = await runUpdateFailureTriage({
         failure: { error: "Update failed" },
@@ -244,23 +249,26 @@ describe("update triage child lifecycle", () => {
         const guidance = runtime.log.mock.calls.flat().join("\n");
         expect(result.hint).not.toContain(target.root);
         expect(result.hint.split("\n")[0]?.length).toBeLessThan(284);
-        expect(result.contextPath).toEqual(expect.any(String));
+        expect(runCommand).toHaveBeenCalledOnce();
+        const args = runCommand.mock.calls[0]![0];
+        expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
+        const contextPath = args.at(-2)!;
         if (platformName === "win32") {
           expect(guidance).toContain(
-            `& openclaw triage --update-result '${result.contextPath!.replaceAll("'", "''")}'`,
+            `& openclaw triage --update-result '${contextPath.replaceAll("'", "''")}'`,
           );
           for (const selector of [targetEnv.OPENCLAW_STATE_DIR, configPath, workspaceDir]) {
             expect(guidance).toContain(`'${selector.replaceAll("'", "''")}'`);
           }
         } else {
-          expect(guidance).toContain(`--update-result ${quoteCliArg(result.contextPath!)}`);
+          expect(guidance).toContain(`--update-result ${quoteCliArg(contextPath)}`);
           expect(guidance).toContain(
             `OPENCLAW_STATE_DIR=${quoteCliArg(targetEnv.OPENCLAW_STATE_DIR)}`,
           );
           expect(guidance).toContain(`OPENCLAW_CONFIG_PATH=${quoteCliArg(configPath)}`);
           expect(guidance).toContain(`OPENCLAW_WORKSPACE_DIR=${quoteCliArg(workspaceDir)}`);
         }
-        await expect(fs.stat(result.contextPath!)).resolves.toMatchObject({
+        await expect(fs.stat(contextPath)).resolves.toMatchObject({
           size: expect.any(Number),
         });
       }

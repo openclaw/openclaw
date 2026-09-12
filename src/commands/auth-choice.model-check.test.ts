@@ -1,24 +1,18 @@
 // Auth-choice model check tests cover warnings for mismatched model and auth config.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveDefaultModelAuthStatus,
+  resolveDefaultModelCatalogFacts,
   warnIfModelConfigLooksOff,
 } from "./auth-choice.model-check.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
-const loadModelCatalog = vi.hoisted(() => vi.fn());
-const modelCatalogMocks = vi.hoisted(() => ({
-  routeVariants: undefined as unknown[] | undefined,
-}));
+const publishPreparedModelRuntimeSnapshot = vi.hoisted(() => vi.fn());
 vi.mock("../agents/prepared-model-runtime.js", () => ({
-  publishPreparedModelRuntimeSnapshot: async (...args: unknown[]) => {
-    const entries = await loadModelCatalog(...args);
-    return {
-      modelCatalog: { entries, routeVariants: modelCatalogMocks.routeVariants ?? entries },
-    };
-  },
+  publishPreparedModelRuntimeSnapshot,
 }));
 
 const openAIRouteMocks = vi.hoisted(() => ({
@@ -50,13 +44,11 @@ vi.mock("../agents/auth-profiles.js", () => ({
 describe("warnIfModelConfigLooksOff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadModelCatalog.mockResolvedValue([]);
-    modelCatalogMocks.routeVariants = undefined;
     ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
     openAIRouteMocks.override = undefined;
   });
 
-  it("skips catalog validation when requested while keeping auth checks", async () => {
+  it("checks auth readiness without publishing a model catalog", async () => {
     const note = vi.fn(async (_message: string) => {});
     const prompter = makePrompter({ note });
     const config = {
@@ -67,9 +59,9 @@ describe("warnIfModelConfigLooksOff", () => {
       },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, prompter, { env: {}, validateCatalog: false });
+    await warnIfModelConfigLooksOff(config, prompter, { env: {} });
 
-    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(publishPreparedModelRuntimeSnapshot).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
     expect(ensureAuthProfileStore).toHaveBeenCalledWith(
       undefined,
@@ -120,7 +112,6 @@ describe("warnIfModelConfigLooksOff", () => {
     await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
       env: {},
       pendingAuthProfiles,
-      validateCatalog: false,
     });
 
     expect(note).not.toHaveBeenCalled();
@@ -144,7 +135,6 @@ describe("warnIfModelConfigLooksOff", () => {
           },
         },
       ],
-      validateCatalog: false,
     });
 
     expect(note).toHaveBeenCalledWith(
@@ -179,7 +169,7 @@ describe("warnIfModelConfigLooksOff", () => {
       },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, prompter, { validateCatalog: false });
+    await warnIfModelConfigLooksOff(config, prompter);
 
     expect(note).not.toHaveBeenCalled();
   });
@@ -218,61 +208,11 @@ describe("warnIfModelConfigLooksOff", () => {
       },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, prompter, { validateCatalog: false });
+    await warnIfModelConfigLooksOff(config, prompter);
 
     expect(note).toHaveBeenCalledWith(
       'No auth configured for provider "openai". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai`, `openclaw configure`, or set an API key env var.',
       "Model check",
-    );
-  });
-
-  it("keeps full catalog validation enabled by default", async () => {
-    const note = vi.fn(async () => {});
-    const prompter = makePrompter({ note });
-    const config = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-        },
-      },
-    } as OpenClawConfig;
-
-    await warnIfModelConfigLooksOff(config, prompter);
-
-    expect(loadModelCatalog).toHaveBeenCalledWith(expect.objectContaining({ config }), {
-      force: true,
-      provenance: "explicit",
-    });
-  });
-
-  it("publishes validation catalogs for the selected agent", async () => {
-    const prompter = makePrompter({ note: vi.fn(async () => {}) });
-    const config = {
-      agents: {
-        defaults: { model: "openai/gpt-5.5" },
-        list: [
-          {
-            id: "worker",
-            workspace: "/tmp/openclaw-worker-workspace",
-            model: "openai/gpt-5.5",
-          },
-        ],
-      },
-    } as OpenClawConfig;
-
-    await warnIfModelConfigLooksOff(config, prompter, {
-      agentId: "worker",
-      agentDir: "/tmp/openclaw-worker-agent",
-    });
-
-    expect(loadModelCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        agentId: "worker",
-        agentDir: "/tmp/openclaw-worker-agent",
-        workspaceDir: "/tmp/openclaw-worker-workspace",
-      }),
-      { force: true, provenance: "explicit" },
     );
   });
 
@@ -290,7 +230,6 @@ describe("warnIfModelConfigLooksOff", () => {
 
     const note = vi.fn(async (_message: string) => {});
     await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
-      validateCatalog: false,
       env: { OPENAI_API_KEY: "api-key" },
     });
     const warning = note.mock.calls.flatMap(([message]) => message).join("\n");
@@ -346,9 +285,7 @@ describe("warnIfModelConfigLooksOff", () => {
       code: "platform-only-model-on-chatgpt",
     });
     const note = vi.fn(async () => {});
-    await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
-      validateCatalog: false,
-    });
+    await warnIfModelConfigLooksOff(config, makePrompter({ note }));
 
     expect(note).toHaveBeenCalledWith(
       'Model route is incompatible for "openai/gpt-5.6": gpt-5.6 is available only through OpenAI Platform API-key authentication.',
@@ -356,9 +293,7 @@ describe("warnIfModelConfigLooksOff", () => {
     );
   });
 
-  it("uses selected static ChatGPT catalog facts for auth checks", async () => {
-    const note = vi.fn(async () => {});
-    const prompter = makePrompter({ note });
+  it("uses selected static ChatGPT catalog facts for auth checks", () => {
     const store = {
       version: 1,
       profiles: {
@@ -372,64 +307,79 @@ describe("warnIfModelConfigLooksOff", () => {
       },
     } satisfies AuthProfileStore;
     ensureAuthProfileStore.mockReturnValue(store);
-    loadModelCatalog.mockResolvedValue([
+    const observedRoute = {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } satisfies Pick<ModelCatalogEntry, "api" | "baseUrl">;
+    const catalog = [
       {
         id: "gpt-5.4-nano",
         name: "GPT 5.4 Nano",
         provider: "openai",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
+        ...observedRoute,
       },
-    ]);
+    ] satisfies ModelCatalogEntry[];
     const config = {
       agents: { defaults: { model: "openai/gpt-5.4-nano" } },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, prompter);
-
-    expect(note).not.toHaveBeenCalled();
+    const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog);
+    expect(catalogFacts.observedRoutes).toEqual([observedRoute]);
+    expect(
+      resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
+    ).toMatchObject({ status: "ready", hasAuth: true });
   });
 
-  it("matches shipped OpenAI aliases to their canonical catalog model", async () => {
-    const note = vi.fn(async () => {});
-    loadModelCatalog.mockResolvedValue([
+  it("matches shipped OpenAI aliases to their canonical catalog model", () => {
+    const observedRoute = {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Pick<ModelCatalogEntry, "api" | "baseUrl">;
+    const catalog = [
       {
         id: "gpt-5.4",
         name: "GPT 5.4",
         provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
+        ...observedRoute,
       },
-    ]);
+    ] satisfies ModelCatalogEntry[];
     const config = {
       agents: { defaults: { model: "openai/gpt-5.4-codex" } },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
-      env: { OPENAI_API_KEY: "api-key" },
-    });
-
-    expect(note).not.toHaveBeenCalled();
+    const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog);
+    expect(catalogFacts.observedRoutes).toEqual([observedRoute]);
+    expect(
+      resolveDefaultModelAuthStatus(config, {
+        env: { OPENAI_API_KEY: "api-key" },
+        observedRoutes: catalogFacts.observedRoutes,
+      }),
+    ).toMatchObject({ status: "ready", hasAuth: true });
   });
 
   it.each([
     ["Platform first", false],
     ["ChatGPT first", true],
-  ])("uses every physical route for a logical model: %s", async (_label, chatGPTFirst) => {
+  ])("uses every physical route for a logical model: %s", (_label, chatGPTFirst) => {
+    const platformRoute = {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Pick<ModelCatalogEntry, "api" | "baseUrl">;
+    const chatGPTRoute = {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } satisfies Pick<ModelCatalogEntry, "api" | "baseUrl">;
     const platform = {
       id: "gpt-5.4-nano",
       name: "GPT 5.4 Nano",
       provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    };
+      ...platformRoute,
+    } satisfies ModelCatalogEntry;
     const chatGPT = {
       ...platform,
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    };
-    loadModelCatalog.mockResolvedValue([platform]);
-    modelCatalogMocks.routeVariants = chatGPTFirst ? [chatGPT, platform] : [platform, chatGPT];
+      ...chatGPTRoute,
+    } satisfies ModelCatalogEntry;
+    const routeVariants = chatGPTFirst ? [chatGPT, platform] : [platform, chatGPT];
     ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
@@ -442,14 +392,17 @@ describe("warnIfModelConfigLooksOff", () => {
         },
       },
     });
-    const note = vi.fn(async () => {});
     const config = {
       agents: { defaults: { model: "openai/gpt-5.4-nano" } },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, makePrompter({ note }));
-
-    expect(note).not.toHaveBeenCalled();
+    const catalogFacts = resolveDefaultModelCatalogFacts(config, [platform], { routeVariants });
+    expect(catalogFacts.observedRoutes).toEqual(
+      chatGPTFirst ? [chatGPTRoute, platformRoute] : [platformRoute, chatGPTRoute],
+    );
+    expect(
+      resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
+    ).toMatchObject({ status: "ready", hasAuth: true });
   });
 
   it("reports an unknown static transport as indeterminate instead of missing auth", async () => {
@@ -463,7 +416,7 @@ describe("warnIfModelConfigLooksOff", () => {
       status: "indeterminate",
       hasAuth: false,
     });
-    await warnIfModelConfigLooksOff(config, prompter, { validateCatalog: false });
+    await warnIfModelConfigLooksOff(config, prompter);
 
     expect(note).toHaveBeenCalledWith(
       'Auth readiness could not be confirmed for "openai/gpt-5.4-nano". Verify the selected model route and credential source before continuing.',

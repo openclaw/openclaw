@@ -19,6 +19,7 @@ import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelSelectionForConfig,
 } from "./model-input.js";
+import { materializeConfiguredProviderModelRows } from "./model-provider-rows.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
@@ -225,11 +226,19 @@ export function applyModelDefaults(
     );
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
-      const normalizedProvider = normalizeProviderConfigForConfigDefaults({
-        provider: providerId,
-        providerConfig: provider,
-        manifestRegistry,
-      });
+      const normalizedProvider = materializeConfiguredProviderModelRows(
+        normalizeProviderConfigForConfigDefaults({
+          provider: providerId,
+          providerConfig: provider,
+          manifestRegistry,
+        }),
+        (modelId) =>
+          normalizeConfiguredProviderCatalogModelId(
+            providerId,
+            modelId,
+            modelIdNormalizationPolicies,
+          ),
+      );
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
         if (normalizedProvider !== provider) {
@@ -247,11 +256,7 @@ export function applyModelDefaults(
       let providerMutated = false;
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
-        const id = normalizeConfiguredProviderCatalogModelId(
-          providerId,
-          raw.id,
-          modelIdNormalizationPolicies,
-        );
+        const id = raw.id;
 
         // Config entries are overrides, not full definitions: authored fields
         // win, the owning catalog row fills omitted fields, and only then do
@@ -305,7 +310,6 @@ export function applyModelDefaults(
             ? catalogModel.compat
             : undefined;
         const modelMutated =
-          id !== raw.id ||
           raw.reasoning !== reasoning ||
           raw.input === undefined ||
           costMutated ||
@@ -323,7 +327,6 @@ export function applyModelDefaults(
           {},
           raw,
           {
-            id,
             reasoning,
             input,
             cost,

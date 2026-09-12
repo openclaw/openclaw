@@ -69,6 +69,7 @@ export function renderNewSessionPlaceControls({
   requestUpdate: () => void;
 }) {
   const browser = place.browser;
+  const { machineClass, os } = place.cloudSelection;
   const nativeTerminal = catalog.isTarget(data);
   const cloudProfiles = nativeTerminal || !place.isAdmin() ? [] : gateway.cloudProfiles;
   const branches = place.repository.kind === "git" ? place.repository : null;
@@ -85,7 +86,8 @@ export function renderNewSessionPlaceControls({
     environments: place.canWrite() ? gateway.environments : [],
     cloudProfiles,
     cloudProfileId: place.cloudProfileId,
-    machineClass: place.machineClass,
+    machineClass,
+    os,
     deviceId: place.deviceId,
     autoDevice: place.autoDevice,
     devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
@@ -115,18 +117,17 @@ export function renderNewSessionPlaceControls({
   return html`${
     nativeTerminal
       ? renderNewSessionTerminalHost({
-          hosts: data?.terminalHosts ?? [],
+          hosts: data?.terminalHosts,
           hostId: place.terminalHostId,
           submitting,
-          refreshing: gateway.catalogRetrying,
           onSelect: (hostId) => place.selectTerminalHost(hostId),
-          onRefresh: gateway.handleCatalogRetry,
         })
       : renderWhereChip({
           state: whereState,
           gatewayName: gateway.gatewayName,
           cloudProfileId: place.cloudProfileId,
-          machineClass: place.machineClass,
+          machineClass,
+          os,
           deviceId: place.deviceId,
           autoDevice: place.autoDevice,
           autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
@@ -141,6 +142,14 @@ export function renderNewSessionPlaceControls({
           onSelectDevice: (deviceId) => place.selectDevice(deviceId),
           onSelectAutoDevice: () => place.selectDevice("", true),
           onSelectCloudProfile: (profileId) => place.selectCloudProfile(profileId),
+          onSelectCloudOs: (osId) =>
+            place.cloudMachines.selectOs(
+              place.cloudProfileId,
+              osId,
+              cloudProfiles,
+              submitting || pendingPlacement,
+              requestUpdate,
+            ),
           onSelectCloudMachine: (machineId) =>
             place.cloudMachines.select(
               place.cloudProfileId,

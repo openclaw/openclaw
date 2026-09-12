@@ -231,7 +231,6 @@ export async function runSetupModelAuthStep(params: {
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
           agentId: target.agentId,
           agentDir: target.agentDir,
-          validateCatalog: false,
         });
       }
       break;
@@ -327,7 +326,6 @@ export async function runSetupModelAuthStep(params: {
       agentId: target.agentId,
       agentDir: target.agentDir,
       pendingAuthProfiles: authProfiles,
-      validateCatalog: false,
     });
     break;
   }

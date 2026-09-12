@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { createEmptyTransportUsage } from "../transports/transport-stream-shared.js";
 import type { Context, Tool } from "../types.js";
-import { convertGoogleTools } from "./google-messages.js";
+import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
   assertRecord,
   convertMessages,
@@ -156,20 +158,118 @@ describe("google-shared convertTools", () => {
 
 describe("google-shared convertMessages", () => {
   it.each([
+    {
+      replay: "managed" as const,
+      required: true,
+      expected: [
+        "c2lnXzE=",
+        "skip_thought_signature_validator",
+        "c2lnXzI=",
+        "c2lnXzE=",
+        "c2lnXzI=",
+      ],
+    },
+    {
+      replay: "managed" as const,
+      required: false,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
+    },
+    {
+      replay: "signed-parts" as const,
+      required: true,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, "skip_thought_signature_validator"],
+    },
+    {
+      replay: "signed-parts" as const,
+      required: false,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
+    },
+  ])(
+    "preserves $replay signature ownership with required=$required",
+    ({ replay, required, expected }) => {
+      const model = makeModel(required ? "gemini-3-flash" : "gemini-2.5-pro");
+      const args = { first: 1, nested: { alpha: 2, beta: 3 } };
+      const reordered = { nested: { beta: 3, alpha: 2 }, first: 1 };
+      const originalBytes = JSON.stringify([args, reordered]);
+      const call = { type: "toolCall" as const, id: "call_1", name: "lookup", arguments: args };
+      const turn = {
+        role: "assistant" as const,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        stopReason: "toolUse" as const,
+        usage: createEmptyTransportUsage(),
+        timestamp: 0,
+      };
+      const result = makeTextToolResult("call_1", "lookup", "ok", false, 1);
+      const contents = projectGoogleMessages({
+        model,
+        replay,
+        requiresToolCallSignature: required,
+        messages: [
+          {
+            ...turn,
+            content: [
+              { ...call, thoughtSignature: "c2lnXzE=" },
+              { ...call, arguments: reordered },
+            ],
+          },
+          result,
+          result,
+          {
+            ...turn,
+            content: [
+              { ...call, thoughtSignature: "c2lnXzI=" },
+              { ...call, arguments: reordered },
+            ],
+          },
+          result,
+          result,
+          { ...turn, content: [{ ...call, arguments: reordered }] },
+          result,
+        ],
+      });
+      const parts = contents
+        .flatMap((content) => content.parts)
+        .filter((part) => part.functionCall);
+      expect(parts.map((part) => part.thoughtSignature)).toEqual(expected);
+      expect(parts.map((part) => part.functionCall?.args)).toEqual([
+        args,
+        reordered,
+        args,
+        reordered,
+        reordered,
+      ]);
+      expect(parts[1]?.functionCall?.args).toBe(reordered);
+      expect(JSON.stringify([args, reordered])).toBe(originalBytes);
+    },
+  );
+
+  it.each([
     { label: "serialized object", value: '{"query":"cats"}', expected: { query: "cats" } },
     { label: "malformed JSON", value: "{not valid json", expected: {} },
     { label: "JSON array", value: ["not", "an", "object"], expected: {} },
   ])("coerces $label tool-call arguments to the SDK object contract", ({ value, expected }) => {
     const model = makeModel("gemini-3-flash");
-    const contents = convertMessagesForTest(model, {
+    const context = {
       messages: [
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "call_1", name: "lookup", arguments: value },
         ]),
       ],
-    } as Context);
+    } as Context;
 
-    expect(contents[0]?.parts?.[0]?.functionCall?.args).toEqual(expected);
+    for (const contents of [
+      convertMessagesForTest(model, context),
+      projectGoogleMessages({
+        model,
+        messages: context.messages,
+        replay: "managed",
+        requiresToolCallSignature: true,
+      }),
+    ]) {
+      expect(contents[0]?.parts?.[0]?.functionCall?.args).toEqual(expected);
+    }
   });
 
   it.each([
@@ -268,14 +368,7 @@ describe("google-shared convertMessages", () => {
           makeGoogleAssistantMessage(model.id, [
             { ...toolCall, arguments: first, thoughtSignature: "c2lnbmVk" },
           ]),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "cats" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "cats", false, 0),
           makeGoogleAssistantMessage(model.id, [{ ...toolCall, arguments: second }]),
         ],
       } as Context);
@@ -294,14 +387,7 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessagesForTest(model, {
       messages: [
         makeGoogleAssistantMessage(model.id, [{ ...cachedCall, thoughtSignature: "c2lnbmVk" }]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "lookup", "ok", false, 0),
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "other", name: "different", arguments: {} },
           cachedCall,
@@ -522,14 +608,7 @@ describe("google-shared convertMessages", () => {
             arguments: { arg: "value" },
           },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "myTool",
-          content: [{ type: "text", text: "Tool result" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "myTool", "Tool result", false, 0),
         {
           role: "user",
           content: "Now do something else",
@@ -597,14 +676,7 @@ describe("google-shared convertMessages", () => {
             thoughtSignature: "dGVzdA==",
           },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "myTool",
-          content: [{ type: "text", text: "Tool result" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "myTool", "Tool result", false, 0),
       ],
     } as unknown as Context;
 
@@ -631,14 +703,7 @@ describe("google-shared convertMessages", () => {
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "provider_call_42", name: "lookup", arguments: {} },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "provider_call_42",
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("provider_call_42", "lookup", "ok", false, 0),
       ],
     } as Context);
 

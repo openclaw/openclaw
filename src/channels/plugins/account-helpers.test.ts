@@ -51,19 +51,10 @@ function expectResolvedDefaultAccountCase(input: OpenClawConfig, expected: strin
 describe("createAccountListHelpers", () => {
   describe("listConfiguredAccountIds", () => {
     it.each([
-      {
-        name: "returns empty for missing config",
-        input: {} as OpenClawConfig,
-      },
-      {
-        name: "returns empty when no accounts key",
-        input: cfg(null),
-      },
-      {
-        name: "returns empty for empty accounts object",
-        input: cfg({}),
-      },
-    ])("$name", ({ input }) => {
+      ["returns empty for missing config", {} as OpenClawConfig],
+      ["returns empty when no accounts key", cfg(null)],
+      ["returns empty for empty accounts object", cfg({})],
+    ])("%s", (_name, input) => {
       expectResolvedAccountIdsCase({
         resolve: listConfiguredAccountIds,
         input,
@@ -101,22 +92,10 @@ describe("createAccountListHelpers", () => {
 
   describe("listAccountIds", () => {
     it.each([
-      {
-        name: 'returns ["default"] for empty config',
-        input: {} as OpenClawConfig,
-        expected: ["default"],
-      },
-      {
-        name: 'returns ["default"] for empty accounts',
-        input: cfg({}),
-        expected: ["default"],
-      },
-      {
-        name: "returns sorted ids",
-        input: cfg({ z: {}, a: {}, m: {} }),
-        expected: ["a", "m", "z"],
-      },
-    ])("$name", ({ input, expected }) => {
+      ['returns ["default"] for empty config', {} as OpenClawConfig, ["default"]],
+      ['returns ["default"] for empty accounts', cfg({}), ["default"]],
+      ["returns sorted ids", cfg({ z: {}, a: {}, m: {} }), ["a", "m", "z"]],
+    ])("%s", (_name, input, expected) => {
       expectResolvedAccountIdsCase({
         resolve: listAccountIds,
         input,
@@ -209,42 +188,30 @@ describe("createAccountListHelpers", () => {
 
   describe("resolveDefaultAccountId", () => {
     it.each([
-      {
-        name: "prefers configured defaultAccount when it matches a configured account id",
-        input: cfg({ alpha: {}, beta: {} }, "beta"),
-        expected: "beta",
-      },
-      {
-        name: "normalizes configured defaultAccount before matching",
-        input: cfg({ "router-d": {} }, "Router D"),
-        expected: "router-d",
-      },
-      {
-        name: "falls back when configured defaultAccount is missing",
-        input: cfg({ beta: {}, alpha: {} }, "missing"),
-        expected: "alpha",
-      },
-      {
-        name: 'returns "default" when present',
-        input: cfg({ alpha: {}, default: {}, other: {} }),
-        expected: "default",
-      },
-      {
-        name: "falls back to the listed default when configured defaultAccount is missing",
-        input: cfg({ alpha: {}, default: {} }, "missing"),
-        expected: "default",
-      },
-      {
-        name: "returns first sorted id when no default",
-        input: cfg({ beta: {}, alpha: {} }),
-        expected: "alpha",
-      },
-      {
-        name: 'returns "default" for empty config',
-        input: {} as OpenClawConfig,
-        expected: "default",
-      },
-    ])("$name", ({ input, expected }) => {
+      [
+        "prefers configured defaultAccount when it matches a configured account id",
+        cfg({ alpha: {}, beta: {} }, "beta"),
+        "beta",
+      ],
+      [
+        "normalizes configured defaultAccount before matching",
+        cfg({ "router-d": {} }, "Router D"),
+        "router-d",
+      ],
+      [
+        "falls back when configured defaultAccount is missing",
+        cfg({ beta: {}, alpha: {} }, "missing"),
+        "alpha",
+      ],
+      ['returns "default" when present', cfg({ alpha: {}, default: {}, other: {} }), "default"],
+      [
+        "falls back to the listed default when configured defaultAccount is missing",
+        cfg({ alpha: {}, default: {} }, "missing"),
+        "default",
+      ],
+      ["returns first sorted id when no default", cfg({ beta: {}, alpha: {} }), "alpha"],
+      ['returns "default" for empty config', {} as OpenClawConfig, "default"],
+    ])("%s", (_name, input, expected) => {
       expectResolvedDefaultAccountCase(input, expected);
     });
 
@@ -363,130 +330,125 @@ describe("listCombinedAccountIds", () => {
 
 describe("resolveListedDefaultAccountId", () => {
   it.each([
-    {
-      name: "prefers the configured default when present in the listed ids",
-      input: {
+    [
+      "prefers the configured default when present in the listed ids",
+      {
         accountIds: ["alerts", "work"],
         configuredDefaultAccountId: "work",
       },
-      expected: "work",
-    },
-    {
-      name: "matches configured defaults against normalized listed ids",
-      input: {
+      "work",
+    ],
+    [
+      "matches configured defaults against normalized listed ids",
+      {
         accountIds: ["Router D"],
         configuredDefaultAccountId: "router-d",
       },
-      expected: "router-d",
-    },
-    {
-      name: "prefers the default account id when listed",
-      input: {
+      "router-d",
+    ],
+    [
+      "prefers the default account id when listed",
+      {
         accountIds: ["default", "work"],
       },
-      expected: "default",
-    },
-    {
-      name: "can preserve an unlisted configured default",
-      input: {
+      "default",
+    ],
+    [
+      "can preserve an unlisted configured default",
+      {
         accountIds: ["default", "work"],
         configuredDefaultAccountId: "ops",
         allowUnlistedDefaultAccount: true,
       },
-      expected: "ops",
-    },
-    {
-      name: "supports an explicit fallback id for ambiguous multi-account setups",
-      input: {
+      "ops",
+    ],
+    [
+      "supports an explicit fallback id for ambiguous multi-account setups",
+      {
         accountIds: ["alerts", "work"],
         ambiguousFallbackAccountId: "default",
       },
-      expected: "default",
-    },
-  ])("$name", ({ input, expected }) => {
+      "default",
+    ],
+  ])("%s", (_name, input, expected) => {
     expect(resolveListedDefaultAccountId(input)).toBe(expected);
   });
 });
 
-describe("describeAccountSnapshot", () => {
-  it("builds the standard snapshot shape with optional extras", () => {
-    expect(
-      describeAccountSnapshot({
-        account: {
-          accountId: "work",
-          name: "Work",
-          enabled: true,
-        },
+describe("account snapshots", () => {
+  it.each([
+    [
+      "builds the standard snapshot shape with optional extras",
+      () =>
+        describeAccountSnapshot({
+          account: {
+            accountId: "work",
+            name: "Work",
+            enabled: true,
+          },
+          configured: true,
+          extra: {
+            tokenSource: "config",
+          },
+        }),
+      {
+        accountId: "work",
+        name: "Work",
+        enabled: true,
         configured: true,
-        extra: {
-          tokenSource: "config",
-        },
-      }),
-    ).toEqual({
-      accountId: "work",
-      name: "Work",
-      enabled: true,
-      configured: true,
-      tokenSource: "config",
-    });
-  });
-
-  it("normalizes missing identity fields to the shared defaults", () => {
-    expect(
-      describeAccountSnapshot({
-        account: {},
-      }),
-    ).toEqual({
-      accountId: "default",
-      name: undefined,
-      enabled: true,
-      configured: undefined,
-    });
-  });
-});
-
-describe("describeWebhookAccountSnapshot", () => {
-  it("defaults mode to webhook while preserving caller extras", () => {
-    expect(
-      describeWebhookAccountSnapshot({
-        account: {
-          accountId: "work",
-          name: "Work",
-        },
+        tokenSource: "config",
+      },
+    ],
+    [
+      "normalizes missing identity fields to the shared defaults",
+      () => describeAccountSnapshot({ account: {} }),
+      { accountId: "default", name: undefined, enabled: true, configured: undefined },
+    ],
+    [
+      "defaults mode to webhook while preserving caller extras",
+      () =>
+        describeWebhookAccountSnapshot({
+          account: {
+            accountId: "work",
+            name: "Work",
+          },
+          configured: true,
+          extra: {
+            tokenSource: "config",
+          },
+        }),
+      {
+        accountId: "work",
+        name: "Work",
+        enabled: true,
         configured: true,
-        extra: {
-          tokenSource: "config",
-        },
-      }),
-    ).toEqual({
-      accountId: "work",
-      name: "Work",
-      enabled: true,
-      configured: true,
-      tokenSource: "config",
-      mode: "webhook",
-    });
-  });
-
-  it("allows callers to override the mode when the transport is not always webhook", () => {
-    expect(
-      describeWebhookAccountSnapshot({
-        account: {
-          accountId: "work",
-        },
+        tokenSource: "config",
+        mode: "webhook",
+      },
+    ],
+    [
+      "allows callers to override the mode when the transport is not always webhook",
+      () =>
+        describeWebhookAccountSnapshot({
+          account: {
+            accountId: "work",
+          },
+          mode: "polling",
+        }),
+      {
+        accountId: "work",
+        name: undefined,
+        enabled: true,
+        configured: undefined,
         mode: "polling",
-      }),
-    ).toEqual({
-      accountId: "work",
-      name: undefined,
-      enabled: true,
-      configured: undefined,
-      mode: "polling",
-    });
+      },
+    ],
+  ] as const)("%s", (_name, resolveSnapshot, expected) => {
+    expect(resolveSnapshot()).toEqual(expected);
   });
 });
 
-describe("mergeAccountConfig", () => {
+describe("account config merging", () => {
   type MergeAccountConfigShape = {
     enabled?: boolean;
     defaultAccount?: string;
@@ -500,10 +462,10 @@ describe("mergeAccountConfig", () => {
 
   type MergeAccountInput = Parameters<typeof mergeAccountConfig<MergeAccountConfigShape>>[0];
 
-  it.each([
-    {
-      name: "drops accounts from the base config before merging",
-      input: {
+  it.each<[string, MergeAccountInput, MergeAccountConfigShape]>([
+    [
+      "drops accounts from the base config before merging",
+      {
         channelConfig: {
           enabled: true,
           accounts: {
@@ -514,14 +476,14 @@ describe("mergeAccountConfig", () => {
           name: "Work",
         },
       },
-      expected: {
+      {
         enabled: true,
         name: "Work",
       },
-    },
-    {
-      name: "drops caller-specified keys from the base config before merging",
-      input: {
+    ],
+    [
+      "drops caller-specified keys from the base config before merging",
+      {
         channelConfig: {
           enabled: true,
           defaultAccount: "work",
@@ -531,14 +493,14 @@ describe("mergeAccountConfig", () => {
         },
         omitKeys: ["defaultAccount"],
       },
-      expected: {
+      {
         enabled: true,
         name: "Work",
       },
-    },
-    {
-      name: "deep-merges selected nested object keys",
-      input: {
+    ],
+    [
+      "deep-merges selected nested object keys",
+      {
         channelConfig: {
           commands: {
             native: true,
@@ -551,38 +513,24 @@ describe("mergeAccountConfig", () => {
         },
         nestedObjectKeys: ["commands"],
       },
-      expected: {
+      {
         commands: {
           native: true,
           callbackPath: "/work",
         },
       },
-    },
-  ] satisfies Array<{
-    name: string;
-    input: MergeAccountInput;
-    expected: MergeAccountConfigShape;
-  }>)("$name", ({ input, expected }) => {
+    ],
+  ])("%s", (_name, input, expected) => {
     expect(mergeAccountConfig<MergeAccountConfigShape>(input)).toEqual(expected);
   });
-});
 
-describe("resolveMergedAccountConfig", () => {
-  type MergedChannelConfig = {
-    enabled?: boolean;
-    name?: string;
-  };
-
+  type MergedChannelConfig = { enabled?: boolean; name?: string };
   type ResolveMergedInput = Parameters<typeof resolveMergedAccountConfig<MergedChannelConfig>>[0];
 
-  const resolveMergedCases: Array<{
-    name: string;
-    input: ResolveMergedInput;
-    expected: MergedChannelConfig;
-  }> = [
-    {
-      name: "merges the matching account config into channel config",
-      input: {
+  const resolveMergedCases: Array<[string, ResolveMergedInput, MergedChannelConfig]> = [
+    [
+      "merges the matching account config into channel config",
+      {
         channelConfig: {
           enabled: true,
         },
@@ -593,14 +541,14 @@ describe("resolveMergedAccountConfig", () => {
         },
         accountId: "work",
       },
-      expected: {
+      {
         enabled: true,
         name: "Work",
       },
-    },
-    {
-      name: "supports normalized account lookups",
-      input: {
+    ],
+    [
+      "supports normalized account lookups",
+      {
         channelConfig: {
           enabled: true,
         },
@@ -612,14 +560,14 @@ describe("resolveMergedAccountConfig", () => {
         accountId: "router-d",
         normalizeAccountId,
       },
-      expected: {
+      {
         enabled: true,
         name: "Router",
       },
-    },
+    ],
   ];
 
-  it.each(resolveMergedCases)("$name", ({ input, expected }) => {
+  it.each(resolveMergedCases)("%s", (_name, input, expected) => {
     expect(resolveMergedAccountConfig<MergedChannelConfig>(input)).toEqual(expected);
   });
 

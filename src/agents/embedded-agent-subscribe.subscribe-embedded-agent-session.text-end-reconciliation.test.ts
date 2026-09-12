@@ -8,6 +8,7 @@ import {
   emitAssistantTextEnd,
   extractTextPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 function createUnphasedAssistant(texts: string[]) {
   return {
@@ -722,10 +723,7 @@ describe("text_end snapshot reconciliation", () => {
     await Promise.resolve();
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Checking: Fetched prices" }],
-      },
+      message: textAssistant("Checking: Fetched prices"),
     });
     await Promise.resolve();
 
@@ -873,10 +871,7 @@ describe("assistant snapshot replay", () => {
   });
   it("keeps the completed assistant independent from transcript mutation", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Current run reply" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Current run reply") as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
     assistantMessage.content = [{ type: "text", text: "Rewritten transcript reply" }];
@@ -898,10 +893,7 @@ describe("assistant snapshot replay", () => {
     // Simulate non-streaming model: only message_start and message_end, no text_delta
     emit({ type: "message_start", message: { role: "assistant" } });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Response from non-streaming model" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Response from non-streaming model") as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
 

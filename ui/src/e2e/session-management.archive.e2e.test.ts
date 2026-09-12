@@ -590,7 +590,9 @@ suite.define(() => {
             titleHistory.push(title);
           }
           const paneTitle = document
-            .querySelector(".chat-pane__session-title")
+            .querySelector(
+              "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__session-title",
+            )
             ?.textContent?.replace(/\s+/g, " ")
             .trim();
           if (paneTitle && paneTitleHistory.at(-1) !== paneTitle) {

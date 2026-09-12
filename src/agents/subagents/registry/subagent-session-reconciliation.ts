@@ -290,6 +290,7 @@ export async function settleSubagentRunFromSessionStore(
   await completeSubagentRunWithRecovery(
     {
       runId: args.runId,
+      expectedEntry: args.entry,
       startedAt: completion.startedAt,
       endedAt: completion.endedAt,
       outcome: completion.outcome,
