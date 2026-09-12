@@ -123,12 +123,14 @@ export function projectSqliteSessionParticipantsBatch(
   entries: ReadonlyMap<string, SessionEntry>,
 ): Map<string, SessionEntry> {
   const records = participantRecordsBySessionKey(database, [...entries.keys()]);
-  return new Map(
-    [...entries].map(([sessionKey, entry]) => [
-      sessionKey,
-      withProjectedParticipants(entry, records.get(sessionKey) ?? []),
-    ]),
-  );
+  const projected = new Map(entries);
+  for (const [sessionKey, participants] of records) {
+    const entry = entries.get(sessionKey);
+    if (entry) {
+      projected.set(sessionKey, withProjectedParticipants(entry, participants));
+    }
+  }
+  return projected;
 }
 
 export function listSessionParticipantsReadOnly(scope: {
