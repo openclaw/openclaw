@@ -308,19 +308,18 @@ export async function visitSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
   visit: (message: unknown, seq: number) => void,
 ): Promise<number> {
-  const target = resolveTranscriptReadTarget(scope);
-  const { restoreSessionColdTranscript } =
-    await import("../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(toTranscriptReadScope(target));
-  let count = 0;
-  visitSessionTranscriptMessageEvents(toTranscriptReadScope(target), (entry) => {
-    const message = asOptionalRecord(entry.event)?.message;
-    if (message !== undefined) {
-      visit(message, entry.seq);
-      count += 1;
-    }
+  const transcriptScope = toTranscriptReadScope(resolveTranscriptReadTarget(scope));
+  return readRestoredSessionTranscript(transcriptScope, () => {
+    let count = 0;
+    visitSessionTranscriptMessageEvents(transcriptScope, (entry) => {
+      const message = asOptionalRecord(entry.event)?.message;
+      if (message !== undefined) {
+        visit(message, entry.seq);
+        count += 1;
+      }
+    });
+    return count;
   });
-  return count;
 }
 
 /** Counts display messages asynchronously through the reader seam. */
