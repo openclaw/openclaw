@@ -24,7 +24,7 @@ import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import {
   CATALOG_SESSION_RELEASED_EVENT,
-  CATALOG_SESSION_RELEASE_RECONCILE_MS,
+  CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS,
   catalogSessionReleasedDetailFromEvent,
   parseCatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
@@ -141,20 +141,25 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     }
     const client = state.client;
     const sessionKey = this.sessionKey;
-    this.catalogReleaseRefreshTimer = globalThis.setTimeout(() => {
-      this.catalogReleaseRefreshTimer = null;
-      const currentState = this.state;
-      const currentKey = parseCatalogSessionKey(this.sessionKey);
-      if (
-        !currentState?.connected ||
-        currentState.client !== client ||
-        this.sessionKey !== sessionKey ||
-        !currentKey
-      ) {
-        return;
-      }
-      void this.loadCatalogSession(currentKey, false);
-    }, CATALOG_SESSION_RELEASE_RECONCILE_MS);
+    const reconcile = (attempt: number) => {
+      this.catalogReleaseRefreshTimer = globalThis.setTimeout(() => {
+        this.catalogReleaseRefreshTimer = null;
+        const currentKey = parseCatalogSessionKey(this.sessionKey);
+        if (
+          !this.state?.connected ||
+          this.state.client !== client ||
+          this.sessionKey !== sessionKey ||
+          !currentKey
+        ) {
+          return;
+        }
+        void this.loadCatalogSession(currentKey, false);
+        if (attempt + 1 < CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS.length) {
+          reconcile(attempt + 1);
+        }
+      }, CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS[attempt]);
+    };
+    reconcile(0);
   };
 
   protected activateComposerPresentation(): void {

@@ -26,7 +26,9 @@ export type CatalogSessionContinuedDetail = CatalogSessionKey & {
 /** A catalog-backed terminal writer exited, so retained readers should reconcile
     after the Gateway's short list-sharing window has elapsed. */
 export const CATALOG_SESSION_RELEASED_EVENT = "openclaw-session-catalog-released";
-export const CATALOG_SESSION_RELEASE_RECONCILE_MS = 5_000;
+// The 33-second cumulative retry crosses Codex's 32-second list cache; later
+// reads observe the background refresh returned stale by the expiry read.
+export const CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS = [5_000, 28_000, 1_000, 2_000, 4_000];
 
 export type CatalogSessionReleasedDetail = Omit<CatalogSessionKey, "threadId"> & {
   agentId: string;

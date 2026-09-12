@@ -128,7 +128,9 @@ suite.define(() => {
       });
       await expect.poll(() => page.locator(".tabstrip-tab.is-live").count()).toBe(1);
       const listedBeforeExit = (await gateway.getRequests("sessions.catalog.list")).length;
-      await gateway.setMethodResponse("sessions.catalog.list", codexCatalog(true));
+      await gateway.setMethodResponse("sessions.catalog.list", {
+        sequence: [staleCatalog, staleCatalog, staleCatalog, staleCatalog, codexCatalog(true)],
+      });
       await gateway.emitGatewayEvent("terminal.exit", {
         sessionId: "codex-terminal-release",
         reason: "process_exit",
@@ -140,6 +142,11 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getRequests("sessions.catalog.list").then((rows) => rows.length))
         .toBeGreaterThan(listedBeforeExit);
+      await expect.poll(() => composer.isDisabled()).toBe(true);
+      await page.clock.fastForward(28_000);
+      await page.clock.runFor(100);
+      await expect.poll(() => composer.isDisabled()).toBe(true);
+      await page.clock.fastForward(1_000);
       await page.clock.runFor(100);
       expect(await page.locator(".tabstrip-tab.is-exited").count()).toBe(1);
       await row.click();
@@ -193,7 +200,9 @@ suite.define(() => {
       await expect.poll(() => page.locator(".tabstrip-tab.is-live").count()).toBe(1);
 
       const listedBeforeExit = (await gateway.getRequests("sessions.catalog.list")).length;
-      await gateway.setMethodResponse("sessions.catalog.list", codexCatalog(true));
+      await gateway.setMethodResponse("sessions.catalog.list", {
+        sequence: [codexCatalog(), codexCatalog(), codexCatalog(true)],
+      });
       await gateway.emitGatewayEvent("terminal.exit", {
         sessionId: "codex-new-terminal",
         reason: "process_exit",
@@ -205,6 +214,12 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getRequests("sessions.catalog.list").then((rows) => rows.length))
         .toBeGreaterThan(listedBeforeExit);
+      expect(await page.locator('[data-catalog-session-key^="catalog:"]').count()).toBe(0);
+      await page.clock.fastForward(28_000);
+      await page.clock.runFor(100);
+      expect(await page.locator('[data-catalog-session-key^="catalog:"]').count()).toBe(0);
+      await page.clock.fastForward(1_000);
+      await page.clock.runFor(100);
       expect(await page.locator(".tabstrip-tab.is-exited").count()).toBe(1);
       await expandCodingSection(page);
       const row = page.locator('[data-catalog-session-key^="catalog:"]').filter({

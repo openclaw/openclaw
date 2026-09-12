@@ -13,7 +13,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import {
   catalogSessionReleasedDetailFromEvent,
-  CATALOG_SESSION_RELEASE_RECONCILE_MS,
+  CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS,
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
 import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
@@ -360,13 +360,19 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     const client = this.gatewayClient;
     const generation = this.sessionScopeGeneration;
-    this.catalogReleaseRefreshTimer = globalThis.setTimeout(() => {
-      this.catalogReleaseRefreshTimer = null;
-      if (client !== this.gatewayClient || generation !== this.sessionScopeGeneration) {
-        return;
-      }
-      void requestSessionCatalogRefresh(this);
-    }, CATALOG_SESSION_RELEASE_RECONCILE_MS);
+    const reconcile = (attempt: number) => {
+      this.catalogReleaseRefreshTimer = globalThis.setTimeout(() => {
+        this.catalogReleaseRefreshTimer = null;
+        if (client !== this.gatewayClient || generation !== this.sessionScopeGeneration) {
+          return;
+        }
+        void requestSessionCatalogRefresh(this);
+        if (attempt + 1 < CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS.length) {
+          reconcile(attempt + 1);
+        }
+      }, CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS[attempt]);
+    };
+    reconcile(0);
   };
 
   private readonly handleSessionCatalogPageActivation = () => {
