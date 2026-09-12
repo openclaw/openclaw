@@ -60,6 +60,18 @@ it.each(["", "invalid", "0", "-1"])("rejects PID contents %j at the deadline", a
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it.each(["42stale", "42\njunk", "4.2", "0x2a"])(
+  "rejects non-decimal PID contents %j at the deadline",
+  async (contents) => {
+    vi.useFakeTimers();
+    const file = path.join(tempDirs.make("openclaw-process-wait-"), "pid");
+    fsSync.writeFileSync(file, contents);
+    const result = waitForPidFile(file, 20).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(await result).toEqual(new Error(`timeout waiting for pid in ${file}`));
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 it("waits through an open-truncate window for valid PID contents", async () => {
   vi.useFakeTimers();
   const file = path.join(tempDirs.make("openclaw-process-wait-"), "pid");
