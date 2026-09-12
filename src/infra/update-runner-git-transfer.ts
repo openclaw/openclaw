@@ -60,9 +60,10 @@ export async function prepareGitCandidateTransfer(params: {
   const prefix = path.join(step.cwd, "update-candidate");
   // Explicit objects and file output produce a non-thin pack: no excluded delta
   // base can trigger a lazy network fetch when the installed Git imports it.
+  // The shared mirror borrows installed objects; --local avoids repacking them.
   const hash = await runGit(
     "git pack candidate",
-    ["pack-objects", "--max-pack-size=0", prefix],
+    ["pack-objects", "--local", "--max-pack-size=0", prefix],
     input,
   );
   if (!hash) {
