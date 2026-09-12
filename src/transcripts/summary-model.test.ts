@@ -124,6 +124,19 @@ describe("model-backed transcript summaries", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledOnce();
   });
 
+  it("uses the first complete object when prose contains later JSON", async () => {
+    runIsolatedCompletion.mockResolvedValue(
+      completion(`${JSON.stringify(notes)}\nDiagnostics: {"tokens":12}`),
+    );
+
+    expect(await summarizeTranscriptsWithModel(params)).toMatchObject({
+      ...notes,
+      overview: notes.overview.trim(),
+      source: "model",
+    });
+    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+  });
+
   it("tries the primary once after utility output is invalid", async () => {
     runIsolatedCompletion
       .mockResolvedValueOnce(completion("not JSON"))
