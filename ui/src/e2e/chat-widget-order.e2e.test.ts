@@ -17,8 +17,8 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
-  it.each(["forwarded", "projected", "mixed"] as const)(
-    "preserves %s assistant embeds through history reload",
+  it.each(["forwarded", "projected", "mixed", "repeated-text"] as const)(
+    "preserves %s transcript content through history reload",
     async (representation) => {
       await suite.withPage(
         { viewport: { width: 1280, height: 1000 }, colorScheme: "light", locale: "en-US" },
@@ -47,12 +47,19 @@ suite.define(() => {
           };
           const siblingId = representation === "mixed" ? "cv_review_two" : "cv_review_one";
           const siblingTitle = representation === "mixed" ? "Widget two" : "Widget one";
+          const hasBoundary = representation === "forwarded" || representation === "projected";
           const historyMessages = [
             { role: "user", content: "Show the report.", timestamp: startedAt },
+            ...(representation === "repeated-text"
+              ? [1, 2].map((offset) => ({
+                  role: "assistant",
+                  content: "Preparing the report.",
+                  timestamp: startedAt + offset,
+                }))
+              : []),
             result,
-            ...(representation === "mixed"
-              ? []
-              : [
+            ...(hasBoundary
+              ? [
                   {
                     role: "assistant",
                     content: "Another turn: show that report again.",
@@ -61,11 +68,15 @@ suite.define(() => {
                       ? { provenance: { kind: "inter_session", sourceTool: "sessions_send" } }
                       : { __openclaw: { id: "review-new-turn", turnBoundary: true } }),
                   },
-                ]),
+                ]
+              : []),
             {
-              role: "assistant",
+              role: representation === "repeated-text" ? "Assistant" : "assistant",
               timestamp: startedAt + 30,
               content: [
+                ...(representation === "repeated-text"
+                  ? [{ type: "text", text: "Report ready." }]
+                  : []),
                 ...(representation === "mixed"
                   ? [
                       {
@@ -111,21 +122,23 @@ suite.define(() => {
               await page.reload();
             }
             const widgets = page.locator(".chat-tool-card__preview-frame");
-            await expect.poll(() => widgets.count()).toBe(2);
+            const expectedTitles =
+              representation === "repeated-text" ? ["Widget one"] : ["Widget one", siblingTitle];
+            await expect.poll(() => widgets.count()).toBe(expectedTitles.length);
             expect(
               await widgets.evaluateAll((frames) =>
                 frames.map((frame) => frame.getAttribute("title")),
               ),
-            ).toEqual(["Widget one", siblingTitle]);
-            for (let index = 0; index < 2; index++) {
+            ).toEqual(expectedTitles);
+            for (const [index, title] of expectedTitles.entries()) {
               await widgets
                 .nth(index)
                 .contentFrame()
                 .frameLocator("iframe")
-                .getByRole("heading", { name: index === 0 ? "Widget one" : siblingTitle })
+                .getByRole("heading", { name: title })
                 .waitFor();
             }
-            if (representation !== "mixed") {
+            if (hasBoundary) {
               const boundary = await page
                 .getByText("Another turn: show that report again.", { exact: true })
                 .boundingBox();
@@ -137,6 +150,15 @@ suite.define(() => {
             await page.screenshot({
               path: path.join(suite.artifactDir, `${representation}-${stage}.png`),
             });
+            if (representation === "repeated-text") {
+              expect(await page.getByText("Report ready.", { exact: true }).count()).toBe(1);
+              const badges = page.locator(".chat-duplicate-count");
+              expect(await badges.count()).toBe(1);
+              expect(await badges.textContent()).toBe("×2");
+              expect(await badges.getAttribute("aria-label")).toBe(
+                "2 consecutive identical messages collapsed",
+              );
+            }
           }
         },
       );

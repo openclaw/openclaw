@@ -33,6 +33,24 @@ function cachedGroups(messages: unknown[]) {
   }).filter((item) => item.kind === "group");
 }
 
+describe("duplicate count projection", () => {
+  it.each([2, 3])("groups %i repeated messages without mutating or recounting inputs", (copies) => {
+    const items: ChatItem[] = Array.from({ length: copies }, (_, index) => ({
+      kind: "message",
+      key: `repeat:${index}`,
+      message: { role: "assistant", content: "Still working", timestamp: 1_000 + index },
+    }));
+    const original = structuredClone(items);
+    const first = groupMessages(items);
+    expect(first).toMatchObject([
+      { kind: "group", messages: [{ key: "repeat:0", duplicateCount: copies }] },
+    ]);
+    expect(items).toEqual(original);
+    expect(groupMessages(items)).toEqual(first);
+    expect(items).toEqual(original);
+  });
+});
+
 describe("reasoning activity boundaries", () => {
   it.each([
     { type: "text", text: "Visible answer" },

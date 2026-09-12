@@ -54,13 +54,13 @@ export function appendCanvasBlockToAssistantMessage(
   };
 }
 
-/** Remove a tool-owned display copy without rewriting other message content. */
+/** The caller selects normalized assistant groups; preserve their other content. */
 function removeCanvasPreviewFromAssistantMessage(
   message: unknown,
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
 ): unknown {
   const raw = asRecord(message);
-  if (!raw || raw.role !== "assistant") {
+  if (!raw) {
     return message;
   }
   const content = Array.isArray(raw.content)

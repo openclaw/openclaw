@@ -67,6 +67,52 @@ function visibleOrder(props: Partial<Parameters<typeof buildCachedChatItems>[0]>
 }
 
 describe("interleaved widget transcript order", () => {
+  it.each([
+    { copies: 2, showToolCalls: false },
+    { copies: 2, showToolCalls: true },
+    { copies: 3, showToolCalls: false },
+    { copies: 3, showToolCalls: true },
+  ])("keeps $copies text copies counted once with widgets and tools=$showToolCalls", (options) => {
+    const result = widgetResult(1);
+    const messages = [
+      { role: "user", content: "Show a visual step", timestamp: 500 },
+      ...Array.from({ length: options.copies }, (_, index) => ({
+        role: "assistant",
+        content: "Step one",
+        timestamp: 1_000 + index,
+      })),
+      result,
+      appendChatCanvasBlocksToMessage(
+        { role: "assistant", content: "", timestamp: 3_000 },
+        [result].flatMap((value) => extractChatToolResultCanvasPreview(value) ?? []),
+      ),
+    ];
+    const original = structuredClone(messages);
+    const items = buildCachedChatItems({
+      paneId: `widget-repeat-count-${options.copies}-${options.showToolCalls}`,
+      sessionKey: "main",
+      messages,
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: options.showToolCalls,
+    });
+    const entries = items.flatMap((item) => (item.kind === "group" ? item.messages : []));
+    const repeated = entries.filter(({ message }) =>
+      normalizeMessage(message).content.some(
+        (block) => block.type === "text" && block.text === "Step one",
+      ),
+    );
+    expect(repeated).toHaveLength(1);
+    expect(repeated[0]?.duplicateCount).toBe(options.copies);
+    expect(visibleOrder({ messages, showToolCalls: options.showToolCalls })).toEqual([
+      "Step one",
+      "Widget one",
+    ]);
+    expect(messages).toEqual(original);
+  });
+
   it.each(["streaming", "history", "overlap"] as const)(
     "renders a repeated widget once within its turn at %s",
     (stage) => {
@@ -186,6 +232,26 @@ describe("interleaved widget transcript order", () => {
   });
 
   describe.each(["history", "live"] as const)("%s display-copy ownership", (source) => {
+    it.each(["assistant", "Assistant", "ASSISTANT"])(
+      "reconciles structured display copies for normalized role %s without losing prose",
+      (role) => {
+        const result = widgetResult(1);
+        const messages = [
+          { role: "user", content: "Show the widget", timestamp: 500 },
+          ...(source === "history" ? [result] : []),
+          appendChatCanvasBlocksToMessage(
+            { role, content: "Keep this explanation.", timestamp: 3_000 },
+            [result].flatMap((value) => extractChatToolResultCanvasPreview(value) ?? []),
+          ),
+        ];
+        const original = structuredClone(messages);
+        expect(visibleOrder({ messages, toolMessages: source === "live" ? [result] : [] })).toEqual(
+          ["Widget one", "Keep this explanation."],
+        );
+        expect(messages).toEqual(original);
+      },
+    );
+
     it.each([
       { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
       { __openclaw: { id: "projected-embed-turn", turnBoundary: true } },
