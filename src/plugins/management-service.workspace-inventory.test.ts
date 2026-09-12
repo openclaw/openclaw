@@ -15,6 +15,7 @@ import { persistPluginInstall } from "./install-persistence.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
+import { PluginInstallPersistedError } from "./lifecycle.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
@@ -374,10 +375,17 @@ it.each(["config-write", "runtime-apply", "none"] as const)(
       install: { source: "path", sourcePath: pluginRoot, installPath: pluginRoot },
       applyRuntime,
       invalidateRuntimeCache: false,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      runtime: { log: vi.fn() },
     });
     if (failure === "none") {
       expect(await installed).toEqual(config);
+    } else if (failure === "runtime-apply") {
+      const result = await installed.catch((error: unknown) => error);
+      expect(result).toBeInstanceOf(PluginInstallPersistedError);
+      expect(result).toMatchObject({ pluginId: fixture.pluginId });
+      if (result instanceof PluginInstallPersistedError) {
+        expect(result.cause).toBe(rejected);
+      }
     } else {
       await expect(installed).rejects.toBe(rejected);
     }

@@ -17,10 +17,7 @@ import type {
 } from "./plugin-instance.types.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import {
-  withPluginRuntimePluginScope,
-  withPluginRuntimeRegistryScope,
-} from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 const { values: valueInstances } = pluginInstanceState;
@@ -249,7 +246,13 @@ export class PluginInstance {
   }
 
   private enter<T>(token: object, run: () => T): T {
-    const invoke = () => invocation.run({ instance: this, token }, run);
+    const current = invocation.getStore();
+    // Node can reuse an identical store instead of copying the entire async context map.
+    const invoke = () =>
+      invocation.run(
+        current?.instance === this && current.token === token ? current : { instance: this, token },
+        run,
+      );
     if (!this.owner) {
       return invoke();
     }
@@ -261,16 +264,15 @@ export class PluginInstance {
       this.consumers.get(token)?.registry ??
       this.calls.get(token) ??
       (generation?.plugins.includes(record) ? generation : this.owner.registry);
-    return withPluginRuntimeRegistryScope(registry, () =>
-      withPluginRuntimePluginScope(
-        {
-          pluginId: record.id,
-          pluginSource: record.source,
-          pluginOrigin: record.origin,
-          pluginTrustedOfficialInstall: record.trustedOfficialInstall,
-        },
-        invoke,
-      ),
+    return withPluginRuntimePluginScope(
+      {
+        pluginId: record.id,
+        pluginSource: record.source,
+        pluginOrigin: record.origin,
+        pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+      },
+      invoke,
+      registry,
     );
   }
 

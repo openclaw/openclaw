@@ -140,7 +140,7 @@ export function createWhatsAppPluginBase() {
   const collectWhatsAppOpenGroupFindings = createConditionalWarningCollector.findings({
     collectWarnings: collectWhatsAppSecurityWarnings,
     checkId: "channels.whatsapp.groups.open",
-    severity: "critical",
+    severity: "warn",
     title: "WhatsApp security warning",
   });
   const base = createChannelPluginBase({

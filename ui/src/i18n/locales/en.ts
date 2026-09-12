@@ -5211,6 +5211,7 @@ export const en: TranslationMap & {
       tooLargeToDisplay: "This message is too large to display here.",
       unknownDate: "Unknown date",
       toolSender: "Tool",
+      errorSender: "Error",
       forwardedFrom: "From",
       forwardedFromAgent: "Forwarded from {agentId}",
       forwardedMessage: "Forwarded message",

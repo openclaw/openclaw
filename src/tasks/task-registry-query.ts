@@ -153,6 +153,7 @@ function heapifyWorstTaskFirst(
 }
 
 const TASK_PAGE_MAX_ATTEMPTS = 3;
+const TASK_PAGE_YIELD_INTERVAL_MS = 12;
 
 export async function listTaskRecordPage(params: {
   offset: number;
@@ -182,6 +183,7 @@ export async function listTaskRecordPage(params: {
   // Filtering and ordering stay registry-owned so authoritative records never
   // cross the boundary; only the bounded selected page is defensively cloned.
   const windowSize = params.offset + params.limit;
+  let workStartedAt = performance.now();
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     const revision = readTaskRegistryRevision();
     if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
@@ -197,9 +199,11 @@ export async function listTaskRecordPage(params: {
     const iterator = source?.keys() ?? [].values();
     let current = iterator.next();
     while (!current.done && scannedCount < scanLimit) {
-      // Yield only when another batch exists; completed pages keep their revision.
-      if (scannedCount > 0) {
+      // Cheap pages finish atomically even while other sessions are busy. Expensive
+      // scans share the event loop without charging time queued behind other work.
+      if (scannedCount > 0 && performance.now() - workStartedAt >= TASK_PAGE_YIELD_INTERVAL_MS) {
         await yieldToEventLoop();
+        workStartedAt = performance.now();
         // A carried revision cannot recover; skip unrelated reads once it is stale.
         // Cursorless scans still finish their attempt before retrying.
         if (params.expectedRevision !== undefined && revision !== readTaskRegistryRevision()) {

@@ -32,7 +32,7 @@ import {
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";

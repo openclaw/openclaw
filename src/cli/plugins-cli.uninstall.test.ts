@@ -14,7 +14,6 @@ import {
   buildPluginDiagnosticsReportMock,
   buildPluginSnapshotReportMock,
   createTestInstalledPluginIndex,
-  parseClawHubPluginSpecMock,
   pluginCliConfigMock,
   pluginLifecycleGatewayMock,
   resolvePluginLifecycleGatewayMock,
@@ -348,10 +347,6 @@ describe("plugins cli uninstall", () => {
     process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-claw-plugin-ref-");
     closeOpenClawStateDatabaseForTest();
     try {
-      const { parseClawHubPluginSpec } = await vi.importActual<
-        typeof import("../infra/clawhub-spec.js")
-      >("../infra/clawhub-spec.js");
-      parseClawHubPluginSpecMock.mockImplementation(parseClawHubPluginSpec);
       const installRecord = {
         source: "clawhub" as const,
         spec: "clawhub:@owner/audit",

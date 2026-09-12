@@ -9,10 +9,8 @@ import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-
 import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 

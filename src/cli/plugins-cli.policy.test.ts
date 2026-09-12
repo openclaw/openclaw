@@ -15,6 +15,7 @@ import {
   resolvePluginLifecycleGatewayMock,
   pluginLifecycleGatewayMock,
   loadPluginManifestRegistryMock,
+  loadPluginMetadataSnapshotMock,
   pluginCliConfigMock,
   replaceConfigFileMock,
   refreshPluginRegistryMock,
@@ -52,6 +53,12 @@ describe("plugins cli policy mutations", () => {
 
   beforeEach(async () => {
     resetPluginsCliTestState();
+    // Policy cases derive metadata from their config-sensitive registry fixture;
+    // the shared install-output snapshot assumes synthetic enabled artifacts.
+    const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
+      "../plugins/plugin-metadata-snapshot.js",
+    );
+    loadPluginMetadataSnapshotMock.mockImplementation(metadata.loadPluginMetadataSnapshot);
     // Resolve after the shared CLI fixture registers its record-IO mock.
     ({ loadInstalledPluginIndexInstallRecordsSync: readInstallRecords } =
       await import("../plugins/installed-plugin-index-record-reader.js"));

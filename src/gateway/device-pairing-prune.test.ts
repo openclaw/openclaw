@@ -12,7 +12,7 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-apns.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";

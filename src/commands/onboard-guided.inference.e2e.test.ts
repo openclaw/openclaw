@@ -227,7 +227,7 @@ describe("guided onboarding inference composition", () => {
           initialValue: "one",
           options: [
             { value: "one", label: "One agent" },
-            { value: "team", label: "A small team: a coordinator plus specialists" },
+            { value: "team", label: "A small team: a chief of staff plus specialists" },
           ],
         }),
       );
@@ -246,7 +246,7 @@ describe("guided onboarding inference composition", () => {
       });
       expect(mockOpenAi.requestBodies).toHaveLength(team ? 2 : 1);
       expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({
-        model: "gpt-5.6-sol",
+        model: "gpt-6-astra",
       });
       const notes = [
         ...vi.mocked(prompter.note).mock.calls,

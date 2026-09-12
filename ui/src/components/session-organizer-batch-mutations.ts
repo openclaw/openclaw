@@ -8,7 +8,7 @@ import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../src/shared/session-arc
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationResult,
@@ -18,7 +18,7 @@ import type { SessionOrganizerControllerHost } from "./session-organizer-control
 
 export type SessionActionRow = Pick<
   SidebarRecentSession,
-  "key" | "sessionId" | "label" | "pinned" | "archived" | "active" | "category"
+  "key" | "agentId" | "sessionId" | "label" | "pinned" | "archived" | "active" | "category"
 > & { gatewayHasActiveRun?: boolean; hasActiveRun?: boolean };
 
 export type SessionActionHost = Pick<
@@ -54,10 +54,10 @@ export function requireSessionMutationAccess(
 }
 
 export function sessionRowAgentId(
-  session: SessionActionRow,
+  session: Pick<SessionActionRow, "key" | "agentId">,
   scope: SidebarSessionMutationScope,
 ): string {
-  return parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  return resolveUiSessionRowAgentId(session, scope.selectedAgentId);
 }
 
 /**

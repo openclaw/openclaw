@@ -381,6 +381,7 @@
     <string name="native_33b31bc65885eb0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Audio afspelen"</string>
     <string name="native_33b93476cf597a33" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tijd"</string>
     <string name="native_33c8e8de41c3a351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Niet geverifieerd"</string>
+    <string name="native_340bd53cf39d26fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"API-sleutel opgeslagen. Tik op Vernieuwen om deze toe te passen."</string>
     <string name="native_347de0eefc8c2b98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yield"</string>
     <string name="native_349f96d2f47c34bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Goedkeuringscommando kopiëren"</string>
     <string name="native_34d29e78d246ae8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Service verbonden"</string>
@@ -1078,7 +1079,6 @@
     <string name="native_9709a3b2e51f0ef3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zijbalk verbergen"</string>
     <string name="native_973769a32161f8de" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gereed op deze gateway. Android kan dit globaal in- of uitschakelen; installatie en configuratie blijven op de desktop of via de CLI."</string>
     <string name="native_973cbee2e75ade09" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Audio afspelen is niet beschikbaar"</string>
-    <string name="native_976f2f9461eeb2c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"API-sleutel opgeslagen. Start de Gateway opnieuw op om deze toe te passen."</string>
     <string name="native_97a5e41b45ddd2b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"toepassen"</string>
     <string name="native_97cbc43c27dd76ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kan het gebruik niet laden."</string>
     <string name="native_97f1b0890fc8e065" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Houd het knooppunt beschikbaar tijdens actief gebruik."</string>
@@ -1088,6 +1088,7 @@
     <string name="native_983f92956ac1a23e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"een bestand gelezen"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geen recente logboekvermeldingen."</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Handmatige Gateway"</string>
+    <string name="native_98a75b6c4b7f4dcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aanmeldingen vernieuwd."</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Groepsnaam wijzigen"</string>
     <string name="native_98ed7669b6d1be9b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Update Goal"</string>
     <string name="native_992a0f626b0714b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Beschikbaarheid van provider onbekend"</string>

@@ -88,6 +88,25 @@ describe("plugin lifecycle protocol validators", () => {
       expect(Value.Check(PluginsReloadResultSchema, result)).toBe(false);
     }
   });
+  it.each([
+    { source: "npm", spec: "example-plugin@1.2.3", pin: true, mode: "update" },
+    { source: "git", spec: "git:example.test/plugins/demo@v1", mode: "install" },
+    { source: "local", path: "/plugins/demo", link: true, mode: "install" },
+    { source: "npm-pack", archivePath: "/plugins/demo.tgz", mode: "update" },
+    { source: "marketplace", marketplace: "team", plugin: "demo", mode: "install" },
+    { source: "bundled", pluginId: "demo" },
+    { source: "official", pluginId: "demo", version: "latest", pin: true },
+  ])("accepts the CLI's $source install intent without caller trust metadata", (request) => {
+    expect(validatePluginsInstallParams(request)).toBe(true);
+    for (const trust of [
+      { trustedSourceLinkedOfficialInstall: true },
+      { bundledOrigin: true },
+      { clawManaged: true },
+    ]) {
+      expect(validatePluginsInstallParams({ ...request, ...trust })).toBe(false);
+    }
+  });
+
   it("exports install policy warning details from the package root", () => {
     const details: InstallPolicyWarningErrorDetails = {
       installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,

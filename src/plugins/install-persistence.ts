@@ -14,6 +14,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { enablePluginInConfig, prepareConfigForDisabledInstall } from "./enable.js";
 import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
+import type { PluginInstallTransaction } from "./install-transaction.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -23,7 +24,7 @@ import {
 } from "./installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { reconcileNpmPluginLoadPath, type PluginInstallUpdate } from "./installs.js";
-import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
+import { PluginInstallPersistedError, type PluginLifecycleRuntimeApply } from "./lifecycle.js";
 import { refreshManagedPluginMetadata } from "./management-service.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
@@ -196,21 +197,21 @@ export async function persistPluginInstall(params: {
   invalidateRuntimeCache?: boolean;
   successMessage?: string;
   warningMessage?: string;
-  runtime?: RuntimeEnv;
+  runtime?: Pick<RuntimeEnv, "log">;
   persistenceLogger?: PluginInstallLogger;
-  onCommitted?: () => void;
+  transaction?: PluginInstallTransaction;
   applyRuntime?: PluginLifecycleRuntimeApply;
   beforePersistentApply?: () => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<OpenClawConfig> {
-  const installRecords = await tracePluginLifecyclePhaseAsync(
-    "install records load",
-    () => loadInstalledPluginIndexInstallRecords(),
-    { command: "install" },
-  );
-  // Keep the prior ledger for replacement cleanup, but validate published package bytes
-  // in a new generation so schema checks and slot selection cannot reuse pre-update facts.
+  let committed = false;
   try {
+    const installRecords = await tracePluginLifecyclePhaseAsync(
+      "install records load",
+      () => loadInstalledPluginIndexInstallRecords(),
+      { command: "install" },
+    );
+    // Validate published bytes in a fresh generation while retaining the prior ledger for cleanup.
     return await withPluginCache(createPluginCache(), async () => {
       const runtime = params.runtime ?? defaultRuntime;
       // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
@@ -380,7 +381,7 @@ export async function persistPluginInstall(params: {
         { command: "install" },
       );
       // Publish the durable install before activation can fail; keep running metadata unchanged.
-      params.onCommitted?.();
+      committed = true;
       refreshManagedPluginMetadata({ config: next });
       // Publish and drain the previous generation before removing its source files.
       await params.applyRuntime?.({
@@ -466,8 +467,30 @@ export async function persistPluginInstall(params: {
       }
       return next;
     });
+  } catch (error) {
+    if (committed) {
+      throw new PluginInstallPersistedError(params.pluginId, error);
+    }
+    try {
+      await params.transaction?.rollback();
+    } catch (rollbackError) {
+      const failure = new AggregateError(
+        [error, rollbackError],
+        "Plugin install failed and payload rollback failed",
+      );
+      failure.cause = error;
+      throw failure;
+    }
+    throw error;
   } finally {
-    // Enclosing batch operations must reread the ledger after this isolated mutation.
+    if (committed) {
+      await params.transaction?.commit().catch(() => {
+        const warning = "Plugin install committed, but backup cleanup failed. Restart is required.";
+        params.persistenceLogger?.warn?.(warning);
+        params.runtime?.log(warning);
+      });
+    }
+    // Enclosing batch operations reread the ledger after this isolated mutation.
     clearLoadInstalledPluginIndexInstallRecordsCache();
   }
 }

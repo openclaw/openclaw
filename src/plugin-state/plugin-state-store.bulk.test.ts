@@ -7,11 +7,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => resetPluginStateStoreForTests());

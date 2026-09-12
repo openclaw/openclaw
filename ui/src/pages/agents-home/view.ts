@@ -3,6 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
+import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
@@ -18,7 +19,7 @@ type AgentCard = {
   role?: string;
   model?: string;
   avatar: string | null;
-  fallback: string;
+  textAvatar: string | null;
   activeNow: boolean;
   lastActiveAt: number;
   preview?: string | null;
@@ -103,21 +104,7 @@ export function renderAgentsHome(props: AgentsHomeProps) {
           >
             <div class="agents-home__identity">
               <div class="agents-home__avatar" aria-hidden="true">
-                ${
-                  card.avatar
-                    ? html`<img
-                        src=${card.avatar}
-                        alt=""
-                        loading="lazy"
-                        @error=${(event: Event) => {
-                          if (event.target instanceof HTMLImageElement) {
-                            event.target.hidden = true;
-                          }
-                        }}
-                      />`
-                    : nothing
-                }
-                <span>${card.fallback}</span>
+                ${renderAgentIdentityAvatar(card)}
               </div>
               <div class="agents-home__name">
                 <h2>${card.name}</h2>

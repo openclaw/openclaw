@@ -7,8 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";

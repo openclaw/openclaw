@@ -738,7 +738,7 @@ describe("Slack live QA runtime helpers", () => {
                         ? commentaryMarker
                         : `🛠️ Exec ${toolMarker}`,
                 ...(testCase.id === "slack-progress-commentary-omitted"
-                  ? { blockText: [`• *Exec* — sleep 5`] }
+                  ? { blockText: [`🛠️ *Exec* — sleep 5`] }
                   : {}),
                 ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },

@@ -85,7 +85,7 @@ describe("runGuidedOnboarding quick start", () => {
           initialValue: "one",
           options: [
             { value: "one", label: "One agent" },
-            { value: "team", label: "A small team: a coordinator plus specialists" },
+            { value: "team", label: "A small team: a chief of staff plus specialists" },
           ],
         }),
       ]);

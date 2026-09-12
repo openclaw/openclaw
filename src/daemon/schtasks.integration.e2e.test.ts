@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";

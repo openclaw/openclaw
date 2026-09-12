@@ -22,10 +22,8 @@ import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareAgentRunUserTurn } from "../agent-turn/agent-run-user-turn.js";
 import type { AgentTurnContext } from "../agent-turn/types.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";

@@ -36,7 +36,7 @@ Skill collection review runs every 7 days. It is enabled when `skills.workshop.a
   Model override; must resolve to an allowed model or the run fails with a validation error.
 </ParamField>
 <ParamField path="--fallbacks" type="string">
-  Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+  Per-job fallback model list, for example `--fallbacks openai/gpt-6-astra,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
 <ParamField path="--clear-fallbacks" type="boolean">
   On `automations edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.

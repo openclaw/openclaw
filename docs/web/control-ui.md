@@ -25,6 +25,15 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 Closed Terminal, Browser, Desktop, and Home/Ask OpenClaw panels initialize when you open them rather than during initial navigation. Panels saved as open still restore after a reload.
 
+Choose **New agent** in the sidebar or Agents home to open the custodian chat.
+It recommends a chief of staff, researcher, writer, reviewer, or a small team
+with all four. Reply with a choice, or describe custom work and a name. Role
+choices use the same [role templates](/cli/agents#role-templates) as the CLI;
+creation waits for operator approval. Created agents appear in Agents home and
+the agent switcher.
+If team creation stops partway through, the custodian reports the retained
+agents so you can inspect them before creating the missing members.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
@@ -61,10 +70,47 @@ main session. Working agents appear first, followed by the most recently active.
 agent creation flow when available, or agent settings otherwise. `/agents` now
 opens the roster; agent configuration remains at `/settings/agents`.
 
-Activity and previews refresh on session events and Gateway reconnects. Each
-refresh reads at most 300 recent sessions; older sessions outside that window
-do not contribute to the cards. When a main session is absent from the window,
-its agent's most recent session supplies the preview.
+To browse sessions across agents, choose **Show all agents** in the
+agent switcher. This enables **team mode**, a browser preference that is off by
+default. The top row becomes a workspace header with the configured Gateway display
+name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
+**Agent settings**, and the existing documentation, help, community, and changelog
+links. Sessions appear under collapsible agent headers in configured roster order,
+which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
+open that agent's main chat. The separate collapse control only folds its sessions.
+The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in
+the same order as the groups; choosing an agent opens New session for that agent.
+Each group's **+** does this directly, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
+agent for chat. Choose **Show one agent** in the workspace menu to restore the
+agent chip, Home row, and direct New session button.
+
+Enabling team mode also defaults the shared page scope to **All agents**, while
+remembering the previous scope to restore when you turn it off. That scope,
+including an explicit **All agents** selection, is saved in this browser for each
+gateway. It survives reloads and switching to another gateway and back, even if
+you open a different agent's chat in team mode. Turning team mode off clears the
+remembered value after restoring it. You can still
+choose a narrower scope; navigating between pages does not reset that choice.
+Automations, Dashboards, Sessions, Tasks, and Usage support all-agent views, with
+agent identity shown on mixed-agent rows. Memory, Model providers, and Skill
+Workshop stay scoped to one agent. Open an agent's main chat from its group header
+to select that agent before visiting those pages; chat actions always belong to
+the conversation's agent.
+
+Choose **All sessions** from an agent group’s options menu to open the Sessions
+page filtered to that agent. Open **Agents** in the sidebar to return to the roster
+page. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
+for group controls and filtering.
+
+Agent names and avatars follow agent and identity updates. Activity and previews on the page and sidebar roster refresh on session events
+and Gateway reconnects. When both are visible, they share one activity window and
+one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
+stops when neither roster is visible. Each refresh reads at most 300 sessions
+across agents, loading pinned sessions first and then the most recent sessions.
+Pinned sessions count toward that limit; sessions outside the window do not appear
+in the grouped sidebar or contribute to activity summaries, except that the open
+conversation remains visible so direct links keep a selected row. When a main session
+is absent from the window, its agent's most recent session supplies the preview.
 
 ## What each page covers
 

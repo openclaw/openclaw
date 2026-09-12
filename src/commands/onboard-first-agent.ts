@@ -22,7 +22,7 @@ export async function promptFirstOnboardingAgent(
         initialValue: "one",
         options: [
           { value: "one", label: "One agent" },
-          { value: "team", label: "A small team: a coordinator plus specialists" },
+          { value: "team", label: "A small team: a chief of staff plus specialists" },
         ],
       })) === "team");
   const teamPreset = createTeam ? await loadAgentTeamPreset() : undefined;
@@ -39,7 +39,7 @@ export async function promptFirstOnboardingAgent(
       ? defaultName
       : await prompter.text({
           message: createTeam
-            ? "What should we call your coordinator?"
+            ? "What should we call your chief of staff?"
             : "What should we call your first agent?",
           initialValue: defaultName,
           validate: validateName,

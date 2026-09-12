@@ -267,7 +267,7 @@ is a sibling of `config`, not a field inside it:
     // Keep your github and identity configuration here.
     summaries: {
       enabled: true,
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       reasoning: "high",
     },
   },

@@ -1,4 +1,5 @@
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { assertAuthProfileStoreAgentOwner } from "../../agents/auth-profiles/sqlite.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
@@ -11,6 +12,8 @@ export async function prepareLocalCapabilityAccountSecrets(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  assertAuthProfileStoreAgentOwner(agentDir, params.agentId);
   if (getActiveSecretsRuntimeConfigSnapshot()) {
     return;
   }
@@ -19,7 +22,7 @@ export async function prepareLocalCapabilityAccountSecrets(params: {
   const snapshot = await secretsRuntime.prepareSecretsRuntimeSnapshot({
     config: getRuntimeConfigSourceSnapshot() ?? params.cfg,
     assignmentConfig: params.cfg,
-    agentDirs: [resolveAgentDir(params.cfg, params.agentId)],
+    agentDirs: [agentDir],
     includeConfigRefs: false,
     allowUnavailableSecretOwners: true,
   });

@@ -11,7 +11,7 @@ import {
 } from "../../src/gateway/server/plugins-http.js";
 import { withTempConfig } from "../../src/gateway/test-temp-config.js";
 import { createSubsystemLogger } from "../../src/logging/subsystem.js";
-import { closePluginStateDatabase } from "../../src/plugin-state/plugin-state-store.js";
+import { closePluginStateDatabase } from "../../src/plugin-state/plugin-state-store.sqlite.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import {

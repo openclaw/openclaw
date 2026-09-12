@@ -2,6 +2,8 @@
 
 import "../test-helpers/app-sidebar-suite.ts";
 import "../test-helpers/app-sidebar-cases/agent-menu.ts";
+import "../test-helpers/app-sidebar-cases/roster-agent-first.ts";
+import "../test-helpers/app-sidebar-cases/roster.ts";
 import "../test-helpers/app-sidebar-cases/attention.ts";
 import "../test-helpers/app-sidebar-cases/basics.ts";
 import "../test-helpers/app-sidebar-cases/footer-status.ts";
@@ -42,3 +44,4 @@ import "../test-helpers/app-sidebar-cases/session-ownership-filtering.ts";
 import "../test-helpers/app-sidebar-cases/session-list-sections.ts";
 import "../test-helpers/app-sidebar-cases/sidebar-zone.ts";
 import "../test-helpers/app-sidebar-cases/transient-menus.ts";
+import "../test-helpers/app-sidebar-cases/plugin-session-list.ts";

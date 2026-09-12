@@ -556,8 +556,9 @@ that reply, then rerun with `--accept-capabilities`:
 /plugins enable <plugin-id> --accept-capabilities
 ```
 
-Capability consent also applies to official external plugins and is separate
-from the source acknowledgement provided by `--force`.
+Bundled plugins and verified plugins from OpenClaw's official catalog are exempt
+from capability consent. Third-party capability consent is separate from the
+source acknowledgement provided by `--force`.
 
 ## `/trace`: plugin trace output
 

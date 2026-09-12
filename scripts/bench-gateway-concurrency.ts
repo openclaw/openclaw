@@ -165,6 +165,7 @@ type CliOptions = {
   subscribers: number;
   timeoutMs: number;
   toolEvents: boolean;
+  turnsPerSession: number;
   visibleObserver: boolean;
   warmup: number;
   workspaceFanout: boolean;
@@ -178,6 +179,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_WARMUP = 0;
 const MOCK_RESPONSE_CHUNK_DELAY_MS = 1_000;
 const MAX_CONCURRENCY = 64;
+const MAX_TURNS_PER_SESSION = 100;
 const MAX_PLUGIN_COUNT = 100;
 const MAX_SESSION_COUNT = 10_000;
 const MAX_SESSION_UPDATES = 100_000;
@@ -223,6 +225,7 @@ const VALUE_FLAGS = new Set([
   "--stream-chunk-delay-ms",
   "--subscribers",
   "--timeout-ms",
+  "--turns-per-session",
   "--warmup",
 ]);
 
@@ -358,6 +361,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       10 * 60_000,
     ),
     toolEvents: hasFlag(argv, "--tool-events"),
+    turnsPerSession: parseBoundedPositiveInt(
+      parseFlagValue(argv, "--turns-per-session"),
+      1,
+      "--turns-per-session",
+      MAX_TURNS_PER_SESSION,
+    ),
     visibleObserver: hasFlag(argv, "--visible-observer"),
     warmup: parseBoundedNonNegativeInt(
       parseFlagValue(argv, "--warmup"),
@@ -386,7 +395,8 @@ Usage:
   node scripts/bench-gateway-concurrency.ts [options]
 
 Options:
-  --concurrency <n>  Concurrent synthetic streaming turns (default: ${DEFAULT_CONCURRENCY})
+  --concurrency <n>  Concurrent synthetic sessions (default: ${DEFAULT_CONCURRENCY})
+  --turns-per-session <n> Serial turns per session (default: 1, max: ${MAX_TURNS_PER_SESSION})
   --control-plane   Also probe tasks.list, cron.list, and cron.status during load
   --history-messages <n> Inject up to 500 synthetic messages per seeded session
   --history-message-chars <n> Synthetic message size (default: 1024, max: 65536)
@@ -408,7 +418,7 @@ Options:
   --no-diagnostics-timeline Disable diagnostics timeline file writes
   --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
   --tool-events      Make every synthetic turn execute a tool before replying
-  --workspace-fanout Bind each turn to a distinct workspace
+  --workspace-fanout Bind each session to a distinct workspace
   --max-control-ms   Fail when any load-phase health/control probe exceeds this bound
   --max-handshake-ms Fail when a fresh authenticated connection exceeds this bound
   --output <path>    Write machine-readable JSON to a file
@@ -898,6 +908,27 @@ async function runTurn(
   }
 }
 
+async function runSessionTurns(
+  rpc: GatewayRpc,
+  index: number,
+  deadlineAt: number,
+  options: {
+    onStarted?: () => void;
+    sessionKey: string;
+    toolEvents: boolean;
+    turnsPerSession: number;
+  },
+): Promise<number> {
+  for (let turn = 0; turn < options.turnsPerSession; turn += 1) {
+    requireRemainingMs(deadlineAt, `starting session ${index + 1} turn ${turn + 1}`);
+    await runTurn(rpc, index * options.turnsPerSession + turn, deadlineAt, options.toolEvents, {
+      sessionKey: options.sessionKey,
+      onStarted: turn === 0 ? options.onStarted : undefined,
+    });
+  }
+  return options.turnsPerSession;
+}
+
 async function sampleGateway(params: {
   deadlineAt: number;
   port: number;
@@ -1053,6 +1084,7 @@ async function runGatewaySample(options: {
   subscribers: number;
   timeoutMs: number;
   toolEvents: boolean;
+  turnsPerSession: number;
   visibleObserver: boolean;
   workspaceFanout: boolean;
 }): Promise<BenchmarkRun> {
@@ -1329,15 +1361,17 @@ async function runGatewaySample(options: {
       const timelineFrom = Date.now();
       const loadStartMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
       const turns = Promise.all(
-        Array.from({ length: options.concurrency }, (_, index) =>
-          runTurn(rpc, index, loadDeadlineAt, options.toolEvents, {
+        turnSessionKeys.map((sessionKey, index) =>
+          runSessionTurns(rpc, index, loadDeadlineAt, {
             onStarted: () => {
               startedTurnCount += 1;
               if (startedTurnCount === options.concurrency) {
                 resolveAllTurnsStarted();
               }
             },
-            ...(turnSessionKeys[index] ? { sessionKey: turnSessionKeys[index] } : {}),
+            sessionKey,
+            toolEvents: options.toolEvents,
+            turnsPerSession: options.turnsPerSession,
           }),
         ),
       ).finally(() => {
@@ -1460,7 +1494,7 @@ async function runGatewaySample(options: {
       ).finally(() => {
         updatesDone = true;
       });
-      const [freshConnectionResult] = await Promise.all([
+      const [freshConnectionResult, sessionTurnCounts] = await Promise.all([
         freshConnection,
         turns,
         sampler,
@@ -1507,7 +1541,7 @@ async function runGatewaySample(options: {
         sessionsList,
         sessionUpdates,
         setupDurationMs,
-        turnCount: options.concurrency,
+        turnCount: sessionTurnCounts.reduce((sum, count) => sum + count, 0),
         turnsDurationMs,
       };
     } catch (error) {
@@ -1696,6 +1730,7 @@ function summarizeRuns(
     sessionUpdateLatencyMs: summarizeNumbers(sessionUpdates.map((sample) => sample.latencyMs)),
     sessionUpdateSampleCount: sessionUpdates.length,
     setupDurationMs: summarizeNumbers(runs.map((run) => run.setupDurationMs)),
+    turnCount: runs.reduce((sum, run) => sum + run.turnCount, 0),
     turnsDurationMs: summarizeNumbers(runs.map((run) => run.turnsDurationMs)),
   };
 }
@@ -1758,6 +1793,7 @@ async function main(): Promise<void> {
     subscribers: options.subscribers,
     summary: summarizeRuns(runs, options),
     toolEvents: options.toolEvents,
+    turnsPerSession: options.turnsPerSession,
     visibleObserver: options.visibleObserver,
     workspaceFanout: options.workspaceFanout,
   };
@@ -1779,6 +1815,7 @@ export const testing = {
   formatRunFailure,
   requestHttp,
   runBenchmarkSamples,
+  runSessionTurns,
   runTurn,
   sampleGateway,
   readDiagnosticsTimelineSpans,

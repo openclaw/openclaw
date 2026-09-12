@@ -10103,7 +10103,6 @@ describe("package artifact reuse", () => {
     );
     expect(runCodexSuite?.if).toContain("steps.codex_compat.outputs.run_lane != 'false'");
     for (const [model, thinking] of [
-      ["sol", "ultra"],
       ["terra", "ultra"],
       ["luna", "max"],
     ]) {

@@ -12,6 +12,7 @@ import {
   readGatewayHeapProfile,
 } from "../../scripts/lib/gateway-bench-heap.ts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { createDeferred } from "../helpers/promise.js";
 
 type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
 
@@ -108,6 +109,8 @@ describe("gateway concurrency benchmark script", () => {
       testing.parseOptions([
         "--concurrency",
         "12",
+        "--turns-per-session",
+        "8",
         "--runs",
         "2",
         "--warmup",
@@ -177,12 +180,18 @@ describe("gateway concurrency benchmark script", () => {
       subscribers: 4,
       timeoutMs: 90_000,
       toolEvents: true,
+      turnsPerSession: 8,
       visibleObserver: true,
       warmup: 0,
       workspaceFanout: true,
     });
     expect(() => testing.parseOptions(["--concurrency", "65"])).toThrow(
       "--concurrency must be at most 64",
+    );
+    expect(testing.parseOptions([]).turnsPerSession).toBe(1);
+    expect(() => testing.parseOptions(["--turns-per-session", "0"])).toThrow("--turns-per-session");
+    expect(() => testing.parseOptions(["--turns-per-session", "101"])).toThrow(
+      "--turns-per-session must be at most 100",
     );
     expect(() => testing.parseOptions(["--runs", "2", "--runs", "3"])).toThrow(
       "--runs was provided more than once",
@@ -428,6 +437,58 @@ describe("gateway concurrency benchmark script", () => {
       expect(wait?.timeoutMs).toBeLessThanOrEqual(budgetMs);
     },
   );
+
+  it("advances parallel sessions independently while serializing their own turns", async () => {
+    const starts: Array<{ sessionKey: string; idempotencyKey: string; message: string }> = [];
+    const startedSessions: string[] = [];
+    const createTurn = () => ({
+      issued: createDeferred(),
+      completed: createDeferred(),
+    });
+    const turns = [createTurn(), createTurn(), createTurn(), createTurn()] as const;
+    const rpc = async <T>(method: string, params: unknown): Promise<T> => {
+      if (method === "agent") {
+        const request = params as (typeof starts)[number];
+        starts.push(request);
+        return { runId: request.idempotencyKey, status: "accepted" } as T;
+      }
+      const { runId } = params as { runId: string };
+      const index = starts.findIndex((request) => request.idempotencyKey === runId);
+      const turn = turns[index];
+      if (!turn) {
+        throw new Error(`Unexpected agent wait: ${runId}`);
+      }
+      turn.issued.resolve();
+      await turn.completed.promise;
+      return { status: "ok" } as T;
+    };
+    const [fastSession, slowSession] = ["fast", "slow"].map((sessionKey, index) =>
+      testing.runSessionTurns(rpc, index, performance.now() + 60_000, {
+        onStarted: () => startedSessions.push(sessionKey),
+        sessionKey,
+        toolEvents: true,
+        turnsPerSession: 2,
+      }),
+    );
+    await Promise.all([turns[0].issued.promise, turns[1].issued.promise]);
+    expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow"]);
+
+    turns[0].completed.resolve();
+    await turns[2].issued.promise;
+    expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow", "fast"]);
+    turns[2].completed.resolve();
+    expect(await fastSession).toBe(2);
+    expect(startedSessions).toEqual(["fast", "slow"]);
+
+    turns[1].completed.resolve();
+    await turns[3].issued.promise;
+    turns[3].completed.resolve();
+    expect(await slowSession).toBe(2);
+    expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow", "fast", "slow"]);
+    expect(startedSessions).toEqual(["fast", "slow"]);
+    expect(new Set(starts.map((request) => request.idempotencyKey)).size).toBe(4);
+    expect(new Set(starts.map((request) => request.message)).size).toBe(4);
+  });
 
   it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {
     const deadlines: number[] = [];

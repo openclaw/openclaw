@@ -507,7 +507,7 @@ provider model's `agentRuntime.id`. Adapter mechanics remain in the plugin:
   agents: {
     defaults: {
       model: {
-        primary: "openai/gpt-5.6-sol",
+        primary: "openai/gpt-6-astra",
         fallbacks: ["acme-cli/large"],
       },
     },

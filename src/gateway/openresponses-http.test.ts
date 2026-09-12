@@ -399,13 +399,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    { stream: false, text: "SDK plain-text response", expected: "SDK plain-text response" },
-    { stream: true, text: "SDK plain-text response", expected: "SDK plain-text response" },
-    { stream: false, text: "", expected: "No response from OpenClaw." },
-    { stream: true, text: "", expected: "No response from OpenClaw." },
+    [false, "SDK plain-text response", "SDK plain-text response"],
+    [true, "SDK plain-text response", "SDK plain-text response"],
+    [false, "", "No response from OpenClaw."],
+    [true, "", "No response from OpenClaw."],
   ])(
-    "returns visible official SDK response text (stream: $stream, text: $text)",
-    async ({ stream, text, expected }) => {
+    "returns visible official SDK response text (stream: %s, text: %s)",
+    async (stream, text, expected) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockResolvedValueOnce({
         payloads: [{ text }],
@@ -878,22 +878,19 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    { name: "JSON-object output", text: { format: { type: "json_object" } } },
-    {
-      name: "JSON-schema output",
-      text: {
+    ["JSON-object output", { format: { type: "json_object" } }],
+    [
+      "JSON-schema output",
+      {
         format: {
           type: "json_schema",
           name: "value",
           schema: { type: "object" },
         },
       },
-    },
-    {
-      name: "unenforced verbosity",
-      text: { format: { type: "text" }, verbosity: "high" },
-    },
-  ])("rejects unsupported SDK text options ($name)", async ({ text }) => {
+    ],
+    ["unenforced verbosity", { format: { type: "text" }, verbosity: "high" }],
+  ])("rejects unsupported SDK text options (%s)", async (_name, text) => {
     agentCommandMock.mockClear();
 
     const res = await postResponses(enabledPort, {
@@ -2072,44 +2069,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    {
-      name: "completed",
-      label: "completed response without a provider terminal",
-      failed: false,
-      providerTerminal: false,
-      reject: false,
-    },
-    {
-      name: "completed",
-      label: "completed response with a provider terminal",
-      failed: false,
-      providerTerminal: true,
-      reject: false,
-    },
-    {
-      name: "failed",
-      label: "provider-failed response with a resolved run",
-      failed: true,
-      providerTerminal: true,
-      reject: false,
-    },
-    {
-      name: "failed",
-      label: "rejected response with a provider terminal",
-      failed: true,
-      providerTerminal: true,
-      reject: true,
-    },
-    {
-      name: "failed",
-      label: "rejected response without a provider terminal",
-      failed: true,
-      providerTerminal: false,
-      reject: true,
-    },
+    ["completed response without a provider terminal", "completed", false, false, false],
+    ["completed response with a provider terminal", "completed", false, true, false],
+    ["provider-failed response with a resolved run", "failed", true, true, false],
+    ["rejected response with a provider terminal", "failed", true, true, true],
+    ["rejected response without a provider terminal", "failed", true, false, true],
   ])(
-    "keeps the $label admitted until its deferred SSE terminal is written",
-    async ({ name, failed, providerTerminal, reject }) => {
+    "keeps the %s admitted until its deferred SSE terminal is written",
+    async (_label, name, failed, providerTerminal, reject) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
@@ -2258,15 +2225,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    { name: "error stop", meta: { stopReason: "error" }, outcome: "failed", status: 500 },
-    {
-      name: "run-budget timeout without error metadata",
-      meta: { aborted: false, timeoutPhase: "provider", providerStarted: true },
-      outcome: "failed",
-      status: 500,
-    },
-    { name: "completed run with an error payload", meta: {}, outcome: "completed", status: 200 },
-  ] as const)("uses the recorded outcome for $name", async ({ meta, outcome, status }) => {
+    ["error stop", { stopReason: "error" }, "failed", 500],
+    [
+      "run-budget timeout without error metadata",
+      { aborted: false, timeoutPhase: "provider", providerStarted: true },
+      "failed",
+      500,
+    ],
+    ["completed run with an error payload", {}, "completed", 200],
+  ] as const)("uses the recorded outcome for %s", async (_name, meta, outcome, status) => {
     agentCommandMock.mockClear();
     agentCommandMock.mockResolvedValueOnce(
       recordAgentRunTerminalOutcome(
@@ -3139,16 +3106,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    { name: "an initial replacement", previousDelta: undefined, replacementDelta: undefined },
-    { name: "a replacement after buffered text", previousDelta: "draft", replacementDelta: "" },
-    {
-      name: "a replacement with an explicit delta",
-      previousDelta: "draft",
-      replacementDelta: "final answer",
-    },
+    ["an initial replacement", undefined, undefined],
+    ["a replacement after buffered text", "draft", ""],
+    ["a replacement with an explicit delta", "draft", "final answer"],
   ])(
-    "buffers $name until the required client tool is validated",
-    async ({ previousDelta, replacementDelta }) => {
+    "buffers %s until the required client tool is validated",
+    async (_name, previousDelta, replacementDelta) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string }).runId;
@@ -3214,33 +3177,23 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    {
-      name: "a completed replacement",
-      replacement: { text: "final answer", delta: "", replace: true },
-      finalText: "final answer",
-      expected: "final answer",
-    },
-    {
-      name: "an empty snapshot",
-      replacement: { text: "", delta: "" },
-      finalText: "",
-      expected: "No response from OpenClaw.",
-    },
-    {
-      name: "an empty replacement snapshot",
-      replacement: { text: "", delta: "", replace: true },
-      finalText: "",
-      expected: "No response from OpenClaw.",
-    },
-    {
-      name: "an empty delta without a snapshot",
-      replacement: { delta: "" },
-      finalText: "",
-      expected: "coordination draft",
-    },
+    [
+      "a completed replacement",
+      { text: "final answer", delta: "", replace: true },
+      "final answer",
+      "final answer",
+    ],
+    ["an empty snapshot", { text: "", delta: "" }, "", "No response from OpenClaw."],
+    [
+      "an empty replacement snapshot",
+      { text: "", delta: "", replace: true },
+      "",
+      "No response from OpenClaw.",
+    ],
+    ["an empty delta without a snapshot", { delta: "" }, "", "coordination draft"],
   ])(
-    "buffers replaceable assistant events through $name",
-    async ({ replacement, finalText, expected }) => {
+    "buffers replaceable assistant events through %s",
+    async (_name, replacement, finalText, expected) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
@@ -3528,13 +3481,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    { stream: false, tools: false },
-    { stream: true, tools: false },
-    { stream: false, tools: true },
-    { stream: true, tools: true },
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
   ])(
-    "replays returned items into a stateless turn (stream=$stream, tools=$tools)",
-    async ({ stream, tools }) => {
+    "replays returned items into a stateless turn (stream=%s, tools=%s)",
+    async (stream, tools) => {
       agentCommandMock.mockClear();
       const calls = [
         { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
@@ -3591,68 +3544,65 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    { stream: false, output: "" },
-    { stream: true, output: "" },
-    { stream: false, output: " \n " },
-    { stream: true, output: "0" },
-    { stream: false, output: "Sunny, 70F." },
-  ])(
-    "continues a client tool result (stream=$stream, output=$output)",
-    async ({ stream, output }) => {
-      const port = enabledPort;
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${port}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "Let me check that." }],
-        meta: {
-          stopReason: "tool_calls",
-          pendingToolCalls: [
-            {
-              id: "call_1",
-              name: "get_weather",
-              arguments: '{"city":"Taipei"}',
-            },
-          ],
-        },
-      } as never);
+    [false, ""],
+    [true, ""],
+    [false, " \n "],
+    [true, "0"],
+    [false, "Sunny, 70F."],
+  ])("continues a client tool result (stream=%s, output=%s)", async (stream, output) => {
+    const port = enabledPort;
+    const client = new OpenAI({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${port}/v1`,
+      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+      maxRetries: 0,
+    });
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Let me check that." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_1",
+            name: "get_weather",
+            arguments: '{"city":"Taipei"}',
+          },
+        ],
+      },
+    } as never);
 
-      const firstJson = await client.responses.create({
-        stream: false,
-        model: "openclaw",
-        input: "check the weather",
-        tools: [{ ...WEATHER_TOOL[0], parameters: {}, strict: false }],
-      });
-      expect(firstJson.status).toBe("completed");
-      const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
-      expect(firstJson.id).toMatch(/^resp_/);
-      const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
+    const firstJson = await client.responses.create({
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: [{ ...WEATHER_TOOL[0], parameters: {}, strict: false }],
+    });
+    expect(firstJson.status).toBe("completed");
+    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
+    expect(firstJson.id).toMatch(/^resp_/);
+    const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "It is sunny." }],
-      } as never);
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "It is sunny." }],
+    } as never);
 
-      const request = {
-        model: "openclaw",
-        previous_response_id: firstJson.id,
-        input: [{ type: "function_call_output" as const, call_id: "call_1", output }],
-      };
-      const secondResponse = stream
-        ? await client.responses.stream(request).finalResponse()
-        : await client.responses.create(request);
-      expect(secondResponse.status).toBe("completed");
-      expect(secondResponse.output_text).toBe("It is sunny.");
-      expect(agentCommandMock).toHaveBeenCalledTimes(2);
-      expect(firstAgentOpts(1)).toMatchObject({
-        sessionKey: firstSessionKey,
-        message: `Tool:call_1: ${output}`,
-      });
-    },
-  );
+    const request = {
+      model: "openclaw",
+      previous_response_id: firstJson.id,
+      input: [{ type: "function_call_output" as const, call_id: "call_1", output }],
+    };
+    const secondResponse = stream
+      ? await client.responses.stream(request).finalResponse()
+      : await client.responses.create(request);
+    expect(secondResponse.status).toBe("completed");
+    expect(secondResponse.output_text).toBe("It is sunny.");
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    expect(firstAgentOpts(1)).toMatchObject({
+      sessionKey: firstSessionKey,
+      message: `Tool:call_1: ${output}`,
+    });
+  });
 
   it.each([undefined, null, 0, {}, []].map((output) => ({ output })))(
     "rejects malformed function output: %j",

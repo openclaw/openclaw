@@ -23,7 +23,7 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", () => ({
+vi.mock("./install-config.js", () => ({
   persistPluginInstall: vi.fn(),
 }));
 

@@ -21,6 +21,11 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  assertExistingAgentSchemaOwner,
+  readExistingAgentSchemaMeta,
+} from "../../state/openclaw-agent-db-schema-helpers.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -416,6 +421,23 @@ function acquireAuthProfileReadDatabase(
   authProfileReadDatabases.set(resolvedPath, db);
   unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
   return { status: "readable", db };
+}
+
+/** Validate selected-agent ownership without requiring a current session schema. */
+export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: string): void {
+  const pathname = resolveAuthProfileDatabasePath(agentDir);
+  const acquired = acquireAuthProfileReadDatabase(pathname);
+  if (acquired.status === "missing") {
+    return;
+  }
+  if (acquired.status === "unreadable") {
+    throw new Error(`Unable to read agent auth database ${pathname}.`);
+  }
+  assertExistingAgentSchemaOwner(
+    readExistingAgentSchemaMeta(acquired.db),
+    normalizeAgentId(agentId),
+    pathname,
+  );
 }
 
 export function inspectAuthProfileJsonCellReadOnly(

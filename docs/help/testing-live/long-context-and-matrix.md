@@ -15,7 +15,7 @@ read_when:
 - Test: `src/gateway/gateway-openai-long-context.live.test.ts`
 - Enable: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1`
 - Profiles: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=full` selects exact
-  `openai/gpt-5.6-sol` with a `1050000` total window, `922000` safe active
+  `openai/gpt-5.6-luna` with a `1050000` total window, `922000` safe active
   input, `128000` maximum output, and `700000` compaction threshold. `reduced`
   reaches the same transport and persistence path with a smaller budget.
 - Metrics: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1` emits phase timing and
@@ -54,7 +54,7 @@ The full embedded and native recipes are proof runs, not throughput
 benchmarks. They fail unless the following runtime contracts hold:
 
 - Runtime and model identity are exact: embedded OpenClaw or native Codex as
-  requested, both on `openai/gpt-5.6-sol`.
+  requested, both on `openai/gpt-5.6-luna`.
 - At least one provider request crosses `272000` input tokens and every call
   reports priority service.
 - Embedded OpenClaw receives and persists a first-class encrypted Responses
@@ -88,7 +88,7 @@ OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
 ```
 
 This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
-the fresh onboarding inference-selection seam, asserts `openai/gpt-5.6-sol`, and then
+the fresh onboarding inference-selection seam, asserts `openai/gpt-6-astra`, and then
 runs a real gateway turn with that resolved model.
 
 GPT-5.6 embedded OpenClaw matrix:
@@ -96,7 +96,7 @@ GPT-5.6 embedded OpenClaw matrix:
 ```bash
 OPENCLAW_LIVE_GATEWAY_THINKING=ultra \
   OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai \
-  OPENCLAW_LIVE_GATEWAY_MODELS='openai/gpt-5.6-sol,openai/gpt-5.6-terra,openai/gpt-5.6-luna' \
+  OPENCLAW_LIVE_GATEWAY_MODELS='openai/gpt-5.6-terra,openai/gpt-5.6-luna' \
   pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
 ```
 

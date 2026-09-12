@@ -50,6 +50,8 @@ it.each(["bulk", "admin"] as const)(
       });
     }
     const start = vi.fn(async () => {});
+    const cleanupGate = createDeferred();
+    const removed = vi.fn(async () => await cleanupGate.promise);
     for (const runId of queued) {
       enqueueSwarmRun({
         groupId: "sibling-cancellation",
@@ -58,6 +60,7 @@ it.each(["bulk", "admin"] as const)(
         activeRunIds: running,
         start,
         onStartFailure: () => true,
+        onRemoved: removed,
       });
     }
     const interrupted: string[] = [];
@@ -85,7 +88,8 @@ it.each(["bulk", "admin"] as const)(
       );
     }
     const cfg = getRuntimeConfig();
-    const pending =
+    let settled = false;
+    const pending = (
       boundary === "admin"
         ? killSubagentRunAdmin({ cfg, sessionKey: owner, expectedRunId: "root" })
         : killAllControlledSubagentRuns({
@@ -98,7 +102,10 @@ it.each(["bulk", "admin"] as const)(
               controlScope: "children",
             },
             runs: selected.map((id) => subagentRuns.get(id)!),
-          });
+          })
+    ).finally(() => {
+      settled = true;
+    });
     try {
       await firstInterrupted.promise;
       await vi.waitFor(() => expect(interrupted.toSorted()).toEqual(running));
@@ -107,6 +114,12 @@ it.each(["bulk", "admin"] as const)(
       for (const lease of leases.toReversed()) {
         lease.release();
       }
+      await vi.waitFor(() => expect(removed).toHaveBeenCalledTimes(queued.length));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      cleanupGate.resolve();
       const result = await pending;
       expect(result).toMatchObject(
         boundary === "admin"
@@ -118,6 +131,7 @@ it.each(["bulk", "admin"] as const)(
       }
       expect(start).not.toHaveBeenCalled();
     } finally {
+      cleanupGate.resolve();
       for (const lease of leases) {
         lease.release();
       }

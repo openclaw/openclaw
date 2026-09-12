@@ -8,6 +8,7 @@ import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { pluginInstallRequestName } from "../../lib/plugins/index.ts";
 import type { PluginInstallWizardStage, PluginInstallWizardState } from "./install-wizard-model.ts";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts";
 
@@ -78,9 +79,13 @@ function renderProgress(stage: PluginInstallWizardStage): TemplateResult {
 
 function requestSource(state: PluginInstallWizardState): string {
   const request = state.request;
-  return request.source === "clawhub"
-    ? `ClawHub · ${request.packageName}`
-    : `${t("pluginsPage.official")} · ${request.pluginId}`;
+  const source =
+    request.source === "clawhub"
+      ? "ClawHub"
+      : request.source === "official"
+        ? t("pluginsPage.official")
+        : request.source;
+  return `${source} · ${pluginInstallRequestName(request)}`;
 }
 
 function renderReview(state: PluginInstallWizardState): TemplateResult {

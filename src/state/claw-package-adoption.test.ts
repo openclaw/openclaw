@@ -195,7 +195,7 @@ describe("Claw package independent adoption", () => {
 
     const results = await applyClawPackageRemovals(decisions, { env });
 
-    expect(results).toMatchObject([{ action: "retained" }]);
+    expect(results).toMatchObject({ packages: [{ action: "retained" }] });
     const directLease = acquireClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: "@acme/audit" },
       { env, required: true },

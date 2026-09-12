@@ -317,7 +317,10 @@ struct DebugSettings: View {
                         Task { await self.resetGatewayTunnel() }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(self.tunnelResetInFlight || !self.isRemoteMode)
+                    .disabled(
+                        self.tunnelResetInFlight ||
+                            self.state.connectionMode != .remote ||
+                            self.state.remoteTransport != .ssh)
                 }
 
                 if let portKillStatus {
@@ -334,9 +337,10 @@ struct DebugSettings: View {
                 }
 
                 if self.portReports.isEmpty, !self.portCheckInFlight {
-                    Text(String(
-                        format: String(localized: "Check which process owns %lld and suggest fixes."),
-                        GatewayEnvironment.gatewayPort()))
+                    Text(self.state.connectionMode == .remote && self.state.remoteTransport == .direct &&
+                        !self.state.hostsLocalGatewayWithRemotePrimary
+                        ? String(localized: "Direct Gateway connectivity is checked by the connection health check.")
+                        : String(localized: "Check which processes own the local Gateway and SSH tunnel ports."))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
@@ -729,10 +733,6 @@ struct DebugSettings: View {
                 }
             }
         }
-    }
-
-    private var isRemoteMode: Bool {
-        CommandResolver.connectionSettings().mode == .remote
     }
 
     private var canRestartGateway: Bool {

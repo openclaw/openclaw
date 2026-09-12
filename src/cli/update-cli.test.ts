@@ -5796,7 +5796,8 @@ describe("update-cli", () => {
   it.each(["progress initialization", "triage preparation"] as const)(
     "finishes the admitted run when %s fails before update execution",
     async (boundary) => {
-      const { closeOpenClawStateDatabaseByPath } = await import("../state/openclaw-state-db.js");
+      const { closeOpenClawStateDatabaseByPath } =
+        await import("../state/openclaw-state-db-cache.js");
       const stateDir = tempDirs.make("openclaw-update-run-initialization-");
       initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
       const failure = new Error(`${boundary} failed`);

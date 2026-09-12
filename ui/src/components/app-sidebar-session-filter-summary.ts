@@ -65,3 +65,34 @@ export function renderSessionFilterSummary(host: SessionListHost) {
     >
   </button>`;
 }
+
+export function renderSidebarSessionFilter(
+  host: Pick<
+    SessionListHost,
+    | "sidebarMenus"
+    | "sessionOwnerFilterActive"
+    | "sessionInvolvingMeFilterActive"
+    | "sessionsStatusFilter"
+  >,
+  className: string,
+) {
+  const filtered =
+    host.sessionOwnerFilterActive ||
+    host.sessionInvolvingMeFilterActive ||
+    host.sessionsStatusFilter !== "active";
+  return html`<button
+    type="button"
+    class="${className} sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+    title=${t("chat.sidebar.sortSessions")}
+    aria-label=${t("chat.sidebar.sortSessions")}
+    aria-haspopup="menu"
+    aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
+    @click=${(event: MouseEvent) => {
+      if (event.currentTarget instanceof HTMLElement) {
+        host.sidebarMenus.toggleSessionSortMenu(event.currentTarget);
+      }
+    }}
+  >
+    ${icons.listFilter}
+  </button>`;
+}

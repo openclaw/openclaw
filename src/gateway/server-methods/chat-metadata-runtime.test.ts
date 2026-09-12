@@ -627,7 +627,7 @@ describe("gateway chat metadata runtime", () => {
     };
     const owner = createChatMetadataOwner(
       config,
-      "gpt-5.6-sol",
+      "gpt-5.6-luna",
       credentials,
       "openai",
       "openai-chatgpt-responses",
@@ -657,7 +657,7 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
 
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
+      models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
     });
     expect(loadFullModelCatalog).not.toHaveBeenCalled();
   });
@@ -669,7 +669,7 @@ describe("gateway chat metadata runtime", () => {
     harness.setOwner(
       createChatMetadataOwner(
         harness.getPreparedOwner()!.config,
-        "gpt-5.6-sol",
+        "gpt-5.6-luna",
         {
           openai: {
             type: "oauth",
@@ -700,7 +700,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("adopts discovered wildcard models without restarting provider discovery", async () => {
-    const config = createOpenAIChatMetadataConfig(["*", "gpt-5.6-sol"]);
+    const config = createOpenAIChatMetadataConfig(["*", "gpt-5.6-luna"]);
     const credentials: AgentCredentialMap = {
       openai: {
         type: "oauth",
@@ -712,7 +712,7 @@ describe("gateway chat metadata runtime", () => {
     const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
     const owner = createChatMetadataOwner(
       config,
-      "gpt-5.6-sol",
+      "gpt-5.6-luna",
       credentials,
       "openai",
       "openai-chatgpt-responses",
@@ -723,8 +723,8 @@ describe("gateway chat metadata runtime", () => {
     };
     harness.setAuthStore(preparedAuthStore);
     const dynamicModel = {
-      id: "gpt-5.6-luna",
-      name: "GPT-5.6 Luna",
+      id: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
       provider: "openai",
       api: "openai-chatgpt-responses" as const,
     };
@@ -751,7 +751,7 @@ describe("gateway chat metadata runtime", () => {
 
     await harness.runtime.refresh();
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
+      models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
     });
 
     await generationOwner.loadFullModelCatalog();
@@ -759,8 +759,8 @@ describe("gateway chat metadata runtime", () => {
 
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
       models: expect.arrayContaining([
-        expect.objectContaining({ id: "gpt-5.6-sol", available: true }),
         expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
+        expect.objectContaining({ id: "gpt-5.6-terra", available: true }),
       ]),
     });
     expect(generationOwner.loadFullModelCatalog).toHaveBeenCalledOnce();

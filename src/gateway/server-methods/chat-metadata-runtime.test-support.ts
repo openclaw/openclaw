@@ -89,11 +89,11 @@ export function createDraftChatMetadataScope(
   };
 }
 
-export function createOpenAIChatMetadataConfig(modelIds = ["gpt-5.6-sol"]): OpenClawConfig {
+export function createOpenAIChatMetadataConfig(modelIds = ["gpt-5.6-luna"]): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.6-sol" },
+        model: { primary: "openai/gpt-5.6-luna" },
         models: Object.fromEntries(modelIds.map((id) => [`openai/${id}`, {}])),
       },
       list: [{ id: "main", default: true }],

@@ -536,7 +536,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
 
     await withTestTimeout(closed.promise, 1_000, "Graceful provider close not received");
-    expect(transcripts).toEqual(["final provider transcript"]);
+    await vi.waitFor(() => expect(transcripts).toEqual(["final provider transcript"]));
     expect(finalizedFrames).toEqual([{ type: "finalize" }]);
   });
 

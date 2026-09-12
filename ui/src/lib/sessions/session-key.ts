@@ -31,6 +31,13 @@ type UiSessionDefaults = {
 
 export { normalizeAgentId };
 
+export function resolveUiSessionRowAgentId(
+  row: { key: string; agentId?: string },
+  fallbackAgentId: string,
+): string {
+  return parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? fallbackAgentId;
+}
+
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {

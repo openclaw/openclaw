@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   createNpmTarget,
@@ -12,11 +13,19 @@ import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-com
 
 afterEach(() => vi.restoreAllMocks());
 
-async function createPackageInstallFixture(base: string, candidateVersion = "1.0.0") {
+async function createPackageInstallFixture(
+  base: string,
+  candidateVersion = "1.0.0",
+  buildId?: string,
+) {
   const globalRoot = path.join(base, "prefix", "lib", "node_modules");
   const target = createNpmTarget(globalRoot);
   const root = path.join(globalRoot, "openclaw");
   await writePackageRoot(root, "1.0.0");
+  if (buildId) {
+    await fs.writeFile(path.join(root, "dist", "build-info.json"), JSON.stringify({ buildId }));
+    await writePackageDistInventory(root);
+  }
   const launcher = path.join(base, "prefix", "bin", "openclaw");
   await fs.mkdir(path.dirname(launcher), { recursive: true });
   await fs.writeFile(launcher, "previous launcher\n");
@@ -37,6 +46,14 @@ async function createPackageInstallFixture(base: string, candidateVersion = "1.0
         path.join(prefix, "lib", "node_modules", "openclaw"),
         candidateVersion,
       );
+      if (buildId) {
+        const stagedRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+        await fs.writeFile(
+          path.join(stagedRoot, "dist", "build-info.json"),
+          JSON.stringify({ buildId }),
+        );
+        await writePackageDistInventory(stagedRoot);
+      }
       await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
       await fs.writeFile(path.join(prefix, "bin", "openclaw"), "candidate launcher\n");
     } else {
@@ -104,16 +121,72 @@ it.each([
   },
 );
 
-it.each(["run", "close"] as const)(
-  "retains the exact staged runtime without replacing the active installation before %s",
-  async (action) => {
+it.each(["package", "git"] as const)(
+  "preserves matching explicit artifact behavior for an existing %s install",
+  async (installKind) => {
+    await withTestDir({ prefix: "update-matching-artifact-" }, async (base) => {
+      const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(
+        base,
+        "1.0.0",
+        "same-build",
+      );
+      const validateCandidate = vi.fn(async () => [
+        { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
+      ]);
+      const beforeActivate = vi.fn(async () => {});
+
+      const result = await runPackageInstallUpdate({
+        root,
+        installKind,
+        tag: "https://example.invalid/candidate.tgz",
+        timeoutMs: 1000,
+        startedAt: Date.now(),
+        progress: {},
+        jsonMode: true,
+        installEnv: {},
+        installTarget: target,
+        validateCandidate,
+        beforeActivate,
+        onTransaction: vi.fn(),
+      });
+      if (installKind === "package") {
+        expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+        expect(validateCandidate).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ status: "error", reason: "unexpected-error" });
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({ name: "canary", exitCode: 1 }),
+        );
+        expect(validateCandidate).toHaveBeenCalledOnce();
+      }
+      expect(beforeActivate).not.toHaveBeenCalled();
+      await expectOriginalInstallation();
+    });
+  },
+);
+
+it.each(
+  [
+    { name: "new version", candidateVersion: "2.0.0", tag: "2.0.0", buildId: undefined },
+    {
+      name: "matching explicit artifact",
+      candidateVersion: "1.0.0",
+      tag: "https://example.invalid/candidate.tgz",
+      buildId: "same-build",
+    },
+  ].flatMap(({ name, candidateVersion, tag, buildId }) =>
+    (["run", "close"] as const).map((action) => ({ name, candidateVersion, tag, buildId, action })),
+  ),
+)(
+  "retains the exact $name staged runtime without replacing the active installation before $action",
+  async ({ action, candidateVersion, tag, buildId }) => {
     await withTestDir({ prefix: "update-retained-stage-" }, async (base) => {
       const { root, target, installedPrefixes, expectOriginalInstallation } =
-        await createPackageInstallFixture(base, "2.0.0");
+        await createPackageInstallFixture(base, candidateVersion, buildId);
       const params = {
         root,
         installKind: "package" as const,
-        tag: "2.0.0",
+        tag,
         timeoutMs: 1000,
         startedAt: Date.now(),
         progress: {},
@@ -126,7 +199,7 @@ it.each(["run", "close"] as const)(
       expect(staged.root).not.toBe(root);
       expect(
         JSON.parse(await fs.readFile(path.join(staged.root, "package.json"), "utf8")).version,
-      ).toBe("2.0.0");
+      ).toBe(candidateVersion);
       await expectOriginalInstallation();
       if (action === "run") {
         const runtimeIdentity = await fs.stat(path.join(staged.root, "dist", "index.js"));

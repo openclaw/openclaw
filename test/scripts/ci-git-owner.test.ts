@@ -1302,25 +1302,38 @@ posixIt.each([124, 125, 143])(
     const report = await publisherRun({
       gitFault: { match: "^push ", code, output: "GH013 repository rule violations\n" },
     });
-    expect(report.code, report.output).toBe(code);
-    expect(report.pushes).toHaveLength(1);
-    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(2);
-    expect(report.output).toContain("refusing a doomed retry");
-    expect(report.pushLog).toBe("GH013 repository rule violations\n");
+    expect(report.code, report.output).toBe(code === 124 ? 0 : code);
+    expect(report.pushes).toHaveLength(code === 124 ? 2 : 1);
+    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(
+      code === 124 ? 3 : 2,
+    );
+    if (code === 124) {
+      expect(report.output).toContain("retrying once under the same lease");
+      expect(report.githubSummary).toContain("Generated pull request:");
+    } else {
+      expect(report.output).toContain("refusing a doomed retry");
+      expect(report.pushLog).toBe("GH013 repository rule violations\n");
+    }
     expect(report.authHeaderPresent).toBe(false);
-    expect(report.githubSummary).toBe("");
+    if (code !== 124) {
+      expect(report.githubSummary).toBe("");
+    }
   },
   55_000,
 );
 
 posixIt.each(["fetch", "ls-remote", "push"])(
-  "generated publisher %s timeout has one attempt and no general retry",
+  "generated publisher %s timeout has bounded recovery",
   async (operation) => {
     const report = await publisherRun({ gitFault: { match: `^${operation} `, code: "hang" } });
-    expect(report.code, report.output).toBe(124);
+    expect(report.code, report.output).toBe(operation === "push" ? 0 : 124);
     expect(report.fetches).toHaveLength(1);
-    expect(report.pushes).toHaveLength(operation === "push" ? 1 : 0);
-    expect(report.githubSummary).toBe("");
+    expect(report.pushes).toHaveLength(operation === "push" ? 2 : 0);
+    expect(report.githubSummary).toBe(
+      operation === "push"
+        ? "Generated pull request: https://github.com/openclaw/openclaw/pull/1\n"
+        : "",
+    );
     expect(report.authHeaderPresent).toBe(false);
   },
   55_000,
@@ -1395,6 +1408,22 @@ posixIt.each([0, 2, 23, 125, 143, "hang", "cleanup-failure", "cancel"] as const)
         expect(report.output).not.toContain("Unable to determine");
       }
     }
+  },
+  55_000,
+);
+
+posixIt(
+  "generated publisher retries one timed-out push under the unchanged lease",
+  async () => {
+    const report = await publisherRun({
+      gitFault: { match: "^push ", occurrence: 1, code: "hang" },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.pushes).toHaveLength(2);
+    expect(report.pushes[0]?.args).toEqual(report.pushes[1]?.args);
+    expect(report.publication?.generatedA).toBe("desired-a");
+    expect(report.githubSummary).toContain("Generated pull request:");
+    expect(report.output).toContain("retrying once under the same lease");
   },
   55_000,
 );

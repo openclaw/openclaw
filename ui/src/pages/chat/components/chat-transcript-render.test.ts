@@ -45,18 +45,37 @@ describe("chat transcript rendering", () => {
   afterEach(resetTranscriptTestDom);
 
   it.each([
-    ["blob:configured-agent", "gutter"],
-    ["🤖", "gutter"],
-    [null, "gutter"],
-    ["blob:configured-agent", "none"],
-    ["blob:configured-agent", "footer"],
+    ["blob:configured-agent", "gutter", "props"],
+    ["blob:configured-agent", "gutter", "roster"],
+    ["blob:configured-agent", "gutter", null],
+    ["🦉", "gutter", "fallback-agent"],
+    ["🤖", "gutter", null],
+    [null, "gutter", null],
+    ["blob:configured-agent", "none", null],
+    ["blob:configured-agent", "footer", null],
   ] as const)(
-    "keeps configured avatar %s consistent across saved and streaming replies with %s placement",
-    async (avatar, avatarPlacement) => {
+    "keeps avatar %s and %s placement consistent across saved and streaming replies (emoji from %s)",
+    async (avatar, avatarPlacement, emojiSource) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       const props = threadProps("pane-agent-avatar");
       props.userId = avatarPlacement === "footer" ? null : "synthetic-owner";
-      props.assistantAvatar = avatar;
+      props.assistantAvatar = emojiSource === "props" ? "🦉" : avatar;
       props.assistantAvatarUrl = avatar?.startsWith("blob:") ? avatar : null;
+      props.agents =
+        emojiSource === "roster" ? [{ id: "main", identity: { emoji: "🦉" } }] : undefined;
+      if (avatar === null) {
+        props.currentAgentId = undefined;
+        props.fullMessageAgentId = "forge";
+      }
+      if (emojiSource === "fallback-agent") {
+        props.currentAgentId = undefined;
+        props.fullMessageAgentId = "writer";
+        props.assistantAvatar = null;
+        props.agents = [
+          { id: "main", identity: { avatarUrl: "/avatar/main", emoji: "🦞" } },
+          { id: "writer", identity: { emoji: "🦉" } },
+        ];
+      }
       if (avatarPlacement === "none") {
         props.sessionKey = "agent:main:subagent:avatar-test";
       }
@@ -73,18 +92,71 @@ describe("chat transcript rendering", () => {
         const replies = container.querySelectorAll(".chat-group.assistant");
         expect(replies).toHaveLength(3);
         for (const reply of replies) {
-          const image = reply.querySelector(".chat-avatar.assistant");
-          if (avatar === null || avatarPlacement !== "gutter") {
-            expect(image).toBeNull();
+          const slot = reply.querySelector(".chat-avatar-slot, .chat-avatar.assistant");
+          if (avatarPlacement !== "gutter") {
+            expect(slot).toBeNull();
+          } else if (avatar === null) {
+            await vi.waitFor(() =>
+              expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+            );
           } else if (avatar.startsWith("blob:")) {
+            const image = slot?.querySelector("img.chat-avatar.assistant");
             expect(image?.getAttribute("src")).toBe(avatar);
+            expect(image?.getAttribute("alt")).toBe(props.assistantName);
+            image?.dispatchEvent(new Event("load"));
+            expect(slot?.classList.contains("is-fallback")).toBe(false);
+            image?.dispatchEvent(new Event("error"));
+            expect(slot?.classList.contains("is-fallback")).toBe(true);
+            if (emojiSource) {
+              expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
+            } else {
+              await vi.waitFor(() =>
+                expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+              );
+            }
           } else {
-            expect(image?.textContent?.trim()).toBe(avatar);
+            expect(slot?.querySelector("img")).toBeNull();
+            expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe(avatar);
           }
+        }
+        if (emojiSource === "props") {
+          props.assistantAvatar = "🦊";
+          render(renderChatThread(props, transcript), container);
+          transcript.hostUpdated();
+          await flushDeferredRowPrune();
+          expect(
+            [...container.querySelectorAll(".chat-avatar.assistant [data-avatar]")].map((element) =>
+              element.getAttribute("data-avatar"),
+            ),
+          ).toEqual(["🦊", "🦊", "🦊"]);
+        }
+        if (avatar === null) {
+          const faces = () =>
+            [
+              ...container.querySelectorAll(".chat-avatar.assistant .identity-avatar__agent-face"),
+            ].map((element) => element.outerHTML);
+          const original = faces();
+          expect(original).toHaveLength(3);
+          expect(new Set(original).size).toBe(1);
+          props.fullMessageAgentId = "scout";
+          render(renderChatThread(props, transcript), container);
+          transcript.hostUpdated();
+          await flushDeferredRowPrune();
+          await vi.waitFor(() => {
+            expect(faces()).toHaveLength(3);
+            expect(new Set(faces()).size).toBe(1);
+            expect(faces()[0]).not.toBe(original[0]);
+          });
+          props.fullMessageAgentId = "forge";
+          render(renderChatThread(props, transcript), container);
+          transcript.hostUpdated();
+          await flushDeferredRowPrune();
+          await vi.waitFor(() => expect(faces()).toEqual(original));
         }
       } finally {
         transcript.hostDisconnected();
         container.remove();
+        now.mockRestore();
       }
     },
   );

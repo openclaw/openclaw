@@ -754,15 +754,17 @@ describe("MemorySettingsPage tab routing", () => {
     const memoryStatus = vi.fn((agentId: string) =>
       Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
     );
-    const { element, request, setPhase } = createPage({
+    const { element, request, setPhase, agentSelection } = createPage({
       configObject: {},
       agents: [{ id: "main" }, { id: "research" }],
+      selectedAgentId: "research",
       memoryStatus,
     });
     element.routeData = memoryTabRoute("overview");
     document.body.append(element);
     try {
       await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
+      expect(memoryStatus).toHaveBeenLastCalledWith("research", false);
       await element.updateComplete;
       expect(
         request.mock.calls.filter(([method]) => method === "doctor.memory.status"),
@@ -775,12 +777,17 @@ describe("MemorySettingsPage tab routing", () => {
       ) as HTMLElement & {
         onSelect?: (value: string) => void;
       };
-      select.onSelect?.("research");
+      select.onSelect?.("main");
+      await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("main", false));
+      agentSelection.setScope(null);
+      await element.updateComplete;
+      expect(memoryStatus).toHaveBeenCalledTimes(2);
+      agentSelection.set("research");
       await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("research", false));
 
       setPhase("disconnected");
       setPhase("connected");
-      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(3));
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(4));
     } finally {
       element.remove();
     }
@@ -803,6 +810,33 @@ describe("MemorySettingsPage tab routing", () => {
       element.configObject = { plugins: { slots: { memory: "engine-b" } } };
       await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
       expect(element.textContent).toContain("engine-b");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("preselects the navigation agent without resetting a later manual choice on rerender", async () => {
+    const { element, agentSelection, request } = createPage({
+      configObject: {},
+      agents: [{ id: "main" }, { id: "research" }],
+      routeData: memoryRoute("/settings/memory?agent=research"),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("doctor.memory.status", {
+          agentId: "research",
+        }),
+      );
+      expect(agentSelection.state.selectedId).toBe("research");
+      expect(request.mock.calls.filter(([method]) => method === "doctor.memory.status")).toEqual([
+        ["doctor.memory.status", { agentId: "research" }],
+      ]);
+      agentSelection.set("main");
+      element.routeData = memoryRoute("/settings/memory?agent=research");
+      await element.updateComplete;
+      expect(agentSelection.state.selectedId).toBe("main");
+      expect(element.querySelector("openclaw-agent-select")).toHaveProperty("value", "main");
     } finally {
       element.remove();
     }

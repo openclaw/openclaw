@@ -137,7 +137,6 @@ export {
   runSetupWizardConfigure,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-  selectFirstWizardOption,
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";

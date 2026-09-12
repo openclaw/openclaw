@@ -11,11 +11,11 @@ import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
-import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPath,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+  openClawStateDatabaseCache,
+} from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import type {

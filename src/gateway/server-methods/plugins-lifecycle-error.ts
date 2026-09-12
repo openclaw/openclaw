@@ -38,10 +38,21 @@ export function pluginLifecycleError(error: unknown, application?: PluginRuntime
             ...(lifecycleError.warning ? { warning: lifecycleError.warning } : {}),
           })
         : undefined;
+  const refusal =
+    !failure.persistence && lifecycleError?.installRejected
+      ? {
+          pluginInstallRejected: true,
+          ...(lifecycleError.code ? { pluginInstallCode: lifecycleError.code } : {}),
+          ...(lifecycleError.installSource
+            ? { pluginInstallSource: lifecycleError.installSource }
+            : {}),
+        }
+      : undefined;
   const details =
-    failure.runtime || failure.persistence
+    failure.runtime || failure.persistence || refusal
       ? {
           ...installDetails,
+          ...refusal,
           ...(failure.runtime ? { runtime: failure.runtime } : {}),
           ...(failure.persistence ? { persistence: failure.persistence } : {}),
           ...(failure.runtimeAttempt ? { runtimeAttempt: failure.runtimeAttempt } : {}),

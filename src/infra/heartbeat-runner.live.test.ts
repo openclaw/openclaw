@@ -21,7 +21,7 @@ import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.j
 const enabled = isLiveTestEnabled() && process.env.OPENCLAW_LIVE_SESSION_EVENT_WAKE === "1";
 const describeLive = enabled ? describe : describe.skip;
 const TURN_TIMEOUT_MS = 180_000;
-const MODEL = "openai/gpt-5.6-sol";
+const MODEL = "openai/gpt-5.6-luna";
 
 async function readMessages(sessionKey: string): Promise<unknown[]> {
   const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);

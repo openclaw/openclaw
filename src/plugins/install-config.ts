@@ -1,21 +1,36 @@
-// Owns config snapshots, include boundaries, and recovery for plugin installation.
+// Owns source-aware config snapshots and recovery for plugin installation.
+import fs from "node:fs";
+import path from "node:path";
+import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { resolveUserPath } from "../utils.js";
+import { findBundledPluginSource } from "./bundled-sources.js";
 import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
   supportsInstallConfigSingleTopLevelIncludeShape,
   type ConfigMutationPreflight,
   type ConfigSnapshotForInstallPersist,
-} from "../plugins/install-config-mutation.js";
-import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
-import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
-import { resolveUserPath } from "../utils.js";
+} from "./install-config-mutation.js";
 import {
-  resolvePluginInstallInvalidConfigPolicy,
-  type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
-import { listPersistedBundledPluginRecoveryLocations } from "./plugins-location-bridges.js";
+  parseNpmPrefixSpec,
+  resolveBundledInstallPlanBeforeNpm,
+  resolveFileNpmSpecToLocalPath,
+} from "./install-source-spec.js";
+import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.js";
+import { loadPluginManifest } from "./manifest.js";
+import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "./official-external-plugin-catalog.js";
+import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 
 export type ConfigSnapshotForInstallExecution = ConfigSnapshotForInstallPersist & {
   hookMutation: ConfigMutationPreflight;
@@ -34,21 +49,15 @@ export function resolveFullyBlockedConfigMutationReason(
   return `Config plugin and hook mutations are both blocked. ${snapshot.pluginMutation.reason} ${snapshot.hookMutation.reason}`;
 }
 
-function buildInvalidPluginInstallConfigError(message: string): Error {
-  return Object.assign(new Error(message), { code: "INVALID_CONFIG" });
-}
-
-function assertPluginConfigMutationAllowed(preflight: ConfigMutationPreflight): void {
-  if (preflight.mode === "blocked") {
-    throw buildInvalidPluginInstallConfigError(preflight.reason);
+export class PluginInstallConfigError extends Error {
+  readonly code = "INVALID_CONFIG";
+  constructor(
+    message: string,
+    readonly blockedSnapshot?: ConfigSnapshotForInstallExecution,
+  ) {
+    super(message);
+    this.name = "PluginInstallConfigError";
   }
-}
-
-function supportsPluginRecoveryIncludeShape(parsed: Record<string, unknown>): boolean {
-  if (Object.hasOwn(parsed, "$include")) {
-    return false;
-  }
-  return supportsInstallConfigSingleTopLevelIncludeShape(parsed.plugins);
 }
 
 function extractMissingPluginLoadPath(issue: ConfigValidationIssue): string | null {
@@ -179,13 +188,13 @@ async function recoverPluginInstallConfig(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["snapshot"],
 ): Promise<OpenClawConfig> {
   if (resolvePluginInstallInvalidConfigPolicy(request) !== "allow-plugin-recovery") {
-    throw buildInvalidPluginInstallConfigError(
+    throw new PluginInstallConfigError(
       "Config invalid; run `openclaw doctor --fix` before installing plugins.",
     );
   }
-  const parsed = (snapshot.parsed ?? {}) as Record<string, unknown>;
+  const parsed = snapshot.parsed ?? {};
   if (!snapshot.exists || Object.keys(parsed).length === 0) {
-    throw buildInvalidPluginInstallConfigError(
+    throw new PluginInstallConfigError(
       "Config file could not be parsed; run `openclaw doctor` to repair it.",
     );
   }
@@ -201,12 +210,15 @@ async function recoverPluginInstallConfig(
     snapshot.issues.some((issue) => !isAllowedPluginRecoveryIssue(issue, request, ownedLoadPaths))
   ) {
     const pluginLabel = request.bundledPluginId ?? "the requested plugin";
-    throw buildInvalidPluginInstallConfigError(
+    throw new PluginInstallConfigError(
       `Config invalid outside the plugin recovery path for ${pluginLabel}; run \`openclaw doctor --fix\` before reinstalling it.`,
     );
   }
-  if (!supportsPluginRecoveryIncludeShape(parsed)) {
-    throw buildInvalidPluginInstallConfigError(
+  if (
+    Object.hasOwn(parsed, "$include") ||
+    !supportsInstallConfigSingleTopLevelIncludeShape(isRecord(parsed) ? parsed.plugins : undefined)
+  ) {
+    throw new PluginInstallConfigError(
       "Config plugin recovery uses an unsupported $include shape; use a single-file top-level plugins include or run `openclaw doctor --fix` before reinstalling it.",
     );
   }
@@ -232,20 +244,162 @@ export async function loadConfigForInstall(
   const config = snapshot.valid
     ? snapshot.sourceConfig
     : await recoverPluginInstallConfig(request, snapshot);
-  const parsed = (snapshot.parsed ?? {}) as Record<string, unknown>;
+  const parsed = asRecord(snapshot.parsed);
   const { hookMutation, pluginMutation } = resolveInstallConfigMutationPreflights({
     parsed,
     snapshotPath: snapshot.path,
     writeOptions: mutationWriteOptions,
   });
-  if (!snapshot.valid || request.installKind === "plugin") {
-    assertPluginConfigMutationAllowed(pluginMutation);
-  }
-  return {
+  const resolved = {
     config,
     baseHash: snapshot.hash,
     writeOptions: mutationWriteOptions,
     hookMutation,
     pluginMutation,
   };
+  if (!snapshot.valid || request.installKind === "plugin") {
+    if (pluginMutation.mode === "blocked") {
+      throw new PluginInstallConfigError(pluginMutation.reason, resolved);
+    }
+  }
+  return resolved;
+}
+
+type PluginInstallInvalidConfigPolicy = "deny" | "allow-plugin-recovery";
+
+/** Parsed install request plus recovery metadata needed by CLI pre-action config policy. */
+export type PluginInstallRequestContext = {
+  rawSpec: string;
+  installKind?: "plugin";
+  marketplace?: string;
+  bundledPluginId?: string;
+  allowInvalidConfigRecovery?: boolean;
+};
+
+type PluginInstallRequestResolution =
+  | { ok: true; request: PluginInstallRequestContext }
+  | { ok: false; error: string };
+
+function readPluginInstallRecoveryMetadata(rootDir: string): {
+  pluginId?: string;
+  allowInvalidConfigRecovery: boolean;
+} {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    return { allowInvalidConfigRecovery: false };
+  }
+  const manifest = loadPluginManifest(rootDir, false);
+  const pluginId = manifest.ok ? manifest.manifest.id : undefined;
+  const parsed = tryReadJsonSync<{
+    openclaw?: {
+      install?: {
+        allowInvalidConfigRecovery?: boolean;
+      };
+    };
+  }>(packageJsonPath);
+  return {
+    ...(pluginId ? { pluginId } : {}),
+    allowInvalidConfigRecovery: parsed?.openclaw?.install?.allowInvalidConfigRecovery === true,
+  };
+}
+
+function resolvePluginInstallRecoveryMetadata(
+  rawSpec: string,
+  localPath: string | undefined,
+): {
+  pluginId?: string;
+  allowInvalidConfigRecovery?: boolean;
+} {
+  // A local or file: request must never inherit recovery authority from a catalog name.
+  if (localPath !== undefined) {
+    const direct = readPluginInstallRecoveryMetadata(localPath);
+    return direct.pluginId || direct.allowInvalidConfigRecovery ? direct : {};
+  }
+  const npmPrefixSpec = parseNpmPrefixSpec(rawSpec);
+  const values = new Set(
+    normalizeStringEntries([
+      rawSpec,
+      npmPrefixSpec ?? "",
+      parseRegistryNpmSpec(rawSpec)?.name ?? "",
+      npmPrefixSpec ? parseRegistryNpmSpec(npmPrefixSpec)?.name : "",
+    ]),
+  );
+  if (values.size === 0) {
+    return {};
+  }
+  for (const entry of listOfficialExternalPluginCatalogEntries()) {
+    const install = resolveOfficialExternalPluginInstall(entry);
+    const npmSpec = install?.npmSpec?.trim() || entry.name?.trim();
+    if (!npmSpec || !values.has(npmSpec)) {
+      continue;
+    }
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    // An official descriptor owns this decision even when recovery is explicitly disabled.
+    return {
+      ...(pluginId ? { pluginId } : {}),
+      allowInvalidConfigRecovery: install?.allowInvalidConfigRecovery === true,
+    };
+  }
+  return {};
+}
+
+/** Resolve install metadata from the raw spec before Commander action handlers mutate config. */
+export function resolvePluginInstallRequestContext(params: {
+  rawSpec: string;
+  source?: PluginsInstallParams["source"];
+  localPath?: string;
+  marketplace?: string;
+  installKind?: "plugin";
+}): PluginInstallRequestResolution {
+  if (params.marketplace) {
+    return {
+      ok: true,
+      request: {
+        rawSpec: params.rawSpec,
+        installKind: "plugin",
+        marketplace: params.marketplace,
+      },
+    };
+  }
+  const fileSpec = resolveFileNpmSpecToLocalPath(params.rawSpec);
+  if (fileSpec && !fileSpec.ok) {
+    return {
+      ok: false,
+      error: fileSpec.error,
+    };
+  }
+  const normalizedSpec = fileSpec && fileSpec.ok ? fileSpec.path : params.rawSpec;
+  const resolvedPath = resolveUserPath(params.localPath ?? normalizedSpec);
+  const localPath = params.source
+    ? params.source === "local" || params.source === "bundled"
+      ? resolvedPath
+      : undefined
+    : fileSpec || fs.existsSync(resolvedPath)
+      ? resolvedPath
+      : resolveBundledInstallPlanBeforeNpm({
+          rawSpec: params.rawSpec,
+          findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+        })?.bundledSource.localPath;
+  const recovered = resolvePluginInstallRecoveryMetadata(params.rawSpec, localPath);
+  return {
+    ok: true,
+    request: {
+      rawSpec: params.rawSpec,
+      ...(params.installKind === "plugin" || recovered.pluginId ? { installKind: "plugin" } : {}),
+      ...(recovered.pluginId ? { bundledPluginId: recovered.pluginId } : {}),
+      ...(recovered.allowInvalidConfigRecovery !== undefined
+        ? { allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery }
+        : {}),
+    },
+  };
+}
+
+/** Decide whether invalid config should block a command before plugin recovery can run. */
+export function resolvePluginInstallInvalidConfigPolicy(
+  request: PluginInstallRequestContext | null,
+): PluginInstallInvalidConfigPolicy {
+  if (!request) {
+    return "deny";
+  }
+  return request.allowInvalidConfigRecovery === true ? "allow-plugin-recovery" : "deny";
 }

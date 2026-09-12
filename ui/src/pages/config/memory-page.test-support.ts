@@ -1,6 +1,7 @@
 import { ContextProvider } from "@lit/context";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -82,6 +83,7 @@ export function createMemoryPage(params: {
   routeData?: ConfigRouteData;
   basePath?: string;
   agents?: Array<{ id: string; name?: string }>;
+  selectedAgentId?: string;
   memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
   processInfo?: (call: number) => Promise<{ processInstanceId?: string }>;
   scopes?: string[];
@@ -228,6 +230,15 @@ export function createMemoryPage(params: {
     navigate: params.navigate ?? vi.fn(),
     replace: params.replace ?? vi.fn(),
   } as unknown as ApplicationContext;
+  const agentSelection = createAgentSelectionCapability(
+    {
+      connection: { gatewayUrl: "ws://memory.test" },
+      snapshot: { assistantAgentId: params.selectedAgentId ?? params.agents?.[0]?.id ?? "main" },
+      subscribe: () => () => undefined,
+    },
+    context.agents,
+  );
+  Object.assign(context, { agentSelection });
   const connectionLifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   (element as unknown as { context: ApplicationContext }).context = context;
   new ContextProvider(element, { context: applicationContext, initialValue: context }).setValue(
@@ -269,6 +280,7 @@ export function createMemoryPage(params: {
   };
   return {
     element,
+    agentSelection,
     request,
     setPhase,
     publishPluginGeneration,

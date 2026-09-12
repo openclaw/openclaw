@@ -1,15 +1,17 @@
 // Resolve and validate plugin install requests without opening mutable runtime state.
-import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
-import { resolveMarketplaceInstallShortcut } from "../plugins/marketplace.js";
-import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { formatCliCommand } from "./command-format.js";
-import { NON_CLAWHUB_INSTALL_FORCE_FLAG } from "./non-clawhub-install-acknowledgement.js";
+import fs from "node:fs";
 import {
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
-import { resolvePluginInstallSourcePlan } from "./plugin-install-plan.js";
+} from "../plugins/install-config.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
+import { resolveMarketplaceInstallShortcut } from "../plugins/marketplace.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { resolveUserPath } from "../utils.js";
+import { formatCliCommand } from "./command-format.js";
+import { NON_CLAWHUB_INSTALL_FORCE_FLAG } from "./non-clawhub-install-acknowledgement.js";
 
 export type RunPluginInstallCommandParams = {
   raw: string;
@@ -30,6 +32,7 @@ export type RunPluginInstallCommandParams = {
   runtime?: RuntimeEnv;
   /** Synchronous authority guard at the final plugin/config mutation. */
   beforePersistentApply?: () => void;
+  applyRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
 };
 
 type ResolvedPluginInstallSourcePlan = Extract<
@@ -135,6 +138,9 @@ export async function resolvePluginInstallPreflight(
     }
   }
 
+  if (marketplace && fs.existsSync(resolveUserPath(marketplace))) {
+    marketplace = resolveUserPath(marketplace);
+  }
   const opts = { ...params.opts, marketplace };
   const optionError = marketplace
     ? resolveMarketplaceOptionError(opts)
@@ -145,7 +151,12 @@ export async function resolvePluginInstallPreflight(
     return { ok: false, error: optionError };
   }
 
-  const requestResolution = resolvePluginInstallRequestContext({ rawSpec: raw, marketplace });
+  const requestResolution = resolvePluginInstallRequestContext({
+    rawSpec: raw,
+    marketplace,
+    source: sourcePlan?.request.source,
+    localPath: sourcePlan?.localPath,
+  });
   if (!requestResolution.ok) {
     return requestResolution;
   }

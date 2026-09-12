@@ -3521,7 +3521,7 @@ describe("workboard controller", () => {
       taskId: "task-1",
       execution: createWorkboardExecution({
         id: "card-1:codex",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         sessionKey: sampleTaskSessionKey,
         runId: "run-1",
         startedAt: 10,
@@ -3542,7 +3542,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.start", {
       id: sampleCard.id,
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "tasks.list", { limit: 500 });
     expect(state.cards).toEqual([running]);

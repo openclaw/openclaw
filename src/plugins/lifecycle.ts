@@ -5,13 +5,17 @@ import { getActivePluginRegistryVersion } from "./runtime.js";
 
 export const getPluginRuntimeGeneration = getActivePluginRegistryVersion;
 
-/** Recorded only by the install persistence owner after its durable commit succeeds. */
+/** Carries the install persistence owner’s durable-commit fact, including across RPC. */
 export class PluginInstallPersistedError extends Error {
   constructor(
     readonly pluginId: string,
     cause: unknown,
   ) {
-    super(formatErrorMessage(cause), { cause });
+    super(
+      `${formatErrorMessage(cause)}
+Plugin "${pluginId}" installation is saved. Fix the reported issue, then run \`openclaw plugins reload ${pluginId}\`.`,
+      { cause },
+    );
     this.name = "PluginInstallPersistedError";
   }
 }

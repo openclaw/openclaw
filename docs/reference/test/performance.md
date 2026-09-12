@@ -107,7 +107,18 @@ first; no provider key is required.
 
 ```bash
 pnpm test:gateway:concurrency -- --concurrency 16 --tool-events --workspace-fanout --session-count 100 --history-messages 20 --history-clients 4 --subscribers 4 --visible-observer --control-plane --heap-prof-dir .artifacts/gateway-heap --output .artifacts/gateway-concurrency.json
+pnpm test:gateway:concurrency -- --concurrency 64 --turns-per-session 8 --tool-events --timeout-ms 600000 --heap-prof-dir .artifacts/gateway-sustained-heap --output .artifacts/gateway-sustained.json
 ```
+
+`--concurrency` controls parallel sessions; `--turns-per-session` controls serial
+turns in each session (default 1, maximum 100). The second example completes 512
+turns across 64 sessions. Each session starts its next turn as soon as its
+previous turn completes, retaining its conversation history and workspace;
+there is no barrier between rounds. The fresh-connection probe runs once after
+every session has started its first turn. `--tool-events` requests a tool call
+on every turn, including follow-ups. The per-run timeout still bounds the whole
+workload. Health/control sampling is capped at 2,048 samples, while heap
+sampling continues until the full workload finishes.
 
 `--heap-prof-dir` samples allocations in the Gateway's main V8 isolate, starting
 after startup, session seeding, and probe warmup. Sampling ends after the load
@@ -121,6 +132,9 @@ allocation stacks; open the raw file in the Chrome DevTools Memory panel.
 The summary includes sampled allocation bytes per run and per completed turn.
 The per-turn figure also includes concurrent probes and session mutations;
 compare identical workload settings and Node versions across multiple runs.
+Initial and follow-up turns overlap across sessions, so the allocation profile
+covers their combined workload rather than attributing separate cold and warm
+allocations. Compare matched one-turn and sustained runs to study reuse.
 Sampling is statistical and adds overhead. Use unprofiled runs for latency
 comparisons. Existing heap/RSS measurements are taken before exporting the
 profile. `--cpu-prof-dir` remains available separately and includes startup;

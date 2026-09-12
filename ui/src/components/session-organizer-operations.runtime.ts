@@ -3,7 +3,6 @@ import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
   formatPreservedWorktreesNotice,
@@ -295,7 +294,7 @@ export async function deleteSessionsBatch(
   }
   const requests = rows.map((row) => ({
     key: row.key,
-    agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
+    agentId: sessionRowAgentId(row, scope),
     deleteTranscript: true,
     ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
     ...(row.archived === true ? { archivedOnly: true } : {}),
@@ -394,7 +393,7 @@ export async function renameSession(
 
 export async function assignSessionOwner(
   host: SessionActionHost,
-  session: Pick<SidebarRecentSession, "key">,
+  session: Pick<SidebarRecentSession, "key" | "agentId">,
   owner: Pick<SessionOwnerOption, "type" | "id">,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
@@ -408,7 +407,7 @@ export async function assignSessionOwner(
     return;
   }
   const assigned = await scope.sessions.assignOwner(session.key, owner, {
-    agentId: parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId,
+    agentId: sessionRowAgentId(session, scope),
   });
   if (
     host.sessionData.isSessionMutationScopeCurrent(scope) &&
@@ -484,7 +483,7 @@ export async function forkSession(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  const agentId = sessionRowAgentId(session, scope);
   const createParams = {
     parentSessionKey: session.key,
     fork: true,
@@ -546,7 +545,7 @@ export async function stopCloudWorker(
     return;
   }
   try {
-    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+    const agentId = sessionRowAgentId(session, scope);
     await requestCloudWorkerStop(
       scope.client,
       {
@@ -589,7 +588,7 @@ export async function deleteSession(
   if (!confirmed) {
     return;
   }
-  const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  const agentId = sessionRowAgentId(session, scope);
   const deleteParams = {
     agentId,
     deleteTranscript: true,

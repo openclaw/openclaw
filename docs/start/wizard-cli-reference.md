@@ -260,21 +260,21 @@ on a different release.
     Browser flow; paste `code#state`.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to the same tier.
 
     Adding or reauthenticating OpenAI preserves an existing explicit primary

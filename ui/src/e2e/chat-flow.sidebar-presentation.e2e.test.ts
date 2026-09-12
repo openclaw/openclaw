@@ -751,7 +751,7 @@ suite.define(() => {
         return marker;
       });
       const avatar = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] img.agent-chat__welcome-avatar',
+        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__welcome-avatar img',
       );
       await avatar.waitFor({ state: "visible" });
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);

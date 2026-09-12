@@ -9,8 +9,6 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
-import "../../styles/chat/text.css";
-import "../../styles/cron.css";
 import type {
   ChannelUiMetaEntry,
   CronJob,
@@ -24,6 +22,9 @@ import type {
   CronJobsSortBy,
   CronSortDir,
 } from "../../api/types.ts";
+import "../../styles/chat/text.css";
+import "../../styles/cron.css";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderChannelPicker, type ChannelPickerOption } from "../../components/channel-picker.ts";
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { icon, icons } from "../../components/icons.ts";
@@ -843,6 +844,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
             <span class="cron-table__name-text">${displayName}</span>
             ${job.trigger ? renderTriggerIndicator() : nothing}
           </span>
+          ${systemOwned ? nothing : renderAgentRowChip(job.agentId)}
           ${
             description || !job.enabled
               ? html`

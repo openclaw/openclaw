@@ -29,6 +29,7 @@ import {
   formatStageTimings,
   type StageTimingSummary,
 } from "openclaw/plugin-sdk/time-runtime";
+import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "../../native-tool-policy.js";
 import {
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
@@ -76,14 +77,6 @@ type OpenClawSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 type CodexDynamicToolBuildEvent = Parameters<
   NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>
 >[0];
-const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
-  "exec",
-  "process",
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
   "exec",
@@ -701,9 +694,7 @@ function canCodexAppServerNativeToolSurfaceHonorSandbox(
 function canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox: {
   tools: Parameters<typeof isToolAllowed>[0];
 }): boolean {
-  return CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS.every((toolName) =>
-    isToolAllowed(sandbox.tools, toolName),
-  );
+  return CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName));
 }
 function isCodexMemoryFlushRun(
   params?: Pick<EmbeddedRunAttemptParams, "trigger" | "memoryFlushWritePath">,

@@ -33,9 +33,13 @@ the selected channel or installation method, or the Git target SHA equals
 explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
-Explicit package artifacts, such as tarball paths and URLs, still pass through
-validation and installation when their version matches the installed version.
-A matching version alone does not establish artifact equality.
+Explicit package artifacts, such as tarball paths and URLs, compare known build
+IDs before a same-version no-op. Matching known identity remains nonmutating;
+different or missing identity continues through normal candidate validation and
+installation because a matching version alone does not establish artifact
+equality. Registry requests retain their version-based same-version no-op.
+Installation-method switches and fresh-profile initialization still retain and
+validate the candidate even when its build identity matches.
 
 Updates continue with recorded warnings when disposable validation-copy cleanup,
 retired derived-cache cleanup, or Git upstream tracking setup fails. Resolve the
@@ -76,6 +80,11 @@ validation without recovery or pruning.
 Candidate build and rehearsal processes resolve source-linked plugin SDKs from
 the candidate root, even when the serving source launcher passed its own checkout
 root. This keeps candidate assets and validation independent of the old checkout.
+
+Warning-severity Doctor findings do not block candidate or post-plugin readiness.
+The updater retains them in the run report shown by `openclaw update status`,
+including when an intentional open channel policy requires no configuration change.
+Error findings and failed check execution still refuse the update.
 
 The candidate answers the updater's native service capability probe before
 loading configuration or initializing debug capture. Probing capability does not

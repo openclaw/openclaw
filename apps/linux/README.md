@@ -159,8 +159,9 @@ Gateway and shows it as a choice. Discovery never imports or copies an account,
 and the companion never selects, tests, installs, or saves a provider until you
 click its action. The list includes supported installed providers and official
 provider plugins available from OpenClaw's managed plugin catalog. Installing a
-provider plugin shows its capabilities for review and continues directly to
-that provider's authentication form. Successful verification may require a
+official provider plugin continues directly to that provider's authentication
+form without a capability approval prompt. Other plugins require capability
+review before installation. Successful verification may require a
 Gateway restart before the new model becomes available.
 
 The custom endpoint option supports OpenAI- and Anthropic-compatible services.
