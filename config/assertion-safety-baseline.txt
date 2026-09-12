@@ -3118,7 +3118,7 @@ src/mcp/channel-bridge.ts	6
 src/mcp/channel-shared.ts	3
 src/mcp/codex-supervision-tools-serve.ts	6
 src/mcp/openclaw-tools-serve-config.ts	1
-src/mcp/plugin-tools-handlers.ts	3
+src/mcp/plugin-tools-handlers.ts	2
 src/media-generation/provider-registry.ts	1
 src/media-understanding/attachments.select.ts	1
 src/media-understanding/entry-capabilities.ts	1

@@ -24,6 +24,7 @@ import {
   TASK_COUNT,
   withAuthenticatedTaskGateway,
 } from "./server.tasks-list.test-helpers.js";
+import * as taskSessionAccess from "./task-session-access.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -58,6 +59,18 @@ describe("tasks.list Gateway performance", () => {
       });
     };
     await withAuthenticatedTaskGateway(initializeTasks, async ({ admin, viewer }) => {
+      // Keep real authorization and RPCs, but make each prepared access slice
+      // consume a deterministic work budget regardless of host speed.
+      let workMs = performance.now();
+      const workClock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+      const prepareAccess = taskSessionAccess.prepareTaskSessionReadFilter;
+      const accessWork = vi
+        .spyOn(taskSessionAccess, "prepareTaskSessionReadFilter")
+        .mockImplementation((...args) => {
+          const filter = prepareAccess(...args);
+          workMs += 20;
+          return filter;
+        });
       const sortedInputLengths: number[] = [];
       const originalToSorted = Array.prototype.toSorted;
       const sortSpy = vi.spyOn(Array.prototype, "toSorted").mockImplementation(function <T>(
@@ -404,6 +417,8 @@ describe("tasks.list Gateway performance", () => {
         });
       } finally {
         sortSpy.mockRestore();
+        accessWork.mockRestore();
+        workClock.mockRestore();
       }
     });
   }, 60_000);
