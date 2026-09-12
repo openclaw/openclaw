@@ -1,7 +1,7 @@
-// Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
+import { githubLinkPrefetch } from "../../../components/github-link-prefetch.ts";
+import { renderLoadingState } from "../../../components/loading-state.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -9,7 +9,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
-  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
@@ -22,6 +21,7 @@ import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
+import { renderChatPositionRail } from "./chat-position-rail.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
@@ -62,33 +62,40 @@ function renderTranscriptShell(
       }
     : null;
   const transcriptContents =
-    projection.showLoadingSkeleton || projection.isEmpty
-      ? html`
-          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
-            ${historySentinel}
-            ${
-              projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
-                ? historyHeader.template
-                : nothing
-            }
-            ${
-              projection.showLoadingSkeleton
-                ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
-                : nothing
-            }
-            ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
-            ${
-              projection.isEmpty && projection.searchOpen
-                ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
-                : nothing
-            }
-          </div>
-        `
-      : projection.renderRows(historySentinel, historyHeader);
+    props.routeLoadingSkeleton && projection.showLoadingSkeleton
+      ? renderLoadingState()
+      : projection.showLoadingSkeleton || projection.isEmpty
+        ? html`
+            <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
+              ${historySentinel}
+              ${
+                projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
+                  ? historyHeader.template
+                  : nothing
+              }
+              ${
+                projection.showLoadingSkeleton
+                  ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+                  : nothing
+              }
+              ${
+                projection.isEmpty && !projection.searchOpen
+                  ? renderWelcomeState({ ...props, onModelSetup: undefined })
+                  : nothing
+              }
+              ${
+                projection.isEmpty && projection.searchOpen
+                  ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+                  : nothing
+              }
+            </div>
+          `
+        : projection.renderRows(historySentinel, historyHeader);
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
-      ${markdownBlocks()}
+      ${markdownBlocks(props.transcriptVisible ?? true)}
+      ${githubLinkPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           hydrateLinkFavicons(element, props.fetchLinkFavicon);
@@ -108,13 +115,8 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromKeyboardEvent(event) ??
-          (event.key === "Enter"
-            ? markdownSessionHref(event, sessionRefFromPath, props.basePath)
-            : null);
+        const sessionTarget = markdownSessionLinkFromKeyboardEvent(event, props.basePath);
         if (sessionTarget) {
-          event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
           return;
         }
@@ -136,9 +138,7 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromEvent(event) ??
-          markdownSessionHref(event, sessionRefFromPath, props.basePath);
+        const sessionTarget = markdownSessionLinkFromEvent(event, props.basePath);
         if (sessionTarget && shouldHandleNavigationClick(event)) {
           event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
@@ -154,6 +154,11 @@ function renderTranscriptShell(
         aria-atomic="true"
         >${transcript.liveAnnouncementText}</span
       >
+      ${renderChatPositionRail({
+        messages: projection.positionMessages,
+        transcript,
+        requestUpdate: props.onRequestUpdate ?? (() => {}),
+      })}
       ${transcriptContents}
     </div>
   `;

@@ -547,6 +547,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report,
       error: null,
     } as unknown as SkillsRouteData;
@@ -594,6 +595,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
             slug: "agentreceipt",
             installedVersion: "1.2.3",
             installedAt: 123,
+            originPath: "/tmp/.clawhub/origin.json",
+            lockPath: "/tmp/workspace/.clawhub/lock.json",
           },
         }),
       ],
@@ -609,6 +612,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report,
       error: null,
     } as SkillsRouteData;
@@ -656,6 +660,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
             slug: "agentreceipt",
             installedVersion: "1.2.3",
             installedAt: 123,
+            originPath: "/tmp/.clawhub/origin.json",
+            lockPath: "/tmp/workspace/.clawhub/lock.json",
           },
         }),
       ],
@@ -672,6 +678,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: harness.context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: harness.context.agentSelection.state,
       report,
       error: null,
     } as SkillsRouteData;
@@ -735,6 +742,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report: null,
       error: null,
     };
@@ -769,6 +777,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report: staleReport,
       error: null,
     } as unknown as SkillsRouteData;

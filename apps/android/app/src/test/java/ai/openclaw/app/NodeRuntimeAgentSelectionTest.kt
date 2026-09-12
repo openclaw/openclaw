@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
@@ -41,6 +42,419 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
+  @Test
+  fun selectedAgentPublishesRefreshFailureAndSuccessfulEmptyResult() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      val response = AtomicReference("""{"models":[{"id":"previous","name":"Previous","provider":"fixture","available":true}]}""")
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          assertEquals(
+            "beta",
+            Json
+              .parseToJsonElement(paramsJson.orEmpty())
+              .jsonObject["agentId"]
+              ?.jsonPrimitive
+              ?.content,
+          )
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              response.get()
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"current-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected catalog request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("beta")
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertEquals(listOf("previous"), runtime.providerModelCatalog.value.map { it.id })
+
+        response.set("""{"models":[{"id":"compatible","name":"Compatible","provider":"fixture","available":true}],"refreshFailed":true}""")
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { catalogJobs.receive().join() }
+
+        assertEquals(listOf("compatible"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals(listOf("current-credential"), runtime.modelAuthProviders.value.map { it.id })
+        assertFalse("A failed refresh must remain visible alongside its returned rows", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+
+        response.set("""{"models":[],"refreshFailed":false}""")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun failedRefreshCannotRestoreRowsWithRejectedAuth() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      val response = AtomicReference("""{"models":[{"id":"retired-private-model","name":"Retired private model","provider":"fixture","available":true}]}""")
+      val authResponse = AtomicReference("""{"providers":[{"provider":"fixture","status":"ok","profiles":[]}]}""")
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              response.get()
+            }
+
+            "models.authStatus" -> {
+              authResponse.get()
+            }
+
+            else -> {
+              error("Unexpected catalog request: $method")
+            }
+          }
+        }
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertEquals(listOf("retired-private-model"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("retired-private-model"), runtime.providerModelCatalog.value.map { it.id })
+
+        response.set("""{"models":[],"refreshFailed":true,"providerOutcomes":[{"provider":"fixture","status":"auth-rejected"}]}""")
+        authResponse.set("""{"providers":[{"provider":"fixture","status":"missing","profiles":[]}]}""")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals(
+          "missing",
+          runtime.modelAuthProviders.value
+            .single()
+            .status,
+        )
+        assertFalse("An unavailable empty result must show the refresh failure", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun publicationsRevealSelectedAgentModelsWithoutDiscovery() =
+    runBlocking {
+      for (event in listOf("config.changed", "chat.metadata.changed")) {
+        val runtime = createConnectedRuntime()
+        val catalogRequests = Channel<Pair<JsonObject, Job>>(Channel.UNLIMITED)
+        val revision = AtomicInteger(0)
+        try {
+          runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+            when (method) {
+              "models.list" -> {
+                catalogRequests.send(Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject to currentCoroutineContext().job)
+                if (revision.get() == 0) {
+                  """{"models":[]}"""
+                } else {
+                  """{"models":[{"id":"model-1","provider":"fixture","name":"Published","available":true}]}"""
+                }
+              }
+
+              "models.authStatus" -> {
+                assertEquals(
+                  "beta",
+                  Json
+                    .parseToJsonElement(paramsJson.orEmpty())
+                    .jsonObject["agentId"]
+                    ?.jsonPrimitive
+                    ?.content,
+                )
+                """{"providers":[{"provider":"credential-${revision.get()}","status":"ok","profiles":[]}]}"""
+              }
+
+              "config.get" -> {
+                """{"config":{}}"""
+              }
+
+              else -> {
+                error("Unexpected publication request: $method")
+              }
+            }
+          }
+          runtime.selectChatAgent("beta")
+          withTimeout(2_000) {
+            repeat(2) { catalogRequests.receive().second.join() }
+          }
+          assertTrue(runtime.modelCatalog.value.isEmpty())
+          assertTrue(runtime.providerModelCatalog.value.isEmpty())
+          assertEquals(
+            "credential-0",
+            runtime.modelAuthProviders.value
+              .single()
+              .id,
+          )
+          revision.set(1)
+          ReflectionHelpers.callInstanceMethod<Unit>(
+            runtime,
+            "handleGatewayEvent",
+            ReflectionHelpers.ClassParameter.from(String::class.java, event),
+            ReflectionHelpers.ClassParameter.from(String::class.java, "{}"),
+          )
+
+          withTimeout(2_000) {
+            runtime.modelCatalog.first { it.singleOrNull()?.id == "model-1" }
+            runtime.providerModelCatalog.first { it.singleOrNull()?.id == "model-1" }
+            runtime.modelAuthProviders.first { it.singleOrNull()?.id == "credential-1" }
+            repeat(2) {
+              val (params, job) = catalogRequests.receive()
+              job.join()
+              assertEquals("beta", params["agentId"]?.jsonPrimitive?.content)
+              assertFalse(params.containsKey("refresh"))
+            }
+          }
+        } finally {
+          closeNodeRuntimeTestFixture(runtime)
+          catalogRequests.close()
+        }
+      }
+    }
+
+  @Test
+  fun defaultModelReadsKeepTheLegacyGatewayContract() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              if ("agentId" in Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject) {
+                throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "Legacy catalog parameters unsupported"))
+              }
+              """{"models":[{"id":"legacy-model","provider":"fixture","name":"Legacy"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"legacy-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
+          }
+        }
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) {
+          val jobs = listOf(catalogJobs.receive(), catalogJobs.receive())
+          jobs.forEach { it.join() }
+        }
+        assertEquals(listOf("legacy-model"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("legacy-model"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals(listOf("legacy-credential"), runtime.modelAuthProviders.value.map { it.id })
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun selectingAgentPublishesItsModelsWithoutAnotherPageRead() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          val agentId =
+            Json
+              .parseToJsonElement(paramsJson.orEmpty())
+              .jsonObject["agentId"]
+              ?.jsonPrimitive
+              ?.content ?: "alpha"
+          when (method) {
+            "models.list" -> {
+              """{"models":[{"id":"$agentId-model","provider":"fixture","name":"$agentId"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("beta")
+
+        val catalog = withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }
+        val providerCatalog = withTimeout(2_000) { runtime.providerModelCatalog.first { it.isNotEmpty() } }
+        val providers = withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }
+        assertEquals("beta-model", catalog.single().id)
+        assertEquals("beta-model", providerCatalog.single().id)
+        assertEquals("beta-credential", providers.single().id)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun switchingAwayAndBackRetiresPendingModelReads() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val phase = AtomicInteger(0)
+      val catalogStarted = CompletableDeferred<Job>()
+      val providerCatalogStarted = CompletableDeferred<Job>()
+      val catalogResponse = CompletableDeferred<String>()
+      val providerCatalogResponse = CompletableDeferred<String>()
+      val newReads = Channel<Job>(Channel.UNLIMITED)
+      val newResponse = CompletableDeferred<Unit>()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          val params = Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject
+          val agentId = params["agentId"]?.jsonPrimitive?.content ?: "alpha"
+          when (method) {
+            "models.list" -> {
+              when (phase.get()) {
+                1 -> {
+                  if (params["view"]?.jsonPrimitive?.content == "provider-config") {
+                    providerCatalogStarted.complete(currentCoroutineContext().job)
+                    providerCatalogResponse.await()
+                  } else {
+                    catalogStarted.complete(currentCoroutineContext().job)
+                    catalogResponse.await()
+                  }
+                }
+
+                2 -> {
+                  assertFalse("Owner changes must not request discovery", params.containsKey("refresh"))
+                  newReads.send(currentCoroutineContext().job)
+                  newResponse.await()
+                  """{"models":[{"id":"$agentId-current","name":"$agentId current","provider":"fixture"}]}"""
+                }
+
+                else -> {
+                  """{"models":[{"id":"alpha-model","name":"Alpha","provider":"fixture"}]}"""
+                }
+              }
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("alpha")
+        withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }
+        withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }
+
+        phase.set(1)
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        val catalogJob = withTimeout(2_000) { catalogStarted.await() }
+        val providerCatalogJob = withTimeout(2_000) { providerCatalogStarted.await() }
+        phase.set(2)
+        runtime.selectChatAgent("beta")
+        runtime.selectChatAgent("alpha")
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertTrue(runtime.modelAuthProviders.value.isEmpty())
+
+        catalogResponse.complete("""{"models":[{"id":"retired-model","name":"Retired model","provider":"fixture"}],"refreshFailed":true}""")
+        providerCatalogResponse.completeExceptionally(IllegalStateException("Retired model read failed"))
+        withTimeout(2_000) {
+          catalogJob.join()
+          providerCatalogJob.join()
+        }
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertTrue(runtime.modelAuthProviders.value.isEmpty())
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+
+        newResponse.complete(Unit)
+        withTimeout(2_000) { repeat(4) { newReads.receive().join() } }
+        assertEquals(
+          "alpha-current",
+          runtime.modelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "alpha-current",
+          runtime.providerModelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "alpha-credential",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        newReads.close()
+      }
+    }
+
+  @Test
+  fun reselectingSameAgentKeepsRowsAndAcceptsItsPendingRefresh() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val jobs = Channel<Job>(Channel.UNLIMITED)
+      val response = CompletableDeferred<String>()
+      val hold = AtomicInteger(0)
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              jobs.send(currentCoroutineContext().job)
+              if (hold.get() == 1) response.await() else """{"models":[{"id":"retained","name":"Retained","provider":"fixture"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("alpha")
+        withTimeout(2_000) { repeat(2) { jobs.receive().join() } }
+        hold.set(1)
+        runtime.refreshProviderModels()
+        val pending = withTimeout(2_000) { jobs.receive() }
+
+        runtime.selectChatAgent("alpha")
+        assertEquals(listOf("retained"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("retained"), runtime.providerModelCatalog.value.map { it.id })
+        response.complete("""{"models":[{"id":"updated","name":"Updated","provider":"fixture"}]}""")
+        withTimeout(2_000) { pending.join() }
+        assertEquals(listOf("updated"), runtime.providerModelCatalog.value.map { it.id })
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        jobs.close()
+      }
+    }
+
   @Test
   fun selectingAgentRebindsCanonicalMainSession() {
     val app = RuntimeEnvironment.getApplication()

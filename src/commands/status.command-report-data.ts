@@ -17,6 +17,7 @@ import {
 import { formatPluginCompatibilityNotice } from "../plugins/status-compatibility.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
+import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import type { StatusSummary } from "../status/types.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
@@ -69,18 +70,9 @@ export async function buildStatusCommandReportData(params: {
     agents: AgentLocalStatus[];
   };
   channels: {
-    rows: Array<{
-      id: string;
-      label: string;
-      enabled: boolean;
-      state: "ok" | "warn" | "off" | "setup";
-      detail: string;
-    }>;
+    rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
   };
-  channelIssues: Array<{
-    channel: string;
-    message: string;
-  }>;
+  channelIssues: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
   pluginCompatibility: PluginCompatibilityNotice[];
@@ -91,13 +83,14 @@ export async function buildStatusCommandReportData(params: {
   } | null;
   tableWidth: number;
   updateValue?: string;
-  updateRestartValue?: string | null;
+  updateRows?: Array<{ Item: string; Value: string }>;
 }) {
   const ok = (value: string) => theme.success(value);
   const warn = (value: string) => theme.warn(value);
   const muted = (value: string) => theme.muted(value);
   const overviewRows = buildStatusCommandOverviewRows({
     env: params.env,
+    backupFreshness: await readBackupRunFreshness(params.env),
     opts: params.opts,
     surface: params.surface,
     osLabel: params.osSummary.label,
@@ -117,7 +110,7 @@ export async function buildStatusCommandReportData(params: {
     resolveMemoryFtsState,
     resolveMemoryCacheSummary,
     updateValue: params.updateValue,
-    updateRestartValue: params.updateRestartValue,
+    updateRows: params.updateRows,
   });
 
   const sessionsColumns = [

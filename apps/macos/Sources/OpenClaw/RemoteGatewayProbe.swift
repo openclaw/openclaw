@@ -40,15 +40,6 @@ enum RemoteGatewayAuthIssue: Equatable {
         }
     }
 
-    var showsTokenField: Bool {
-        switch self {
-        case .tokenRequired, .tokenMismatch:
-            true
-        case .gatewayTokenNotConfigured, .setupCodeExpired, .passwordRequired, .pairingRequired:
-            false
-        }
-    }
-
     var title: String {
         switch self {
         case .tokenRequired:
@@ -60,7 +51,7 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .setupCodeExpired:
             "This setup code is no longer valid"
         case .passwordRequired:
-            "This gateway is using unsupported auth"
+            "Check this gateway's password"
         case .pairingRequired:
             "This device needs pairing approval"
         }
@@ -69,21 +60,24 @@ enum RemoteGatewayAuthIssue: Equatable {
     var body: String {
         switch self {
         case .tokenRequired:
-            "Paste the token configured on the gateway host. "
-                + "On the gateway host, run `openclaw gateway auth-token --show` "
-                + "in an interactive terminal, then paste its output."
+            "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal. "
+                + "Click Change connection and paste its output into Gateway token. "
+                + "Save the connection, then try again."
         case .tokenMismatch:
-            "On the gateway host, run `openclaw gateway auth-token --show` "
-                + "in an interactive terminal, then replace the token and try again."
+            "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal. "
+                + "Click Change connection and replace Gateway token with its output. "
+                + "Save the connection, then try again."
         case .gatewayTokenNotConfigured:
             "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. "
                 + "If the gateway uses an environment variable instead, "
                 + "set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
         case .setupCodeExpired:
-            "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again."
+            "Get a fresh setup code from the Gateway owner. Click Change connection and paste it into "
+                + "Address or setup code. Save the connection, then try again."
         case .passwordRequired:
-            "This onboarding flow does not support password auth yet. "
-                + "Reconfigure the gateway to use token auth, then retry."
+            "Click Change connection and enter the gateway host's configured password in the Gateway password field. "
+                + "Save the connection, then try again. If no password is configured, "
+                + "set `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD` on the gateway host."
         case .pairingRequired:
             "Approve this device from an already-paired OpenClaw client. "
                 + "In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
@@ -114,9 +108,10 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .gatewayTokenNotConfigured:
             "This gateway has token auth enabled, but no gateway.auth.token is configured on the host."
         case .setupCodeExpired:
-            "Setup code expired or already used. Scan a fresh setup code, then try again."
+            "Setup code expired or already used. Get a fresh code from the Gateway owner and use Change connection."
         case .passwordRequired:
-            "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet."
+            "Click Change connection and enter the gateway password in the Gateway password field. "
+                + "If needed, configure gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD on the gateway host."
         case .pairingRequired:
             "Pairing required. In an already-paired OpenClaw client, "
                 + "run /pair approve, then check the connection again."

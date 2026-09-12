@@ -279,7 +279,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     };
   });
   const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
-  activeSession.agent.prepareNextTurn = async (signal) => {
+  const prepareNextTurn: typeof activeSession.agent.prepareNextTurn = async (signal) => {
+    if (attempt.pluginRuntimeRefreshPending?.()) {
+      return { stop: true };
+    }
     const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
     const refreshedPrompt = await refreshPermissionPrompt(snapshot?.context?.systemPrompt, signal);
     return snapshot?.context && refreshedPrompt !== undefined
@@ -293,6 +296,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
         }
       : snapshot;
   };
+  activeSession.agent.prepareNextTurn = prepareNextTurn;
+  attempt.registerPluginRuntimeRefreshConsumer?.(
+    () =>
+      activeSession.agent.prepareNextTurn === prepareNextTurn &&
+      activeSession.agent.state.isStreaming &&
+      !input.runAbortSignal.aborted,
+  );
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
   const markSourceReplyDelivered = () => {
@@ -347,6 +357,7 @@ type SessionBoundaryAttempt = Pick<
   | "onUserMessagePersistenceInvalidated"
   | "operation"
   | "prompt"
+  | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
   | "trigger"
   | "userTurnTranscriptRecorder"
@@ -386,13 +397,19 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     : resolveOrphanRepairPlan({
         sessionManager,
         prompt: attempt.prompt,
-        preserveLeaf: isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
+        preserveLeaf:
+          attempt.skipPreparedUserTurnMessage === true ||
+          isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
         trigger: attempt.trigger,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.
-  const currentUserTurnMessage =
-    attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ?? input.preparedUserTurnMessage;
+  // Internal retries merge the durable orphan into model-only continuation
+  // context; they do not resubmit the admitted user prompt after removing it.
+  const currentUserTurnMessage = attempt.skipPreparedUserTurnMessage
+    ? undefined
+    : (attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+      input.preparedUserTurnMessage);
   const reconciledCurrentUser =
     !preserveExactPrompt &&
     reconcilePrePersistedCurrentUserTurn({
@@ -457,6 +474,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     }
     const userTranscriptContexts = input.getUserTranscriptContexts();
     return {
+      sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
@@ -584,7 +602,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
+    assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
     prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     onUserMessagePreparingForPersistence: (_message, recorder) => {
@@ -613,15 +631,18 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     onUserMessageBlocked: () => {
       attempt.userTurnTranscriptRecorder?.markBlocked();
     },
-    onAssistantErrorMessagePersisted: (message) => {
-      attempt.onAssistantErrorMessagePersisted?.(message);
-    },
   });
   attempt.promptCacheKey = resolveSessionBoundaryPromptCacheKey({
     api: attempt.model.api,
     boundaryCount: sessionManager.getBoundaryCount(),
     promptCacheKey: attempt.promptCacheKey,
-    sessionId: attempt.sessionId,
+    // A detached helper routes under its private identity but reads the caller's prompt bytes.
+    sessionId:
+      attempt.sessionPersistence === "detached" &&
+      attempt.sessionManager &&
+      !attempt.sessionManager.getSessionTarget()
+        ? attempt.sessionManager.getSessionId()
+        : attempt.sessionId,
   });
 
   await input.withOwnedTranscriptWrite(async () => {

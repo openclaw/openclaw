@@ -16,8 +16,8 @@ vi.mock("../plugins/cli-backends.runtime.js", () => ({
     },
   ],
 }));
-vi.mock("../agents/auth-profiles/store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/auth-profiles/store.js")>()),
+vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
 }));
 vi.mock("../agents/model-auth-availability.js", async (importOriginal) => ({
@@ -26,13 +26,7 @@ vi.mock("../agents/model-auth-availability.js", async (importOriginal) => ({
     evaluateModelAuth: () => ({ availability: true }),
   }),
 }));
-vi.mock("../system-agent/setup-inference-test.js", () => ({ runSetupInferenceTest: probe }));
-vi.mock("../system-agent/setup-inference-persist.js", () => ({
-  cleanupSetupInferenceTempDir: async ({ tempDir }: { tempDir: string }) => {
-    const fs = await import("node:fs/promises");
-    await fs.rm(tempDir, { recursive: true, force: true });
-  },
-}));
+vi.mock("../system-agent/setup-inference-turn.js", () => ({ runSetupInferenceTurn: probe }));
 
 const config: OpenClawConfig = {
   agents: {
@@ -91,10 +85,10 @@ describe("update repair logical routes", () => {
         timeoutMs: 10_000,
       });
 
-      expect(probe.mock.calls.map(([params]) => params.plan.modelRef)).toEqual(
+      expect(probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual(
         primaryFails ? ["fixture/primary", "fixture/backup"] : ["fixture/primary"],
       );
-      expect(probe.mock.calls[0]?.[0].plan).toMatchObject({
+      expect(probe.mock.calls[0]?.[0].route).toMatchObject({
         provider: "fixture",
         authProfileId: "owner-profile",
         agentDir: "/isolated/owner",

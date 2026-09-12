@@ -1,7 +1,24 @@
 // Runtime launchers and the package build share these subprocess locations.
 const currentModuleUrl = import.meta.url;
 
+export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
+
 export const runtimeProcessEntrypoints = {
+  sharedStateStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../state/openclaw-state.worker",
+    distWorkerPath: "state/openclaw-state.worker.js",
+  },
+  sqliteStore: {
+    currentModuleUrl,
+    sourceWorkerName: "sqlite-store.worker",
+    distWorkerPath: "infra/sqlite-store.worker.js",
+  },
+  stateMigrationSnapshot: {
+    currentModuleUrl,
+    sourceWorkerName: "state-migrations.snapshot.worker",
+    distWorkerPath: "infra/state-migrations.snapshot.worker.js",
+  },
   githubExec: {
     currentModuleUrl,
     sourceWorkerName: "../agents/github-exec-launcher",
@@ -11,6 +28,31 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "sqlite-readonly-location.worker",
     distWorkerPath: "infra/sqlite-readonly-location.worker.js",
+  },
+  sqliteIntegrity: {
+    currentModuleUrl,
+    sourceWorkerName: "sqlite-integrity.worker",
+    distWorkerPath: "infra/sqlite-integrity.worker.js",
+  },
+  preparedModelCatalog: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/prepared-model-catalog.worker",
+    distWorkerPath: "agents/prepared-model-catalog.worker.js",
+  },
+  updateRepair: {
+    currentModuleUrl,
+    sourceWorkerName: "update-repair.worker",
+    distWorkerPath: "infra/update-repair.worker.js",
+  },
+  updateMigratedFinalize: {
+    currentModuleUrl,
+    sourceWorkerName: "update-migrated-finalize.worker",
+    distWorkerPath: "infra/update-migrated-finalize.worker.js",
+  },
+  updateCandidateState: {
+    currentModuleUrl,
+    sourceWorkerName: "update-candidate-state.worker",
+    distWorkerPath: "infra/update-candidate-state.worker.js",
   },
   databaseVerify: {
     currentModuleUrl,
@@ -27,6 +69,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../config/sessions/session-accessor.sqlite-archive.worker",
     distWorkerPath: "config/sessions/session-accessor.sqlite-archive.worker.js",
   },
+  sessionModelContext: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-model-context.worker",
+    distWorkerPath: "config/sessions/session-model-context.worker.js",
+  },
   sessionTranscriptReconcile: {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-transcript-reconcile.worker",
@@ -42,6 +89,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../process/supervisor/service-child-relay",
     distWorkerPath: "process/supervisor/service-child-relay.js",
   },
+  terminalPty: {
+    currentModuleUrl,
+    sourceWorkerName: "../process/terminal-pty-worker",
+    distWorkerPath: "process/terminal-pty-worker.js",
+  },
   serviceChildGroupAnchor: {
     currentModuleUrl,
     sourceWorkerName: "../process/supervisor/service-child-group-anchor",
@@ -51,5 +103,12 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../process/supervisor/service-child-windows-job-anchor",
     distWorkerPath: "process/supervisor/service-child-windows-job-anchor.js",
+  },
+  // Not a launcher: the daemon runtime probe requires this module inside candidate Bun
+  // executables so they select the same SQLite library the Gateway will run with.
+  bunSqliteLibrary: {
+    currentModuleUrl,
+    sourceWorkerName: "bun-sqlite-library",
+    distWorkerPath: "infra/bun-sqlite-library.js",
   },
 } as const;

@@ -44,7 +44,6 @@ import type {
   VerboseLevel,
 } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
-import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
@@ -64,7 +63,7 @@ export type ResolveQueueSettingsParams = {
   pluginDebounceMs?: number;
 };
 
-export type QueueDedupeMode = "message-id" | "prompt" | "none";
+export type QueueDedupeMode = "message-id" | "none";
 
 type QueueInsertPosition = "tail" | "front";
 
@@ -80,10 +79,22 @@ export type QueuedFollowupReplyBatch = {
   runId: string;
   originatingChannel: string | undefined;
   payloads: ReplyPayload[];
+  completion:
+    | { kind: "progress" }
+    | { kind: "completed"; stopReason?: string; allowCanvasOnly?: true }
+    | { kind: "failed"; error: string; stopReason?: string; errorKind?: "timeout" }
+    | { kind: "aborted"; stopReason?: string };
+};
+
+export type QueuedFollowupReplyDelivery = ((
+  batch: QueuedFollowupReplyBatch,
+) => Promise<void> | void) & {
+  ownsCompletion?: (originatingChannel: string | undefined) => boolean;
+  createSourceRetry?: () => QueuedFollowupReplyDelivery;
 };
 
 type QueuedFollowupReplyDisposition =
-  | { kind: "deliver"; deliver: (batch: QueuedFollowupReplyBatch) => Promise<void> | void }
+  | { kind: "deliver"; deliver: QueuedFollowupReplyDelivery }
   | { kind: "drop"; reason: "source-unavailable" };
 
 export class FollowupRunDeferredError extends Error {
@@ -138,6 +149,7 @@ export type FollowupRun = {
   /** The current-turn hook already ran before this steer became a fallback. */
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
   steerPending?: {
+    phase: "waiting" | "injecting";
     predecessor: Promise<boolean>;
     settle: (accepted: boolean) => void;
   };
@@ -361,10 +373,6 @@ export function completeFollowupRunLifecycle(
     // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
       if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
-        // The queue is relinquishing an un-admitted message: free its dedupe
-        // identity so the abandonment-triggered ingress retry can re-enqueue
-        // instead of being rejected as a recent duplicate and falsely completed.
-        releaseRecentQueueMessageId(run);
         lifecycle.onAbandoned?.();
       }
     } finally {

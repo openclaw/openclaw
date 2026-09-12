@@ -18,7 +18,7 @@ describe("config draft revision ownership", () => {
     { start: "raw", revert: "none", next: "form", saved: false },
     { start: "form", revert: "form", next: "form", saved: false },
   ] as const)(
-    "preserves external changes after $start editing, $revert revert and $next editing",
+    "config.set preserves external changes after $start editing, $revert revert and $next editing",
     async ({ start, revert, next, saved }) => {
       vi.useFakeTimers();
       let storedRaw = '{"count":1,"note":"original"}\n';
@@ -34,7 +34,7 @@ describe("config draft revision ownership", () => {
           }
           storedRaw = submission.raw;
           hash = "revision-saved";
-          return { hash };
+          return { config: JSON.parse(storedRaw), hash };
         }
         return {};
       });

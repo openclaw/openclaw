@@ -18,6 +18,7 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
+import { projectInternalRealtimeVoicePublicConfig } from "../../talk/provider-internal.js";
 import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
@@ -278,6 +279,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           agentId,
           defaultModel: realtimeConfig.model,
           surface: "gateway-relay",
+          autoRespondToAudio: realtimeConfig.consultRouting !== "force-agent-consult",
         });
         const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
           ...resolution,
@@ -351,8 +353,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           relaySessionId: session.relaySessionId,
           sessionTarget: target,
         });
+        const publicSession = projectInternalRealtimeVoicePublicConfig({
+          provider: resolution.provider,
+          providerConfig: relayLaunch.providerConfig,
+          config: session,
+        });
         return respondOk(respond, {
-          ...session,
+          ...publicSession,
           sessionId: session.relaySessionId,
           voiceSessionId: session.relaySessionId,
           mode,
@@ -585,7 +592,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId });
+        await stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId });
       } else if (session.kind === "transcription-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
         stopTalkTranscriptionRelaySession({

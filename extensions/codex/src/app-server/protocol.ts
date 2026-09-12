@@ -15,6 +15,8 @@ import type {
   CodexConfigRequirementsReadResponse,
   CodexConfigValueWriteParams,
   CodexConfigWriteResponse,
+  CodexExperimentalFeatureListParams,
+  CodexExperimentalFeatureListResponse,
   CodexHooksListParams,
   CodexHooksListResponse,
   CodexInstalledApp,
@@ -43,7 +45,14 @@ export type {
   CodexPluginReadResponse,
 } from "./protocol-control-plane.js";
 export type { CodexListMcpServerStatusResponse, CodexMcpServerStatus } from "./protocol-mcp.js";
-export type { JsonObject, JsonValue } from "./protocol-json.js";
+export { isRpcResponse } from "./protocol-json.js";
+export type {
+  JsonObject,
+  JsonValue,
+  RpcMessage,
+  RpcRequest,
+  RpcResponse,
+} from "./protocol-json.js";
 
 export type CodexServiceTier = string;
 export type CodexApprovalPolicy =
@@ -73,24 +82,6 @@ export type CodexAppServerRequestResult<M extends CodexAppServerRequestMethod> =
   M extends keyof CodexAppServerRequestResultMap
     ? CodexAppServerRequestResultMap[M]
     : JsonValue | undefined;
-
-export type RpcRequest = {
-  id?: number | string;
-  method: string;
-  params?: JsonValue;
-};
-
-export type RpcResponse = {
-  id: number | string;
-  result?: JsonValue;
-  error?: {
-    code?: number;
-    message: string;
-    data?: JsonValue;
-  };
-};
-
-export type RpcMessage = RpcRequest | RpcResponse;
 
 export type CodexInitializeParams = {
   clientInfo: {
@@ -168,6 +159,7 @@ export type CodexTurnEnvironmentParams = JsonObject & {
 };
 
 export type CodexThreadStartParams = JsonObject & {
+  threadSource?: string | null;
   input?: CodexUserInput[];
   cwd?: string;
   projectId?: string | null;
@@ -235,6 +227,22 @@ export type CodexThreadForkParams = JsonObject & {
   threadSource?: string | null;
   excludeTurns?: boolean;
 };
+
+/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
+export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
+  if (
+    !isRecord(value) ||
+    typeof value.threadId !== "string" ||
+    !value.threadId.trim() ||
+    (value.beforeTurnId !== undefined &&
+      value.beforeTurnId !== null &&
+      typeof value.beforeTurnId !== "string")
+  ) {
+    throw new Error("Invalid Codex app-server thread/fork params");
+  }
+  // SAFETY: The required id and optional fork boundary are checked; native Codex validates other options.
+  return value as CodexThreadForkParams;
+}
 
 export type CodexThreadForkResponse = CodexThreadStartResponse;
 
@@ -386,7 +394,10 @@ type CodexTurnInterruptParams = JsonObject & {
 
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
+  turnTrigger?: string | null;
   input: CodexUserInput[];
+  /** Native 0.153.4 flattens these entries into its Responses turn-metadata object. */
+  responsesapiClientMetadata?: Record<string, string> | null;
   additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
   cwd?: string;
   runtimeWorkspaceRoots?: string[] | null;
@@ -447,6 +458,7 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   forkedFromId?: string | null;
+  parentThreadId?: string | null;
   sessionId?: string;
   path?: string | null;
   projectId: string | null;
@@ -686,6 +698,7 @@ type CodexAppServerRequestParamsOverride = {
   "config/read": CodexConfigReadParams;
   "config/value/write": CodexConfigValueWriteParams;
   "environment/add": { environmentId: string; execServerUrl: string };
+  "experimentalFeature/list": CodexExperimentalFeatureListParams;
   "plugin/installed": CodexPluginInstalledParams;
   "plugin/install": CodexPluginInstallParams;
   "plugin/list": CodexPluginListParams;
@@ -729,6 +742,7 @@ type CodexAppServerRequestResultMap = {
   "configRequirements/read": CodexConfigRequirementsReadResponse;
   "config/value/write": CodexConfigWriteResponse;
   "environment/add": JsonValue;
+  "experimentalFeature/list": CodexExperimentalFeatureListResponse;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
@@ -768,8 +782,4 @@ type CodexAppServerRequestResultMap = {
 
 export function isJsonObject(value: unknown): value is JsonObject {
   return isRecord(value);
-}
-
-export function isRpcResponse(message: RpcMessage): message is RpcResponse {
-  return "id" in message && !("method" in message);
 }

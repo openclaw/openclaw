@@ -1,6 +1,7 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
   ConfigWriteAfterWrite,
   RuntimeConfigSnapshotRefreshOptions,
@@ -13,12 +14,16 @@ export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false
 export type ConfigWriteResult = {
   persistedHash: string;
   persistedConfig: OpenClawConfig;
+  /** Exact resolved source accepted before commit; absent for legacy custom writers. */
+  persistedSourceConfig?: OpenClawConfig;
 };
+
+export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown };
 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: () => void;
+  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
 };
 
 export type ConfigWriteAuditOrigin =
@@ -29,6 +34,8 @@ export type ConfigWriteAuditOrigin =
   | "cli";
 
 export type ConfigWriteOptions = {
+  /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */
+  inputBase?: ConfigMutationBase;
   /** Semantic writer label recorded in the config audit journal. */
   auditOrigin?: ConfigWriteAuditOrigin;
   /** Read-time env snapshot used to validate `${VAR}` restoration decisions. */
@@ -39,6 +46,8 @@ export type ConfigWriteOptions = {
   ownedConfigPathForWrite?: string;
   /** Rechecks that the config path captured at mutation start is still active. */
   assertConfigPathForWrite?: () => void;
+  /** Internal synchronous live-owner assertion; unlike path provenance, requires rename-only writes. */
+  assertCurrent?: () => void;
   /** Paths that must be removed from the persisted payload. */
   unsetPaths?: string[][];
   /** Caller-authored paths that stay persisted even when equal to defaults. */
@@ -71,6 +80,8 @@ export type ConfigWriteOptions = {
   preservedLegacyRootKeys?: readonly string[];
   /** Skip plugin-aware validation for bounded repair migrations only. */
   skipPluginValidation?: boolean;
+  /** Disable observation during mutation snapshots and canonical rereads, not write auditing. */
+  observe?: boolean;
   /** Preserve an older writer version during update handoff writes. */
   lastTouchedVersionOverride?: string;
   /** Optional runtime candidate preflight; the runtime writer composes its own preflight. */
@@ -148,6 +159,10 @@ export type ReadConfigFileSnapshotInternalResult = {
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+};
+
+export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
+  apply: (beforeCommit?: () => void) => Promise<void>;
 };
 
 export type BestEffortConfigSnapshot = {

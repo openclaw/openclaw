@@ -4,17 +4,14 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
-  resolveThinkingProfile,
+  type ThinkingCatalogResolver,
 } from "../auto-reply/thinking.js";
-import {
-  resolveThinkingDefaultForModelCore,
-  type ThinkLevel,
-} from "../auto-reply/thinking.shared.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderThinkingPolicySource } from "../plugins/provider-thinking.types.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-ref-shared.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
@@ -25,19 +22,22 @@ type ThinkingDefaultParams = {
   model: string;
   catalog?: ModelCatalogEntry[];
   agentRuntime?: string | null;
+  agentId?: string;
 };
 
 export function resolveConfiguredThinkingDefaultCore(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
 }): ThinkLevel | undefined {
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  const perModelThinking =
-    configuredModels?.[canonicalKey]?.params?.thinking ??
-    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  const { modelParams, agentModelParams } = resolveModelExtraParamSources({
+    config: params.cfg,
+    provider: params.provider,
+    modelId: params.model,
+    agentId: params.agentId,
+  });
+  const perModelThinking = agentModelParams?.thinking ?? modelParams?.thinking;
   if (
     perModelThinking === false ||
     perModelThinking === "disabled" ||
@@ -64,6 +64,7 @@ export function resolveConfiguredThinkingDefaultCore(params: {
 export function resolveThinkingDefaultCore(
   params: ThinkingDefaultParams & {
     providerPolicySource?: ProviderThinkingPolicySource;
+    catalogResolver?: ThinkingCatalogResolver;
   },
 ): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
@@ -120,29 +121,12 @@ export function resolveThinkingDefaultCore(
   ) {
     return "adaptive";
   }
-  const fallbackParams = {
+  return resolveThinkingDefaultForModel({
     provider: params.provider,
     model: params.model,
     catalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime: params.agentRuntime,
-  };
-  if (!params.providerPolicySource) {
-    return resolveThinkingDefaultForModel(fallbackParams);
-  }
-  const profile = resolveThinkingProfile({
-    ...fallbackParams,
-    providerPolicySource: params.providerPolicySource,
-  });
-  if (profile.defaultLevel) {
-    return profile.defaultLevel;
-  }
-  const fallback = resolveThinkingDefaultForModelCore(fallbackParams);
-  if (fallback === "off") {
-    return "off";
-  }
-  return resolveSupportedThinkingLevel({
-    ...fallbackParams,
-    level: "medium",
     providerPolicySource: params.providerPolicySource,
   });
 }

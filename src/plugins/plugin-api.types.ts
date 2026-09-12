@@ -10,6 +10,7 @@ import type {
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
 import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -166,7 +167,9 @@ type OpenClawPluginRunContextApi = {
   clearRunContext: (params: { runId: string; namespace?: string }) => void;
 };
 
-type OpenClawPluginLifecycleApi = {
+type OpenClawPluginLifecycleApi = Partial<
+  import("./plugin-instance.types.js").PluginInstanceLifecycle
+> & {
   /** Register cleanup hooks for plugin-owned host state and background work. */
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };
@@ -182,6 +185,8 @@ export type OpenClawPluginApi = {
   version?: string;
   description?: string;
   source: string;
+  /** Selected runtime entrypoint, independent of setup; absent without runtime artifact selection. */
+  readonly runtimeSource?: string;
   rootDir?: string;
   registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
@@ -284,12 +289,24 @@ export type OpenClawPluginApi = {
   registerEmbeddingProvider: (
     adapter: import("./embedding-providers.js").EmbeddingProviderAdapter,
   ) => void;
-  /** Register a speech synthesis provider (speech capability). */
-  registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
-  /** Register a realtime transcription provider (streaming STT capability). */
-  registerRealtimeTranscriptionProvider: (provider: RealtimeTranscriptionProviderPlugin) => void;
-  /** Register a realtime voice provider (duplex voice capability). */
-  registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
+  /** Register a speech descriptor or synchronous factory bound to native host operations. */
+  registerSpeechProvider: (
+    provider:
+      | SpeechProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => SpeechProviderPlugin),
+  ) => void;
+  /** Register a transcription descriptor or synchronous factory bound to native host operations. */
+  registerRealtimeTranscriptionProvider: (
+    provider:
+      | RealtimeTranscriptionProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => RealtimeTranscriptionProviderPlugin),
+  ) => void;
+  /** Register a voice descriptor or synchronous factory bound to native host operations. */
+  registerRealtimeVoiceProvider: (
+    provider:
+      | RealtimeVoiceProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => RealtimeVoiceProviderPlugin),
+  ) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register a transcripts source provider (live or imported meeting transcript capability). */

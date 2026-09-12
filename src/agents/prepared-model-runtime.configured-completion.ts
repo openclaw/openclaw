@@ -3,8 +3,10 @@ import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provid
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
-import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedConfiguredRuntimeModel,
+  PreparedModelRuntimePluginGeneration,
+} from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export function completeConfiguredRuntimeModels(

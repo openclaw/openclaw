@@ -46,7 +46,7 @@ import type { CostUsageTotals, ParsedTranscriptEntry } from "./session-cost-usag
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-const USAGE_COST_ROLLUP_VERSION = 3;
+const USAGE_COST_ROLLUP_VERSION = 4;
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
 type UsageCostJsonlCheckpoint = {
@@ -277,27 +277,44 @@ async function scanJsonlRange(params: {
     start: params.startOffset,
     end: params.endOffset - 1,
   });
-  let carry = Buffer.alloc(0);
-  let carryStart = params.startOffset;
+  // Retain fragments until a line is complete; growing a contiguous carry buffer
+  // would repeatedly copy and rescan large transcript records.
+  const lineChunks: Buffer[] = [];
+  let lineBytes = 0;
+  let chunkStart = params.startOffset;
   let processedOffset = params.startOffset;
   try {
     for await (const chunk of stream) {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const data = carry.length === 0 ? bytes : Buffer.concat([carry, bytes]);
       let lineStart = 0;
-      for (let newline = data.indexOf(10); newline >= 0; newline = data.indexOf(10, lineStart)) {
-        const record = parseJsonlRecord(data.subarray(lineStart, newline));
+      for (let newline = bytes.indexOf(10); newline >= 0; newline = bytes.indexOf(10, lineStart)) {
+        const fragment = bytes.subarray(lineStart, newline);
+        let line = fragment;
+        if (lineChunks.length > 0) {
+          lineChunks.push(fragment);
+          line = Buffer.concat(lineChunks, lineBytes + fragment.length);
+          lineChunks.length = 0;
+          lineBytes = 0;
+        }
+        const record = parseJsonlRecord(line);
         if (record) {
           params.onRecord(record);
         }
-        processedOffset = carryStart + newline + 1;
+        processedOffset = chunkStart + newline + 1;
         lineStart = newline + 1;
       }
-      carry = data.subarray(lineStart);
-      carryStart = processedOffset;
+      if (lineStart < bytes.length) {
+        const fragment = bytes.subarray(lineStart);
+        lineChunks.push(fragment);
+        lineBytes += fragment.length;
+      }
+      chunkStart += bytes.length;
     }
-    if (carry.length > 0) {
-      const record = parseJsonlRecord(carry);
+    const firstChunk = lineChunks[0];
+    if (firstChunk) {
+      const record = parseJsonlRecord(
+        lineChunks.length === 1 ? firstChunk : Buffer.concat(lineChunks, lineBytes),
+      );
       if (record) {
         params.onRecord(record);
         processedOffset = params.endOffset;
@@ -492,6 +509,9 @@ async function scanSqliteUsageRollup(params: {
     sessionId: marker.sessionId,
     storePath: marker.storePath,
   };
+  const { restoreSessionColdTranscript } =
+    await import("../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(scope);
   const snapshotLastRow = maxSeq > 0 ? readTranscriptEventAtSeqSync(scope, maxSeq) : undefined;
   if (maxSeq > 0 && !snapshotLastRow) {
     throw new Error(`SQLite transcript checkpoint unavailable: ${params.file.filePath}`);
@@ -528,7 +548,8 @@ async function scanSqliteUsageRollup(params: {
     ? selectIncrementalSqliteRecords(rawRecords, previousCheckpoint?.visibleLeafId)
     : undefined;
   const appendOnly = Boolean(incremental && params.previous);
-  const allRows = appendOnly ? rows : loadTranscriptEventRowsAfterSeqSync(scope, 0, maxSeq);
+  const allRows =
+    appendOnly || afterSeq === 0 ? rows : loadTranscriptEventRowsAfterSeqSync(scope, 0, maxSeq);
   const allRecords = appendOnly
     ? (incremental?.records ?? [])
     : selectVisibleTranscriptEvents(allRows.map((row) => row.event)).flatMap((event) =>
@@ -584,8 +605,11 @@ export async function refreshCostUsageCacheForAgent(params: {
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  const databasePath = params.databasePath ?? resolveUsageCostCacheDatabasePath(params.agentId);
-  const lock = acquireSessionCostUsageRefreshLock(params.agentId, databasePath);
+  const databasePath = resolveOpenClawAgentSqlitePath({
+    agentId: normalizeAgentId(params.agentId),
+    path: params.databasePath,
+  });
+  const lock = await acquireSessionCostUsageRefreshLock(params.agentId, databasePath);
   if (!lock.acquired) {
     return "busy";
   }
@@ -613,7 +637,7 @@ export async function refreshCostUsageCacheForAgent(params: {
       filesByPath.set(file.filePath, file);
     }
     const files = [...filesByPath.values()];
-    deleteSessionCostUsageRollupsExcept({
+    await deleteSessionCostUsageRollupsExcept({
       agentId: params.agentId,
       databasePath,
       liveKeys: new Set(files.map((file) => file.filePath)),
@@ -648,7 +672,7 @@ export async function refreshCostUsageCacheForAgent(params: {
         resolveCost,
       });
       const valueJson = JSON.stringify(entry);
-      const written = writeSessionCostUsageRollup({
+      const written = await writeSessionCostUsageRollup({
         agentId: params.agentId,
         databasePath,
         rollupId: file.filePath,
@@ -664,6 +688,6 @@ export async function refreshCostUsageCacheForAgent(params: {
     }
     return "refreshed";
   } finally {
-    lock.release();
+    await lock.release();
   }
 }

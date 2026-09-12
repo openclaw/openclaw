@@ -25,6 +25,7 @@ import {
   type CachedCopilotToken,
 } from "./provider-auth-copilot-cache.js";
 
+export { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { CachedCopilotToken } from "./provider-auth-copilot-cache.js";
 export type { SecretInput } from "../config/types.secrets.js";
@@ -39,7 +40,7 @@ export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-prof
 export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreForLocalUpdate,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 export { listProfilesForProvider, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 export {
   removeProviderAuthProfilesWithLockCompat as removeProviderAuthProfilesWithLock,
@@ -56,7 +57,6 @@ export {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   resolveOAuthApiKeyMarker,
-  resolveNonEnvSecretRefApiKeyMarker,
 } from "../agents/model-auth-markers.js";
 export {
   formatApiKeyPreview,
@@ -313,7 +313,7 @@ export async function resolveCopilotApiToken(params: {
     ...(params.saveJsonFileImpl ? { saveJsonFileImpl: params.saveJsonFileImpl } : {}),
   });
   const cachePath = cache.path;
-  const cached = cache.load();
+  const cached = await cache.load();
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
     // Token cache entries are scoped to the current Copilot integration id and
     // GitHub host so stale tokens from older editor identities or a different
@@ -368,7 +368,7 @@ export async function resolveCopilotApiToken(params: {
     sourceCredentialFingerprint,
     domain,
   };
-  cache.save(payload);
+  await cache.save(payload);
 
   return {
     token: payload.token,

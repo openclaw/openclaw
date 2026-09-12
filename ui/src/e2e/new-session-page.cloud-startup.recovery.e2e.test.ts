@@ -2,10 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   expectPastedPngImage,
   installMockGateway,
@@ -53,7 +55,7 @@ suite.define(() => {
       workspaceGit: true,
       methodResponses: {
         "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
-        "chat.metadata": {
+        "models.list": {
           cases: [
             {
               match: { authProfileId: account.authProfileId },
@@ -121,12 +123,19 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await place.evaluate((element) => {
+        const onAfterShow = (event: Event) => {
+          if (event.target === element) {
+            element.removeEventListener("wa-after-show", onAfterShow);
+            element.setAttribute("data-test-picker-ready", "true");
+          }
+        };
+        element.addEventListener("wa-after-show", onAfterShow);
+      });
       await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
-        .click();
-      await page.locator("#new-session-where-trigger").click();
+      await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
+      await page.locator('[data-value="cloud:aws"]').click();
       await page.locator('[data-value="machine:fast"]').click();
       await expect
         .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-machine-class"))
@@ -134,9 +143,9 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
       await page.locator('[data-chat-model-select="true"]').click();
-      const picker = page.locator(".chat-model-account__picker");
-      await picker.locator("[data-chat-account-trigger]").click();
-      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      const picker = page.locator("[data-chat-account-selection]");
+      await picker.locator("[data-chat-account-group-toggle]").click();
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
       await expect
         .poll(() =>
           page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
@@ -172,8 +181,11 @@ suite.define(() => {
         .toBe(message);
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-      ).toBe("aws · fast");
-      await gateway.waitForRequest("chat.metadata");
+      ).toBe("aws");
+      expect(
+        await page.locator("#new-session-where-trigger").getAttribute("data-machine-class"),
+      ).toBe("fast");
+      await gateway.waitForRequest("models.list");
       try {
         await expect
           .poll(() =>
@@ -236,20 +248,7 @@ suite.define(() => {
       deferredMethods: ["sessions.create", "sessions.delete"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -277,7 +276,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start session" }).click();
@@ -360,20 +359,7 @@ suite.define(() => {
         deferredMethods: ["sessions.create"],
         workspaceGit: true,
         methodResponses: {
-          "agents.list": {
-            agents: [
-              {
-                id: "cloud",
-                identity: { name: "Cloud" },
-                name: "Cloud",
-                workspace: WORKSPACE,
-                workspaceGit: true,
-              },
-            ],
-            defaultId: "cloud",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createCloudAgentsListResponse(),
           "environments.list": {
             environments: [],
             profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -413,7 +399,7 @@ suite.define(() => {
         await page.locator("#new-session-where-trigger").click();
         await page
           .locator("wa-popover.new-session-page__where-popover")
-          .getByRole("button", { name: "Cloud · aws" })
+          .getByRole("button", { name: "aws", exact: true })
           .click();
         const composer = page.locator(".new-session-page__message");
         await composer.fill(message);
@@ -523,11 +509,7 @@ suite.define(() => {
   );
 
   it("checks an unconfirmed cloud turn without replay when composer storage is unavailable", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:cloud:storage-recovery";
     const message = "keep this cloud recovery task";
@@ -535,20 +517,7 @@ suite.define(() => {
       deferredMethods: ["sessions.send"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -604,7 +573,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);

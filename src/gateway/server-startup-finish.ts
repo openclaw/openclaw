@@ -5,6 +5,7 @@ import {
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
 } from "../config/io.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -16,6 +17,10 @@ import {
   buildGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "./config-reload-plan.js";
+import {
+  indexPluginNodeCapabilitySurfaces,
+  reconcileClientPluginNodeCapabilities,
+} from "./plugin-node-capability.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
@@ -107,7 +112,7 @@ export async function finishGatewayStartup(params: {
     pluginMetadataSnapshot,
     pluginLookUpTable,
     ambientEnvTriggers,
-    replaceAttachedPluginRuntime,
+    prepareAttachedPluginRuntime,
     refreshAttachedGatewayDiscovery,
     wss,
     httpBindHosts,
@@ -196,6 +201,7 @@ export async function finishGatewayStartup(params: {
   );
   const activateScheduledServicesWhenReady = () => {
     if (
+      opts.updateCanary ||
       lifecycle.closePreludeStarted ||
       !postAttachRuntimeReturned ||
       !startupState.sidecarsReady ||
@@ -238,6 +244,7 @@ export async function finishGatewayStartup(params: {
       loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
         startGatewayPostAttachRuntime({
           minimalTestGateway,
+          updateCanary: opts.updateCanary,
           cfgAtStart,
           getConfig: getRuntimeConfig,
           bindHost,
@@ -258,7 +265,9 @@ export async function finishGatewayStartup(params: {
           ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           pluginRuntimeClaim: startupPluginRuntimeClaim,
           getCurrentPluginRegistry: () => pluginRuntime.registry,
+          getCurrentPluginServices: () => kernel.pluginRuntimeGeneration.currentServices(),
           getCurrentPluginMetadataSnapshot: getPluginMetadataSnapshot,
+          getCurrentActivationSourceConfig: getRuntimeConfigSourceSnapshot,
           ambientEnvTriggers,
           pluginRegistry: pluginRuntime.registry,
           defaultWorkspaceDir,
@@ -293,12 +302,24 @@ export async function finishGatewayStartup(params: {
             startupState.pendingReason = "startup-sidecars";
           },
           onStartupPluginsLoaded: async (loaded) => {
-            if (!startupPluginRuntimeClaim.publish(() => replaceAttachedPluginRuntime(loaded))) {
-              loaded.retireGatewayRuntimeBindings?.();
-              return;
+            const prepared = await prepareAttachedPluginRuntime(loaded);
+            if (
+              lifecycle.closePreludeStarted ||
+              !startupPluginRuntimeClaim.publish(prepared.publish)
+            ) {
+              return false;
             }
             startupState.pendingReason = "startup-sidecars";
+            prepared.afterCommit();
+            // Nodes can finish their handshake before deferred plugins attach.
+            const nodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(
+              getPluginNodeCapabilities(),
+            );
+            for (const client of clients) {
+              reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
+            }
             await refreshAttachedGatewayDiscovery(loaded.pluginRegistry, startupPluginRuntimeClaim);
+            return true;
           },
           getCronService: () => runtimeState.cronState.cron,
           onChannelsStarted: () => {
@@ -340,20 +361,21 @@ export async function finishGatewayStartup(params: {
           sidecarStartup,
           waitForPostReadyWork: params.waitForPostReadyWork,
           activeWorkInspectors,
-          providerAuthPrewarm: {
-            getConfig: getRuntimeConfig,
-          },
         }),
       ),
     ),
   );
-  kernel.setPostAttachHandles(postAttachHandles, startupPluginRuntimeClaim);
+  kernel.setPostAttachHandles(postAttachHandles);
   startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
   startupTrace.mark("ready");
   if (sidecarStartup === "defer") {
     log.info("gateway ready");
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
+  if (opts.updateCanary) {
+    // Copied queues and jobs must not resume; the canary owns only startup probes.
+    return { startupSettled: postAttachHandles.startupSettled };
+  }
   if (!minimalTestGateway) {
     const { startOpenClawDatabaseIntegrityVerifier } =
       await import("../state/openclaw-database-verify.js");
@@ -382,9 +404,10 @@ export async function finishGatewayStartup(params: {
     resolveGatewayContext: resolvePluginGatewayContext,
     minimalTestGateway,
     initialConfig: cfgAtStart,
+    initialPluginInstallRecords: pluginMetadataSnapshot?.index.installRecords,
     initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
     initialSnapshotRawHash: startupLastGoodSnapshot.exists
-      ? (startupLastGoodSnapshot.hash ?? null)
+      ? hashConfigRaw(startupLastGoodSnapshot.raw)
       : null,
     initialAuthoredConfig: startupLastGoodSnapshot.parsed,
     initialIncludedPaths: startupLastGoodSnapshot.includedPaths ?? [],
@@ -398,7 +421,7 @@ export async function finishGatewayStartup(params: {
       registerConfigWriteListener(listener, {
         ownsRuntimeActivationFor: configSnapshot.path,
         preCommitRuntimePreflight: async (sourceConfig, runtimeRefresh) => {
-          const candidate = prepareReloadCandidate({
+          const candidate = await prepareReloadCandidate({
             runtimeConfig: sourceConfig,
             sourceConfig,
           });
@@ -503,7 +526,15 @@ export async function finishGatewayStartup(params: {
     ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
     restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
   };
-  kernel.setConfigReloaderHandle(startManagedGatewayConfigReloader(configReloaderParams));
+  if (lifecycle.closePreludeStarted) {
+    return { startupSettled: postAttachHandles.startupSettled };
+  }
+  const configReloader = startManagedGatewayConfigReloader(configReloaderParams);
+  kernel.setConfigReloaderHandle(configReloader);
+  await configReloader.ready;
+  if (lifecycle.closePreludeStarted) {
+    return { startupSettled: postAttachHandles.startupSettled };
+  }
   await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
     log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
   });

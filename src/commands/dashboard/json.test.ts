@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "../dashboard.js";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
@@ -52,9 +53,7 @@ const fakePassword = ["te", "st-password"].join("");
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 const runtime = {
-  error: vi.fn(),
-  exit: vi.fn(),
-  log: vi.fn(),
+  ...createTestRuntime(),
   writeJson: vi.fn(),
   writeStdout: vi.fn(),
 };
@@ -123,7 +122,7 @@ describe("dashboardCommand --json", () => {
         port: 18789,
         tokenIncluded: true,
         browserUrl:
-          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
         browserBootstrapExpiresAtMs: 123_456,
       },
       0,

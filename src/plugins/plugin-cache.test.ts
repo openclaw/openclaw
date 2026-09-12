@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
@@ -12,8 +13,16 @@ import {
   readPluginCacheFile,
   readPluginCacheJsonFile,
 } from "./plugin-cache-files.js";
-import { createPluginCache, getPluginCacheRoot, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  getPluginCacheRoot,
+  getPluginCacheSource,
+  withPluginCache,
+} from "./plugin-cache.js";
+import { PluginInstance } from "./plugin-instance.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { preparePluginModule } from "./plugin-module-loader-cache.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -23,6 +32,31 @@ afterEach(() => {
 });
 
 describe("plugin package facts", () => {
+  it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
+    const root = tempDirs.make("plugin-lease-parent-");
+    const filePath = path.join(root, "catalog.json");
+    fs.writeFileSync(filePath, '{"name":"before-install"}');
+    await using cache = createPluginCache();
+    const instance = new PluginInstance("setup-owner");
+    cache.instances.add(instance);
+    const afterWrite = instance.wrap(() => "post-write usable");
+    await withPluginCache(cache, async () => {
+      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+        ok: true,
+        value: { name: "before-install" },
+      });
+      await withPluginLifecycleLease({ path: path.join(root, "state.sqlite") }, async () => {
+        fs.writeFileSync(filePath, '{"name":"after-install"}');
+        clearPluginMetadataLifecycleCaches();
+      });
+      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+        ok: true,
+        value: { name: "after-install" },
+      });
+      expect(afterWrite()).toBe("post-write usable");
+    });
+  });
+
   it.each(["regular", "boundary"] as const)(
     "shares missing %s files across reader policies until the owner changes",
     (firstPolicy) => {
@@ -163,6 +197,42 @@ describe("plugin package facts", () => {
     ).toBe(first);
     expect(getPluginCacheRoot(root).artifacts.has("missing-surface")).toBe(true);
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("keeps checked source aliases authoritative within their explicit cache generation", () => {
+    const parent = fs.realpathSync(tempDirs.make("plugin-source-alias-"));
+    const root = path.join(parent, "package with spaces");
+    const alias = path.join(parent, "alias with spaces");
+    fs.mkdirSync(root);
+    fs.writeFileSync(path.join(root, "api.cjs"), "module.exports = {};\n");
+    fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+    const aliasPath = path.join(alias, "api.cjs");
+    const owner = createPluginCache();
+    const lexicalSource = getPluginCacheSource(aliasPath, owner);
+    const prepared = withPluginCache(owner, () =>
+      preparePluginModule({
+        modulePath: aliasPath,
+        boundaryRoot: alias,
+        boundaryLabel: "plugin root",
+        rejectHardlinks: true,
+        surfaceLabel: "fixture public surface",
+      }),
+    );
+    expect(prepared.source).not.toBe(lexicalSource);
+
+    const foreign = createPluginCache();
+    const foreignSource = getPluginCacheSource(aliasPath, foreign);
+    withPluginCache(foreign, () => {
+      expect(getPluginCacheSource(aliasPath)).toBe(foreignSource);
+      for (const modulePath of [
+        aliasPath,
+        prepared.modulePath,
+        path.relative(process.cwd(), aliasPath),
+        pathToFileURL(aliasPath).href,
+      ]) {
+        expect(getPluginCacheSource(modulePath, owner)).toBe(prepared.source);
+      }
+    });
   });
 
   it("does not use a permissive hardlink read to satisfy a strict root policy", () => {

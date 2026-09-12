@@ -17,11 +17,7 @@ const LIVE =
   process.env.LIVE === "1" ||
   process.env.GITHUB_COPILOT_LIVE_TEST === "1";
 const ENV_GITHUB_TOKEN =
-  process.env.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN ??
-  process.env.COPILOT_GITHUB_TOKEN ??
-  process.env.GH_TOKEN ??
-  process.env.GITHUB_TOKEN ??
-  "";
+  process.env.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN ?? process.env.COPILOT_GITHUB_TOKEN ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_GITHUB_COPILOT_MODEL?.trim() || "gpt-5.4";
 const describeLive = LIVE ? describe : describe.skip;
 const TOOL_ARGUMENT_MARKER = `copilot-stream-arguments-${"x".repeat(128)}`;
@@ -136,11 +132,13 @@ async function resolveGithubTokenCandidates(): Promise<Array<{ source: string; t
 }
 
 describeLive("github-copilot connection-bound Responses IDs live", () => {
-  it("rewrites replayed item IDs and preserves streamed tool arguments", async () => {
+  it("rewrites replayed item IDs and preserves streamed tool arguments", async ({ skip }) => {
     logProgress("start");
     const candidates = await resolveGithubTokenCandidates();
     if (candidates.length === 0) {
-      logProgress("skip (no GitHub Copilot token found in env or auth profile)");
+      skip(
+        "No GitHub Copilot token found in env vars OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN / COPILOT_GITHUB_TOKEN or the github-copilot auth profile",
+      );
       return;
     }
 

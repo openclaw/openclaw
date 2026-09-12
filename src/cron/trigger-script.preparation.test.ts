@@ -26,7 +26,6 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { resetPluginToolDescriptorCacheForTest } from "../plugins/tools.test-fixtures.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
@@ -103,7 +102,6 @@ beforeEach(async () => {
 afterEach(async () => {
   clearRuntimeConfigSnapshot();
   clearPluginLoaderCache();
-  resetPluginToolDescriptorCacheForTest();
   clearPluginMetadataLifecycleCaches();
   await state?.cleanup();
 });
@@ -168,7 +166,7 @@ describe("cron preparation plugin ownership", () => {
         });
       for (const [jobId, agentId, calls] of [
         ["first", "main", 1],
-        ["first", "main", 2],
+        ["first", "main", 1],
         ["second", "main", 1],
         ["first", "other", 1],
       ] as const) {

@@ -38,6 +38,7 @@ import {
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
+import type { probeIMessagePrivateApi } from "./probe.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const DEFAULT_SENDER = "+15550001111";
@@ -159,6 +160,7 @@ const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
 );
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
+const probeIMessagePrivateApiMock = vi.hoisted(() => vi.fn<typeof probeIMessagePrivateApi>());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
   vi.fn<typeof ensureConfiguredBindingRouteReady>(async () => ({ ok: true })),
@@ -245,6 +247,14 @@ vi.mock("./client.js", () => ({
   createIMessageRpcClient: createIMessageRpcClientMock,
 }));
 
+vi.mock("./probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./probe.js")>();
+  return {
+    ...actual,
+    probeIMessagePrivateApi: probeIMessagePrivateApiMock,
+  };
+});
+
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: vi.fn(() => () => {}),
 }));
@@ -287,6 +297,15 @@ describe("iMessage monitor last-route updates", () => {
     installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
+    probeIMessagePrivateApiMock.mockReset().mockImplementation(
+      async (cliPath) =>
+        getCachedIMessagePrivateApiStatus(cliPath) ?? {
+          available: false,
+          v2Ready: false,
+          selectors: {},
+          rpcMethods: [],
+        },
+    );
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
     ensureConfiguredBindingRouteReadyMock.mockReset().mockResolvedValue({ ok: true });
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
@@ -854,6 +873,7 @@ describe("iMessage monitor last-route updates", () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
       expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       const onReplyStart =
         params.dispatcherOptions.onReplyStart ??
@@ -939,6 +959,7 @@ describe("iMessage monitor last-route updates", () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "read"]);
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
       expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       expect(params.replyOptions?.onToolStart).toBeUndefined();
       const onToolResult = params.replyOptions?.onToolResult;
@@ -1019,6 +1040,39 @@ describe("iMessage monitor last-route updates", () => {
         expect.any(Object),
       );
     });
+  });
+
+  it("re-probes missing private API capabilities before typing and read receipts", async () => {
+    probeIMessagePrivateApiMock.mockResolvedValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: ["watch.subscribe", "typing", "read"],
+    });
+    const client = await runMessageCase({
+      auxiliaryRequests: {
+        typing: { ok: true },
+        read: { ok: true },
+      },
+      message: createInboundMessage({
+        id: 14,
+        guid: "private-api-refresh-guid-14",
+        text: "restore native feedback after bridge recovery",
+      }),
+    });
+    const auxiliaryClient = client.auxiliaryClient!;
+
+    expect(probeIMessagePrivateApiMock).toHaveBeenCalledWith("imsg", 10_000);
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "read",
+      expect.objectContaining({ chat_id: 123 }),
+      expect.any(Object),
+    );
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "typing",
+      expect.objectContaining({ typing: true }),
+      expect.any(Object),
+    );
   });
 
   for (const { name, id, guid, monitor } of [

@@ -4,6 +4,7 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
+import type { ContextEngine } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -53,6 +54,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -126,6 +128,9 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     ensureContextEnginesInitialized: vi.fn(),
   }));
   vi.doMock("../../context-engine/registry.js", () => ({
+    hasSameContextEngineInstance: vi.fn(
+      (left: ContextEngine, right: ContextEngine) => left === right,
+    ),
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
@@ -165,7 +170,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
-        release: vi.fn(),
+        [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };
     return {
@@ -391,6 +396,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
+    providerOwnsDynamicModelPreparation: vi.fn(() => false),
     shouldDeferProviderSyntheticProfileAuthWithPlugin: vi.fn(() => false),
   }));
 }

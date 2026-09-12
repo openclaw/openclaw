@@ -16,6 +16,7 @@ import {
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
 import { renderSessionColorDot } from "./session-color.ts";
+import { sessionMachineParts } from "./session-machine.ts";
 import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progress-card.ts";
 import "./session-hovercard.css";
@@ -412,12 +413,7 @@ function renderHeader(input: SessionHovercardInput) {
   </header>`;
 }
 
-function renderProgressHeadsUp(
-  card: ProgressCard | null | undefined,
-  sessionStatus: SidebarSessionHovercardRow["status"],
-  startedAt: SidebarSessionHovercardRow["startedAt"],
-) {
-  const headsUp = progressCardHeadsUp(card, sessionStatus, startedAt);
+function renderProgressHeadsUp(headsUp: ReturnType<typeof progressCardHeadsUp>) {
   if (!headsUp) {
     return nothing;
   }
@@ -450,7 +446,10 @@ function renderProgressHeadsUp(
   </div>`;
 }
 
-function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
+function renderSessionContext(
+  { row }: SessionHovercardInput,
+  headsUp: ReturnType<typeof progressCardHeadsUp>,
+) {
   const context = row?.workContext;
   const placementIdentity =
     row?.placementProviderId && row.placementProfileId
@@ -462,15 +461,8 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
           }),
         }
       : undefined;
-  if (
-    !context &&
-    !placementIdentity &&
-    row?.boardFace !== "dashboard" &&
-    row?.hasAutomation !== true &&
-    !progressCardHeadsUp(progressCard, row?.status, row?.startedAt)
-  ) {
-    return nothing;
-  }
+  const machineParts = sessionMachineParts(row?.placementMachine);
+  const machineSummary = machineParts.filter(Boolean).join(" · ");
   return html`<div class="session-hovercard__context">
     ${
       context
@@ -511,6 +503,22 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
         : nothing
     }
     ${
+      placementIdentity && machineSummary
+        ? html`<div
+            class="session-hovercard__machine"
+            aria-label=${`${t("sessionHovercard.machineLabel")}: ${machineSummary}`}
+          >
+            ${machineParts.map((part, index) =>
+              part
+                ? html`<span class=${index === 1 ? "session-hovercard__machine-class" : nothing}
+                    >${part}</span
+                  >`
+                : nothing,
+            )}
+          </div>`
+        : nothing
+    }
+    ${
       row?.boardFace === "dashboard"
         ? html`<div
             class="session-hovercard__context-row"
@@ -538,7 +546,7 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
           </div>`
         : nothing
     }
-    ${renderProgressHeadsUp(progressCard, row?.status, row?.startedAt)}
+    ${renderProgressHeadsUp(headsUp)}
   </div>`;
 }
 
@@ -634,6 +642,12 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
 }
 
 export function renderSessionHovercard(input: SessionHovercardInput) {
+  const headsUp = progressCardHeadsUp(
+    input.progressCard,
+    input.row?.status,
+    input.row?.startedAt,
+    input.row?.hasActiveRun ?? false,
+  );
   const hasPullRequestDetails = Boolean(
     input.pullRequests && (input.pullRequests.pullRequests.length > 0 || input.pullRequests.branch),
   );
@@ -642,7 +656,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     (input.row?.placementProviderId && input.row.placementProfileId) ||
     input.row?.boardFace === "dashboard" ||
     input.row?.hasAutomation === true ||
-    progressCardHeadsUp(input.progressCard, input.row?.status, input.row?.startedAt),
+    headsUp,
   );
   const lastMessagePreview = input.progressCard
     ? undefined
@@ -661,7 +675,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     ${
       hasContext
         ? html`<section class="session-hovercard__section session-hovercard__section--metadata">
-            ${renderSessionContext(input)}
+            ${renderSessionContext(input, headsUp)}
           </section>`
         : nothing
     }

@@ -139,7 +139,9 @@ describe("persistPluginInstall enablement", () => {
     }) => {
       expect(params.selectedId).toBe("legacy-memory");
       expect(params.selectedKind).toBe("memory");
-      expect(params.registry?.plugins).toEqual([{ id: "legacy-memory", kind: "memory" }]);
+      expect(params.registry?.plugins.map(({ id, kind }) => ({ id, kind }))).toEqual([
+        { id: "legacy-memory", kind: "memory" },
+      ]);
       return {
         config: {
           ...params.config,
@@ -215,7 +217,9 @@ describe("persistPluginInstall enablement", () => {
     }) => {
       expect(params.selectedId).toBe("memory-b");
       expect(params.selectedKind).toBe("memory");
-      expect(params.registry?.plugins).toEqual([{ id: "memory-b", kind: "memory" }]);
+      expect(params.registry?.plugins.map(({ id, kind }) => ({ id, kind }))).toEqual([
+        { id: "memory-b", kind: "memory" },
+      ]);
       return {
         config: {
           ...params.config,
@@ -325,18 +329,13 @@ describe("persistPluginInstall enablement", () => {
     } as OpenClawConfig;
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
-        recordPluginManifestInstallOwner(
-          {
-            id: "needs-config",
-            manifestPath: "/tmp/needs-config/openclaw.plugin.json",
-            configSchema: {
-              type: "object",
-              required: ["token"],
-              properties: { token: { type: "string" } },
-            },
+        createManifestRecord("needs-config", {
+          configSchema: {
+            type: "object",
+            required: ["token"],
+            properties: { token: { type: "string" } },
           },
-          "needs-config",
-        ),
+        }),
       ],
       diagnostics: [],
     });
@@ -419,7 +418,6 @@ describe("persistPluginInstall enablement", () => {
 
   it("rejects invalid authored plugin config even for a disabled install", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    let committed = false;
     const baseConfig = {
       plugins: {
         entries: {
@@ -433,18 +431,13 @@ describe("persistPluginInstall enablement", () => {
     } as OpenClawConfig;
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
-        recordPluginManifestInstallOwner(
-          {
-            id: "needs-config",
-            manifestPath: "/tmp/needs-config/openclaw.plugin.json",
-            configSchema: {
-              type: "object",
-              required: ["token"],
-              properties: { token: { type: "string" } },
-            },
+        createManifestRecord("needs-config", {
+          configSchema: {
+            type: "object",
+            required: ["token"],
+            properties: { token: { type: "string" } },
           },
-          "needs-config",
-        ),
+        }),
       ],
       diagnostics: [],
     });
@@ -458,9 +451,6 @@ describe("persistPluginInstall enablement", () => {
         },
         pluginId: "needs-config",
         enable: false,
-        onCommitted: () => {
-          committed = true;
-        },
         install: {
           source: "npm",
           spec: "needs-config@1.0.0",
@@ -469,7 +459,6 @@ describe("persistPluginInstall enablement", () => {
       }),
     ).rejects.toThrow("has invalid configured settings");
 
-    expect(committed).toBe(false);
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();

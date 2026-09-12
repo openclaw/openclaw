@@ -19,11 +19,10 @@ import {
   getCapabilityWebSearchCommandSecretTargets,
 } from "../command-secret-targets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalPositiveInteger,
-  resolveCapabilityProviderAgentId,
+  registerLocalProvidersCommand,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -57,14 +56,7 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web search",
-    targetIds: scopedTargets.targetIds,
-    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
-    ...(scopedTargets.forcedActivePaths
-      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
-      : {}),
-    ...(scopedTargets.optionalActivePaths
-      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
-      : {}),
+    ...scopedTargets,
     config: rawConfig,
   });
   const result = await runWebSearch({
@@ -95,14 +87,7 @@ async function runWebFetchCommand(params: { url: string; provider?: string; form
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web fetch",
-    targetIds: scopedTargets.targetIds,
-    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
-    ...(scopedTargets.forcedActivePaths
-      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
-      : {}),
-    ...(scopedTargets.optionalActivePaths
-      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
-      : {}),
+    ...scopedTargets,
     config: rawConfig,
   });
   const resolved = resolveWebFetchDefinition({
@@ -177,43 +162,36 @@ export function registerWebCapabilityCommands(capability: Command): void {
       }
     });
 
-  web
-    .command("providers")
-    .description("List web providers")
-    .option("--agent <id>", "Agent whose provider state should be inspected")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
-        const agentDir = resolveAgentDir(cfg, agentId);
-        const selectedSearchProvider =
-          typeof cfg.tools?.web?.search?.provider === "string"
-            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
-            : "";
-        const selectedFetchProvider =
-          typeof cfg.tools?.web?.fetch?.provider === "string"
-            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.fetch.provider)
-            : "";
-        const result = {
-          search: listWebSearchProviders({ config: cfg }).map((provider) => ({
-            available: true,
-            configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
-            selected: provider.id === selectedSearchProvider,
-            id: provider.id,
-            envVars: provider.envVars,
-          })),
-          fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
-            available: true,
-            configured: isWebFetchProviderConfigured({ provider, config: cfg }),
-            selected: provider.id === selectedFetchProvider,
-            id: provider.id,
-            envVars: provider.envVars,
-          })),
-        };
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
+  registerLocalProvidersCommand(
+    web,
+    "List web providers",
+    (cfg, agentId) => {
+      const agentDir = resolveAgentDir(cfg, agentId);
+      const selectedSearchProvider =
+        typeof cfg.tools?.web?.search?.provider === "string"
+          ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
+          : "";
+      const selectedFetchProvider =
+        typeof cfg.tools?.web?.fetch?.provider === "string"
+          ? normalizeLowercaseStringOrEmpty(cfg.tools.web.fetch.provider)
+          : "";
+      return {
+        search: listWebSearchProviders({ config: cfg }).map((provider) => ({
+          available: true,
+          configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
+          selected: provider.id === selectedSearchProvider,
+          id: provider.id,
+          envVars: provider.envVars,
+        })),
+        fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
+          available: true,
+          configured: isWebFetchProviderConfigured({ provider, config: cfg }),
+          selected: provider.id === selectedFetchProvider,
+          id: provider.id,
+          envVars: provider.envVars,
+        })),
+      };
+    },
+    (value) => JSON.stringify(value, null, 2),
+  );
 }

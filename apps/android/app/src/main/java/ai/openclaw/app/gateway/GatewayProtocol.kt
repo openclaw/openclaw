@@ -87,6 +87,7 @@ data class Question(
   val questionId: String,
   val header: String,
   val question: String,
+  val url: String? = null,
   val options: List<QuestionOption>,
   val multiSelect: Boolean? = null,
   val isOther: Boolean? = null,
@@ -134,6 +135,8 @@ data class SessionObserverPlanProgress(
 data class SessionObserverDigest(
   val sessionKey: String,
   val agentId: String? = null,
+  val sessionId: String? = null,
+  val lifecycleRevision: String? = null,
   val runId: String? = null,
   val revision: Long,
   val updatedAt: Long,
@@ -155,6 +158,7 @@ data class WorkerDesktopObserveResult(
   val wsPath: String,
   val expiresAtMs: Long,
   val control: Boolean,
+  val canResize: Boolean? = null,
   val vncPassword: String? = null,
 )
 
@@ -918,6 +922,25 @@ enum class GatewayMethod(
   PluginsControlUiStatus("plugins.controlUi.status"),
   UpdateRunsGet("update.runs.get"),
   UpdateRunsList("update.runs.list"),
+  GatewaySuspendHandoff("gateway.suspend.handoff"),
+  TranscriptsExport("transcripts.export"),
+  TranscriptsStatus("transcripts.status"),
+  UpdateReport("update.report"),
+  SkillsWorkshopRead("skills.workshop.read"),
+  SessionPublicShareSet("session.publicShare.set"),
+  ClawsMonitors("claws.monitors"),
+  PluginsCatalogBrowse("plugins.catalog.browse"),
+  PluginsCatalogCategories("plugins.catalog.categories"),
+  PluginsCatalogGet("plugins.catalog.get"),
+  TasksHistory("tasks.history"),
+  EnvironmentsPrepare("environments.prepare"),
+  ModelsAuthRefresh("models.authRefresh"),
+  ModelsAuthLogin("models.authLogin"),
+  ModelsAuthSetApiKey("models.authSetApiKey"),
+  SessionsStorageStatus("sessions.storage.status"),
+  SessionsStorageRun("sessions.storage.run"),
+  PluginsReload("plugins.reload"),
+  ClawsPackagesRemove("claws.packages.remove"),
 }
 
 enum class GatewayEvent(
@@ -966,6 +989,7 @@ enum class GatewayEvent(
   DevicePairSetupDeliveryUncertain("device.pair.setup.deliveryUncertain"),
   UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
+  PluginsChanged("plugins.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),

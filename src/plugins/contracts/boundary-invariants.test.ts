@@ -80,11 +80,6 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
   ],
-  "extensions/github-copilot/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");',
-    "return config ? {} : startupPluginConfig;",
-  ],
   "extensions/ollama/index.ts": [
     "resolvePluginConfigObject(",
     'const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");',

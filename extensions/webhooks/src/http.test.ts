@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./http.js";
 
@@ -28,6 +28,21 @@ type MockIncomingMessage = IncomingMessage & {
 };
 
 let nextSessionId = 0;
+
+// This HTTP fixture models the Promise-valued SDK contract. Real SQLite worker
+// execution is covered through the registered runtime's integration tests.
+function createFlowBindings(sessionKey: string) {
+  const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey });
+  const taskFlowReads: TaskFlowWebhookTarget["taskFlowReads"] = {
+    sessionKey,
+    get: async (flowId) => taskFlow.get(flowId),
+    list: async () => taskFlow.list(),
+    findLatest: async () => taskFlow.findLatest(),
+    resolve: async (token) => taskFlow.resolve(token),
+    getTaskSummary: async (flowId) => taskFlow.getTaskSummary(flowId),
+  };
+  return { taskFlow, taskFlowReads };
+}
 
 function createJsonRequest(params: {
   path: string;
@@ -61,16 +76,13 @@ function createHandler(secret = "shared-secret"): {
   target: TaskFlowWebhookTarget;
   secret: string;
 } {
-  const runtime = createRuntimeTaskFlow();
   nextSessionId += 1;
   const target: TaskFlowWebhookTarget = {
     routeId: "zapier",
     path: "/plugins/webhooks/zapier",
     secretInput: secret,
     defaultControllerId: "webhooks/zapier",
-    taskFlow: runtime.bindSession({
-      sessionKey: `agent:main:webhook-test-${String(nextSessionId)}`,
-    }),
+    ...createFlowBindings(`agent:main:webhook-test-${String(nextSessionId)}`),
   };
   const targetsByPath = new Map<string, TaskFlowWebhookTarget[]>([[target.path, [target]]]);
   return {
@@ -114,11 +126,45 @@ function parseJsonBody(res: { body?: string | Buffer | null }) {
   return JSON.parse(String(res.body ?? ""));
 }
 
-afterEach(() => {
-  vi.clearAllMocks();
-});
-
 describe("createTaskFlowWebhookRequestHandler", () => {
+  it.each([
+    "get_flow",
+    "list_flows",
+    "find_latest_flow",
+    "resolve_flow",
+    "get_task_summary",
+  ] as const)("awaits the SDK read result for %s", async (action) => {
+    const { handler, target, secret } = createHandler();
+    const created = createManagedFlow(target, {
+      controllerId: "tests/webhook-reads",
+      goal: "Read a synthetic flow",
+    });
+    const response = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret,
+      body: {
+        action,
+        ...(action === "get_flow" || action === "get_task_summary"
+          ? { flowId: created.flowId }
+          : {}),
+        ...(action === "resolve_flow" ? { token: created.flowId } : {}),
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const expectedFlow = expect.objectContaining({
+      flowId: created.flowId,
+      goal: "Read a synthetic flow",
+    });
+    expect(parseJsonBody(response).result).toMatchObject(
+      action === "get_task_summary"
+        ? { summary: { total: 0, active: 0, terminal: 0 } }
+        : action === "list_flows"
+          ? { flows: [expectedFlow] }
+          : { flow: expectedFlow },
+    );
+  });
+
   it("rejects requests with the wrong secret", async () => {
     const { handler, target } = createHandler();
     const res = await dispatchJsonRequest({
@@ -136,7 +182,6 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("keeps an unresolved SecretRef-backed route cold", async () => {
-    const runtime = createRuntimeTaskFlow();
     const target: TaskFlowWebhookTarget = {
       routeId: "cached",
       path: "/plugins/webhooks/cached",
@@ -146,43 +191,20 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         id: "OPENCLAW_WEBHOOK_SECRET",
       },
       defaultControllerId: "webhooks/cached",
-      taskFlow: runtime.bindSession({
-        sessionKey: "agent:main:webhook-cached",
-      }),
+      ...createFlowBindings("agent:main:webhook-cached"),
     };
     const handler = createHandlerWithTarget(target);
 
-    const first = await dispatchJsonRequest({
-      handler,
-      path: target.path,
-      secret: "shared-secret",
-      body: {
-        action: "list_flows",
-      },
-    });
-    const second = await dispatchJsonRequest({
-      handler,
-      path: target.path,
-      secret: "shared-secret",
-      body: {
-        action: "list_flows",
-      },
-    });
-    const third = await dispatchJsonRequest({
-      handler,
-      path: target.path,
-      secret: "rotated-secret",
-      body: {
-        action: "list_flows",
-      },
-    });
-
-    expect([first, second, third].map((response) => response.statusCode)).toEqual([401, 401, 401]);
-    expect([first, second, third].map((response) => response.body)).toEqual([
-      "unauthorized",
-      "unauthorized",
-      "unauthorized",
-    ]);
+    for (const secret of ["shared-secret", "shared-secret", "rotated-secret"]) {
+      const response = await dispatchJsonRequest({
+        handler,
+        path: target.path,
+        secret,
+        body: { action: "list_flows" },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.body).toBe("unauthorized");
+    }
   });
 
   it("accepts a resolved secret that has env-template syntax", async () => {

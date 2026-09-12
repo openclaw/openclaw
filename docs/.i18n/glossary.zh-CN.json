@@ -1,5 +1,21 @@
 [
   {
+    "source": "Radius",
+    "target": "Radius"
+  },
+  {
+    "source": "Radius plugin reference",
+    "target": "Radius 插件参考"
+  },
+  {
+    "source": "radius",
+    "target": "radius"
+  },
+  {
+    "source": "Omarchy",
+    "target": "Omarchy"
+  },
+  {
     "source": "OpenClaw",
     "target": "OpenClaw"
   },
@@ -8,8 +24,16 @@
     "target": "macOS 平台说明"
   },
   {
+    "source": "Gateway on macOS",
+    "target": "macOS 上的 Gateway"
+  },
+  {
     "source": "Logging",
     "target": "日志"
+  },
+  {
+    "source": "Prometheus metrics",
+    "target": "Prometheus 指标"
   },
   {
     "source": "iMessage",
@@ -42,6 +66,50 @@
   {
     "source": "Secrets management",
     "target": "密钥管理"
+  },
+  {
+    "source": "Secrets CLI",
+    "target": "密钥 CLI"
+  },
+  {
+    "source": "SecretRef credential surface",
+    "target": "SecretRef 凭据覆盖面"
+  },
+  {
+    "source": "Auth credential semantics",
+    "target": "认证凭据语义"
+  },
+  {
+    "source": "Secrets runtime model",
+    "target": "密钥运行时模型"
+  },
+  {
+    "source": "SecretRef contract and provider config",
+    "target": "SecretRef 契约与提供商配置"
+  },
+  {
+    "source": "Shared secret store and egress proxy",
+    "target": "共享密钥存储与出口代理"
+  },
+  {
+    "source": "Secrets integration examples",
+    "target": "密钥集成示例"
+  },
+  {
+    "source": "Secrets operations and behavior",
+    "target": "密钥运维与行为"
+  },
+  {
+    "source": "1Password",
+    "target": "1Password"
+  },
+  {
+    "source": "Ask user",
+    "target": "询问用户"
+  },
+  {
+    "source": "Audit history",
+    "target": "审计历史"
   },
   {
     "source": "Channel troubleshooting",
@@ -104,8 +172,32 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "xAI provider",
+    "target": "xAI provider"
+  },
+  {
+    "source": "MiniMax provider",
+    "target": "MiniMax provider"
+  },
+  {
+    "source": "Inworld provider",
+    "target": "Inworld provider"
+  },
+  {
+    "source": "ElevenLabs provider",
+    "target": "ElevenLabs provider"
+  },
+  {
+    "source": "CLI backends",
+    "target": "CLI 后端"
+  },
+  {
     "source": "Mantis",
     "target": "Mantis"
+  },
+  {
+    "source": "Mantis Slack desktop runbook",
+    "target": "Mantis Slack 桌面端操作手册"
   },
   {
     "source": "Message lifecycle refactor",
@@ -140,12 +232,36 @@
     "target": "Talk 模式"
   },
   {
+    "source": "Talk realtime sessions and delegation",
+    "target": "Talk 实时会话与委派"
+  },
+  {
+    "source": "Talk session ownership",
+    "target": "Talk 会话归属"
+  },
+  {
+    "source": "Talk on macOS and the Gateway relay",
+    "target": "macOS 上的 Talk 与 Gateway 中继"
+  },
+  {
+    "source": "Talk client UI",
+    "target": "Talk 客户端界面"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },
   {
     "source": "Azure Speech provider",
     "target": "Azure Speech provider"
+  },
+  {
+    "source": "Fish Audio provider",
+    "target": "Fish Audio provider"
+  },
+  {
+    "source": "ElevenLabs",
+    "target": "ElevenLabs"
   },
   {
     "source": "Web tools",
@@ -158,6 +274,22 @@
   {
     "source": "Gateway",
     "target": "Gateway 网关"
+  },
+  {
+    "source": "Gateway integrations for external apps",
+    "target": "面向外部应用的 Gateway 集成"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway 协议"
+  },
+  {
+    "source": "RPC adapters",
+    "target": "RPC 适配器"
+  },
+  {
+    "source": "Gateway RPC methods",
+    "target": "Gateway RPC 方法"
   },
   {
     "source": "Gateway health",
@@ -184,6 +316,10 @@
     "target": "会话"
   },
   {
+    "source": "Cloud Workers",
+    "target": "Cloud Workers"
+  },
+  {
     "source": "Session permission modes",
     "target": "会话权限模式"
   },
@@ -204,6 +340,10 @@
     "target": "代码模式"
   },
   {
+    "source": "Code Mode",
+    "target": "代码模式"
+  },
+  {
     "source": "Swarm",
     "target": "Swarm"
   },
@@ -220,6 +360,42 @@
     "target": "Codex harness runtime"
   },
   {
+    "source": "Codex process recovery",
+    "target": "Codex 进程恢复"
+  },
+  {
+    "source": "Codex thread bindings and supervision",
+    "target": "Codex 线程绑定与监督"
+  },
+  {
+    "source": "Codex replies and final answers",
+    "target": "Codex 回复与最终答案"
+  },
+  {
+    "source": "Codex hook boundaries",
+    "target": "Codex 钩子边界"
+  },
+  {
+    "source": "Codex sandbox process streaming",
+    "target": "Codex 沙箱进程流式输出"
+  },
+  {
+    "source": "Codex runtime v1 support contract",
+    "target": "Codex 运行时 v1 支持契约"
+  },
+  {
+    "source": "Codex native permissions and elicitations",
+    "target": "Codex 原生权限与征询"
+  },
+  {
+    "source": "Codex queue steering and feedback upload",
+    "target": "Codex 队列引导与反馈上传"
+  },
+  {
+    "source": "Codex compaction and transcript mirror",
+    "target": "Codex 压缩与转录镜像"
+  },
+  {
     "source": "Native Codex plugins",
     "target": "Native Codex plugins"
   },
@@ -234,6 +410,10 @@
   {
     "source": "Diagnostics export",
     "target": "诊断导出"
+  },
+  {
+    "source": "Diagnostics flags",
+    "target": "诊断标志"
   },
   {
     "source": "Agent harness plugins",
@@ -272,6 +452,14 @@
     "target": "Steer"
   },
   {
+    "source": "Slash commands",
+    "target": "斜杠命令"
+  },
+  {
+    "source": "Goal",
+    "target": "目标"
+  },
+  {
     "source": "Models",
     "target": "Models"
   },
@@ -292,6 +480,38 @@
     "target": "自我学习"
   },
   {
+    "source": "Personal library authoring",
+    "target": "个人技能库创作"
+  },
+  {
+    "source": "How Skill Workshop works",
+    "target": "Skill Workshop 工作原理"
+  },
+  {
+    "source": "Collection review",
+    "target": "集合审查"
+  },
+  {
+    "source": "Chat and CLI authoring",
+    "target": "聊天与 CLI 创作"
+  },
+  {
+    "source": "Proposal content, support files, and the agent tool",
+    "target": "提案内容、支持文件与代理工具"
+  },
+  {
+    "source": "Self-learning and approval settings",
+    "target": "自我学习与审批设置"
+  },
+  {
+    "source": "Gateway methods, storage, and limits",
+    "target": "Gateway 方法、存储与限制"
+  },
+  {
+    "source": "Skill Workshop troubleshooting",
+    "target": "Skill Workshop 故障排查"
+  },
+  {
     "source": "local loopback",
     "target": "local loopback"
   },
@@ -300,12 +520,20 @@
     "target": "Tailscale"
   },
   {
+    "source": "Stable HTTPS URL",
+    "target": "稳定的 HTTPS URL"
+  },
+  {
     "source": "Getting Started",
     "target": "入门指南"
   },
   {
     "source": "Getting started",
     "target": "入门指南"
+  },
+  {
+    "source": "Personal assistant setup",
+    "target": "个人助理设置"
   },
   {
     "source": "Quick start",
@@ -330,6 +558,34 @@
   {
     "source": "Feishu",
     "target": "Feishu"
+  },
+  {
+    "source": "Feishu setup",
+    "target": "Feishu 设置"
+  },
+  {
+    "source": "Feishu access control",
+    "target": "Feishu 访问控制"
+  },
+  {
+    "source": "Feishu advanced configuration",
+    "target": "Feishu 高级配置"
+  },
+  {
+    "source": "Feishu dynamic agents",
+    "target": "Feishu 动态智能体"
+  },
+  {
+    "source": "Feishu message types",
+    "target": "Feishu 消息类型"
+  },
+  {
+    "source": "Feishu configuration reference",
+    "target": "Feishu 配置参考"
+  },
+  {
+    "source": "Feishu troubleshooting",
+    "target": "Feishu 故障排查"
   },
   {
     "source": "ClickClack",
@@ -428,8 +684,36 @@
     "target": "Moonshot AI"
   },
   {
+    "source": "Mistral",
+    "target": "Mistral"
+  },
+  {
+    "source": "OpenRouter",
+    "target": "OpenRouter"
+  },
+  {
     "source": "Model providers",
     "target": "模型提供商"
+  },
+  {
+    "source": "Models FAQ",
+    "target": "模型常见问题"
+  },
+  {
+    "source": "Quick rules",
+    "target": "快速规则"
+  },
+  {
+    "source": "Control UI and API keys",
+    "target": "Control UI 与 API 密钥"
+  },
+  {
+    "source": "Official provider plugins",
+    "target": "官方提供商插件"
+  },
+  {
+    "source": "Custom providers and local runtimes",
+    "target": "自定义提供商与本地运行时"
   },
   {
     "source": "Model Providers",
@@ -456,6 +740,14 @@
     "target": "Diffs"
   },
   {
+    "source": "Browser login",
+    "target": "浏览器登录"
+  },
+  {
+    "source": "Web fetch",
+    "target": "网页抓取"
+  },
+  {
     "source": "Dreaming",
     "target": "Dreaming"
   },
@@ -480,8 +772,36 @@
     "target": "VPS 托管"
   },
   {
+    "source": "Ansible",
+    "target": "Ansible"
+  },
+  {
+    "source": "Kubernetes",
+    "target": "Kubernetes"
+  },
+  {
+    "source": "Cloudflare Containers",
+    "target": "Cloudflare Containers"
+  },
+  {
+    "source": "Fly.io",
+    "target": "Fly.io"
+  },
+  {
+    "source": "Hetzner",
+    "target": "Hetzner"
+  },
+  {
+    "source": "exe.dev",
+    "target": "exe.dev"
+  },
+  {
     "source": "Linux server",
     "target": "Linux 服务器"
+  },
+  {
+    "source": "macOS VMs",
+    "target": "macOS 虚拟机"
   },
   {
     "source": "Platforms",
@@ -532,6 +852,10 @@
     "target": "致谢"
   },
   {
+    "source": "OpenClaw lore",
+    "target": "OpenClaw 传说"
+  },
+  {
     "source": "Features",
     "target": "功能"
   },
@@ -558,6 +882,50 @@
   {
     "source": "Sandboxing",
     "target": "沙箱隔离"
+  },
+  {
+    "source": "What gets sandboxed",
+    "target": "哪些内容会被沙箱隔离"
+  },
+  {
+    "source": "Modes, scope, and backend",
+    "target": "模式、作用域与后端"
+  },
+  {
+    "source": "Supported capability matrix",
+    "target": "支持的能力矩阵"
+  },
+  {
+    "source": "Docker backend",
+    "target": "Docker 后端"
+  },
+  {
+    "source": "Podman backend",
+    "target": "Podman 后端"
+  },
+  {
+    "source": "SSH backend",
+    "target": "SSH 后端"
+  },
+  {
+    "source": "OpenShell backend",
+    "target": "OpenShell 后端"
+  },
+  {
+    "source": "Workspace access",
+    "target": "工作区访问权限"
+  },
+  {
+    "source": "Multiple folders for one agent",
+    "target": "为单个 Agent 配置多个目录"
+  },
+  {
+    "source": "Images and setup",
+    "target": "镜像与设置"
+  },
+  {
+    "source": "setupCommand (one-time container setup)",
+    "target": "setupCommand（一次性容器设置）"
   },
   {
     "source": "sandboxed",
@@ -652,6 +1020,10 @@
     "target": "Tokenjuice"
   },
   {
+    "source": "Kimi search",
+    "target": "Kimi 搜索"
+  },
+  {
     "source": "WhatsApp",
     "target": "WhatsApp"
   },
@@ -700,6 +1072,38 @@
     "target": "主动记忆"
   },
   {
+    "source": "Enabling active memory",
+    "target": "启用主动记忆"
+  },
+  {
+    "source": "How active memory works",
+    "target": "主动记忆的工作原理"
+  },
+  {
+    "source": "Session controls",
+    "target": "会话控制"
+  },
+  {
+    "source": "Query modes, prompts, and models",
+    "target": "查询模式、提示词与模型"
+  },
+  {
+    "source": "Memory tools",
+    "target": "记忆工具"
+  },
+  {
+    "source": "Advanced overrides and transcripts",
+    "target": "高级覆盖与转录"
+  },
+  {
+    "source": "Recommended setup",
+    "target": "推荐设置"
+  },
+  {
+    "source": "Troubleshooting active memory",
+    "target": "主动记忆故障排查"
+  },
+  {
     "source": "Commitments",
     "target": "跟进承诺"
   },
@@ -724,6 +1128,86 @@
     "target": "配置参考"
   },
   {
+    "source": "Configuration — agents",
+    "target": "配置 — 智能体"
+  },
+  {
+    "source": "Configuration — agent workspace and bootstrap",
+    "target": "配置 — 智能体工作区和引导上下文"
+  },
+  {
+    "source": "Configuration — agent models",
+    "target": "配置 — 智能体模型"
+  },
+  {
+    "source": "Configuration — agent runtime and CLI backends",
+    "target": "配置 — 智能体运行时和 CLI 后端"
+  },
+  {
+    "source": "Configuration — agent heartbeat, compaction, and streaming",
+    "target": "配置 — 智能体心跳、压缩和流式输出"
+  },
+  {
+    "source": "Configuration — agent sandboxing",
+    "target": "配置 — 智能体沙箱"
+  },
+  {
+    "source": "Configuration — per-agent entries and multi-agent routing",
+    "target": "配置 — 单智能体条目和多智能体路由"
+  },
+  {
+    "source": "Configuration — agent sessions",
+    "target": "配置 — 智能体会话"
+  },
+  {
+    "source": "Configuration — messages and talk",
+    "target": "配置 — 消息和语音对话"
+  },
+  {
+    "source": "Configuration — audit, logging, diagnostics, and telemetry",
+    "target": "配置 — 审计、日志、诊断和遥测"
+  },
+  {
+    "source": "Configuration — automations and media template variables",
+    "target": "配置 — 自动化和媒体模板变量"
+  },
+  {
+    "source": "Configuration — browser, UI, and desktop",
+    "target": "配置 — 浏览器、UI 和桌面"
+  },
+  {
+    "source": "Configuration — channels",
+    "target": "配置 — 渠道"
+  },
+  {
+    "source": "Configuration — cloud worker environments",
+    "target": "配置 — Cloud Worker 环境"
+  },
+  {
+    "source": "Configuration — environment, secrets, and includes",
+    "target": "配置 — 环境变量、密钥和包含文件"
+  },
+  {
+    "source": "Configuration — gateway",
+    "target": "配置 — Gateway 网关"
+  },
+  {
+    "source": "Configuration — hooks",
+    "target": "配置 — Hooks"
+  },
+  {
+    "source": "Configuration — MCP, skills, and plugins",
+    "target": "配置 — MCP、Skills 和插件"
+  },
+  {
+    "source": "Configuration — runtime basics",
+    "target": "配置 — 运行时基础"
+  },
+  {
+    "source": "Configuration — tools",
+    "target": "配置 — 工具"
+  },
+  {
     "source": "wiki",
     "target": "wiki"
   },
@@ -746,6 +1230,10 @@
   {
     "source": "Release policy",
     "target": "发布策略"
+  },
+  {
+    "source": "Full release validation",
+    "target": "完整发布验证"
   },
   {
     "source": "Release notes",
@@ -809,11 +1297,63 @@
   },
   {
     "source": "troubleshooting",
-    "target": "故障排除"
+    "target": "故障排查"
   },
   {
     "source": "FAQ",
     "target": "常见问题"
+  },
+  {
+    "source": "What is OpenClaw?",
+    "target": "什么是 OpenClaw？"
+  },
+  {
+    "source": "Skills and automation",
+    "target": "Skills 与自动化"
+  },
+  {
+    "source": "Sandboxing and memory",
+    "target": "沙箱与记忆"
+  },
+  {
+    "source": "Where things live on disk",
+    "target": "磁盘上的文件位置"
+  },
+  {
+    "source": "Config basics",
+    "target": "配置基础"
+  },
+  {
+    "source": "Remote gateways and nodes",
+    "target": "远程 Gateway 与节点"
+  },
+  {
+    "source": "Env vars and .env loading",
+    "target": "环境变量与 .env 加载"
+  },
+  {
+    "source": "Sessions and multiple chats",
+    "target": "会话与多个聊天"
+  },
+  {
+    "source": "Gateway ports, already running, and remote mode",
+    "target": "Gateway 端口、已在运行与远程模式"
+  },
+  {
+    "source": "Logging and debugging",
+    "target": "日志与调试"
+  },
+  {
+    "source": "Media and attachments",
+    "target": "媒体与附件"
+  },
+  {
+    "source": "Security and access control",
+    "target": "安全与访问控制"
+  },
+  {
+    "source": "Chat commands, aborting tasks, and stopping a run",
+    "target": "聊天命令、中止任务与停止运行"
   },
   {
     "source": "Ollama Web Search",
@@ -860,6 +1400,26 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "Google Meet transports and hosts",
+    "target": "Google Meet 传输方式与主机"
+  },
+  {
+    "source": "Google Meet OAuth and artifacts",
+    "target": "Google Meet OAuth 与会议产物"
+  },
+  {
+    "source": "Google Meet configuration",
+    "target": "Google Meet 配置"
+  },
+  {
+    "source": "Google Meet tool and modes",
+    "target": "Google Meet 工具与模式"
+  },
+  {
+    "source": "Google Meet troubleshooting",
+    "target": "Google Meet 故障排查"
+  },
+  {
     "source": "Meeting plugins",
     "target": "会议插件"
   },
@@ -884,6 +1444,26 @@
     "target": "语音通话插件"
   },
   {
+    "source": "Voice call configuration",
+    "target": "语音通话配置"
+  },
+  {
+    "source": "Voice call realtime and streaming",
+    "target": "语音通话实时语音与流式转写"
+  },
+  {
+    "source": "Voice call TTS and inbound calls",
+    "target": "语音通话 TTS 与来电"
+  },
+  {
+    "source": "Voice call security and interfaces",
+    "target": "语音通话安全与接口"
+  },
+  {
+    "source": "Voice call troubleshooting",
+    "target": "语音通话故障排查"
+  },
+  {
     "source": "Browser control",
     "target": "浏览器控制"
   },
@@ -904,6 +1484,10 @@
     "target": "插件 SDK 子路径"
   },
   {
+    "source": "Plugin SDK migration",
+    "target": "插件 SDK 迁移"
+  },
+  {
     "source": "Plugins CLI",
     "target": "插件 CLI"
   },
@@ -922,6 +1506,26 @@
   {
     "source": "Plugin reference",
     "target": "插件参考"
+  },
+  {
+    "source": "Lobster plugin reference",
+    "target": "Lobster 插件参考"
+  },
+  {
+    "source": "ACPx plugin reference",
+    "target": "ACPx 插件参考"
+  },
+  {
+    "source": "Llama Cpp plugin reference",
+    "target": "Llama Cpp 插件参考"
+  },
+  {
+    "source": "Policy plugin reference",
+    "target": "Policy 插件参考"
+  },
+  {
+    "source": "A2A plugin reference",
+    "target": "A2A 插件参考"
   },
   {
     "source": "Community plugins",
@@ -972,6 +1576,34 @@
     "target": "插件清单"
   },
   {
+    "source": "Manifest model fields",
+    "target": "清单模型字段"
+  },
+  {
+    "source": "Manifest provider fields",
+    "target": "清单提供商字段"
+  },
+  {
+    "source": "Manifest setup and auth fields",
+    "target": "清单设置与认证字段"
+  },
+  {
+    "source": "Manifest capability fields",
+    "target": "清单能力字段"
+  },
+  {
+    "source": "Manifest host surface fields",
+    "target": "清单宿主界面字段"
+  },
+  {
+    "source": "Manifest config and secret fields",
+    "target": "清单配置与密钥字段"
+  },
+  {
+    "source": "Manifest versus package.json",
+    "target": "清单与 package.json 对比"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -994,6 +1626,54 @@
   {
     "source": "Plugin entry points",
     "target": "插件入口点"
+  },
+  {
+    "source": "Plugin runtime helpers",
+    "target": "插件运行时辅助函数"
+  },
+  {
+    "source": "Plugin setup and config",
+    "target": "插件设置与配置"
+  },
+  {
+    "source": "Building channel plugins",
+    "target": "构建渠道插件"
+  },
+  {
+    "source": "Building provider plugins",
+    "target": "构建提供商插件"
+  },
+  {
+    "source": "Plugin SDK tool policy and sandbox helpers",
+    "target": "插件 SDK 工具策略与沙箱辅助方法"
+  },
+  {
+    "source": "Plugin SDK package entries",
+    "target": "插件 SDK 包入口"
+  },
+  {
+    "source": "Plugin SDK defineToolPlugin helper",
+    "target": "插件 SDK defineToolPlugin 辅助方法"
+  },
+  {
+    "source": "Plugin SDK definePluginEntry helper",
+    "target": "插件 SDK definePluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK native provider factories",
+    "target": "插件 SDK 原生提供方工厂"
+  },
+  {
+    "source": "Plugin SDK defineChannelPluginEntry helper",
+    "target": "插件 SDK defineChannelPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK defineSetupPluginEntry helper",
+    "target": "插件 SDK defineSetupPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK registration mode",
+    "target": "插件 SDK 注册模式"
   },
   {
     "source": "Plugin hooks",
@@ -1040,6 +1720,10 @@
     "target": "迁移"
   },
   {
+    "source": "Backups",
+    "target": "备份"
+  },
+  {
     "source": "Migrating from Hermes",
     "target": "从 Hermes 迁移"
   },
@@ -1050,6 +1734,14 @@
   {
     "source": "Agent workspace",
     "target": "Agent 工作区"
+  },
+  {
+    "source": "Default AGENTS.md",
+    "target": "默认 AGENTS.md"
+  },
+  {
+    "source": "Bootstrapping",
+    "target": "引导初始化"
   },
   {
     "source": "Migration",
@@ -1086,6 +1778,14 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Tests",
+    "target": "测试"
+  },
+  {
+    "source": "Scripts",
+    "target": "脚本"
   },
   {
     "source": "Update and plugin tests",
@@ -1204,8 +1904,20 @@
     "target": "子智能体"
   },
   {
+    "source": "Parallel specialist lanes",
+    "target": "并行专职通道"
+  },
+  {
+    "source": "Thinking levels",
+    "target": "思考级别"
+  },
+  {
     "source": "ACP agents",
     "target": "ACP 智能体"
+  },
+  {
+    "source": "ACP agents — setup",
+    "target": "ACP 智能体 — 设置"
   },
   {
     "source": "Tools and custom providers",
@@ -1249,7 +1961,7 @@
   },
   {
     "source": "Multi-agent sandbox and tools",
-    "target": "多 Agent 沙盒和工具"
+    "target": "多智能体沙箱与工具"
   },
   {
     "source": "Exec tool",
@@ -1337,11 +2049,11 @@
   },
   {
     "source": "Building Plugins",
-    "target": "Building Plugins"
+    "target": "构建插件"
   },
   {
     "source": "Plugin Manifest",
-    "target": "Plugin Manifest"
+    "target": "插件清单"
   },
   {
     "source": "Workboard plugin",
@@ -1354,6 +2066,18 @@
   {
     "source": "Control UI",
     "target": "Control UI"
+  },
+  {
+    "source": "Hosted embeds",
+    "target": "托管嵌入"
+  },
+  {
+    "source": "Control UI URLs",
+    "target": "Control UI 地址"
+  },
+  {
+    "source": "Tools invoke API",
+    "target": "工具调用 API"
   },
   {
     "source": "Models CLI",
@@ -1424,7 +2148,19 @@
     "target": "渠道路由"
   },
   {
+    "source": "Bot loop protection",
+    "target": "机器人循环保护"
+  },
+  {
+    "source": "Access groups",
+    "target": "访问组"
+  },
+  {
     "source": "Channels Overview",
+    "target": "渠道概览"
+  },
+  {
+    "source": "Channels overview",
     "target": "渠道概览"
   },
   {
@@ -1458,6 +2194,26 @@
   {
     "source": "Hooks",
     "target": "Hooks"
+  },
+  {
+    "source": "Writing hooks",
+    "target": "编写 Hook"
+  },
+  {
+    "source": "Hook configuration and discovery",
+    "target": "Hook 配置与发现"
+  },
+  {
+    "source": "Bundled hooks",
+    "target": "内置 Hook"
+  },
+  {
+    "source": "Hook event types and context",
+    "target": "Hook 事件类型与上下文"
+  },
+  {
+    "source": "Hook troubleshooting",
+    "target": "Hook 故障排查"
   },
   {
     "source": "Incident response",
@@ -1496,8 +2252,40 @@
     "target": "媒体概览"
   },
   {
+    "source": "Music generation",
+    "target": "音乐生成"
+  },
+  {
     "source": "Text to speech",
     "target": "文本转语音"
+  },
+  {
+    "source": "Text-to-speech quickstart",
+    "target": "文本转语音快速上手"
+  },
+  {
+    "source": "Text-to-speech configuration",
+    "target": "文本转语音配置"
+  },
+  {
+    "source": "Text-to-speech personas",
+    "target": "文本转语音人设"
+  },
+  {
+    "source": "Text-to-speech commands and directives",
+    "target": "文本转语音命令与指令"
+  },
+  {
+    "source": "Text-to-speech output and Auto-TTS behavior",
+    "target": "文本转语音输出与自动 TTS 行为"
+  },
+  {
+    "source": "Text-to-speech field reference",
+    "target": "文本转语音字段参考"
+  },
+  {
+    "source": "Text-to-speech agent tool and Gateway RPC",
+    "target": "文本转语音代理工具与 Gateway RPC"
   },
   {
     "source": "Linux app",
@@ -1514,6 +2302,14 @@
   {
     "source": "Network proxy",
     "target": "网络代理"
+  },
+  {
+    "source": "Network",
+    "target": "网络"
+  },
+  {
+    "source": "Proxy",
+    "target": "代理"
   },
   {
     "source": "Node troubleshooting",
@@ -1538,6 +2334,10 @@
   {
     "source": "Onboard",
     "target": "引导设置"
+  },
+  {
+    "source": "Setup CLI",
+    "target": "设置 CLI"
   },
   {
     "source": "Operator scopes",
@@ -1572,12 +2372,60 @@
     "target": "Task Flow"
   },
   {
+    "source": "Tasks",
+    "target": "任务"
+  },
+  {
     "source": "Telegram reaction notifications",
     "target": "Telegram 表情回应通知"
   },
   {
+    "source": "Telegram reaction level",
+    "target": "Telegram 表情回应级别"
+  },
+  {
     "source": "Threat model",
     "target": "威胁模型"
+  },
+  {
+    "source": "Contributing to the threat model",
+    "target": "参与威胁模型贡献"
+  },
+  {
+    "source": "Formal verification",
+    "target": "形式化验证"
+  },
+  {
+    "source": "Reconnaissance (AML.TA0002)",
+    "target": "侦察（AML.TA0002）"
+  },
+  {
+    "source": "Initial access (AML.TA0004)",
+    "target": "初始访问（AML.TA0004）"
+  },
+  {
+    "source": "Execution (AML.TA0005)",
+    "target": "执行（AML.TA0005）"
+  },
+  {
+    "source": "Persistence (AML.TA0006)",
+    "target": "持久化（AML.TA0006）"
+  },
+  {
+    "source": "Defense evasion (AML.TA0007)",
+    "target": "防御规避（AML.TA0007）"
+  },
+  {
+    "source": "Discovery (AML.TA0008)",
+    "target": "发现（AML.TA0008）"
+  },
+  {
+    "source": "Collection and exfiltration (AML.TA0009, AML.TA0010)",
+    "target": "收集与外传（AML.TA0009、AML.TA0010）"
+  },
+  {
+    "source": "Impact (AML.TA0011)",
+    "target": "影响（AML.TA0011）"
   },
   {
     "source": "Timezones",
@@ -1586,6 +2434,102 @@
   {
     "source": "Troubleshooting",
     "target": "故障排查"
+  },
+  {
+    "source": "Updates and rollbacks",
+    "target": "更新与回滚"
+  },
+  {
+    "source": "Skills and model providers",
+    "target": "Skills 与模型提供商"
+  },
+  {
+    "source": "Agent replies and Control UI",
+    "target": "智能体回复与 Control UI"
+  },
+  {
+    "source": "Gateway service and process",
+    "target": "Gateway 网关服务与进程"
+  },
+  {
+    "source": "Config validation and probes",
+    "target": "配置校验与探针"
+  },
+  {
+    "source": "Channel delivery and tools",
+    "target": "渠道投递与工具"
+  },
+  {
+    "source": "Configuration",
+    "target": "配置"
+  },
+  {
+    "source": "Configuration examples",
+    "target": "配置示例"
+  },
+  {
+    "source": "Common tasks",
+    "target": "常见任务"
+  },
+  {
+    "source": "Config hot reload",
+    "target": "配置热重载"
+  },
+  {
+    "source": "Config RPC (programmatic updates)",
+    "target": "配置 RPC（程序化更新）"
+  },
+  {
+    "source": "Configuration: hot reload",
+    "target": "配置：热重载"
+  },
+  {
+    "source": "Configuration: strict validation",
+    "target": "配置：严格校验"
+  },
+  {
+    "source": "Remote access",
+    "target": "远程访问"
+  },
+  {
+    "source": "Multiple gateways on the same host",
+    "target": "同一主机上的多个 Gateway 网关"
+  },
+  {
+    "source": "Background exec and process tool",
+    "target": "后台执行与进程工具"
+  },
+  {
+    "source": "Scheduled tasks: troubleshooting",
+    "target": "定时任务：故障排查"
+  },
+  {
+    "source": "Browser (OpenClaw-managed)",
+    "target": "浏览器（OpenClaw 托管）"
+  },
+  {
+    "source": "Anthropic",
+    "target": "Anthropic"
+  },
+  {
+    "source": "Token use and costs",
+    "target": "Token 用量与成本"
+  },
+  {
+    "source": "OpenAI-compatible endpoints",
+    "target": "OpenAI 兼容端点"
+  },
+  {
+    "source": "Provider configuration",
+    "target": "提供商配置"
+  },
+  {
+    "source": "Local models",
+    "target": "本地模型"
+  },
+  {
+    "source": "Logs",
+    "target": "日志"
   },
   {
     "source": "Update troubleshooting",
@@ -1598,6 +2542,10 @@
   {
     "source": "WhatsApp reaction level",
     "target": "WhatsApp 表情回应级别"
+  },
+  {
+    "source": "Reactions",
+    "target": "表情回应"
   },
   {
     "source": "Zalo (official Bot/webhook channel)",
@@ -1646,6 +2594,102 @@
   {
     "source": "Cloud workers plan",
     "target": "云端工作节点计划"
+  },
+  {
+    "source": "Cloud worker warm images",
+    "target": "云工作机预热镜像"
+  },
+  {
+    "source": "Per-project default profiles",
+    "target": "按项目的默认配置档"
+  },
+  {
+    "source": "Worker setup and bundle installation",
+    "target": "工作机初始化与套件安装"
+  },
+  {
+    "source": "Verify a cloud worker profile",
+    "target": "验证云工作机配置档"
+  },
+  {
+    "source": "Dispatching a cloud session",
+    "target": "派发云会话"
+  },
+  {
+    "source": "Placement and machine selection",
+    "target": "放置位置与机器选择"
+  },
+  {
+    "source": "Cloud session lifecycle and durability",
+    "target": "云会话生命周期与持久性"
+  },
+  {
+    "source": "Cloud Worker Desktop",
+    "target": "云工作机桌面"
+  },
+  {
+    "source": "Cloud worker security model",
+    "target": "云工作机安全模型"
+  },
+  {
+    "source": "Cloud worker troubleshooting",
+    "target": "云工作机故障排查"
+  },
+  {
+    "source": "Warm images",
+    "target": "预热镜像"
+  },
+  {
+    "source": "Recover a paused capture",
+    "target": "恢复暂停的捕获"
+  },
+  {
+    "source": "Upgrade warm-image state",
+    "target": "升级预热镜像状态"
+  },
+  {
+    "source": "The setup command",
+    "target": "初始化命令"
+  },
+  {
+    "source": "Bundle installation",
+    "target": "套件安装"
+  },
+  {
+    "source": "Build a complete custom node package",
+    "target": "构建完整的自定义节点包"
+  },
+  {
+    "source": "Verify the profile",
+    "target": "验证配置档"
+  },
+  {
+    "source": "Dispatching a session",
+    "target": "派发会话"
+  },
+  {
+    "source": "Cloud child sessions",
+    "target": "云子会话"
+  },
+  {
+    "source": "Runtime support",
+    "target": "运行时支持"
+  },
+  {
+    "source": "Codex on a paired device",
+    "target": "在已配对设备上运行 Codex"
+  },
+  {
+    "source": "Choose a machine class per session",
+    "target": "为每个会话选择机器规格"
+  },
+  {
+    "source": "What survives a dead machine",
+    "target": "机器失效后仍然保留的内容"
+  },
+  {
+    "source": "Desktop (interactive)",
+    "target": "桌面（交互式）"
   },
   {
     "source": "Crabbox plugin",
@@ -1744,6 +2788,10 @@
     "target": "会话管理"
   },
   {
+    "source": "Transcript hygiene",
+    "target": "转录净化"
+  },
+  {
     "source": "Session tools",
     "target": "会话工具"
   },
@@ -1802,6 +2850,30 @@
   {
     "source": "Docker VM Runtime",
     "target": "Docker VM 运行时"
+  },
+  {
+    "source": "Docker environment variables",
+    "target": "Docker 环境变量"
+  },
+  {
+    "source": "Docker networking, providers, and storage",
+    "target": "Docker 网络、提供商与存储"
+  },
+  {
+    "source": "Docker Compose operations and image maintenance",
+    "target": "Docker Compose 运维与镜像维护"
+  },
+  {
+    "source": "Docker agent sandbox and troubleshooting",
+    "target": "Docker 智能体沙箱与故障排查"
+  },
+  {
+    "source": "OpenShell",
+    "target": "OpenShell"
+  },
+  {
+    "source": "Multi-Agent Sandbox and Tools",
+    "target": "多智能体沙箱与工具"
   },
   {
     "source": "Updating",
@@ -1894,5 +2966,1897 @@
   {
     "source": "Node and tsx startup errors",
     "target": "Node 和 tsx 启动错误"
+  },
+  {
+    "source": "Installation and Onboarding",
+    "target": "安装与新手引导"
+  },
+  {
+    "source": "v2026.8.1: Installation and Onboarding",
+    "target": "v2026.8.1：安装与新手引导"
+  },
+  {
+    "source": "The New Web UI",
+    "target": "全新 Web UI"
+  },
+  {
+    "source": "v2026.8.1: The New Web UI",
+    "target": "v2026.8.1：全新 Web UI"
+  },
+  {
+    "source": "Updates and Maintenance",
+    "target": "更新与维护"
+  },
+  {
+    "source": "v2026.8.1: Updates and Maintenance",
+    "target": "v2026.8.1：更新与维护"
+  },
+  {
+    "source": "Messaging",
+    "target": "消息"
+  },
+  {
+    "source": "v2026.8.1: Messaging",
+    "target": "v2026.8.1：消息"
+  },
+  {
+    "source": "Memory",
+    "target": "记忆"
+  },
+  {
+    "source": "v2026.8.1: Memory",
+    "target": "v2026.8.1：记忆"
+  },
+  {
+    "source": "v2026.8.1: Skills",
+    "target": "v2026.8.1：Skills"
+  },
+  {
+    "source": "Native Apps",
+    "target": "原生应用"
+  },
+  {
+    "source": "v2026.8.1: Native Apps",
+    "target": "v2026.8.1：原生应用"
+  },
+  {
+    "source": "Models and Providers",
+    "target": "Models 与提供商"
+  },
+  {
+    "source": "v2026.8.1: Models and Providers",
+    "target": "v2026.8.1：Models 与提供商"
+  },
+  {
+    "source": "Automations and Scheduling",
+    "target": "自动化与定时任务"
+  },
+  {
+    "source": "v2026.8.1: Automations and Scheduling",
+    "target": "v2026.8.1：自动化与定时任务"
+  },
+  {
+    "source": "Browser and Computer Use",
+    "target": "浏览器与计算机使用"
+  },
+  {
+    "source": "v2026.8.1: Browser and Computer Use",
+    "target": "v2026.8.1：浏览器与计算机使用"
+  },
+  {
+    "source": "Plugins and Integrations",
+    "target": "插件与集成"
+  },
+  {
+    "source": "v2026.8.1: Plugins and Integrations",
+    "target": "v2026.8.1：插件与集成"
+  },
+  {
+    "source": "Security and Privacy",
+    "target": "安全与隐私"
+  },
+  {
+    "source": "v2026.8.1: Security and Privacy",
+    "target": "v2026.8.1：安全与隐私"
+  },
+  {
+    "source": "Quality-of-Life Improvements",
+    "target": "体验改进"
+  },
+  {
+    "source": "v2026.8.1: Quality-of-Life Improvements",
+    "target": "v2026.8.1：体验改进"
+  },
+  {
+    "source": "Other Bug Fixes",
+    "target": "其他缺陷修复"
+  },
+  {
+    "source": "v2026.8.1: Other Bug Fixes",
+    "target": "v2026.8.1：其他缺陷修复"
+  },
+  {
+    "source": "Maintainer and Internal Changes",
+    "target": "维护者与内部变更"
+  },
+  {
+    "source": "v2026.8.1: Maintainer and Internal Changes",
+    "target": "v2026.8.1：维护者与内部变更"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 1 of 8)",
+    "target": "v2026.8.1：维护变更（第 1 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 1 of 8",
+    "target": "第 1 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 2 of 8)",
+    "target": "v2026.8.1：维护变更（第 2 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 2 of 8",
+    "target": "第 2 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 3 of 8)",
+    "target": "v2026.8.1：维护变更（第 3 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 3 of 8",
+    "target": "第 3 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 4 of 8)",
+    "target": "v2026.8.1：维护变更（第 4 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 4 of 8",
+    "target": "第 4 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 5 of 8)",
+    "target": "v2026.8.1：维护变更（第 5 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 5 of 8",
+    "target": "第 5 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 6 of 8)",
+    "target": "v2026.8.1：维护变更（第 6 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 6 of 8",
+    "target": "第 6 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 7 of 8)",
+    "target": "v2026.8.1：维护变更（第 7 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 7 of 8",
+    "target": "第 7 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 8 of 8)",
+    "target": "v2026.8.1：维护变更（第 8 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 8 of 8",
+    "target": "第 8 部分，共 8 部分"
+  },
+  {
+    "source": "Chat channels",
+    "target": "聊天渠道"
+  },
+  {
+    "source": "Installer internals",
+    "target": "安装程序内部机制"
+  },
+  {
+    "source": "Connect and pair",
+    "target": "连接与配对"
+  },
+  {
+    "source": "Sessions and sidebar",
+    "target": "会话与侧边栏"
+  },
+  {
+    "source": "Chat",
+    "target": "聊天"
+  },
+  {
+    "source": "Panels and docks",
+    "target": "面板与停靠区"
+  },
+  {
+    "source": "Settings",
+    "target": "设置"
+  },
+  {
+    "source": "Feature and RPC reference",
+    "target": "功能与 RPC 参考"
+  },
+  {
+    "source": "Offline and reconnect",
+    "target": "离线与重新连接"
+  },
+  {
+    "source": "Security model",
+    "target": "安全模型"
+  },
+  {
+    "source": "Build and develop",
+    "target": "构建与开发"
+  },
+  {
+    "source": "CI pipeline jobs",
+    "target": "CI 流水线作业"
+  },
+  {
+    "source": "Watch a CI run",
+    "target": "查看 CI 运行"
+  },
+  {
+    "source": "CI checkout ownership",
+    "target": "CI 检出归属"
+  },
+  {
+    "source": "CI scope and routing",
+    "target": "CI 范围与路由"
+  },
+  {
+    "source": "Scope selection",
+    "target": "范围选择"
+  },
+  {
+    "source": "Node test lanes",
+    "target": "Node 测试通道"
+  },
+  {
+    "source": "Job budgets and platform lanes",
+    "target": "作业预算与平台通道"
+  },
+  {
+    "source": "Manual dispatches",
+    "target": "手动触发"
+  },
+  {
+    "source": "CI runner classes",
+    "target": "CI 运行器类型"
+  },
+  {
+    "source": "CI capacity and shard weights",
+    "target": "CI 容量与分片权重"
+  },
+  {
+    "source": "Release validation workflows",
+    "target": "发布验证工作流"
+  },
+  {
+    "source": "Full Release Validation",
+    "target": "完整发布验证"
+  },
+  {
+    "source": "Live and E2E shards",
+    "target": "实时与端到端分片"
+  },
+  {
+    "source": "Package Acceptance",
+    "target": "软件包验收"
+  },
+  {
+    "source": "Install smoke and Docker E2E",
+    "target": "安装冒烟与 Docker 端到端测试"
+  },
+  {
+    "source": "Plugin Prerelease",
+    "target": "插件预发布"
+  },
+  {
+    "source": "Scheduled and maintenance workflows",
+    "target": "定时与维护工作流"
+  },
+  {
+    "source": "Local checks and Testbox",
+    "target": "本地检查与 Testbox"
+  },
+  {
+    "source": "Release channels",
+    "target": "发布渠道"
+  },
+  {
+    "source": "Transport and framing",
+    "target": "传输与分帧"
+  },
+  {
+    "source": "Handshake and roles",
+    "target": "握手与角色"
+  },
+  {
+    "source": "Presence and events",
+    "target": "在线状态与事件"
+  },
+  {
+    "source": "RPC methods",
+    "target": "RPC 方法"
+  },
+  {
+    "source": "Ledger RPCs",
+    "target": "账本 RPC"
+  },
+  {
+    "source": "Operator methods",
+    "target": "操作员方法"
+  },
+  {
+    "source": "Versioning",
+    "target": "版本管理"
+  },
+  {
+    "source": "Auth and device identity",
+    "target": "身份验证与设备身份"
+  },
+  {
+    "source": "Gateway protocol transport",
+    "target": "Gateway 协议传输"
+  },
+  {
+    "source": "Gateway protocol handshake",
+    "target": "Gateway 协议握手"
+  },
+  {
+    "source": "Gateway protocol presence and events",
+    "target": "Gateway 协议在线状态与事件"
+  },
+  {
+    "source": "Gateway protocol RPC methods",
+    "target": "Gateway 协议 RPC 方法"
+  },
+  {
+    "source": "Gateway protocol ledger RPCs",
+    "target": "Gateway 协议账本 RPC"
+  },
+  {
+    "source": "Gateway protocol operator methods",
+    "target": "Gateway 协议操作员方法"
+  },
+  {
+    "source": "Gateway protocol versioning",
+    "target": "Gateway 协议版本管理"
+  },
+  {
+    "source": "Gateway protocol auth",
+    "target": "Gateway 协议身份验证"
+  },
+  {
+    "source": "System and channel methods",
+    "target": "系统与频道方法"
+  },
+  {
+    "source": "Talk, config, and agent methods",
+    "target": "Talk、配置与代理方法"
+  },
+  {
+    "source": "Session control",
+    "target": "会话控制"
+  },
+  {
+    "source": "Devices, nodes, and approvals",
+    "target": "设备、节点与审批"
+  },
+  {
+    "source": "Session list bootstrap and events",
+    "target": "会话列表引导与事件"
+  },
+  {
+    "source": "Gateway protocol system and channel methods",
+    "target": "Gateway 协议系统与频道方法"
+  },
+  {
+    "source": "Gateway protocol talk, config, and agent methods",
+    "target": "Gateway 协议 Talk、配置与代理方法"
+  },
+  {
+    "source": "Gateway protocol session control",
+    "target": "Gateway 协议会话控制"
+  },
+  {
+    "source": "Gateway protocol device, node, and approval methods",
+    "target": "Gateway 协议设备、节点与审批方法"
+  },
+  {
+    "source": "Gateway protocol session bootstrap and events",
+    "target": "Gateway 协议会话引导与事件"
+  },
+  {
+    "source": "Config and utilities",
+    "target": "配置与实用工具"
+  },
+  {
+    "source": "Agent and sessions",
+    "target": "Agent 与会话"
+  },
+  {
+    "source": "Model helpers",
+    "target": "模型辅助方法"
+  },
+  {
+    "source": "Background work",
+    "target": "后台工作"
+  },
+  {
+    "source": "Gateway and nodes",
+    "target": "Gateway 与节点"
+  },
+  {
+    "source": "Media helpers",
+    "target": "媒体辅助方法"
+  },
+  {
+    "source": "State and system",
+    "target": "状态与系统"
+  },
+  {
+    "source": "Channel helpers",
+    "target": "频道辅助方法"
+  },
+  {
+    "source": "Plugin runtime config and utilities",
+    "target": "插件运行时配置与实用工具"
+  },
+  {
+    "source": "Plugin runtime agent helpers",
+    "target": "插件运行时 Agent 辅助方法"
+  },
+  {
+    "source": "Plugin runtime model helpers",
+    "target": "插件运行时模型辅助方法"
+  },
+  {
+    "source": "Plugin runtime background work",
+    "target": "插件运行时后台工作"
+  },
+  {
+    "source": "Plugin runtime Gateway and nodes",
+    "target": "插件运行时 Gateway 与节点"
+  },
+  {
+    "source": "Plugin runtime media helpers",
+    "target": "插件运行时媒体辅助方法"
+  },
+  {
+    "source": "Plugin runtime state and system",
+    "target": "插件运行时状态与系统"
+  },
+  {
+    "source": "Plugin runtime channel helpers",
+    "target": "插件运行时频道辅助方法"
+  },
+  {
+    "source": "Slack setup",
+    "target": "Slack 设置"
+  },
+  {
+    "source": "Slack transports",
+    "target": "Slack 传输方式"
+  },
+  {
+    "source": "Slack Enterprise Grid",
+    "target": "Slack Enterprise Grid"
+  },
+  {
+    "source": "Slack manifest and scopes",
+    "target": "Slack 清单与权限范围"
+  },
+  {
+    "source": "Slack access control",
+    "target": "Slack 访问控制"
+  },
+  {
+    "source": "Slack threads and sessions",
+    "target": "Slack 话题与会话"
+  },
+  {
+    "source": "Slack message behavior",
+    "target": "Slack 消息行为"
+  },
+  {
+    "source": "Slack media and attachments",
+    "target": "Slack 媒体与附件"
+  },
+  {
+    "source": "Slack charts, tables, and approvals",
+    "target": "Slack 图表、表格与审批"
+  },
+  {
+    "source": "Slack events and operations",
+    "target": "Slack 事件与运维"
+  },
+  {
+    "source": "Slack troubleshooting",
+    "target": "Slack 故障排查"
+  },
+  {
+    "source": "Discord setup",
+    "target": "Discord 设置"
+  },
+  {
+    "source": "Discord access control",
+    "target": "Discord 访问控制"
+  },
+  {
+    "source": "Discord message behavior",
+    "target": "Discord 消息行为"
+  },
+  {
+    "source": "Discord threads and sessions",
+    "target": "Discord 话题与会话"
+  },
+  {
+    "source": "Discord components and approvals",
+    "target": "Discord 组件与审批"
+  },
+  {
+    "source": "Discord events and operations",
+    "target": "Discord 事件与运维"
+  },
+  {
+    "source": "Discord voice transcripts and meeting notes",
+    "target": "Discord 语音转录与会议记录"
+  },
+  {
+    "source": "Follow users in Discord voice",
+    "target": "在 Discord 语音中跟随用户"
+  },
+  {
+    "source": "Discord troubleshooting",
+    "target": "Discord 故障排查"
+  },
+  {
+    "source": "Media understanding pipeline",
+    "target": "媒体理解流程"
+  },
+  {
+    "source": "PDF tool",
+    "target": "PDF 工具"
+  },
+  {
+    "source": "Run Codex on another machine",
+    "target": "在其他机器上运行 Codex"
+  },
+  {
+    "source": "Codex routing and deployment",
+    "target": "Codex 路由与部署"
+  },
+  {
+    "source": "Codex harness configuration",
+    "target": "Codex harness 配置"
+  },
+  {
+    "source": "Codex app-server policy",
+    "target": "Codex app-server 策略"
+  },
+  {
+    "source": "Codex plugin config fields",
+    "target": "Codex 插件配置字段"
+  },
+  {
+    "source": "Codex commands and diagnostics",
+    "target": "Codex 命令与诊断"
+  },
+  {
+    "source": "Codex runtime behavior",
+    "target": "Codex 运行时行为"
+  },
+  {
+    "source": "Native Codex state and features",
+    "target": "原生 Codex 状态与功能"
+  },
+  {
+    "source": "Codex harness troubleshooting",
+    "target": "Codex harness 故障排查"
+  },
+  {
+    "source": "How automations work",
+    "target": "自动化的工作原理"
+  },
+  {
+    "source": "Automation schedules",
+    "target": "自动化计划"
+  },
+  {
+    "source": "Automation payloads",
+    "target": "自动化载荷"
+  },
+  {
+    "source": "Automation delivery",
+    "target": "自动化投递"
+  },
+  {
+    "source": "Manage automations",
+    "target": "管理自动化"
+  },
+  {
+    "source": "Inbound webhooks",
+    "target": "入站 Webhook"
+  },
+  {
+    "source": "Gmail PubSub triggers",
+    "target": "Gmail PubSub 触发器"
+  },
+  {
+    "source": "Automation troubleshooting",
+    "target": "自动化故障排查"
+  },
+  {
+    "source": "Test suites and commands",
+    "target": "测试套件与命令"
+  },
+  {
+    "source": "Live and Docker/Parallels workflows",
+    "target": "Live 与 Docker/Parallels 工作流"
+  },
+  {
+    "source": "Docker test runners",
+    "target": "Docker 测试运行器"
+  },
+  {
+    "source": "QA-specific runners",
+    "target": "QA 专用运行器"
+  },
+  {
+    "source": "Contract tests",
+    "target": "契约测试"
+  },
+  {
+    "source": "Writing and adding tests",
+    "target": "编写与添加测试"
+  },
+  {
+    "source": "Quick live smokes and the Android node sweep",
+    "target": "快速 Live 冒烟测试与 Android 节点扫描"
+  },
+  {
+    "source": "Live model smoke (profile keys)",
+    "target": "Live 模型冒烟测试（配置文件密钥）"
+  },
+  {
+    "source": "CLI backend and APNs lanes",
+    "target": "CLI 后端与 APNs 通道"
+  },
+  {
+    "source": "ACP bind and Codex app-server lanes",
+    "target": "ACP 绑定与 Codex app-server 通道"
+  },
+  {
+    "source": "OpenAI long context and the live model matrix",
+    "target": "OpenAI 长上下文与 Live 模型矩阵"
+  },
+  {
+    "source": "Media provider live lanes",
+    "target": "媒体提供商 Live 通道"
+  },
+  {
+    "source": "Provider model catalogs",
+    "target": "提供商模型目录"
+  },
+  {
+    "source": "Provider hook families",
+    "target": "提供商 Hook 族"
+  },
+  {
+    "source": "Provider hook wiring",
+    "target": "提供商 Hook 接线"
+  },
+  {
+    "source": "Provider voice capabilities",
+    "target": "提供商语音能力"
+  },
+  {
+    "source": "Provider media and search",
+    "target": "提供商媒体与搜索"
+  },
+  {
+    "source": "Run doctor",
+    "target": "运行 Doctor"
+  },
+  {
+    "source": "What doctor checks",
+    "target": "Doctor 检查内容"
+  },
+  {
+    "source": "Config and migration repairs",
+    "target": "配置与迁移修复"
+  },
+  {
+    "source": "Provider and route repairs",
+    "target": "提供商与路由修复"
+  },
+  {
+    "source": "State, session, and plugin repairs",
+    "target": "状态、会话与插件修复"
+  },
+  {
+    "source": "Gateway, service, and security checks",
+    "target": "Gateway、服务与安全检查"
+  },
+  {
+    "source": "Workspace tips and Dreams UI actions",
+    "target": "工作区提示与 Dreams UI 操作"
+  },
+  {
+    "source": "Bun",
+    "target": "Bun"
+  },
+  {
+    "source": "Bun compatibility",
+    "target": "Bun 兼容性"
+  },
+  {
+    "source": "Environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "Linux",
+    "target": "Linux"
+  },
+  {
+    "source": "Memory configuration",
+    "target": "记忆配置"
+  },
+  {
+    "source": "Node.js",
+    "target": "Node.js"
+  },
+  {
+    "source": "Node.js compatibility",
+    "target": "Node.js 兼容性"
+  },
+  {
+    "source": "Runtimes",
+    "target": "运行时"
+  },
+  {
+    "source": "macOS",
+    "target": "macOS"
+  },
+  {
+    "source": "Run tests locally",
+    "target": "本地运行测试"
+  },
+  {
+    "source": "Control UI, TUI, and E2E lanes",
+    "target": "控制 UI、TUI 与 E2E 通道"
+  },
+  {
+    "source": "Docker test suites",
+    "target": "Docker 测试套件"
+  },
+  {
+    "source": "Test performance and benchmarks",
+    "target": "测试性能与基准"
+  },
+  {
+    "source": "Test runner internals",
+    "target": "测试运行器内部机制"
+  },
+  {
+    "source": "Remote test proof",
+    "target": "远程测试验证"
+  },
+  {
+    "source": "OpenAI setup",
+    "target": "OpenAI 设置"
+  },
+  {
+    "source": "OpenAI models",
+    "target": "OpenAI 模型"
+  },
+  {
+    "source": "OpenAI runtimes and Codex auth",
+    "target": "OpenAI 运行时与 Codex 认证"
+  },
+  {
+    "source": "OpenAI coverage and cost",
+    "target": "OpenAI 覆盖范围与费用"
+  },
+  {
+    "source": "OpenAI image and video generation",
+    "target": "OpenAI 图像与视频生成"
+  },
+  {
+    "source": "OpenAI voice and speech",
+    "target": "OpenAI 语音与语音合成"
+  },
+  {
+    "source": "Azure OpenAI endpoints",
+    "target": "Azure OpenAI 端点"
+  },
+  {
+    "source": "OpenAI advanced configuration",
+    "target": "OpenAI 高级配置"
+  },
+  {
+    "source": "Code Mode quickstart",
+    "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode configuration",
+    "target": "代码模式配置"
+  },
+  {
+    "source": "Code Mode tool surface",
+    "target": "代码模式工具暴露面"
+  },
+  {
+    "source": "Code Mode guest API",
+    "target": "代码模式来宾 API"
+  },
+  {
+    "source": "Code Mode output",
+    "target": "代码模式输出"
+  },
+  {
+    "source": "Code Mode internals",
+    "target": "代码模式内部机制"
+  },
+  {
+    "source": "Code Mode troubleshooting",
+    "target": "代码模式故障排查"
+  },
+  {
+    "source": "Code Mode maintainer notes",
+    "target": "代码模式维护者说明"
+  },
+  {
+    "source": "Security trust model",
+    "target": "安全信任模型"
+  },
+  {
+    "source": "Running the security audit",
+    "target": "运行安全审计"
+  },
+  {
+    "source": "Security audit checks",
+    "target": "安全审计检查项"
+  },
+  {
+    "source": "Hardened baselines",
+    "target": "加固基线"
+  },
+  {
+    "source": "Access control and allowlists",
+    "target": "访问控制与允许列表"
+  },
+  {
+    "source": "Prompt injection",
+    "target": "提示注入"
+  },
+  {
+    "source": "Tool and agent permissions",
+    "target": "工具与 Agent 权限"
+  },
+  {
+    "source": "Browser control risks",
+    "target": "浏览器控制风险"
+  },
+  {
+    "source": "Browser setup",
+    "target": "浏览器设置"
+  },
+  {
+    "source": "Browser profiles",
+    "target": "浏览器配置文件"
+  },
+  {
+    "source": "Browser configuration",
+    "target": "浏览器配置"
+  },
+  {
+    "source": "Remote and hosted browsers",
+    "target": "远程与托管浏览器"
+  },
+  {
+    "source": "Browser security",
+    "target": "浏览器安全"
+  },
+  {
+    "source": "Multi-profile and existing-session attach",
+    "target": "多配置文件与现有会话接入"
+  },
+  {
+    "source": "Isolation and browser selection",
+    "target": "隔离与浏览器选择"
+  },
+  {
+    "source": "Browser troubleshooting",
+    "target": "浏览器故障排查"
+  },
+  {
+    "source": "Browser agent tools",
+    "target": "浏览器代理工具"
+  },
+  {
+    "source": "Network exposure",
+    "target": "网络暴露面"
+  },
+  {
+    "source": "Secrets, storage, and logs",
+    "target": "密钥、存储与日志"
+  },
+  {
+    "source": "Dependency locking",
+    "target": "依赖锁定"
+  },
+  {
+    "source": "Rate limiting",
+    "target": "限流"
+  },
+  {
+    "source": "Operator incident response",
+    "target": "运维方事件响应"
+  },
+  {
+    "source": "Command surface",
+    "target": "命令总览"
+  },
+  {
+    "source": "Operator flow",
+    "target": "操作员流程"
+  },
+  {
+    "source": "Canonical scenario coverage",
+    "target": "标准场景覆盖"
+  },
+  {
+    "source": "Channel QA reference",
+    "target": "通道 QA 参考"
+  },
+  {
+    "source": "Slack QA",
+    "target": "Slack QA"
+  },
+  {
+    "source": "WhatsApp QA and credentials",
+    "target": "WhatsApp QA 与凭据"
+  },
+  {
+    "source": "Extending the QA stack",
+    "target": "扩展 QA 技术栈"
+  },
+  {
+    "source": "QA reporting",
+    "target": "QA 报告"
+  },
+  {
+    "source": "Hook reference",
+    "target": "Hook 参考"
+  },
+  {
+    "source": "Tool call policy hooks",
+    "target": "工具调用策略 Hook"
+  },
+  {
+    "source": "Prompt and session hooks",
+    "target": "提示词与会话 Hook"
+  },
+  {
+    "source": "Message and delivery hooks",
+    "target": "消息与投递 Hook"
+  },
+  {
+    "source": "Gateway and install lifecycle hooks",
+    "target": "Gateway 与安装生命周期 Hook"
+  },
+  {
+    "source": "How to migrate a plugin",
+    "target": "如何迁移插件"
+  },
+  {
+    "source": "Import path reference",
+    "target": "导入路径参考"
+  },
+  {
+    "source": "Removed surfaces and replacements",
+    "target": "已移除的接口与替代方案"
+  },
+  {
+    "source": "Talk and realtime voice migration",
+    "target": "Talk 与实时语音迁移"
+  },
+  {
+    "source": "Compatibility policy and records",
+    "target": "兼容性策略与记录"
+  },
+  {
+    "source": "Removal timeline",
+    "target": "移除时间线"
+  },
+  {
+    "source": "Imports and module layout",
+    "target": "导入与模块布局"
+  },
+  {
+    "source": "Capability registration",
+    "target": "能力注册"
+  },
+  {
+    "source": "Tools and commands",
+    "target": "工具与命令"
+  },
+  {
+    "source": "Infrastructure registration",
+    "target": "基础设施注册"
+  },
+  {
+    "source": "Host hooks",
+    "target": "宿主钩子"
+  },
+  {
+    "source": "CLI and discovery",
+    "target": "CLI 与发现"
+  },
+  {
+    "source": "Memory and context slots",
+    "target": "记忆与上下文插槽"
+  },
+  {
+    "source": "Events and hook semantics",
+    "target": "事件与钩子语义"
+  },
+  {
+    "source": "Plugin SDK imports and module layout",
+    "target": "插件 SDK 导入与模块布局"
+  },
+  {
+    "source": "Plugin SDK capability registration",
+    "target": "插件 SDK 能力注册"
+  },
+  {
+    "source": "Plugin SDK tools and commands",
+    "target": "插件 SDK 工具与命令"
+  },
+  {
+    "source": "Plugin SDK infrastructure registration",
+    "target": "插件 SDK 基础设施注册"
+  },
+  {
+    "source": "Plugin SDK host hooks for workflow plugins",
+    "target": "面向工作流插件的插件 SDK 宿主钩子"
+  },
+  {
+    "source": "Plugin SDK CLI and discovery registration",
+    "target": "插件 SDK CLI 与发现注册"
+  },
+  {
+    "source": "Plugin SDK memory and context slots",
+    "target": "插件 SDK 记忆与上下文插槽"
+  },
+  {
+    "source": "Plugin SDK events and hook semantics",
+    "target": "插件 SDK 事件与钩子语义"
+  },
+  {
+    "source": "Load pipeline and registry",
+    "target": "加载流水线与注册表"
+  },
+  {
+    "source": "Plugin load pipeline and registry",
+    "target": "插件加载流水线与注册表"
+  },
+  {
+    "source": "Provider hooks and catalogs",
+    "target": "提供商 Hook 与目录"
+  },
+  {
+    "source": "Provider runtime hooks and catalogs",
+    "target": "提供商运行时 Hook 与目录"
+  },
+  {
+    "source": "Core runtime helpers",
+    "target": "核心运行时辅助方法"
+  },
+  {
+    "source": "Gateway routes",
+    "target": "Gateway 路由"
+  },
+  {
+    "source": "Channel surfaces",
+    "target": "频道接口"
+  },
+  {
+    "source": "Packs and import paths",
+    "target": "扩展包与导入路径"
+  },
+  {
+    "source": "Package packs and import paths",
+    "target": "软件包扩展包与导入路径"
+  },
+  {
+    "source": "Context engines",
+    "target": "上下文引擎"
+  },
+  {
+    "source": "New capability",
+    "target": "新能力"
+  },
+  {
+    "source": "Adding a new capability",
+    "target": "添加新能力"
+  },
+  {
+    "source": "Channel message adapter",
+    "target": "频道消息适配器"
+  },
+  {
+    "source": "Durable channel ingress",
+    "target": "持久化频道入口"
+  },
+  {
+    "source": "Channel status and media",
+    "target": "频道状态与媒体"
+  },
+  {
+    "source": "Channel sessions and bindings",
+    "target": "频道会话与绑定"
+  },
+  {
+    "source": "Channel approvals",
+    "target": "频道审批"
+  },
+  {
+    "source": "Channel setup and config",
+    "target": "频道设置与配置"
+  },
+  {
+    "source": "Channel mention policy",
+    "target": "频道提及策略"
+  },
+  {
+    "source": "Node pairing and status",
+    "target": "节点配对与状态"
+  },
+  {
+    "source": "Run a node host",
+    "target": "运行节点主机"
+  },
+  {
+    "source": "Run commands on a node",
+    "target": "在节点上运行命令"
+  },
+  {
+    "source": "Node-hosted MCP servers and skills",
+    "target": "节点托管的 MCP 服务器与技能"
+  },
+  {
+    "source": "Host OpenClaw sessions on a node",
+    "target": "在节点上托管 OpenClaw 会话"
+  },
+  {
+    "source": "Node session catalogs",
+    "target": "节点会话目录"
+  },
+  {
+    "source": "Node file transfers",
+    "target": "节点文件传输"
+  },
+  {
+    "source": "File transfers",
+    "target": "文件传输"
+  },
+  {
+    "source": "File Transfer plugin reference",
+    "target": "文件传输插件参考"
+  },
+  {
+    "source": "Node command policy",
+    "target": "节点命令策略"
+  },
+  {
+    "source": "Node device commands",
+    "target": "节点设备命令"
+  },
+  {
+    "source": "Node host CLI",
+    "target": "节点主机 CLI"
+  },
+  {
+    "source": "Active computer presence",
+    "target": "活动计算机在线状态"
+  },
+  {
+    "source": "Camera capture",
+    "target": "相机拍摄"
+  },
+  {
+    "source": "Location command",
+    "target": "位置命令"
+  },
+  {
+    "source": "Voice wake",
+    "target": "语音唤醒"
+  },
+  {
+    "source": "Releasing",
+    "target": "发布流程"
+  },
+  {
+    "source": "Release performance sweep",
+    "target": "发布性能扫描"
+  },
+  {
+    "source": "Dispatch a validation run",
+    "target": "启动验证运行"
+  },
+  {
+    "source": "Continue a failed validation",
+    "target": "继续失败的验证"
+  },
+  {
+    "source": "Extended-stable and changelog-only validation",
+    "target": "扩展稳定版与仅变更日志验证"
+  },
+  {
+    "source": "Top-level stages",
+    "target": "顶层阶段"
+  },
+  {
+    "source": "Release checks stages",
+    "target": "发布检查阶段"
+  },
+  {
+    "source": "Release profiles and focused reruns",
+    "target": "发布档位与定向重跑"
+  },
+  {
+    "source": "Evidence to keep",
+    "target": "需保留的证据"
+  },
+  {
+    "source": "Codex session catalog and supervision",
+    "target": "Codex 会话目录与监督"
+  },
+  {
+    "source": "Codex app-server transport",
+    "target": "Codex app-server 传输"
+  },
+  {
+    "source": "Codex approval and sandbox modes",
+    "target": "Codex 审批与沙箱模式"
+  },
+  {
+    "source": "Codex auth and environment isolation",
+    "target": "Codex 认证与环境隔离"
+  },
+  {
+    "source": "Codex dynamic tools",
+    "target": "Codex 动态工具"
+  },
+  {
+    "source": "Codex timeouts and turn settlement",
+    "target": "Codex 超时与回合结算"
+  },
+  {
+    "source": "Codex model discovery",
+    "target": "Codex 模型发现"
+  },
+  {
+    "source": "Codex restricted turns",
+    "target": "Codex 受限回合"
+  },
+  {
+    "source": "Codex workspace bootstrap files",
+    "target": "Codex 工作区引导文件"
+  },
+  {
+    "source": "Gateway and service recovery",
+    "target": "Gateway 与服务恢复"
+  },
+  {
+    "source": "Lint and post-upgrade modes",
+    "target": "Lint 与升级后模式"
+  },
+  {
+    "source": "Structured health check contract",
+    "target": "结构化健康检查契约"
+  },
+  {
+    "source": "Legacy state migration",
+    "target": "旧版状态迁移"
+  },
+  {
+    "source": "SQLite maintenance and session migration",
+    "target": "SQLite 维护与会话迁移"
+  },
+  {
+    "source": "Database layout",
+    "target": "数据库布局"
+  },
+  {
+    "source": "Versioning contract",
+    "target": "版本契约"
+  },
+  {
+    "source": "Per-person and companion storage",
+    "target": "个人与配套设备存储"
+  },
+  {
+    "source": "Storage changes and release preflight",
+    "target": "存储变更与发布预检"
+  },
+  {
+    "source": "Agent schema history",
+    "target": "Agent 数据库 schema 历史"
+  },
+  {
+    "source": "State schema history",
+    "target": "状态数据库 schema 历史"
+  },
+  {
+    "source": "Integrity, troubleshooting, and recovery",
+    "target": "完整性、故障排查与恢复"
+  },
+  {
+    "source": "Other checks and repairs",
+    "target": "其他检查与修复"
+  },
+  {
+    "source": "Agent harness core ownership",
+    "target": "Agent harness 核心归属"
+  },
+  {
+    "source": "Register an agent harness",
+    "target": "注册 agent harness"
+  },
+  {
+    "source": "Agent harness selection policy",
+    "target": "Agent harness 选择策略"
+  },
+  {
+    "source": "Agent harness attempt runtime",
+    "target": "Agent harness 尝试运行时"
+  },
+  {
+    "source": "Agent harness user input and execution authority",
+    "target": "Agent harness 用户输入与执行权限"
+  },
+  {
+    "source": "Agent harness native inventories",
+    "target": "Agent harness 原生清单"
+  },
+  {
+    "source": "Agent harness runtime configuration",
+    "target": "Agent harness 运行时配置"
+  },
+  {
+    "source": "Agent harness sessions and results",
+    "target": "Agent harness 会话与结果"
+  },
+  {
+    "source": "Update status and run history",
+    "target": "更新状态与运行历史"
+  },
+  {
+    "source": "Update repair and recovery",
+    "target": "更新修复与恢复"
+  },
+  {
+    "source": "How an update runs",
+    "target": "更新的运行方式"
+  },
+  {
+    "source": "Configuration — shared channel policies",
+    "target": "配置 — 共享渠道策略"
+  },
+  {
+    "source": "Configuration — personal messaging channels",
+    "target": "配置 — 个人消息渠道"
+  },
+  {
+    "source": "Configuration — workplace chat channels",
+    "target": "配置 — 办公聊天渠道"
+  },
+  {
+    "source": "Configuration — community chat channels",
+    "target": "配置 — 社区聊天渠道"
+  },
+  {
+    "source": "Configuration — group mention gating and history",
+    "target": "配置 — 群组提及门控和历史记录"
+  },
+  {
+    "source": "Configuration — chat commands",
+    "target": "配置 — 聊天命令"
+  },
+  {
+    "source": "Ollama setup",
+    "target": "Ollama 设置"
+  },
+  {
+    "source": "Ollama model discovery",
+    "target": "Ollama 模型发现"
+  },
+  {
+    "source": "Ollama node-local inference",
+    "target": "Ollama 节点本地推理"
+  },
+  {
+    "source": "Ollama vision and image description",
+    "target": "Ollama 视觉与图像描述"
+  },
+  {
+    "source": "Ollama configuration",
+    "target": "Ollama 配置"
+  },
+  {
+    "source": "Ollama config recipes",
+    "target": "Ollama 配置示例"
+  },
+  {
+    "source": "Ollama advanced configuration",
+    "target": "Ollama 高级配置"
+  },
+  {
+    "source": "Ollama troubleshooting",
+    "target": "Ollama 故障排查"
+  },
+  {
+    "source": "ACP agents quickstart",
+    "target": "ACP 智能体快速上手"
+  },
+  {
+    "source": "ACP agents operator runbook",
+    "target": "ACP 智能体运维手册"
+  },
+  {
+    "source": "ACP agents bindings",
+    "target": "ACP 智能体绑定"
+  },
+  {
+    "source": "ACP agents sessions",
+    "target": "ACP 智能体会话"
+  },
+  {
+    "source": "ACP agents delivery model",
+    "target": "ACP 智能体投递模型"
+  },
+  {
+    "source": "ACP agents controls",
+    "target": "ACP 智能体控制"
+  },
+  {
+    "source": "ACP agents troubleshooting",
+    "target": "ACP 智能体故障排查"
+  },
+  {
+    "source": "Set up OpenTelemetry export",
+    "target": "设置 OpenTelemetry 导出"
+  },
+  {
+    "source": "OpenTelemetry configuration",
+    "target": "OpenTelemetry 配置"
+  },
+  {
+    "source": "Privacy and trace context",
+    "target": "隐私和追踪上下文"
+  },
+  {
+    "source": "Model calls and exported metrics",
+    "target": "模型调用和导出指标"
+  },
+  {
+    "source": "Exported spans and diagnostic events",
+    "target": "导出的 Span 和诊断事件"
+  },
+  {
+    "source": "Configuration — tool policy",
+    "target": "配置 — 工具策略"
+  },
+  {
+    "source": "Configuration — GitHub identity for agent tools",
+    "target": "配置 — 智能体工具的 GitHub 身份"
+  },
+  {
+    "source": "Configuration — built-in tool settings",
+    "target": "配置 — 内置工具设置"
+  },
+  {
+    "source": "Configuration — cross-agent, session, and subagent tools",
+    "target": "配置 — 跨智能体、会话和子智能体工具"
+  },
+  {
+    "source": "Configuration — custom providers and base URLs",
+    "target": "配置 — 自定义提供商和基础 URL"
+  },
+  {
+    "source": "Configuration — provider examples",
+    "target": "配置 — 提供商示例"
+  },
+  {
+    "source": "Author plugins",
+    "target": "编写插件"
+  },
+  {
+    "source": "Install plugins",
+    "target": "安装插件"
+  },
+  {
+    "source": "List installed plugins",
+    "target": "列出已安装插件"
+  },
+  {
+    "source": "Uninstall and update plugins",
+    "target": "卸载与更新插件"
+  },
+  {
+    "source": "Inspect and diagnose plugins",
+    "target": "检查与诊断插件"
+  },
+  {
+    "source": "Marketplace feeds",
+    "target": "市场订阅源"
+  },
+  {
+    "source": "Author a policy file",
+    "target": "编写策略文件"
+  },
+  {
+    "source": "Policy rule reference",
+    "target": "策略规则参考"
+  },
+  {
+    "source": "Scoped policy overlays",
+    "target": "作用域策略覆盖"
+  },
+  {
+    "source": "Run and configure policy checks",
+    "target": "运行与配置策略检查"
+  },
+  {
+    "source": "Run OpenClaw as an MCP server",
+    "target": "将 OpenClaw 作为 MCP 服务器运行"
+  },
+  {
+    "source": "Manage saved MCP servers",
+    "target": "管理已保存的 MCP 服务器"
+  },
+  {
+    "source": "JSON output shapes",
+    "target": "JSON 输出结构"
+  },
+  {
+    "source": "Transports and OAuth",
+    "target": "传输方式与 OAuth"
+  },
+  {
+    "source": "MCP in the Control UI",
+    "target": "Control UI 中的 MCP"
+  },
+  {
+    "source": "MCP Apps",
+    "target": "MCP Apps"
+  },
+  {
+    "source": "Accept and watch policy state",
+    "target": "接受并监视策略状态"
+  },
+  {
+    "source": "Policy findings, repair, and exit codes",
+    "target": "策略发现项、修复与退出码"
+  },
+  {
+    "source": "Telegram setup",
+    "target": "Telegram 设置"
+  },
+  {
+    "source": "Telegram access control",
+    "target": "Telegram 访问控制"
+  },
+  {
+    "source": "Telegram message behavior",
+    "target": "Telegram 消息行为"
+  },
+  {
+    "source": "Telegram threads and sessions",
+    "target": "Telegram 话题与会话"
+  },
+  {
+    "source": "Telegram rich messages and approvals",
+    "target": "Telegram 富文本消息与审批"
+  },
+  {
+    "source": "Telegram media and attachments",
+    "target": "Telegram 媒体与附件"
+  },
+  {
+    "source": "Telegram events and operations",
+    "target": "Telegram 事件与运维"
+  },
+  {
+    "source": "Telegram transports",
+    "target": "Telegram 传输方式"
+  },
+  {
+    "source": "Telegram Dashboard Mini App",
+    "target": "Telegram 仪表盘小程序"
+  },
+  {
+    "source": "Telegram troubleshooting",
+    "target": "Telegram 故障排查"
+  },
+  {
+    "source": "iMessage setup",
+    "target": "iMessage 设置"
+  },
+  {
+    "source": "Enabling the imsg private API",
+    "target": "启用 imsg 私有 API"
+  },
+  {
+    "source": "iMessage access control and routing",
+    "target": "iMessage 访问控制与路由"
+  },
+  {
+    "source": "iMessage deployment patterns",
+    "target": "iMessage 部署模式"
+  },
+  {
+    "source": "iMessage media and attachments",
+    "target": "iMessage 媒体与附件"
+  },
+  {
+    "source": "iMessage private API actions",
+    "target": "iMessage 私有 API 操作"
+  },
+  {
+    "source": "iMessage message behavior",
+    "target": "iMessage 消息行为"
+  },
+  {
+    "source": "iMessage troubleshooting",
+    "target": "iMessage 故障排查"
+  },
+  {
+    "source": "Microsoft Teams setup",
+    "target": "Microsoft Teams 设置"
+  },
+  {
+    "source": "Microsoft Teams access control",
+    "target": "Microsoft Teams 访问控制"
+  },
+  {
+    "source": "Microsoft Teams authentication",
+    "target": "Microsoft Teams 身份验证"
+  },
+  {
+    "source": "Microsoft Teams manifest and permissions",
+    "target": "Microsoft Teams 清单与权限"
+  },
+  {
+    "source": "Microsoft Teams configuration",
+    "target": "Microsoft Teams 配置"
+  },
+  {
+    "source": "Microsoft Teams message behavior",
+    "target": "Microsoft Teams 消息行为"
+  },
+  {
+    "source": "Microsoft Teams cards and actions",
+    "target": "Microsoft Teams 卡片与操作"
+  },
+  {
+    "source": "Microsoft Teams troubleshooting",
+    "target": "Microsoft Teams 故障排查"
+  },
+  {
+    "source": "Groups",
+    "target": "群组"
+  },
+  {
+    "source": "Security",
+    "target": "安全"
+  },
+  {
+    "source": "Run the Gateway",
+    "target": "运行 Gateway 网关"
+  },
+  {
+    "source": "Restart and supervision",
+    "target": "重启与进程监管"
+  },
+  {
+    "source": "Query a running Gateway",
+    "target": "查询运行中的 Gateway 网关"
+  },
+  {
+    "source": "Manage the Gateway service",
+    "target": "管理 Gateway 网关服务"
+  },
+  {
+    "source": "Discover gateways (Bonjour)",
+    "target": "发现 Gateway 网关（Bonjour）"
+  },
+  {
+    "source": "Sub-agent slash command",
+    "target": "子智能体斜杠命令"
+  },
+  {
+    "source": "Sub-agent tool reference",
+    "target": "子智能体工具参考"
+  },
+  {
+    "source": "Thread-bound sub-agent sessions",
+    "target": "线程绑定的子智能体会话"
+  },
+  {
+    "source": "Nested sub-agents and authentication",
+    "target": "嵌套子智能体与鉴权"
+  },
+  {
+    "source": "Sub-agent announce",
+    "target": "子智能体通报"
+  },
+  {
+    "source": "Sub-agent tool policy",
+    "target": "子智能体工具策略"
+  },
+  {
+    "source": "Sub-agent concurrency, recovery, and stopping",
+    "target": "子智能体并发、恢复与停止"
+  },
+  {
+    "source": "Swarm collectors",
+    "target": "Swarm 收集器"
+  },
+  {
+    "source": "The trust boundary",
+    "target": "信任边界"
+  },
+  {
+    "source": "Policy as code",
+    "target": "策略即代码"
+  },
+  {
+    "source": "Identity and roles",
+    "target": "身份与角色"
+  },
+  {
+    "source": "Secrets",
+    "target": "密钥"
+  },
+  {
+    "source": "Versioned state, guarded upgrades",
+    "target": "版本化状态与受保护的升级"
+  },
+  {
+    "source": "Provenance",
+    "target": "溯源"
+  },
+  {
+    "source": "OpenClaw and Hermes Agent",
+    "target": "OpenClaw 与 Hermes Agent"
+  },
+  {
+    "source": "Matrix setup",
+    "target": "Matrix 设置"
+  },
+  {
+    "source": "Matrix access control",
+    "target": "Matrix 访问控制"
+  },
+  {
+    "source": "Matrix message behavior",
+    "target": "Matrix 消息行为"
+  },
+  {
+    "source": "Matrix rich messages and approvals",
+    "target": "Matrix 富消息与审批"
+  },
+  {
+    "source": "Matrix encryption and verification",
+    "target": "Matrix 加密与验证"
+  },
+  {
+    "source": "Matrix threads and sessions",
+    "target": "Matrix 话题与会话"
+  },
+  {
+    "source": "Matrix accounts and homeservers",
+    "target": "Matrix 账户与家庭服务器"
+  },
+  {
+    "source": "Other update methods",
+    "target": "其他更新方式"
+  },
+  {
+    "source": "Update methods",
+    "target": "更新方式"
+  },
+  {
+    "source": "Automatic updates",
+    "target": "自动更新"
+  },
+  {
+    "source": "Rollback and recovery",
+    "target": "回滚与恢复"
+  },
+  {
+    "source": "Standing orders",
+    "target": "常设指令"
+  },
+  {
+    "source": "Standing intents",
+    "target": "常设意图"
+  },
+  {
+    "source": "Multi-agent routing",
+    "target": "多智能体路由"
+  },
+  {
+    "source": "Agent bindings",
+    "target": "智能体绑定"
+  },
+  {
+    "source": "System prompt",
+    "target": "系统提示词"
+  },
+  {
+    "source": "Usage tracking",
+    "target": "用量追踪"
+  },
+  {
+    "source": "Honcho memory",
+    "target": "Honcho 记忆"
+  },
+  {
+    "source": "Managed worktrees",
+    "target": "托管工作树"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "正在输入指示器"
+  },
+  {
+    "source": "Session management deep dive",
+    "target": "会话管理深入解析"
+  },
+  {
+    "source": "Session state on disk",
+    "target": "磁盘上的会话状态"
+  },
+  {
+    "source": "Store maintenance and retention",
+    "target": "存储维护与保留"
+  },
+  {
+    "source": "Session keys, ids, and transcript events",
+    "target": "会话键、会话 ID 与转录事件"
+  },
+  {
+    "source": "Compaction behavior and settings",
+    "target": "压缩行为与设置"
+  },
+  {
+    "source": "Silent turns and the memory flush",
+    "target": "静默轮次与记忆刷写"
+  },
+  {
+    "source": "Personal agent benchmark pack",
+    "target": "个人智能体基准包"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "FAQ: quick start and first-run setup",
+    "target": "常见问题：快速开始与首次运行设置"
+  },
+  {
+    "source": "FAQ: providers, hardware, and hosting",
+    "target": "常见问题：服务商、硬件与托管"
   }
 ]

@@ -215,25 +215,6 @@ describe("resolveBuildAllStep", () => {
     }
   });
 
-  it("keeps node steps on the current node binary", () => {
-    const step = getBuildAllStep("runtime-postbuild");
-
-    const result = resolveBuildAllStep(step, {
-      nodeExecPath: "/custom/node",
-      env: { FOO: "bar" },
-    });
-
-    expect(result).toEqual({
-      command: "/custom/node",
-      args: ["scripts/runtime-postbuild.mjs"],
-      options: {
-        stdio: "inherit",
-        env: { FOO: "bar" },
-        shell: false,
-      },
-    });
-  });
-
   it("passes encoded import URLs literally to managed Node on Windows", () => {
     const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
     const result = resolveBuildAllStep(
@@ -257,6 +238,11 @@ describe("resolveBuildAllStep", () => {
   });
 
   it.each([
+    {
+      label: "runtime-postbuild",
+      scriptPath: "scripts/runtime-postbuild.mts",
+      expectedEnv: { FOO: "bar" },
+    },
     {
       label: "write-plugin-sdk-entry-dts",
       scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
@@ -810,7 +796,7 @@ describe("resolveBuildAllSteps", () => {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     });
 
-    for (const profile of ["ciArtifacts", "sourcePerformance", "cliStartup"]) {
+    for (const profile of ["ciArtifacts", "cliStartup"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -821,7 +807,7 @@ describe("resolveBuildAllSteps", () => {
       });
     }
 
-    for (const profile of ["gatewayWatch", "qaRuntime"]) {
+    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -928,7 +914,7 @@ describe("resolveBuildAllSteps", () => {
 
   it.each([
     ["external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"],
-    ["runtime-postbuild", "scripts/runtime-postbuild.mjs"],
+    ["runtime-postbuild", "scripts/runtime-postbuild.mts"],
   ])("does not stamp qaRuntime after %s fails", async (label, script) => {
     const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
     const result = await runBuildAllSteps("qaRuntime", {
@@ -975,6 +961,36 @@ describe("resolveBuildAllSteps", () => {
   });
 
   describe.each(["full", "package"])("%s runner build environment", (profile) => {
+    it.each([undefined, "1"])("isolates update build children with marker %s", async (marker) => {
+      const env = {
+        OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout",
+        OPENCLAW_UPDATE_IN_PROGRESS: marker,
+      };
+      const originalEnv = { ...env };
+      const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+      const result = await runBuildAllSteps(profile, {
+        cacheEnabled: false,
+        env,
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: buildMemoryLimit(5),
+        now: () => 0,
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep(invocation) {
+          invocations.push(invocation);
+          return { status: 0 };
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.timings.map((timing) => timing.label)).toContain("plugins:assets:build");
+      expect(invocations.length).toBeGreaterThan(0);
+      for (const invocation of invocations) {
+        expect(invocation.options.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(
+          marker === "1" ? process.cwd() : "/serving-checkout",
+        );
+      }
+      expect(env).toEqual(originalEnv);
+    });
+
     it.each([
       { name: "ordinary build", env: {}, runtimeOnly: false, skipDts: undefined },
       {
@@ -1038,7 +1054,7 @@ describe("resolveBuildAllSteps", () => {
     );
   });
 
-  it("uses a source performance profile with QA assets and immutable build provenance", () => {
+  it("uses a source performance profile without precomputed CLI help", () => {
     expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
@@ -1049,7 +1065,6 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-build-info",
-      "write-cli-startup-metadata",
     ]);
   });
 
@@ -1794,18 +1809,28 @@ describe("resolveBuildStepCacheState", () => {
       const cacheState = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
       writeBuildStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
       fs.writeFileSync(outputPath, "overwritten by earlier build step");
+      const obsoletePath = path.join(rootDir, "dist/obsolete.js");
+      fs.writeFileSync(obsoletePath, "obsolete output");
 
-      const restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+      const readSpy = vi.spyOn(fs, "readFileSync");
+      let restorable: ReturnType<typeof resolveBuildStepCacheState>;
+      try {
+        restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+        expect(readSpy.mock.calls.map(([file]) => file)).not.toContain(outputPath);
+      } finally {
+        readSpy.mockRestore();
+      }
       expect(restorable.cacheable).toBe(true);
       expect(restorable.fresh).toBe(true);
       expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.outputFiles).toBe(1);
+      expect(restorable.outputFiles).toBe(2);
       expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(restorable.relativeOutputFiles).toEqual(["dist/obsolete.js", "dist/output.js"]);
       expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
 
       expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+      expect(fs.existsSync(obsoletePath)).toBe(false);
     });
   });
 

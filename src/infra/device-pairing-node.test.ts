@@ -1,13 +1,11 @@
 // Tests node-role capability approvals stored on canonical paired-device records.
-import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
@@ -24,6 +22,7 @@ import {
   requestNodePairing,
   reusePendingNodePairingForReconnect,
 } from "./device-pairing-node.js";
+import { seedNodeDevice, setupPairedNode } from "./device-pairing-node.test-support.js";
 import {
   getPairedDevice,
   listDevicePairingReadOnly,
@@ -40,6 +39,7 @@ import {
 } from "./node-commands.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
+const databasePaths = new Set<string>();
 const hostStats: NodeHostStats = {
   cpuCount: 4,
   loadAverage: [1.5, 1, 0.5],
@@ -49,43 +49,11 @@ const hostStats: NodeHostStats = {
 };
 
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
-  return await run(await tempDirs.make("case"));
-}
-
-async function seedNodeDevice(baseDir: string, nodeId: string): Promise<void> {
-  const request = await requestDevicePairing(
-    {
-      deviceId: nodeId,
-      publicKey: `test-key-${nodeId}`,
-      role: "node",
-      roles: ["node"],
-      scopes: [],
-    },
-    baseDir,
+  const baseDir = await tempDirs.make("case");
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
   );
-  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
-}
-
-async function setupPairedNode(baseDir: string, displayName?: string) {
-  await seedNodeDevice(baseDir, "node-1");
-  const request = await requestNodePairing(
-    {
-      nodeId: "node-1",
-      displayName,
-      platform: "darwin",
-      commands: ["system.run"],
-    },
-    baseDir,
-  );
-  await approveNodePairing(
-    request.request.requestId,
-    { callerScopes: ["operator.pairing", "operator.admin"] },
-    baseDir,
-  );
-  return expectDefined(
-    resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir)),
-    "node pairing generation",
-  );
+  return await run(baseDir);
 }
 
 async function findPairedNode(nodeId: string, baseDir: string) {
@@ -113,6 +81,9 @@ describe("node surface approvals", () => {
   });
 
   afterAll(async () => {
+    for (const databasePath of databasePaths) {
+      closeOpenClawStateDatabaseByPath(databasePath);
+    }
     await tempDirs.cleanup();
   });
 

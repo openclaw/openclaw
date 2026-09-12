@@ -40,7 +40,7 @@ const mocks = getPreparedModelRuntimeMocks();
 let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-  resetPreparedModelRuntimeHarness(state);
+  await resetPreparedModelRuntimeHarness(state);
 });
 afterEach(async ({ task }) => {
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
@@ -261,7 +261,7 @@ describe("prepared build candidate lifetime", () => {
       try {
         expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
       await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
         PreparedModelRuntimeOwnerNotPublishedError,
@@ -282,7 +282,7 @@ describe("prepared build candidate lifetime", () => {
       const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
       const first = acquire(input);
       const timedOut = expect(first).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (ambient credentials; agent standalone) timed out",
       );
       let retry: ReturnType<typeof acquire> | undefined;
       try {
@@ -304,7 +304,7 @@ describe("prepared build candidate lifetime", () => {
         expect(mocks.discoverModels).toHaveBeenCalledOnce();
       } finally {
         finish.resolve();
-        await Promise.allSettled([first, retry?.then((lease) => lease.release())]);
+        await Promise.allSettled([first, retry?.then((lease) => lease[Symbol.asyncDispose]())]);
         await Promise.all(builds.mock.results.map((result) => result.value.completion));
         builds.mockRestore();
         vi.useRealTimers();
@@ -320,13 +320,13 @@ describe("prepared build candidate lifetime", () => {
     const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
     try {
       await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (agent catalog sources) timed out",
       );
       await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (agent catalog sources) timed out",
       );
       await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (agent catalog sources) timed out",
       );
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
 

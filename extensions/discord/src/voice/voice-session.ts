@@ -1,12 +1,10 @@
 import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
 import { getDiscordRuntime } from "../runtime.js";
-import { parseDiscordTarget } from "../target-parsing.js";
 import { createVoiceCaptureState, stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeBootstrapContext } from "./ingress.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
@@ -29,27 +27,15 @@ import {
   type VoiceSessionGeneration,
   type VoiceSessionEntry,
 } from "./session.js";
+import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
 import type { DiscordVoiceReceive } from "./voice-receive.js";
+import { resolveDiscordVoiceAgentRoute } from "./voice-route.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const REALTIME_PLAYBACK_MAX_MISSED_FRAMES = 100;
 
 function isVoiceSessionStopped(entry: VoiceSessionEntry): boolean {
   return entry.sessionLifecycle.status === "stopped";
-}
-
-function retireTranscripts(entry: VoiceSessionEntry): void {
-  const transcripts = entry.transcripts;
-  entry.transcripts = undefined;
-  // Detach before notifying: retained delivery and reentrant stop cannot target
-  // this binding or a replacement installed while notification settles.
-  try {
-    void Promise.resolve(transcripts?.onStop?.()).catch((error: unknown) => {
-      logger.warn(`discord voice: transcripts retirement failed: ${formatErrorMessage(error)}`);
-    });
-  } catch (error) {
-    logger.warn(`discord voice: transcripts retirement failed: ${formatErrorMessage(error)}`);
-  }
 }
 
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
@@ -92,56 +78,9 @@ function resolveVoiceConnectionGroup(accountId: string): string {
   return `openclaw:${accountId}`;
 }
 
-function resolveDiscordVoiceAgentRoute(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  guildId: string;
-  sessionChannelId: string;
-  voiceConfig: DiscordAccountConfig["voice"];
-}) {
-  const voiceRoute = resolveAgentRoute({
-    cfg: params.cfg,
-    channel: "discord",
-    accountId: params.accountId,
-    guildId: params.guildId,
-    peer: { kind: "channel", id: params.sessionChannelId },
-  });
-  const agentSession = params.voiceConfig?.agentSession;
-  if (agentSession?.mode !== "target") {
-    return {
-      route: voiceRoute,
-      voiceRoute,
-      agentSessionMode: "voice" as const,
-      agentSessionTarget: undefined,
-    };
-  }
-  const target = agentSession.target?.trim();
-  if (!target) {
-    throw new Error('channels.discord.voice.agentSession.target is required when mode is "target"');
-  }
-  const parsed = parseDiscordTarget(target, { defaultKind: "channel" });
-  if (!parsed) {
-    throw new Error(`Invalid Discord voice agent session target "${target}"`);
-  }
-  const route = resolveAgentRoute({
-    cfg: params.cfg,
-    channel: "discord",
-    accountId: params.accountId,
-    guildId: params.guildId,
-    peer: {
-      kind: parsed.kind === "user" ? "direct" : "channel",
-      id: parsed.id,
-    },
-  });
-  return {
-    route,
-    voiceRoute,
-    agentSessionMode: "target" as const,
-    agentSessionTarget: parsed.normalized,
-  };
-}
-
 export class DiscordVoiceSessions {
+  private readonly pendingStops = new Set<Promise<void>>();
+
   constructor(
     private readonly params: {
       accountId: string;
@@ -149,6 +88,10 @@ export class DiscordVoiceSessions {
       cfg: OpenClawConfig;
       client: Client;
       destroyed: () => boolean;
+      getTranscripts: (entry: {
+        guildId: string;
+        channelId: string;
+      }) => VoiceSessionEntry["transcripts"];
       discordConfig: DiscordAccountConfig;
       membership: DiscordVoiceMembershipTracker;
       onLeaveFollowState: (guildId: string) => void;
@@ -158,12 +101,53 @@ export class DiscordVoiceSessions {
     },
   ) {}
 
+  async waitForStops(): Promise<void> {
+    await Promise.allSettled(this.pendingStops);
+  }
+
   refreshGuildRoster(guildId: string): void {
     const entry = this.params.sessions.get(guildId.trim());
     if (!entry || entry.sessionLifecycle.status === "stopped") {
       return;
     }
     this.params.membership.activate(entry, this.params.botUserId());
+  }
+
+  async resolveChannel({
+    guildId,
+    channelId,
+  }: {
+    guildId: string;
+    channelId: string;
+  }): Promise<
+    | { ok: true; value: Awaited<ReturnType<Client["fetchChannel"]>> }
+    | { ok: false; error: VoiceOperationResult }
+  > {
+    let channelInfo: Awaited<ReturnType<Client["fetchChannel"]>>;
+    try {
+      channelInfo = await this.params.client.fetchChannel(channelId);
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          ok: false,
+          message: `Failed to resolve Discord channel ${channelId}: ${formatErrorMessage(err)}`,
+          guildId,
+          channelId,
+        },
+      };
+    }
+    if (!isVoiceChannel(channelInfo.type)) {
+      return {
+        ok: false,
+        error: { ok: false, message: `Channel ${channelId} is not a voice channel.` },
+      };
+    }
+    const channelGuildId = "guildId" in channelInfo ? channelInfo.guildId : undefined;
+    if (channelGuildId && channelGuildId !== guildId) {
+      return { ok: false, error: { ok: false, message: "Voice channel is not in this guild." } };
+    }
+    return { ok: true, value: channelInfo };
   }
 
   async joinUnlocked(
@@ -183,16 +167,11 @@ export class DiscordVoiceSessions {
 
     const existing = this.params.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
-      existing.autoJoinWhenOccupied = options?.autoJoinWhenOccupied === true;
       if (authority) {
         existing.generation = authority.generation;
       }
-      if (options?.transcripts) {
-        retireTranscripts(existing);
-        existing.transcripts = options.transcripts;
-      }
       if (
-        !options?.transcripts &&
+        (!options?.captureOnly || !existing.captureOnly) &&
         isDiscordRealtimeVoiceMode(voiceMode) &&
         existing.realtimeLifecycle.status !== "active" &&
         existing.realtimeLifecycle.status !== "starting"
@@ -223,32 +202,15 @@ export class DiscordVoiceSessions {
       await this.leave({ guildId }, { preserveFollowState: options?.preserveFollowState });
     }
 
-    let channelInfo: Awaited<ReturnType<Client["fetchChannel"]>>;
-    try {
-      channelInfo = await this.params.client.fetchChannel(channelId);
-    } catch (err) {
-      // A leave or replacement can invalidate the join while the REST lookup is pending;
-      // cancellation remains authoritative over a stale lookup failure.
-      if (authority && !authority.isCurrent()) {
-        return cancelledJoinResult();
-      }
-      return {
-        ok: false,
-        message: `Failed to resolve Discord channel ${channelId}: ${formatErrorMessage(err)}`,
-        guildId,
-        channelId,
-      };
-    }
+    const resolved = await this.resolveChannel(params);
+    // Leave or replacement wins over a lookup that failed after this join lost ownership.
     if (authority && !authority.isCurrent()) {
       return cancelledJoinResult();
     }
-    if (!isVoiceChannel(channelInfo.type)) {
-      return { ok: false, message: `Channel ${channelId} is not a voice channel.` };
+    if (!resolved.ok) {
+      return resolved.error;
     }
-    const channelGuildId = "guildId" in channelInfo ? channelInfo.guildId : undefined;
-    if (channelGuildId && channelGuildId !== guildId) {
-      return { ok: false, message: "Voice channel is not in this guild." };
-    }
+    const channelInfo = resolved.value;
 
     const voicePlugin = this.params.client.getPlugin<VoicePlugin>("voice");
     if (!voicePlugin) {
@@ -280,7 +242,7 @@ export class DiscordVoiceSessions {
     const voiceSdk = loadDiscordVoiceSdk();
     const existingEntry = this.params.sessions.get(guildId);
     if (existingEntry) {
-      existingEntry.stop();
+      void existingEntry.stop();
     }
     const voiceConnectionGroup = resolveVoiceConnectionGroup(this.params.accountId);
     const staleConnection = voiceSdk.getVoiceConnection(guildId, voiceConnectionGroup);
@@ -405,12 +367,15 @@ export class DiscordVoiceSessions {
         })
       : voiceSdk.createAudioPlayer();
     connection.subscribe(player);
-    const stopEntry = (optionsLocal: { destroyConnection: boolean; reason: string }) => {
+    let stopCompletion: Promise<void> | undefined;
+    const stopEntry = (optionsLocal: {
+      destroyConnection: boolean;
+      reason: string;
+    }): void | Promise<void> => {
       if (entry.sessionLifecycle.status === "stopped") {
-        return;
+        return stopCompletion;
       }
       entry.sessionLifecycle = { status: "stopped", reason: optionsLocal.reason };
-      retireTranscripts(entry);
       // A late callback from an old connection must not remove its replacement.
       if (this.params.sessions.get(guildId) === entry) {
         this.params.sessions.delete(guildId);
@@ -423,14 +388,19 @@ export class DiscordVoiceSessions {
       connection.off(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
       player.off("error", playerErrorHandler);
       const realtimeLifecycle = entry.realtimeLifecycle;
-      if (realtimeLifecycle.status === "starting" || realtimeLifecycle.status === "active") {
-        realtimeLifecycle.instance.close();
-      }
       entry.realtimeLifecycle = {
         status: "stopped",
         generation: realtimeLifecycle.generation,
         reason: optionsLocal.reason,
       };
+      let realtimeCompletion: void | Promise<void> = undefined;
+      try {
+        if (realtimeLifecycle.status === "starting" || realtimeLifecycle.status === "active") {
+          realtimeCompletion = realtimeLifecycle.instance.close();
+        }
+      } catch (error) {
+        logger.warn(`discord voice: realtime close failed: ${formatErrorMessage(error)}`);
+      }
       // Buffering resources cannot drain silence padding; terminal teardown must reach Idle now.
       player.stop(true);
       if (optionsLocal.destroyConnection) {
@@ -440,11 +410,35 @@ export class DiscordVoiceSessions {
           reason: optionsLocal.reason,
         });
       }
-      this.params.onSessionStopped(entry, optionsLocal.reason);
+      const finish = () => {
+        entry.conversations.close();
+        this.params.onSessionStopped(entry, optionsLocal.reason);
+      };
+      if (realtimeCompletion) {
+        stopCompletion = realtimeCompletion
+          .catch((error: unknown) =>
+            logger.warn(`discord voice: realtime close failed: ${formatErrorMessage(error)}`),
+          )
+          .then(finish);
+        const completion = stopCompletion;
+        this.pendingStops.add(completion);
+        const forget = () => {
+          this.pendingStops.delete(completion);
+        };
+        void completion.then(forget, (error: unknown) => {
+          forget();
+          logger.warn(`discord voice: session stop failed: ${formatErrorMessage(error)}`);
+        });
+      } else {
+        finish();
+      }
+      return stopCompletion;
     };
 
+    const getTranscripts = this.params.getTranscripts;
     const entry: VoiceSessionEntry = {
       generation: authority?.generation ?? 0,
+      captureOnly: options?.captureOnly === true,
       autoJoinWhenOccupied: options?.autoJoinWhenOccupied === true,
       sessionLifecycle: { status: "active" },
       guildId,
@@ -467,14 +461,17 @@ export class DiscordVoiceSessions {
       player,
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
+      conversations: new DiscordVoiceConversationQueue(),
       audioInputBudget,
       ttsStreamFallbackWarned: false,
       capture: createVoiceCaptureState(),
-      transcripts: options?.transcripts,
+      get transcripts(): VoiceSessionEntry["transcripts"] {
+        return getTranscripts(entry);
+      },
       receiveRecovery: createVoiceReceiveRecoveryState(),
       realtimeLifecycle: { status: "inactive", generation: 0 },
       stop(reason) {
-        stopEntry({
+        return stopEntry({
           destroyConnection: true,
           reason: reason ?? `stop guild ${guildId} channel ${channelId}`,
         });
@@ -513,7 +510,7 @@ export class DiscordVoiceSessions {
           logger.warn(
             `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
           );
-          stopEntry({
+          void stopEntry({
             destroyConnection: true,
             reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
           });
@@ -521,7 +518,7 @@ export class DiscordVoiceSessions {
       })();
     };
     const destroyedHandler = () => {
-      stopEntry({
+      void stopEntry({
         destroyConnection: false,
         reason: `destroyed guild ${guildId} channel ${channelId}`,
       });
@@ -535,12 +532,12 @@ export class DiscordVoiceSessions {
     connection.on(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
     connection.on(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
     player.on("error", playerErrorHandler);
-    if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
+    if (!entry.captureOnly && isDiscordRealtimeVoiceMode(voiceMode)) {
       const realtimeResult = await this.attachRealtimeSession(entry, voiceMode, {
         isCurrent: authority?.isCurrent,
       });
       if (!realtimeResult.ok) {
-        entry.stop(`realtime setup failed guild ${guildId} channel ${channelId}`);
+        await entry.stop(`realtime setup failed guild ${guildId} channel ${channelId}`);
         return {
           ok: false,
           message: realtimeResult.message,
@@ -554,7 +551,7 @@ export class DiscordVoiceSessions {
       this.params.destroyed() ||
       (authority && !authority.isCurrent())
     ) {
-      entry.stop(
+      await entry.stop(
         `${this.params.destroyed() ? "manager stopped" : "join cancelled"} during setup guild ${guildId} channel ${channelId}`,
       );
       return {
@@ -590,7 +587,7 @@ export class DiscordVoiceSessions {
 
   async leave(
     params: { guildId: string; channelId?: string },
-    options?: { preserveFollowState?: boolean; transcriptsSessionId?: string },
+    options?: { preserveFollowState?: boolean },
   ): Promise<VoiceOperationResult> {
     const guildId = params.guildId.trim();
     logVoiceVerbose(`leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`);
@@ -601,35 +598,14 @@ export class DiscordVoiceSessions {
     if (params.channelId && params.channelId !== entry.channelId) {
       return { ok: false, message: "Not connected to that voice channel." };
     }
-    if (options?.transcriptsSessionId) {
-      if (!entry.transcripts || entry.transcripts.sessionId !== options.transcriptsSessionId) {
-        return {
-          ok: false,
-          message: "Transcripts session is not active in this voice channel.",
-          guildId,
-          channelId: entry.channelId,
-        };
-      }
-      if (
-        entry.realtimeLifecycle.status === "active" ||
-        entry.realtimeLifecycle.status === "starting"
-      ) {
-        retireTranscripts(entry);
-        return {
-          ok: true,
-          message: `Stopped transcripts for ${formatMention({ channelId: entry.channelId })}.`,
-          guildId,
-          channelId: entry.channelId,
-        };
-      }
-    }
-    entry.stop();
+    const stopped = entry.stop();
     if (!entry.receiveRecovery.decryptRecoveryInFlight) {
-      this.params.receive.deleteRecoveryAttempt(guildId);
+      this.params.receive.daveRecoveryAttempts.delete(guildId);
     }
     if (!options?.preserveFollowState) {
       this.params.onLeaveFollowState(guildId);
     }
+    await stopped;
     logVoiceVerbose(`leave: disconnected from guild ${guildId} channel ${entry.channelId}`);
     return {
       ok: true,
@@ -673,7 +649,23 @@ export class DiscordVoiceSessions {
         logger.error(
           `discord voice: realtime session failed terminally guild=${entry.guildId} channel=${entry.channelId}: ${formatErrorMessage(error)}`,
         );
-        entry.stop("realtime terminal error");
+        const lifecycle = entry.realtimeLifecycle;
+        if (
+          options?.requireLiveEntry &&
+          lifecycle.status === "starting" &&
+          lifecycle.instance === realtime
+        ) {
+          // Failed promotion retires only its realtime attempt. The already-ready
+          // receiver still belongs to the previous capture or conversation owner.
+          entry.realtimeLifecycle = {
+            status: "stopped",
+            generation: lifecycle.generation,
+            reason: "realtime terminal error",
+          };
+          void realtime.close();
+        } else {
+          void entry.stop("realtime terminal error");
+        }
       },
       runAgentTurn: ({ context, message, toolsAllow, userId }) =>
         this.params.receive.runDiscordRealtimeAgentTurn({
@@ -696,7 +688,7 @@ export class DiscordVoiceSessions {
         options?.isCurrent?.() === false ||
         (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
       ) {
-        realtime.close();
+        await realtime.close();
         return {
           ok: false,
           message: "Discord realtime voice session stopped before startup completed.",
@@ -705,7 +697,7 @@ export class DiscordVoiceSessions {
       entry.realtimeLifecycle = { status: "active", generation, instance: realtime };
       return { ok: true };
     } catch (err) {
-      realtime.close();
+      await realtime.close();
       if (
         entry.realtimeLifecycle.status === "starting" &&
         entry.realtimeLifecycle.generation === generation

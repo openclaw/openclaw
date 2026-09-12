@@ -5,10 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  tryFastAbortFromMessage,
-  stopSubagentsForRequester,
-} from "../../../auto-reply/reply/abort.js";
+import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
+import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
@@ -1924,14 +1922,15 @@ describe("killAllControlledSubagentRuns", () => {
         createdAt: 1,
         startedAt: 2,
       });
-      const sibling = createSubagentRunRecord({
+      const activeChild = createSubagentRunRecord({
         ...parent,
-        runId: "live-sibling",
-        childSessionKey: "agent:main:subagent:live-sibling",
+        runId: "live-child",
+        childSessionKey: "agent:main:subagent:live-child",
+        controllerSessionKey: parent.childSessionKey,
       });
       addSubagentRunForTests(parent);
       if (phase === "admission drain") {
-        addSubagentRunForTests(sibling);
+        addSubagentRunForTests(activeChild);
       }
       const storePath = await writeSessionStoreFixture("late-descendant", {
         [parent.childSessionKey]: { sessionId: "late-parent-session", updatedAt: 1 },
@@ -1953,7 +1952,7 @@ describe("killAllControlledSubagentRuns", () => {
       const start = vi.fn(async () => {});
       const childKey = "agent:main:subagent:late-child";
       const registerChild = () => {
-        const requester = phase === "admission drain" ? sibling : parent;
+        const requester = phase === "admission drain" ? activeChild : parent;
         expect(requester.execution.endedAt).toBeUndefined();
         registerSubagentRun({
           runId: "late-child",
@@ -1998,7 +1997,7 @@ describe("killAllControlledSubagentRuns", () => {
       const pending = killAllControlledSubagentRuns({
         cfg,
         controller,
-        runs: phase === "admission drain" ? [parent, sibling] : [parent],
+        runs: [parent],
         beforeKill:
           phase === "parent persistence"
             ? async () => {

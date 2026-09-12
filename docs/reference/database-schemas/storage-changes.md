@@ -1,0 +1,265 @@
+---
+summary: "Proposing a persistent-store change, the review checkpoint, and preflighting a target release"
+read_when:
+  - "Proposing a SQLite or persistent-store change, or another database backend"
+  - "Preflighting a copied state database against a target release before activation"
+title: "Storage changes and release preflight"
+---
+
+## Preparing for another database backend
+
+SQLite remains the supported runtime store. Preparation for PostgreSQL should
+improve the existing store owners and their tests before adding a driver or
+configuration option. The initial target is remote persistence for one Gateway;
+multiple active Gateways would require a separate ownership and coordination
+design. A shared database alone does not make process-local writer queues,
+session lifecycles, or host-owned leases safe across Gateway instances.
+
+### Keep operations at the owning store
+
+Callers should request domain operations, such as claiming a cron run or
+appending a transcript report, from the store that owns the invariant. That
+owner selects and decodes rows, validates current authority, commits changes,
+and publishes the result. Avoid exposing a generic SQL callback to application
+code or adding an asynchronous wrapper around an existing asynchronous facade.
+The plugin KV API already has asynchronous methods over its SQLite owner.
+
+Use Kysely for ordinary queries and mutations. The current
+`getNodeSqliteKysely` facade compiles queries; `executeSqliteQuerySync` runs them
+on the supplied `node:sqlite` connection. Calling Kysely's asynchronous
+`execute` method on that facade is an error. Query compilation with another
+dialect can identify syntax coupling, but does not prove driver behavior,
+isolation, or database compatibility.
+
+Task and flow stores keep row codecs and SQLite operations in connection-bound
+kernels. Their existing facades retain global connection acquisition, cache and
+close behavior, and write transaction admission. Compound subagent and cron
+operations call the kernels on their already-admitted connection. Task status
+classification stays with the pure record types, so decoding does not load
+provider or plugin runtime ownership. These operations and their transaction
+callbacks remain synchronous; this separation does not move SQL to a worker.
+
+SQLite worker transport preserves complete result values. Results within the
+64 MiB inline reply budget keep their existing reply path; larger results are
+serialized once and transferred in 8 MiB frames. The original operation retains
+its worker until the complete result and cleanup are acknowledged, including
+during shutdown. Framing does not paginate or repeat the database query, truncate
+results, or change request and queue budgets. Callers still materialize their
+complete result in memory.
+
+Worker execute inputs also use bounded frames when necessary. Queued commands
+retain their full serialized-byte charge, up to the existing 64 MiB aggregate
+budget. Larger commands require immediate admission to an idle worker and reserve
+a 32 MiB transport window through settlement. Otherwise, admission returns the
+existing overload error without queuing the value or executing any part of it.
+Only complete validated input reaches the backend. The transport queue remains
+bounded; an active complete input or result still requires its materialized memory.
+
+Acquire a connection once for an operation and pass that exact connection
+through its transactional helpers. SQLite write callbacks remain synchronous:
+finish asynchronous planning first, then reread authoritative rows after write
+admission. Publish live session changes and other dependent effects only after
+the durable write succeeds. A future network-backed owner must preserve that
+ordering while awaiting its driver.
+
+Board operations, board inventory reads, and widget document reads expose asynchronous
+contracts. Gateway callers await persistence before publishing board changes or replies.
+Writes carry the caller's current-authority assertion into the synchronous SQLite
+transaction. HTML widget capability actions and protected publication run in the store's immediate
+continuation after its authoritative read and current ticket, session, and grant checks.
+Database ownership is released before awaiting external work; no Promise handoff separates
+the final authorization from its use. SQLite execution remains synchronous inside the
+store, with existing revision, grant, and transaction semantics.
+
+MCP App pinning retains its existing source-interaction checks. A delayed adapter must
+revalidate that source authority at its actual write admission; checking view registration
+alone cannot replace the supported asynchronous interaction policy.
+
+Backup outcome recording and freshness reads expose asynchronous operations from
+the shared-state owner. Archive, SQLite snapshot, and Git backup commands await
+recording before reporting completion; a recording failure remains a warning and
+does not change the backup result. Status and Doctor await freshness before
+formatting it. These operations still execute synchronous SQLite internally;
+they retain the existing insertion-and-pruning transaction, 200-row limit, and
+non-creating freshness reads.
+
+Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
+eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
+existing asynchronous admission owner runs the full integrity and foreign-key
+checks in a read-only child, moving those full checks off the main thread while
+retaining that queue position. A supplied caller guard is rechecked before the open
+resumes into index repair, schema work, or registration, and before that caller
+uses the admitted handle. Coalesced callers retain their own guards. History
+eviction also uses this admission when reopening after archive materialization,
+then rereads candidate protection before preparing reclamation.
+
+After archive preparation, session deletion rereads its target before admitting
+the final reclamation worker. A missing or changed target returns the existing
+entry-mismatch result without starting that worker, while preserving archives
+already committed by the deletion. Admitted workers still recheck the target
+and current authority inside their deletion transaction.
+
+Prepared session-store updates, entry replacements, and lifecycle upserts use
+the same admission for cold snapshot reads and actual commits, retaining their
+existing writer position. Warm update callbacks remain direct. Result-only
+no-op commits do not reopen a disposed handle. Native deletion and archive
+preparation still run outside the writer; the subsequent commit rechecks its
+native owner's authority after any awaited admission.
+
+Session reclamation keeps its deletion transaction on a worker connection.
+The worker opens its database under the session writer, then releases that writer
+while full integrity and foreign-key checks run on the same connection. Unrelated
+session writes can continue during those checks. It reacquires the writer and
+revalidates current authority before index repair, schema work, or deletion.
+The connection and lease remain owned throughout admission; refusal unwinds that
+owner, and final writer admission remains held until the worker exits.
+
+Disk-budget cleanup rechecks protection after archive materialization. A candidate
+already excluded by that fresh protection set is canceled before worker admission
+and is not counted as reclaimed. After releasing its lifecycle holds, cleanup
+remeasures physical usage before considering another candidate, so space freed by
+a peer does not cause unnecessary eviction. Every admitted worker still performs
+the full integrity, foreign-key, and current-owner checks described here.
+
+Archive publication and cascading deletion remain atomic. Before COMMIT, the
+worker publishes its authorization request in shared memory and waits for the
+parent's current owner check. Synchronous writers service that request at the shared
+SQLite transaction boundary between short lock-admission attempts, in the reclamation
+owner's captured async context. This includes session entries, delivery records, and
+first-use board and Goal schema transactions. Registration uses the open connection's
+native database location, so other connections and reopened handles share admission.
+Only admission is retried; transaction callbacks and mutations are never replayed.
+The original lock-admission deadline is retained. After granting approval,
+the parent synchronously joins transaction settlement before allowing owner retirement;
+that mandatory join cannot be abandoned at the append deadline.
+
+Periodic incremental vacuum uses the same write-admission boundary, so it can
+service reclamation approval before taking the writer lock. Its 512-page limit
+is unchanged; passive checkpoints remain outside the write transaction.
+
+Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
+incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
+the number of WAL frames copied. Before pruning retained archives, disk-budget
+enforcement drains the initially observed free pages in units of at most 512,
+yields between units, and reacquires the database owner after each yield. It
+preserves physical checkpointing before measuring pressure, so unreclaimed pages
+do not cause unnecessary archive deletion. Full logical deletion with resumable
+physical cleanup remains a separate design; existing deletion visibility and rollback
+semantics are unchanged.
+
+Queued archive pruning prepares cold connections through the same asynchronous
+admission owner while retaining its existing writer section. Each page-drain
+pass keeps its checkpoints, freelist reads, and bounded vacuum in one synchronous
+phase on the admitted connection. Archive-row and unpublished-name reads follow
+validation. After removing a derived archive file, pruning reacquires before the
+canonical row-deletion transaction; an acquisition failure propagates without
+deleting that recovery row.
+
+Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
+agent-database admission. A cold mutation waits for the existing integrity worker;
+its compare-and-set transaction remains synchronous on the admitted connection.
+Refresh completion and cleanup await persistence. Operations capture their resolved
+database path before admission, and refresh-lock release retains that path and its
+original environment when the caller's directory or environment changes. Doctor reports rejected
+pruning operations before continuing to the next agent. Read-only cache snapshots
+retain their existing synchronous owner and do not create missing databases.
+
+### Preserve the data and concurrency contracts
+
+An adapter must make these contracts explicit and verify them against a real
+database:
+
+| Contract           | Required behavior                                                                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store identity     | Keep global and per-agent ownership, incognito lifetime, quarantine, and disposal explicit. Filesystem paths currently participate in admission and registry identity; replacing a path with a connection string is not sufficient. |
+| Read consistency   | Define whether each operation needs one snapshot or a fresh authoritative reread. Keep ordered, bounded queries and batch enrichment inside that consistency boundary.                                                              |
+| Conditional writes | Preserve exact revision, session generation, writer claim, and lease-owner predicates. A stale or refused mutation must not publish a success result or alter live state.                                                           |
+| Canonical payloads | Preserve serialized transcript and record text where byte identity, replay, or exact JSON comparison is part of the contract. Keep derived query projections separate.                                                              |
+| Scalar decoding    | Decode driver values at the store boundary, including counts, integer ranges, nullable booleans, timestamps, JSON, and binary bytes. Match TypeScript declarations to observed driver values.                                       |
+| Failure and retry  | Define which failures permit retry of the whole operation. Keep external effects outside a retried transaction, and revalidate authority after awaited work.                                                                        |
+
+Kysely's TypeScript types do not convert driver results; the driver determines
+runtime values. See [Kysely data types](https://kysely.dev/docs/recipes/data-types).
+PostgreSQL transactions must use one acquired client, and its default Read
+Committed isolation can give successive statements different snapshots. An
+adapter therefore needs operation-specific isolation and retry decisions, not
+a mechanical replacement of `BEGIN IMMEDIATE`. See
+[node-postgres transactions](https://node-postgres.com/features/transactions)
+and [PostgreSQL isolation](https://www.postgresql.org/docs/current/transaction-iso.html).
+
+Do not automatically convert canonical JSON text to `jsonb`: PostgreSQL's
+`jsonb` representation changes whitespace, object-key order, and duplicate-key
+handling. A searchable `jsonb` projection would need an explicit design and
+migration decision. See [PostgreSQL JSON types](https://www.postgresql.org/docs/current/datatype-json.html).
+
+### Keep engine-specific capabilities owned
+
+SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
+databases, WAL maintenance, integrity checks, and backup operations remain
+SQLite capabilities. Keep their implementation behind the memory or database
+lifecycle owner. A future backend must supply equivalent product behavior or
+an explicit capability boundary; a second SQL dialect alone cannot replace
+these features. Schema, retention, migration, and multi-host changes still use
+the review checkpoint below.
+
+## Review checkpoint for material changes
+
+Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
+
+Treat a change as material when it introduces or materially changes any of these:
+
+- a table, dedicated database, durable projection, cache, index, or other persisted representation
+- which data is canonical, derived, reconstructible, retained, deleted, exported, or visible after restart
+- user-visible persistence semantics, including a second interpretation of existing durable data
+- migration, backfill, repair, downgrade, rollback, retention, compaction, or corruption recovery
+- transaction boundaries, writer ownership, concurrency, locking, publication fencing, or reader consistency
+- read, write, disk, startup, or maintenance cost enough to affect the store's operating model
+
+The discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link the accepted decision.
+
+The checkpoint normally does not apply to a read-only query that preserves existing semantics, a bounded query-plan improvement with no material write/disk tradeoff, routine maintenance of an existing approved schema, or tests, generated baselines, and documentation that only follow an already accepted design. A mechanical migration or repair still links the decision that approved its persistent contract.
+
+For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
+
+## Preflight a target release
+
+Before activating or rolling back a release, run that target release's CLI against one explicit copied state database:
+
+```bash
+openclaw database preflight <copied-state.sqlite> --json
+```
+
+The command does not read the default state directory or mutate the supplied file. It opens the supplied consolidated file as immutable/read-only, compares the target release's own schema contract, and reports one status:
+
+- `exact`: the copied database matches the target release's runtime schema. Feature-local tables that are intentionally absent until first use do not require repair.
+- `startup-repairable`: the numeric version matches and a runtime-owned additive difference remains; startup needs a write to converge the shape.
+- `migration-required`: the database is older than the target release.
+- `incompatible`: the database is newer, or its same-version shape has blocking drift such as an unexpected column.
+- `indeterminate`: the file, integrity metadata, or ownership metadata could not be verified.
+
+JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
+
+Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
+
+Diagnostic paths that prepare their own private read-only snapshots use the size-derived child-process budget described under [Integrity checks](/reference/database-schemas#integrity-checks).
+
+### Preflight an explicit agent copy
+
+Runtimes that provide the agent reader also support:
+
+```bash
+openclaw database preflight-agent <copied-agent.sqlite> --agent-id main --json
+```
+
+Use the exact canonical agent ID and a canonical regular-file path. This command
+validates integrity, both schema version markers, schema shape, and agent ownership
+through that release's maintenance reader, without creating, registering, migrating,
+or repairing any store. The supplied file must be consolidated with no WAL, SHM,
+or journal siblings. JSON uses `openclaw.agent-schema-preflight.v1`; only `exact`
+is compatibility proof. Other outcomes exit nonzero and require no writes.
+
+Shared-state preflight cannot validate agent databases. Older retained payloads
+without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
+does not make those payloads compatible. Runtime/package identity and serving
+health are separate checks from database compatibility. A successful read-only
+preflight does not authorize checkpoint replay or replacement of live databases.

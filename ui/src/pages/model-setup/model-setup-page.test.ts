@@ -473,7 +473,7 @@ describe("ModelSetupPage catalog icons", () => {
     );
   });
 
-  it("flushes a pending config draft before activation review and refreshes afterward", async () => {
+  it("config.set flushes a pending config draft before activation review and refreshes afterward", async () => {
     vi.useFakeTimers();
     const { context, client, request, runtimeConfig } = createContext();
     const order: string[] = [];
@@ -495,7 +495,7 @@ describe("ModelSetupPage catalog icons", () => {
         order.push(method);
         config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { hash };
+        return { config, hash };
       }
       if (method === "openclaw.setup.activate.start") {
         order.push(method);
@@ -543,7 +543,7 @@ describe("ModelSetupPage catalog icons", () => {
     runtimeConfig.dispose();
   });
 
-  it("owns the complete wizard action between draft flush and authoritative refresh", async () => {
+  it("config.set owns the complete wizard action between draft flush and authoritative refresh", async () => {
     const { context, client, request, runtimeConfig } = createContext();
     const order: string[] = [];
     let config: Record<string, unknown> = { pending: false };
@@ -563,7 +563,7 @@ describe("ModelSetupPage catalog icons", () => {
       if (method === "config.set") {
         config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { hash };
+        return { config, hash };
       }
       if (method === "openclaw.setup.auth.start") {
         return { sessionId: "wizard-session", done: false, status: "running" };
@@ -902,6 +902,7 @@ describe("ModelSetupPage catalog icons", () => {
         runExternalMutation,
       },
     } as ApplicationContext;
+    let cancellationAttempt = 0;
     request.mockImplementation(async (method: string) => {
       if (method === "openclaw.setup.auth.start") {
         return { sessionId: "wizard-session", done: false, status: "running" };
@@ -912,6 +913,16 @@ describe("ModelSetupPage catalog icons", () => {
           status: "running",
           step: { id: "token", type: "text", message: "Paste token" },
         };
+      }
+      if (method === "wizard.cancel") {
+        cancellationAttempt += 1;
+        if (cancellationAttempt === 1) {
+          return { status: "running" };
+        }
+        if (cancellationAttempt === 2) {
+          throw new Error("Cancellation request disconnected");
+        }
+        return { status: "cancelled" };
       }
       return {};
     });
@@ -935,7 +946,28 @@ describe("ModelSetupPage catalog icons", () => {
       expect(page.textContent).toContain("Paste token");
     });
     page.querySelector<HTMLButtonElement>("openclaw-modal-dialog .btn")?.click();
-    await page.updateComplete;
-    expect(page.textContent).toContain("config.get failed after wizard commit");
+    await waitForFast(() => {
+      const modal = page.querySelector("openclaw-modal-dialog");
+      expect(modal?.textContent).toContain("config.get failed after wizard commit");
+      expect(modal?.textContent).toContain("Setup is finishing the current step.");
+    });
+
+    page.querySelector<HTMLButtonElement>("openclaw-modal-dialog .btn")?.click();
+    await waitForFast(() => {
+      const modal = page.querySelector("openclaw-modal-dialog");
+      expect(modal?.textContent).toContain("config.get failed after wizard commit");
+      expect(modal?.textContent).toContain(
+        "Could not confirm cancellation: Cancellation request disconnected",
+      );
+      expect(modal?.textContent).not.toContain("Setup is finishing the current step.");
+    });
+    expect(cancellationAttempt).toBe(2);
+
+    page.querySelector<HTMLButtonElement>("openclaw-modal-dialog .btn")?.click();
+    await waitForFast(() => {
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(page.textContent).toContain("config.get failed after wizard commit");
+    });
+    expect(cancellationAttempt).toBe(3);
   });
 });

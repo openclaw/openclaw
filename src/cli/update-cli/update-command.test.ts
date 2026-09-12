@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -17,6 +18,7 @@ import { testing as updateCommandPluginsTesting } from "./update-command-plugins
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
+  resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
   resolveOwnedManagedUpdateEnv,
   resolveUpdatedInstallCommandEnv,
@@ -196,6 +198,51 @@ describe("resolvePostUpdateServiceStateReadEnv", () => {
       processEnv,
     );
   });
+});
+
+describe("update environment snapshots", () => {
+  it.each(["win32", "linux", "darwin"] as const)(
+    "preserves %s selector lookup semantics without retaining the live environment",
+    (platform) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      try {
+        const caller = {
+          Home: "/caller/home",
+          OpenClaw_State_Dir: "/caller/state",
+          OpenClaw_Config_Path: "/caller/config.json",
+          OpenClaw_Profile: "caller",
+        };
+        const snapshot = resolveServiceRefreshEnv(caller);
+        caller.OpenClaw_State_Dir = "/later/state";
+        if (platform === "win32") {
+          expect(snapshot).toEqual({
+            HOME: "/caller/home",
+            OPENCLAW_STATE_DIR: "/caller/state",
+            OPENCLAW_CONFIG_PATH: "/caller/config.json",
+            OPENCLAW_PROFILE: "caller",
+          });
+          const owned = resolveOwnedManagedUpdateEnv({
+            processEnv: snapshot,
+            serviceEnv: { OpenClaw_State_Dir: "/service/state" },
+          });
+          expect(owned.OPENCLAW_STATE_DIR).toBe("/service/state");
+          expect(owned.OPENCLAW_CONFIG_PATH).toBeUndefined();
+          expect(owned.OPENCLAW_PROFILE).toBeUndefined();
+          expect(
+            resolveUpdateTargetEnv({ baseEnv: caller, serviceEnv: { OPENCLAW_PROFILE: "work" } }),
+          ).toMatchObject({ HOME: "/caller/home", OPENCLAW_PROFILE: "work" });
+        } else {
+          expect(snapshot.OpenClaw_State_Dir).toBe("/caller/state");
+          expect(snapshot.OPENCLAW_STATE_DIR).toBeUndefined();
+          expect(snapshot.OPENCLAW_CONFIG_PATH).toBeUndefined();
+          expect(snapshot.OPENCLAW_PROFILE).toBeUndefined();
+        }
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+      }
+    },
+  );
 });
 
 describe("resolveUpdateTargetEnv", () => {
@@ -598,31 +645,6 @@ describe("collectMissingPluginInstallPayloads", () => {
   });
 });
 
-describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
-  it("never restarts package updates through the pre-update process", () => {
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "npm" }),
-    ).toBe(false);
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "pnpm" }),
-    ).toBe(false);
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "bun" }),
-    ).toBe(false);
-  });
-
-  it("keeps the in-process restart path for non-package updates", () => {
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "git" }),
-    ).toBe(true);
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({
-        updateMode: "unknown",
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   const result: UpdateRunResult = {
     status: "error",
@@ -693,7 +715,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
         running: false,
         env: recoveredEnv,
         command: null,
-        runtime: { status: "unknown", missingSupervision: true },
+        runtime: { status: "stopped" },
       }));
       const message =
         "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
@@ -774,6 +796,12 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
+  beforeEach(() => {
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      tempDirs.make("update-native-repair-locks-"),
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
   it.each(["recovered", "failed", "not attempted"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {
@@ -956,6 +984,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config)", () => {
     const result = await updatePluginsAfterCoreUpdate({
       root: "/tmp/openclaw-test",
       channel: "stable",
+      configWriteOptions: {},
       configSnapshot: {
         valid: false,
         issues: [],

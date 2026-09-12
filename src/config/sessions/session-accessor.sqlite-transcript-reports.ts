@@ -6,6 +6,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -53,6 +54,7 @@ type TranscriptReport =
   | {
       kind: "custom";
       customTypes: readonly string[];
+      suppressWhenAssistantRun?: string;
       selectReport: (
         latest: CustomMessageReport | undefined,
       ) => CustomMessageReportAppend | undefined;
@@ -62,6 +64,7 @@ type ReportNavigationEntry = SessionNavigationEntry & {
   seq: number;
   customType?: string;
   assistantResponseId?: string;
+  assistantRunId?: string;
 };
 
 class TranscriptReportNavigation extends SessionEntryNavigation<ReportNavigationEntry> {
@@ -82,6 +85,9 @@ class TranscriptReportNavigation extends SessionEntryNavigation<ReportNavigation
         appendMode: entry.appendMode,
         seq,
         ...(entry.type === "custom_message" ? { customType: entry.customType } : {}),
+        ...(entry.type === "message" && entry.message.role === "assistant"
+          ? { assistantRunId: readSessionTranscriptRunId(entry.message) }
+          : {}),
         ...(entry.type === "message" &&
         entry.message.role === "assistant" &&
         typeof entry.message.responseId === "string"
@@ -168,36 +174,39 @@ async function withCurrentTranscript<T>(
   // or inherited writer fences would stop matching after the queue wait.
   const fenced = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fenced);
-  return runExclusiveSqliteSessionWrite(resolved, async () =>
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        assertOwnedTranscriptWriteCommit(fenced);
-        const refusal = resolveTranscriptAppendRefusal(
-          readSessionEntryRow(database, resolved.sessionKey)?.entry,
-          resolved,
-          fenced,
-        );
-        if (refusal) {
-          if (fenced.expectedWriterRunId !== undefined) {
-            throw new SessionTranscriptWriterClaimReboundError(refusal);
+  return runExclusiveSqliteSessionWrite(
+    resolved,
+    async () =>
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          assertOwnedTranscriptWriteCommit(fenced);
+          const refusal = resolveTranscriptAppendRefusal(
+            readSessionEntryRow(database, resolved.sessionKey)?.entry,
+            resolved,
+            fenced,
+          );
+          if (refusal) {
+            if (fenced.expectedWriterRunId !== undefined) {
+              throw new SessionTranscriptWriterClaimReboundError(refusal);
+            }
+            return err(refusal);
           }
-          return err(refusal);
-        }
-        const result = run(database, resolved);
-        assertOwnedTranscriptWriteCommit(fenced);
-        const rebound = resolveTranscriptAppendRefusal(
-          readSessionEntryRow(database, resolved.sessionKey)?.entry,
-          resolved,
-          fenced,
-        );
-        if (rebound) {
-          throw new SessionTranscriptWriterClaimReboundError(rebound);
-        }
-        return ok(result);
-      },
-      toDatabaseOptions(resolved),
-      { operationLabel: "session.transcript.report" },
-    ),
+          const result = run(database, resolved);
+          assertOwnedTranscriptWriteCommit(fenced);
+          const rebound = resolveTranscriptAppendRefusal(
+            readSessionEntryRow(database, resolved.sessionKey)?.entry,
+            resolved,
+            fenced,
+          );
+          if (rebound) {
+            throw new SessionTranscriptWriterClaimReboundError(rebound);
+          }
+          return ok(result);
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.transcript.report" },
+      ),
+    "session.transcript.report",
   );
 }
 
@@ -234,6 +243,12 @@ export async function appendSessionTranscriptReport(
         message: applyAssistantDeliveryDirectives(report.message),
         parentId: branch.appendParentId,
       });
+      return;
+    }
+    if (
+      report.suppressWhenAssistantRun !== undefined &&
+      branch.path.some((entry) => entry.assistantRunId === report.suppressWhenAssistantRun)
+    ) {
       return;
     }
     const selected = report.selectReport(

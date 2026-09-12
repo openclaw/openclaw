@@ -414,13 +414,14 @@ function progressConfig(
   channel: "discord" | "slack",
   native: boolean,
   toolProgress: boolean,
+  compact = false,
 ): OpenClawConfig {
   const streaming = {
     mode: "progress" as const,
     progress: {
       label: HEADLINE,
       toolProgress,
-      ...(channel === "slack" ? { style: "card" as const } : {}),
+      ...(channel === "slack" ? { style: compact ? ("compact" as const) : ("card" as const) } : {}),
     },
   };
   return {
@@ -1176,8 +1177,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
     }
-    const { openOpenClawStateDatabase, closeOpenClawStateDatabaseByPath } =
+    const { openOpenClawStateDatabase } =
       await import("../../../../src/state/openclaw-state-db.js");
+    const { closeOpenClawStateDatabaseByPath } =
+      await import("../../../../src/state/openclaw-state-db-cache.js");
     const { readSubagentRun } =
       await import("../../../../src/agents/subagents/registry/subagent-registry.store.sqlite.js");
     const database = openOpenClawStateDatabase({ env: gateway.runtimeEnv });
@@ -1283,9 +1286,41 @@ describe("channel progress presentation through an isolated Gateway", () => {
     { channel: "slack" as const, native: true, thread: "root", rejectStop: true, tools: true },
     { channel: "slack" as const, native: false, thread: "reply", rejectStop: false, tools: true },
     { channel: "slack" as const, native: false, thread: "current", rejectStop: false, tools: true },
+    {
+      channel: "slack" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: false,
+      compact: true,
+    },
+    {
+      channel: "slack" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: true,
+      compact: true,
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: false,
+      failTool: true,
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: true,
+      failTool: true,
+    },
   ])(
-    "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools)",
-    async ({ channel, native, thread, rejectStop, tools }) => {
+    "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools, compact=$compact, failTool=$failTool)",
+    async ({ channel, native, thread, rejectStop, tools, compact = false, failTool = false }) => {
       const directory = await fs.mkdtemp(
         path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
       );
@@ -1308,7 +1343,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
       cleanups.push(() => provider.stop());
       const owner = createQaGatewayChild();
-      cleanups.push(() => stopQaGatewayFixture(owner));
+      cleanups.push(() =>
+        stopQaGatewayFixture(owner, {
+          preserveToDir: path.join(
+            process.cwd(),
+            ".artifacts",
+            "channel-progress-presentation",
+            path.basename(directory),
+          ),
+        }),
+      );
       const environment = adapter.createProviderReadinessEnv({});
       if (channel === "slack") {
         environment.SLACK_API_URL = `${api.baseUrl}/api/`;
@@ -1337,7 +1381,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         },
         runtimeEnvPatch: environment,
         mutateConfig: (config) => {
-          const configured = progressConfig(config, channel, native, tools);
+          const configured = progressConfig(config, channel, native, tools, compact);
           if (channel === "discord") {
             configured.channels!.discord!.proxy = api.proxyUrl;
             const qa = configured.agents!.entries!.qa!;
@@ -1416,7 +1460,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
       const finalText = `${thread === "current" ? "[[reply_to_current]] " : ""}${FINAL_MARKER}`;
       const injected = await injectProviderMessage(
-        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`sleep 3\`. After that command completes, reply exactly \`${finalText}\`.`,
+        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${failTool ? "sleep 3; exit 1" : "sleep 3"}\`. After that command completes or fails, reply exactly \`${finalText}\`.`,
         threadId,
       );
       if (adapter.manifest.provider === "slack") {
@@ -1467,7 +1511,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
               )
             : native
               ? writes.some((write) => write.route.endsWith("chat.stopStream"))
-              : writes.some((write) => write.route.endsWith("chat.update")),
+              : writes.some((write) =>
+                  write.route.endsWith(compact ? "chat.delete" : "chat.update"),
+                ),
         "progress finalization",
       );
 
@@ -1498,6 +1544,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
       } else {
         expect(progressText).not.toMatch(toolRow);
       }
+      if (failTool) {
+        expect(progressText).toContain("exit 1");
+      }
       const reactionAdds = writes.filter((write) =>
         channel === "discord"
           ? write.method === "PUT" && write.route.includes("/reactions/")
@@ -1512,7 +1561,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
       const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}${tools ? "" : "-quiet"}`;
+      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}${tools ? "" : "-quiet"}${compact ? "-compact" : ""}${failTool ? "-failed-tool" : ""}`;
       await fs.mkdir(evidenceDir, { recursive: true });
       await fs.writeFile(
         path.join(evidenceDir, `${evidenceName}-diagnostic.json`),

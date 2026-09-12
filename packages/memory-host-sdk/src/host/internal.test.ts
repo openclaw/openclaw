@@ -19,6 +19,7 @@ import {
   stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
+import { estimateStringChars } from "./openclaw-runtime-io.js";
 import { readMemoryFile } from "./read-file.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
@@ -107,7 +108,7 @@ describe("memory host SDK package internals", () => {
       await expect(listMemoryFiles(workspaceDir, [upperPath])).resolves.toEqual([]);
       await expect(
         readMemoryFile({ workspaceDir, extraPaths: [upperPath], relPath: upperPath }),
-      ).rejects.toThrow("path required");
+      ).rejects.toThrow("path is not an allowed Markdown memory file");
     },
   );
 
@@ -513,6 +514,63 @@ describe("memory host SDK package internals", () => {
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
     for (const chunk of chunks) {
       expect(() => encodeURIComponent(chunk.text)).not.toThrow();
+    }
+  });
+
+  it("keeps chunks within budget when overlap carries a long segment", () => {
+    // A 3000-char line is sliced into 1600-char segments; without a bounded
+    // carry the emitted chunk used to reach 3001 chars (budget 1600).
+    const chunks = chunkMarkdown("a".repeat(3000), { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+    expect(chunks.map((chunk) => chunk.text).join("")).toContain("a".repeat(100));
+  });
+
+  it("keeps chunks within budget for mixed short and long lines", () => {
+    const content = ["intro line", "b".repeat(3000), "outro line"].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("intro line");
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("outro line");
+  });
+
+  it("subtracts already retained entries from the carry window", () => {
+    const content = ["a".repeat(900), "b".repeat(100), "c".repeat(1450)].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+  });
+
+  it.each([
+    { label: "common CJK", character: "中", count: 60, retained: 24 },
+    { label: "rare BMP CJK", character: "\u3400", count: 60, retained: 8 },
+    { label: "supplementary CJK", character: "\u{20000}", count: 60, retained: 6 },
+    { label: "emoji", character: "🌸", count: 60, retained: 49 },
+    { label: "lone high surrogates", character: "\ud800", count: 120, retained: 99 },
+    { label: "lone low surrogates", character: "\udc00", count: 120, retained: 99 },
+  ])("preserves the weighted overlap tail for $label", ({ character, count, retained }) => {
+    const firstLine = `${"a".repeat(600)}${character.repeat(count)}`;
+    const nextLine = "x".repeat(1499);
+    const content = [firstLine, nextLine].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
+
+    // The 100-unit overlap window reserves one unit for its separator.
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      firstLine,
+      `${character.repeat(retained)}\n${nextLine}`,
+    ]);
+    for (const chunk of chunks) {
+      expect(estimateStringChars(chunk.text)).toBeLessThanOrEqual(1600);
     }
   });
 

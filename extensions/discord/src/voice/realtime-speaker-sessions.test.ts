@@ -15,7 +15,11 @@ defineDiscordVoiceTests(
     emitFinalRealtimeUserTranscript,
     lastAgentCommandArgs,
     lastRealtimeBridge,
+    loggerWarnMock,
     sentUserMessages,
+    createClient,
+    startTranscripts,
+    receiveRecordedSpeech,
   }) => {
     it("preserves immediate acknowledgments for installed providers with unscoped marks", async () => {
       const { entry, manager } = await createJoinedAgentProxyFixture();
@@ -32,15 +36,19 @@ defineDiscordVoiceTests(
     it.each(["guest-first", "owner-first"] as const)(
       "keeps speaker authority and transcript labels with their input connections: %s",
       async (order) => {
+        const client = createClient();
+        client.fetchMember.mockImplementation(async (_guildId, userId) => ({
+          nickname: userId === "guest" ? "Ada" : "Grace",
+          roles: [],
+          user: { id: userId },
+        }));
         const { entry, manager } = await createJoinedAgentProxyFixture({
+          client,
           config: { voice: { realtime: { requireWakeName: false } } },
         });
         const onUtterance = vi.fn();
         try {
-          await manager.join(
-            { guildId: "g1", channelId: "1001" },
-            { transcripts: { sessionId: "shared-room", onUtterance } },
-          );
+          await startTranscripts(manager, onUtterance, "shared-room");
           beginSpeakerTurn(entry, {
             userId: "guest",
             speakerLabel: "Ada",
@@ -84,6 +92,8 @@ defineDiscordVoiceTests(
               agentId: "agent-1",
               sessionKey: "discord:g1:c1",
             });
+            expect(onUtterance).toHaveBeenCalledTimes(index);
+            await receiveRecordedSpeech(manager, turn.text, entry, turn.id);
             expect(onUtterance).toHaveBeenCalledWith(
               expect.objectContaining({
                 sessionId: "shared-room",
@@ -228,12 +238,7 @@ defineDiscordVoiceTests(
       const newTranscript = vi.fn();
       let pending: Promise<void> | void = undefined;
       try {
-        await manager.join(
-          { guildId: "g1", channelId: "1001" },
-          {
-            transcripts: { sessionId: "old-subscription", onUtterance: oldTranscript },
-          },
-        );
+        await startTranscripts(manager, oldTranscript, "old-subscription");
         const originalCapture = beginSpeakerTurn(entry);
         const original = lastRealtimeBridge();
         pending = original.bridgeParams.onToolCall?.(
@@ -246,12 +251,7 @@ defineDiscordVoiceTests(
           original.session,
         );
         await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledOnce());
-        await manager.join(
-          { guildId: "g1", channelId: "1001" },
-          {
-            transcripts: { sessionId: "new-subscription", onUtterance: newTranscript },
-          },
-        );
+        await startTranscripts(manager, newTranscript, "new-subscription");
         beginSpeakerTurn(entry).close();
         const replacement = lastRealtimeBridge();
         const sentBeforeLateAudio = original.session.sendAudio.mock.calls.length;
@@ -265,6 +265,8 @@ defineDiscordVoiceTests(
         });
         expect(replacement.session.submitToolResult).not.toHaveBeenCalled();
         await emitFinalRealtimeUserTranscript(replacement.bridgeParams, "Fresh question.");
+        expect(newTranscript).not.toHaveBeenCalled();
+        await receiveRecordedSpeech(manager, "Fresh question.", entry);
         expect(newTranscript).toHaveBeenCalledWith(
           expect.objectContaining({ sessionId: "new-subscription", text: "Fresh question." }),
         );
@@ -275,6 +277,43 @@ defineDiscordVoiceTests(
         await pending;
         await manager.destroy();
       }
+    });
+
+    it("waits for every speaker to drain when another speaker's cleanup rejects", async () => {
+      const { entry, manager } = await createJoinedAgentProxyFixture();
+      beginSpeakerTurn(entry, { userId: "owner" }).close();
+      beginSpeakerTurn(entry, { userId: "guest", senderIsOwner: false }).close();
+      const pendingProvider = lastRealtimeBridge().session;
+      const pending = createDeferred<void>();
+      const { DiscordRealtimeSpeakerSession } = await import("./realtime-speaker-session.js");
+      const close = vi.spyOn(DiscordRealtimeSpeakerSession.prototype, "close");
+      const conversationClosed = vi.spyOn(entry.conversations, "close");
+      let leaving: ReturnType<typeof manager.leave> | undefined;
+      try {
+        pendingProvider.close.mockReturnValueOnce(pending.promise);
+        close.mockImplementationOnce(
+          function (this: InstanceType<typeof DiscordRealtimeSpeakerSession>) {
+            close.mockRestore();
+            return Promise.resolve(this.close()).then(() => {
+              throw new Error("Speaker cleanup failed");
+            });
+          },
+        );
+        leaving = manager.leave({ guildId: entry.guildId });
+        await vi.waitFor(() =>
+          expect(loggerWarnMock).toHaveBeenCalledWith(
+            expect.stringContaining("Speaker cleanup failed"),
+          ),
+        );
+        expect(pendingProvider.close).toHaveBeenCalledOnce();
+        expect(conversationClosed).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve();
+        close.mockRestore();
+        await leaving;
+        await manager.destroy();
+      }
+      expect(conversationClosed).toHaveBeenCalledOnce();
     });
 
     it("keeps a healthy speaker connected when another speaker's provider connection fails", async () => {

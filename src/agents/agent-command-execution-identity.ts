@@ -3,6 +3,7 @@ import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spa
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { drainAgentRunTerminalWrites } from "../infra/agent-run-terminal-writes.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -43,20 +44,17 @@ function systemIngress(boundary: string): AgentCommandAdmissionIngress {
   return { kind: "system", boundary, state: "present" };
 }
 
-function prepareAgentCommandRunAdmission(params: {
-  admission?: AgentCommandOpts["executionIdentityAdmission"];
-  agentId: string;
-  cfg: OpenClawConfig;
-  ingress: AgentCommandAdmissionIngress;
-  operationalRunInstance: OperationalRunInstanceRef;
-  runId: string;
-  onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
-}) {
-  return prepareAgentCommandRunAdmissionWithSpawnFacts(params);
-}
-
-function prepareAgentCommandRunAdmissionWithSpawnFacts(
-  params: Parameters<typeof prepareAgentCommandRunAdmission>[0],
+function prepareAgentCommandRunAdmission(
+  params: {
+    admission?: AgentCommandOpts["executionIdentityAdmission"];
+    agentId: string;
+    cfg: OpenClawConfig;
+    ingress: AgentCommandAdmissionIngress;
+    operationalRunInstance: OperationalRunInstanceRef;
+    runId: string;
+    onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
+    assertSourceCurrent?: () => void;
+  },
   spawnFacts?: AgentCommandExecutionIdentitySpawnFacts,
 ) {
   const admissionFacts = getAgentCommandAdmissionFacts(params.operationalRunInstance) ?? {
@@ -83,6 +81,7 @@ function prepareAgentCommandRunAdmissionWithSpawnFacts(
     }),
     ...(params.admission ? { recovery: params.admission } : {}),
     ...(params.onAdmitted ? { onAdmitted: params.onAdmitted } : {}),
+    assertSourceCurrent: params.assertSourceCurrent,
   });
 }
 
@@ -166,6 +165,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
     ingress: params.ingress,
     operationalRunInstance,
     runId: prepared.runId,
+    assertSourceCurrent: opts.assertSourceCurrent,
     onAdmitted: async (admittedRunContext) => {
       await opts.onAdmittedRunContext?.(admittedRunContext);
       admittedContext = admittedRunContext;
@@ -185,7 +185,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
   };
   const spawnFacts = readAgentCommandExecutionIdentitySpawnFacts(opts);
   const preparedAdmission = spawnFacts
-    ? prepareAgentCommandRunAdmissionWithSpawnFacts(admissionParams, spawnFacts)
+    ? prepareAgentCommandRunAdmission(admissionParams, spawnFacts)
     : executionIdentity.prepare(admissionParams);
   const admission = opts.onPostAdmittedRunContext
     ? withPostAdmissionExecutionOwnerBinding(preparedAdmission, opts.onPostAdmittedRunContext)
@@ -194,7 +194,15 @@ export function prepareAgentCommandExecutionIdentity(params: {
     ...admission,
     // Observational events do not await consumers. Finish their recovery write
     // before releasing the admission; explicit close remains immediate.
-    finish: () => Promise.resolve(turnRegistration).finally(admission.close),
+    finish: async () => {
+      try {
+        await turnRegistration;
+      } finally {
+        await drainAgentRunTerminalWrites(admission.operationalRunInstance).finally(
+          admission.close,
+        );
+      }
+    },
     onRuntimeTurnStarted: (): Promise<void> | undefined => {
       if (!recovery || !isActive()) {
         return undefined;
@@ -215,12 +223,15 @@ export function sanitizePublicAgentCommandIngressOpts(
 ): AgentCommandGatewayIngressOpts {
   return withoutAgentCommandExecutionIdentitySpawnFacts({
     ...opts,
+    runtimeContextFragments: undefined,
     senderIsOwner: false,
     mainRestartRecoveryOwnerLease: undefined,
     mainRestartRecoveryAdmitted: undefined,
     mainRestartRecoveryAttempt: undefined,
+    pinnedWidgetAuthoring: undefined,
     executionIdentityAdmission: undefined,
     operationalRunInstance: undefined,
+    assertSourceCurrent: undefined,
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
     onPostAdmittedRunContext: undefined,

@@ -3,6 +3,10 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import {
+  SetupInferenceActivationRejectionSchema,
+  SetupInferenceFailureStatusSchema,
+} from "./setup-inference.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 export const SystemAgentWizardCancelSchema = closedObject({
@@ -175,6 +179,9 @@ export const SystemAgentSetupDetectParamsSchema = closedObject({
 const ProviderAutoSetupInferenceKind = Type.TemplateLiteral("provider-auto:${string}", {
   pattern: "^provider-auto:.+$",
 });
+const SavedAuthSetupInferenceKind = Type.TemplateLiteral("saved-auth:${string}", {
+  pattern: "^saved-auth:.+$",
+});
 
 const SetupInferenceHttpsUrl = Type.String({
   minLength: 1,
@@ -190,27 +197,12 @@ const SetupInferenceKind = Type.Union([
   Type.Literal("codex-cli"),
   Type.Literal("gemini-cli"),
   ProviderAutoSetupInferenceKind,
+  SavedAuthSetupInferenceKind,
 ]);
 
 const SetupInferenceStatus = Type.Union([
   Type.Literal("ok"),
-  Type.Literal("auth"),
-  Type.Literal("rate_limit"),
-  Type.Literal("billing"),
-  Type.Literal("timeout"),
-  Type.Literal("format"),
-  Type.Literal("unavailable"),
-  Type.Literal("unknown"),
-]);
-
-const SetupInferenceFailureStatus = Type.Union([
-  Type.Literal("auth"),
-  Type.Literal("rate_limit"),
-  Type.Literal("billing"),
-  Type.Literal("timeout"),
-  Type.Literal("format"),
-  Type.Literal("unavailable"),
-  Type.Literal("unknown"),
+  ...SetupInferenceFailureStatusSchema.anyOf,
 ]);
 
 export const SystemAgentSetupDetectResultSchema = closedObject({
@@ -260,7 +252,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       website: Type.Optional(SetupInferenceHttpsUrl),
     }),
   ),
-  /** Provider-owned browser and device-code login methods. */
+  /** Provider-owned auth, managed-install, and custom-endpoint setup methods. */
   authOptions: Type.Optional(
     Type.Array(
       closedObject({
@@ -272,7 +264,12 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         groupLabel: Type.Optional(Type.String()),
         icon: Type.Optional(SetupInferenceHttpsUrl),
         website: Type.Optional(SetupInferenceHttpsUrl),
-        kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
+        kind: Type.Union([
+          Type.Literal("oauth"),
+          Type.Literal("device-code"),
+          Type.Literal("install"),
+          Type.Literal("custom"),
+        ]),
         featured: Type.Boolean(),
       }),
     ),
@@ -305,6 +302,18 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       }),
     ),
   ),
+  /** Native provider conversation catalogs available on this Gateway host. */
+  nativeSessionCatalogs: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        label: NonEmptyString,
+        detail: Type.Optional(Type.String()),
+      }),
+    ),
+  ),
+  /** Fresh setup needs an explicit native-conversation catalog choice. */
+  nativeSessionCatalogPreferenceRequired: Type.Optional(Type.Boolean()),
   workspace: NonEmptyString,
   codexAppServerDetected: Type.Optional(Type.Boolean()),
   configuredModel: Type.Optional(Type.String()),
@@ -325,7 +334,7 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
   }),
   closedObject({
     ok: Type.Literal(false),
-    status: SetupInferenceFailureStatus,
+    status: SetupInferenceFailureStatusSchema,
     error: NonEmptyString,
   }),
 ]);
@@ -341,6 +350,7 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
     Type.Literal("codex-cli"),
     Type.Literal("gemini-cli"),
     ProviderAutoSetupInferenceKind,
+    SavedAuthSetupInferenceKind,
     Type.Literal("api-key"),
   ]),
   /** Exact detected model for this route; prevents detect/activate drift. */
@@ -350,6 +360,8 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
   /** Manual step only: the pasted API key or token; masked by clients, never echoed. */
   apiKey: Type.Optional(Type.String()),
   workspace: Type.Optional(Type.String()),
+  /** Fresh-install opt-in for native provider conversation discovery. */
+  nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
 });
 
 /** Starts interactive activation without moving artifact consent into the client. */
@@ -372,6 +384,8 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   /** Present on failure: coarse bucket for client copy + docs links. */
   status: Type.Optional(SetupInferenceStatus),
   error: Type.Optional(Type.String()),
+  /** Owner-recorded rejection, not a claim that preparation had no persistent effects. */
+  disposition: Type.Optional(SetupInferenceActivationRejectionSchema.properties.disposition),
 });
 
 /** Starts one provider-owned interactive login as a gateway wizard session. */
@@ -382,6 +396,8 @@ export const SystemAgentSetupAuthStartParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
   workspace: Type.Optional(Type.String()),
+  /** Fresh-install opt-in for native provider conversation discovery. */
+  nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
 });
 
 export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;

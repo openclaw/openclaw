@@ -5,7 +5,7 @@ import type { SidebarLayout } from "./sidebar-layout.ts";
 export type SidebarSessionLayouts = Record<string, SidebarLayout>;
 export type SidebarSessionActivePanels = Record<string, string>;
 
-const MAX_SIDEBAR_SESSION_LAYOUTS = 50;
+const MAX_SIDEBAR_SESSION_LAYOUTS = 500;
 
 export function normalizeSidebarSessionLayouts(value: unknown): SidebarSessionLayouts {
   const layouts: SidebarSessionLayouts = {};

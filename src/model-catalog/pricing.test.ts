@@ -16,7 +16,7 @@ import * as manifestNormalization from "../plugins/manifest-model-id-normalizati
 import { normalizeManifestModelPricing } from "../plugins/manifest-model-provider-normalizers.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { buildStatusMessageParts } from "../status/status-message.js";
+import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
 import {
   estimateAggregateUsageCost,
   resetUsageFormatCachesForTest,
@@ -593,7 +593,7 @@ describe("hosted model pricing", () => {
         const discoverySpies = allowPluginNormalization
           ? []
           : [
-              vi.spyOn(manifestNormalization, "normalizeProviderModelIdWithManifest"),
+              vi.spyOn(manifestNormalization, "resolveManifestModelIdNormalizationPolicies"),
               vi.spyOn(runtimeNormalization, "normalizeProviderModelIdWithRuntime"),
               vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot"),
             ];
@@ -623,6 +623,7 @@ describe("hosted model pricing", () => {
           spy.mockRestore();
         }
         const status = buildStatusMessageParts({
+          modelRefs: statusModelRefs({ provider: "openai", model: "gpt-authored" }),
           config,
           agent: { model: "openai/gpt-authored" },
           modelAuth: "api-key",

@@ -3,12 +3,15 @@ import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
   migrateOpenClawAgentDatabaseForMaintenance,
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { shortenHomePath } from "../utils.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
@@ -80,11 +83,35 @@ function inspectAgentMemoryRecallMetadataMigration(
   }
 }
 
+function needsAgentMemorySchemaMaintenance(env: NodeJS.ProcessEnv): boolean {
+  try {
+    // Doctor discovery must observe registrations committed by another process.
+    invalidateRegisteredAgentDatabasesMemo({ env });
+    return listOpenClawRegisteredAgentDatabases({
+      env,
+      includeIncompatibleSchemaVersions: true,
+    }).some((entry) => {
+      if (readAgentDatabaseAdmissionRefusal(entry.agentId, { env })) {
+        return false;
+      }
+      const state = inspectAgentMemoryRecallMetadataMigration(entry.path);
+      return Boolean(state && (state.columns.length > 0 || state.hasProvenanceTrigger));
+    });
+  } catch {
+    // Uncertain inspection must retain the maintenance path and its diagnostics.
+    return true;
+  }
+}
+
 /** Move the unreleased inline metadata shape into rollback-safe additive tables. */
-function repairDoctorAgentMemorySchemas(
-  options: { env?: NodeJS.ProcessEnv } = {},
-): DoctorAgentMemorySchemaReport {
+async function repairDoctorAgentMemorySchemas(
+  options: { env?: NodeJS.ProcessEnv },
+  maintenance: OpenClawStateLeaseContext,
+): Promise<DoctorAgentMemorySchemaReport> {
   const env = options.env ?? process.env;
+  maintenance.assertOwned();
+  // The preliminary scan may have populated the memo before lease acquisition.
+  invalidateRegisteredAgentDatabasesMemo({ env });
   const repaired: DoctorAgentMemorySchemaRepair[] = [];
   const warnings: string[] = [];
   let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
@@ -101,6 +128,11 @@ function repairDoctorAgentMemorySchemas(
   }
 
   for (const entry of registered) {
+    if (readAgentDatabaseAdmissionRefusal(entry.agentId, { env })) {
+      continue;
+    }
+    // A lost lease must stop the pass before a later target can close a new owner's handle.
+    maintenance.assertOwned();
     try {
       const before = inspectAgentMemoryRecallMetadataMigration(entry.path);
       if (!before || (before.columns.length === 0 && !before.hasProvenanceTrigger)) {
@@ -109,10 +141,11 @@ function repairDoctorAgentMemorySchemas(
       // Doctor owns offline maintenance. Close any handle opened by an earlier
       // doctor contribution before the feature owner migrates the shared table.
       closeOpenClawAgentDatabaseByPath(entry.path);
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: entry.agentId,
-        pathname: entry.path,
-      });
+      await migrateOpenClawAgentDatabaseForMaintenance(
+        { agentId: entry.agentId, pathname: entry.path },
+        maintenance,
+      );
+      maintenance.assertOwned();
       const after = inspectAgentMemoryRecallMetadataMigration(entry.path);
       if (
         after === null ||
@@ -153,10 +186,16 @@ export async function noteDoctorAgentMemorySchemaHealth(
     report = await withDoctorSqliteMaintenanceLock({
       env: params.env,
       operation: "agent memory schema repair",
-      run: () =>
-        withAgentDatabaseMaintenanceLease({ env: params.env }, async () =>
-          repairDoctorAgentMemorySchemas({ env: params.env }),
-        ),
+      run: () => {
+        // Acquiring the agent lease closes admitted writers. Keep a read-only
+        // no-op cheap; real repairs rediscover every target under that lease.
+        if (!needsAgentMemorySchemaMaintenance(params.env ?? process.env)) {
+          return { repaired: [], warnings: [] };
+        }
+        return withAgentDatabaseMaintenanceLease({ env: params.env }, (maintenance) =>
+          repairDoctorAgentMemorySchemas({ env: params.env }, maintenance),
+        );
+      },
     });
   } catch (error) {
     if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {

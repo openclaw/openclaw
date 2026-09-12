@@ -48,6 +48,7 @@ function createOverlayHandle(): OverlayHandle {
     focus: vi.fn(),
     unfocus: vi.fn(),
     isFocused: vi.fn(() => true),
+    getBounds: () => undefined,
   };
 }
 
@@ -126,6 +127,7 @@ function createHarness(params?: {
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
+  reopenQuestion?: () => void;
   refreshAgents?: RefreshAgentsMock;
   agentDefaultId?: string;
   agents?: Array<{ id: string; kind?: "agent" | "system"; name?: string }>;
@@ -266,6 +268,7 @@ function createHarness(params?: {
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
+    reopenQuestion: params?.reopenQuestion,
   });
 
   return {
@@ -317,6 +320,21 @@ function createHarness(params?: {
 }
 
 describe("tui command handlers", () => {
+  it.each([false, true])(
+    "reopens /question locally without sending a chat turn (local=%s)",
+    async (local) => {
+      const reopenQuestion = vi.fn();
+      const { handleCommand, sendChat, addPendingUser } = createHarness({
+        opts: { local },
+        reopenQuestion,
+      });
+      await handleCommand("/question");
+      expect(reopenQuestion).toHaveBeenCalledOnce();
+      expect(sendChat).not.toHaveBeenCalled();
+      expect(addPendingUser).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not open the agent picker from a cached roster after refresh failure", async () => {
     const refreshAgents = vi
       .fn()
@@ -430,6 +448,36 @@ describe("tui command handlers", () => {
     expect(harness.openOverlay).toHaveBeenCalledTimes(2);
     expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
   });
+
+  it.each([
+    { command: "/models", value: "fixture/model" },
+    { command: "/sessions", value: "agent:main:other" },
+    { command: "/agents", value: "other" },
+  ])(
+    "consumes $command selection before its asynchronous action finishes",
+    async ({ command, value }) => {
+      const pending = createDeferred();
+      const action = vi.fn(() => pending.promise);
+      const harness = createHarness({
+        listModels: vi.fn().mockResolvedValue([{ provider: "fixture", id: "model" }]),
+        listSessions: vi.fn().mockResolvedValue({ sessions: [{ key: "agent:main:other" }] }),
+        agents: [{ id: "main" }, { id: "other" }],
+        patchSession: action,
+        setSession: action,
+      });
+      await harness.handleCommand(command);
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+
+      selector.onSelect?.({ value });
+      expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+      selector.onSelect?.({ value });
+      expect(action).toHaveBeenCalledOnce();
+
+      pending.resolve();
+      await flushAsyncSelect();
+      expect(harness.closeOverlay).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     {
@@ -1114,6 +1162,7 @@ describe("tui command handlers", () => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({
         runtimeVersion: "1.2.3",
+        channelSummary: ["Telegram: not configured"],
         sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
       }),
     });
@@ -1125,6 +1174,7 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+    expect(addSystem).toHaveBeenCalledWith("  Telegram: not configured");
   });
 
   it("returns to OpenClaw with an optional request", async () => {
@@ -2344,37 +2394,34 @@ describe("tui command handlers", () => {
   );
 
   it.each([
-    { command: "/model openai/gpt-5.6-luna", hook: "refresh" },
-    { command: "/think high", hook: "refresh" },
-    { command: "/verbose full", hook: "history" },
-    { command: "/usage reset", hook: "refresh" },
-  ])(
-    "hides a stale $command failure after its post-patch $hook rejects",
-    async ({ command, hook }) => {
-      const followup = createDeferred();
-      const harness = createHarness({
-        currentAgentId: "research",
-        currentSessionKey: "agent:research:private",
-        currentSessionId: "private-session",
-        ...(hook === "history"
-          ? { loadHistory: vi.fn(() => followup.promise) as LoadHistoryMock }
-          : { refreshSessionInfo: vi.fn(() => followup.promise) }),
-      });
-      const pending = harness.handleCommand(command);
-      const followupCall = hook === "history" ? harness.loadHistory : harness.refreshSessionInfo;
-      await vi.waitFor(() => expect(followupCall).toHaveBeenCalledTimes(1));
-      harness.addSystem.mockClear();
-      harness.state.currentAgentId = "ops";
-      harness.state.currentSessionKey = "agent:ops:public";
-      harness.state.currentSessionId = "public-session";
+    ["/model openai/gpt-5.6-luna", "refresh"],
+    ["/think high", "refresh"],
+    ["/verbose full", "history"],
+    ["/usage reset", "refresh"],
+  ])("hides a stale %s failure after its post-patch %s rejects", async (command, hook) => {
+    const followup = createDeferred();
+    const harness = createHarness({
+      currentAgentId: "research",
+      currentSessionKey: "agent:research:private",
+      currentSessionId: "private-session",
+      ...(hook === "history"
+        ? { loadHistory: vi.fn(() => followup.promise) as LoadHistoryMock }
+        : { refreshSessionInfo: vi.fn(() => followup.promise) }),
+    });
+    const pending = harness.handleCommand(command);
+    const followupCall = hook === "history" ? harness.loadHistory : harness.refreshSessionInfo;
+    await vi.waitFor(() => expect(followupCall).toHaveBeenCalledTimes(1));
+    harness.addSystem.mockClear();
+    harness.state.currentAgentId = "ops";
+    harness.state.currentSessionKey = "agent:ops:public";
+    harness.state.currentSessionId = "public-session";
 
-      followup.reject(new Error("private provider account rejected research tenant"));
-      await pending;
+    followup.reject(new Error("private provider account rejected research tenant"));
+    await pending;
 
-      expect(harness.addSystem).not.toHaveBeenCalled();
-      expect(harness.state.currentAgentId).toBe("ops");
-    },
-  );
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.state.currentAgentId).toBe("ops");
+  });
 
   it.each(["/model openai/gpt-5.6-luna", "/usage reset"])(
     "ignores a stale global-agent %s result",
@@ -2415,50 +2462,47 @@ describe("tui command handlers", () => {
   );
 
   it.each([
-    { command: "/think high", rejected: false },
-    { command: "/verbose full", rejected: false },
-    { command: "/usage reset", rejected: false },
-    { command: "/model openai/gpt-5.6-luna", rejected: true },
-  ])(
-    "ignores a stale $command patch after the same session is reset",
-    async ({ command, rejected }) => {
-      const deferred = createDeferred<{
-        ok: true;
-        path: string;
-        key: string;
-        entry: Record<string, unknown>;
-      }>();
-      const harness = createHarness({
-        currentSessionId: "session-before-reset",
-        sessionGeneration: 4,
-        sessionInfo: { responseUsage: "tokens", effectiveResponseUsage: "tokens" },
-        patchSession: vi.fn(() => deferred.promise),
+    ["/think high", false],
+    ["/verbose full", false],
+    ["/usage reset", false],
+    ["/model openai/gpt-5.6-luna", true],
+  ])("ignores a stale %s patch after the same session is reset", async (command, rejected) => {
+    const deferred = createDeferred<{
+      ok: true;
+      path: string;
+      key: string;
+      entry: Record<string, unknown>;
+    }>();
+    const harness = createHarness({
+      currentSessionId: "session-before-reset",
+      sessionGeneration: 4,
+      sessionInfo: { responseUsage: "tokens", effectiveResponseUsage: "tokens" },
+      patchSession: vi.fn(() => deferred.promise),
+    });
+
+    const pending = harness.handleCommand(command);
+    harness.state.currentSessionId = "session-after-reset";
+    harness.state.sessionGeneration = 5;
+    if (rejected) {
+      deferred.reject(new Error("stale session setting"));
+    } else {
+      deferred.resolve({
+        ok: true,
+        path: "/sessions/patch",
+        key: "agent:main:main",
+        entry: { model: "stale-model" },
       });
+    }
+    await pending;
 
-      const pending = harness.handleCommand(command);
-      harness.state.currentSessionId = "session-after-reset";
-      harness.state.sessionGeneration = 5;
-      if (rejected) {
-        deferred.reject(new Error("stale session setting"));
-      } else {
-        deferred.resolve({
-          ok: true,
-          path: "/sessions/patch",
-          key: "agent:main:main",
-          entry: { model: "stale-model" },
-        });
-      }
-      await pending;
-
-      expect(harness.state.sessionInfo.responseUsage).toBe("tokens");
-      expect(harness.state.sessionInfo.effectiveResponseUsage).toBe("tokens");
-      expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
-      expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
-      expect(harness.loadHistory).not.toHaveBeenCalled();
-      expect(harness.clearTools).not.toHaveBeenCalled();
-      expect(harness.addSystem).not.toHaveBeenCalled();
-    },
-  );
+    expect(harness.state.sessionInfo.responseUsage).toBe("tokens");
+    expect(harness.state.sessionInfo.effectiveResponseUsage).toBe("tokens");
+    expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
+    expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+    expect(harness.clearTools).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
 
   it("applies a model patch after its selected session becomes canonical", async () => {
     const deferred = createDeferred<{
@@ -2577,28 +2621,25 @@ describe("tui command handlers", () => {
   });
 
   it.each([
-    { mode: "gateway", local: false, command: "/think default", field: "thinkingLevel" },
-    { mode: "gateway", local: false, command: "/fast default", field: "fastMode" },
-    { mode: "embedded", local: true, command: "/think default", field: "thinkingLevel" },
-    { mode: "embedded", local: true, command: "/fast default", field: "fastMode" },
-    { mode: "gateway", local: false, command: "/think inherit", field: "thinkingLevel" },
-    { mode: "embedded", local: true, command: "/fast reset", field: "fastMode" },
-  ])(
-    "clears the $field session override for $command in $mode mode",
-    async ({ local, command, field }) => {
-      const { handleCommand, patchSession, refreshSessionInfo } = createHarness({
-        opts: { local },
-      });
+    ["thinkingLevel", "/think default", "gateway", false],
+    ["fastMode", "/fast default", "gateway", false],
+    ["thinkingLevel", "/think default", "embedded", true],
+    ["fastMode", "/fast default", "embedded", true],
+    ["thinkingLevel", "/think inherit", "gateway", false],
+    ["fastMode", "/fast reset", "embedded", true],
+  ])("clears the %s session override for %s in %s mode", async (field, command, _mode, local) => {
+    const { handleCommand, patchSession, refreshSessionInfo } = createHarness({
+      opts: { local },
+    });
 
-      await handleCommand(command);
+    await handleCommand(command);
 
-      expect(patchSession).toHaveBeenCalledWith({
-        key: "agent:main:main",
-        [field]: null,
-      });
-      expect(refreshSessionInfo).toHaveBeenCalledOnce();
-    },
-  );
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      [field]: null,
+    });
+    expect(refreshSessionInfo).toHaveBeenCalledOnce();
+  });
 
   it("does not treat non-default model names as session reset aliases", async () => {
     const { handleCommand, patchSession } = createHarness();
@@ -2668,57 +2709,39 @@ describe("tui command handlers", () => {
   });
 
   it.each([
-    {
-      name: "provider-specific binary on",
-      local: false,
-      levels: [
+    [
+      "provider-specific binary on",
+      false,
+      [
         { id: "off", label: "off" },
         { id: "high", label: "on" },
       ],
-      input: "on",
-      expected: "high",
-    },
-    {
-      name: "case-insensitive binary on in embedded mode",
-      local: true,
-      levels: [{ id: "high", label: "on" }],
-      input: "ON",
-      expected: "high",
-    },
-    {
-      name: "always-on high profile",
-      local: false,
-      levels: [{ id: "high", label: "always on" }],
-      input: "always on",
-      expected: "high",
-    },
-    {
-      name: "always-on off profile",
-      local: false,
-      levels: [{ id: "off", label: "always on" }],
-      input: "always on",
-      expected: "off",
-    },
-    {
-      name: "Moonshot binary on",
-      local: false,
-      levels: [{ id: "low", label: "on" }],
-      input: "on",
-      expected: "low",
-    },
-    {
-      name: "canonical id ahead of another option's label",
-      local: false,
-      levels: [
+      "on",
+      "high",
+    ],
+    [
+      "case-insensitive binary on in embedded mode",
+      true,
+      [{ id: "high", label: "on" }],
+      "ON",
+      "high",
+    ],
+    ["always-on high profile", false, [{ id: "high", label: "always on" }], "always on", "high"],
+    ["always-on off profile", false, [{ id: "off", label: "always on" }], "always on", "off"],
+    ["Moonshot binary on", false, [{ id: "low", label: "on" }], "on", "low"],
+    [
+      "canonical id ahead of another option's label",
+      false,
+      [
         { id: "low", label: "high" },
         { id: "high", label: "turbo" },
       ],
-      input: "high",
-      expected: "high",
-    },
+      "high",
+      "high",
+    ],
   ])(
-    "resolves $name to its canonical thinking level",
-    async ({ local, levels, input, expected }) => {
+    "resolves %s to its canonical thinking level",
+    async (_name, local, levels, input, expected) => {
       const { handleCommand, patchSession, addSystem } = createHarness({
         opts: { local },
         sessionInfo: { thinkingLevels: levels },
@@ -3266,6 +3289,68 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("fast mode: auto");
   });
 
+  it.each([
+    ["missing-auth", "Run openclaw models auth login or choose another model."],
+    ["auth-failed", "Run openclaw models auth login or choose another model."],
+    ["cooldown", "Wait and retry, or choose another model."],
+    [undefined, "Run openclaw models auth login or choose another model."],
+  ])(
+    "keeps unavailable model availability %s visible without applying it",
+    async (reason, guidance) => {
+      const harness = createHarness({
+        listModels: vi.fn().mockResolvedValue([
+          {
+            provider: "fixture",
+            id: "waiting",
+            name: "Waiting model",
+            available: false,
+            unavailableReason: reason,
+          },
+          { provider: "fixture", id: "ready", name: "Ready model", available: true },
+        ]),
+      });
+
+      await harness.handleCommand("/model");
+
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      const unavailable = expectDefined(
+        selector.items?.find((item) => item.value === "fixture/waiting"),
+        "unavailable model option",
+      );
+      selector.onSelect?.(unavailable);
+      await flushAsyncSelect();
+
+      expect(harness.patchSession).not.toHaveBeenCalled();
+      expect(unavailable.description).toContain(reason ?? "unavailable");
+      expect(harness.addSystem).toHaveBeenCalledWith(
+        `model unavailable: ${reason ?? "unavailable"}. ${guidance}`,
+      );
+    },
+  );
+
+  it.each([true, undefined])(
+    "applies model availability %s without changing its reference",
+    async (available) => {
+      const harness = createHarness({
+        listModels: vi
+          .fn()
+          .mockResolvedValue([
+            { provider: "fixture", id: "ready", name: "Ready model", available },
+          ]),
+      });
+
+      await harness.handleCommand("/model");
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      selector.onSelect?.(expectDefined(selector.items?.[0], "model option"));
+      await flushAsyncSelect();
+
+      expect(harness.patchSession).toHaveBeenCalledExactlyOnceWith({
+        key: "agent:main:main",
+        model: "fixture/ready",
+      });
+    },
+  );
+
   it("uses canonical model refs in the model selector", async () => {
     const listModels = vi.fn().mockResolvedValue([
       {
@@ -3304,33 +3389,24 @@ describe("tui command handlers", () => {
   });
 
   it.each([
-    { local: false, command: "/model default" },
-    { local: true, command: "/model default" },
-    { local: false, command: "/model DEFAULT" },
-    {
-      local: false,
-      command: "/model openai/gpt-5.6-luna --runtime codex continue with this model",
-    },
-    {
-      local: false,
-      command: "/model openai/gpt-5.6-luna --runtime openclaw continue with this model",
-    },
-  ])(
-    "forwards $command through the server directive path (local: $local)",
-    async ({ command, local }) => {
-      const sendChat = vi.fn().mockResolvedValue({ status: "ok" });
-      const patchSession = vi.fn();
-      const { handleCommand } = createHarness({ sendChat, patchSession, opts: { local } });
+    ["/model default", false],
+    ["/model default", true],
+    ["/model DEFAULT", false],
+    ["/model openai/gpt-5.6-luna --runtime codex continue with this model", false],
+    ["/model openai/gpt-5.6-luna --runtime openclaw continue with this model", false],
+  ])("forwards %s through the server directive path (local: %s)", async (command, local) => {
+    const sendChat = vi.fn().mockResolvedValue({ status: "ok" });
+    const patchSession = vi.fn();
+    const { handleCommand } = createHarness({ sendChat, patchSession, opts: { local } });
 
-      await handleCommand(command);
+    await handleCommand(command);
 
-      expectSendChatFields(sendChat, {
-        message: command,
-        sessionKey: "agent:main:main",
-      });
-      expect(patchSession).not.toHaveBeenCalled();
-    },
-  );
+    expectSendChatFields(sendChat, {
+      message: command,
+      sessionKey: "agent:main:main",
+    });
+    expect(patchSession).not.toHaveBeenCalled();
+  });
 
   it("shows resolved canonical model ref after /model alias, not raw alias string", async () => {
     // When the user types `/model gpt4` (a bare alias), the gateway resolves it
@@ -3680,42 +3756,12 @@ describe("tui command handlers", () => {
   });
 
   it.each([
-    {
-      name: "session result",
-      sessionKey: "agent:main:first",
-      agentId: "main",
-      fails: false,
-      replace: false,
-    },
-    {
-      name: "global-agent result",
-      sessionKey: "global",
-      agentId: "main",
-      fails: false,
-      replace: false,
-    },
-    {
-      name: "session failure",
-      sessionKey: "agent:main:first",
-      agentId: "main",
-      fails: true,
-      replace: false,
-    },
-    {
-      name: "replacement-session result",
-      sessionKey: "agent:main:first",
-      agentId: "main",
-      fails: false,
-      replace: true,
-    },
-    {
-      name: "replacement-session failure",
-      sessionKey: "agent:main:first",
-      agentId: "main",
-      fails: true,
-      replace: true,
-    },
-  ])("suppresses a stale usage-cost $name", async ({ sessionKey, agentId, fails, replace }) => {
+    ["session result", "agent:main:first", "main", false, false],
+    ["global-agent result", "global", "main", false, false],
+    ["session failure", "agent:main:first", "main", true, false],
+    ["replacement-session result", "agent:main:first", "main", false, true],
+    ["replacement-session failure", "agent:main:first", "main", true, true],
+  ])("suppresses a stale usage-cost %s", async (_name, sessionKey, agentId, fails, replace) => {
     const deferred = createDeferred<{ text: string }>();
     const runUsageCostCommand = vi.fn(() => deferred.promise);
     const harness = createHarness({

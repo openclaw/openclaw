@@ -34,7 +34,7 @@ const originalExecPath = process.execPath;
 const validatedNodePath = "/opt/Validated Node/bin/node";
 const validatedBunPath = "/opt/Validated Bun/bin/bun";
 const missingSelectedNodeError =
-  "No supported Node runtime was selected for the daemon. Install Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 (Node 26 recommended), then retry.";
+  "No supported Node runtime was selected for the daemon. Install Node >=24.16.0 <25, or >=26.1.0 (Node 26 recommended), then retry.";
 const missingSelectedBunError =
   "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry.";
 
@@ -51,6 +51,32 @@ afterEach(() => {
 });
 
 describe("resolveGatewayProgramArguments", () => {
+  it.each([false, true])(
+    "installs only the requested start-mode override: %s",
+    async (allowUnconfigured) => {
+      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+      process.argv = ["node", entryPath];
+      fsMocks.realpath.mockResolvedValue(entryPath);
+      fsMocks.access.mockResolvedValue(undefined);
+      const { programArguments } = await resolveGatewayProgramArguments({
+        port: 18789,
+        runtime: "node",
+        runtimePath: validatedNodePath,
+        allowUnconfigured,
+        existingCommand: {
+          programArguments: [validatedNodePath, entryPath, "gateway", "--allow-unconfigured"],
+        },
+      });
+
+      expect(programArguments.slice(programArguments.indexOf("gateway"))).toEqual([
+        "gateway",
+        "--port",
+        "18789",
+        ...(allowUnconfigured ? ["--allow-unconfigured"] : []),
+      ]);
+    },
+  );
+
   it.skipIf(Boolean(process.versions.bun))(
     "sizes only the Gateway in an ordinary Node spawn tree",
     async () => {

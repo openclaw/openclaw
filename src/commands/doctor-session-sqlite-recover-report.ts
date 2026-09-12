@@ -5,8 +5,11 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  inspectSqliteRecoveryFiles,
+  moveSqliteFilesAside,
+} from "../infra/sqlite-recovery-files.js";
 import { getCanonicalSqliteNamedIndexContracts } from "../infra/sqlite-schema-contract.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
@@ -17,6 +20,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
@@ -60,7 +64,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   if (!failedRun) {
     const recoveredCorruptTargets = await withAgentDatabaseMaintenanceLease(
       { env: params.env },
-      async () => recoverCorruptSqliteTargets(params.targets, params.env),
+      (maintenance) => recoverCorruptSqliteTargets(params.targets, params.env, maintenance),
     );
     if (recoveredCorruptTargets.length > 0) {
       return summarizeRecoverReport(recoveredCorruptTargets);
@@ -114,59 +118,81 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   return report;
 }
 
-function recoverCorruptSqliteTargets(
+async function recoverCorruptSqliteTargets(
   targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
-): DoctorSessionSqliteTargetReport[] {
-  return targets.flatMap((target) => {
+  maintenance: OpenClawStateLeaseContext,
+): Promise<DoctorSessionSqliteTargetReport[]> {
+  const reports: DoctorSessionSqliteTargetReport[] = [];
+  for (const target of targets) {
+    // A prior repair may have yielded or lost its lease; later targets can rename files.
+    maintenance.assertOwned();
     const databaseOptions = resolveTargetSqliteOptions(target, env);
     const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
     let recoveryFiles: ReturnType<typeof inspectSqliteRecoveryFiles>;
     try {
       recoveryFiles = inspectSqliteRecoveryFiles(sqlitePath);
     } catch (error) {
-      return [createRecoverInspectionFailureTargetReport(target, sqlitePath, error)];
+      reports.push(createRecoverInspectionFailureTargetReport(target, sqlitePath, error));
+      continue;
     }
     if (recoveryFiles.existing.length === 0) {
-      return [];
+      continue;
     }
     if (!recoveryFiles.existing.includes(sqlitePath)) {
-      return [
+      reports.push(
         recoverCorruptSqliteTarget(
           target,
           sqlitePath,
           new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
+          () => maintenance.assertOwned(),
         ),
-      ];
+      );
+      continue;
     }
     const inspection = inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing);
     if (inspection.ok) {
-      return [];
+      continue;
     }
     if (!isSqliteCorruptionError(inspection.error)) {
-      return [createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error)];
+      reports.push(
+        createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error),
+      );
+      continue;
     }
     if (!isCanonicalAgentIndexCorruptionError(inspection.error)) {
-      return [recoverCorruptSqliteTarget(target, sqlitePath, inspection.error)];
+      reports.push(
+        recoverCorruptSqliteTarget(target, sqlitePath, inspection.error, () =>
+          maintenance.assertOwned(),
+        ),
+      );
+      continue;
     }
-    const repair = repairCanonicalIndexesForRecovery(databaseOptions, sqlitePath);
-    return [
+    const repair = await repairCanonicalIndexesForRecovery(
+      databaseOptions,
+      sqlitePath,
+      maintenance,
+    );
+    reports.push(
       repair.ok
         ? createEmptyRecoverTargetReport(target, sqlitePath)
         : createRecoverInspectionFailureTargetReport(target, sqlitePath, repair.error),
-    ];
-  });
+    );
+  }
+  return reports;
 }
 
-function repairCanonicalIndexesForRecovery(
+async function repairCanonicalIndexesForRecovery(
   databaseOptions: OpenClawAgentDatabaseOptions,
   sqlitePath: string,
-): { ok: true } | { error: unknown; ok: false } {
+  maintenance: OpenClawStateLeaseContext,
+): Promise<{ ok: true } | { error: unknown; ok: false }> {
   try {
-    migrateOpenClawAgentDatabaseForMaintenance({
-      agentId: databaseOptions.agentId,
-      pathname: sqlitePath,
-    });
+    await migrateOpenClawAgentDatabaseForMaintenance(
+      { agentId: databaseOptions.agentId, pathname: sqlitePath },
+      maintenance,
+    );
+    maintenance.assertOwned();
     const sourcePaths = inspectSqliteRecoveryFiles(sqlitePath).existing;
     const inspection = inspectSqliteForRecovery(sqlitePath, sourcePaths);
     if (!inspection.ok) {
@@ -229,10 +255,11 @@ function recoverCorruptSqliteTarget(
   target: SessionStoreTarget,
   sqlitePath: string,
   error: unknown,
+  assertCurrent: () => void,
 ): DoctorSessionSqliteTargetReport {
   const report = createEmptyRecoverTargetReport(target, sqlitePath);
   try {
-    report.corruptRecovery = moveCorruptSqliteFilesAside(sqlitePath);
+    report.corruptRecovery = moveSqliteFilesAside(sqlitePath, assertCurrent);
   } catch (moveError) {
     report.issues.push({
       code: "sqlite_corrupt_recovery_failed",
@@ -253,112 +280,6 @@ function createRecoverInspectionFailureTargetReport(
     message: `${sqlitePath}: ${String(error)}`,
   });
   return report;
-}
-
-function moveCorruptSqliteFilesAside(sqlitePath: string): {
-  movedFiles: string[];
-  skippedFiles: string[];
-} {
-  const recoveryFiles = inspectSqliteRecoveryFiles(sqlitePath);
-  const moves = planCorruptSqliteMoves(recoveryFiles.existing);
-  const completed: typeof moves = [];
-  try {
-    // Preserve every journal before removing the main pathname. Recovery is
-    // offline; rollback restores the set after a caught rename failure.
-    for (const move of moves.toSorted((left, right) => {
-      if (left.sourcePath === sqlitePath) {
-        return 1;
-      }
-      if (right.sourcePath === sqlitePath) {
-        return -1;
-      }
-      return left.sourcePath.localeCompare(right.sourcePath);
-    })) {
-      fs.renameSync(move.sourcePath, move.destinationPath);
-      completed.push(move);
-    }
-  } catch (error) {
-    const rollbackErrors: unknown[] = [];
-    for (const move of completed.toReversed()) {
-      try {
-        if (pathExists(move.sourcePath)) {
-          throw new Error(`rollback source was recreated: ${move.sourcePath}`, {
-            cause: error,
-          });
-        }
-        fs.renameSync(move.destinationPath, move.sourcePath);
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError);
-      }
-    }
-    if (rollbackErrors.length > 0) {
-      const rollbackDetails = rollbackErrors
-        .map((rollbackError) => String(rollbackError))
-        .join("; ");
-      throw new Error(
-        `Could not move corrupt SQLite file set aside or restore it: ${sqlitePath}; rollback failures: ${rollbackDetails}`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  return {
-    movedFiles: moves.map((move) => move.destinationPath),
-    skippedFiles: recoveryFiles.missing,
-  };
-}
-
-function inspectSqliteRecoveryFiles(sqlitePath: string): {
-  existing: string[];
-  missing: string[];
-} {
-  const existing: string[] = [];
-  const missing: string[] = [];
-  for (const candidate of resolveSqliteDatabaseFilePaths(sqlitePath)) {
-    try {
-      const stat = fs.lstatSync(candidate);
-      if (!stat.isFile()) {
-        throw new Error(`SQLite recovery path is not a regular file: ${candidate}`);
-      }
-      existing.push(candidate);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        missing.push(candidate);
-        continue;
-      }
-      throw error;
-    }
-  }
-  return { existing, missing };
-}
-
-function planCorruptSqliteMoves(
-  sourcePaths: readonly string[],
-): Array<{ destinationPath: string; sourcePath: string }> {
-  const timestampSuffix = `.corrupt-${Date.now()}`;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const suffix = attempt === 0 ? timestampSuffix : `${timestampSuffix}.${attempt}`;
-    const moves = sourcePaths.map((sourcePath) => ({
-      destinationPath: `${sourcePath}${suffix}`,
-      sourcePath,
-    }));
-    if (moves.every((move) => !pathExists(move.destinationPath))) {
-      return moves;
-    }
-  }
-  throw new Error(`Could not choose recovery paths for ${sourcePaths[0] ?? "SQLite files"}`);
-}
-
-function pathExists(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
 }
 
 function isSqliteCorruptionError(error: unknown): boolean {

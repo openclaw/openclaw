@@ -45,10 +45,15 @@ function openDatabase(encoding?: "UTF-8" | "UTF-16le" | "UTF-16be") {
   });
 }
 
-function insertEntry(database: OpenClawAgentDatabase, key: string, id: string, json?: string) {
+function insertEntry(
+  database: OpenClawAgentDatabase,
+  key: string,
+  id: string,
+  json?: string | Buffer,
+) {
   database.db
     .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, CAST(? AS TEXT), ?)",
     )
     .run(key, id, json ?? JSON.stringify({ sessionId: id, updatedAt: 1 }), 1);
 }
@@ -164,46 +169,96 @@ describe.each(readers)("SQLite $name exclusions", ({ read }) => {
 describe("SQLite exclusion survivor semantics", () => {
   describe.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)("%s JSON boundaries", (encoding) => {
     it.each([
-      ["literal NUL", "\u0000"],
-      ["literal NUL and suffix", "\u0000garbage"],
-      ["valid escaped NUL", ""],
-    ])("keeps %s metadata reads consistent with full rows", (_name, suffix) => {
-      const database = openDatabase(encoding);
-      const key = "agent:main:survivor";
-      const json =
-        JSON.stringify({
-          sessionId: "raw",
-          updatedAt: 1,
-          previousSessionId: "historical",
-          label: "escaped\u0000日本語🦞",
-        }) + suffix;
-      insertEntry(database, key, "raw", json);
-      // Compare the actual full-reader contract, including older Node TEXT bindings.
-      const full = readSessionEntryStore(database, { allowCanonicalRepair: true });
-      const fullEntry = full[key];
-      expect(readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set() })).toEqual(
-        full,
-      );
-      expect([...readReferencedSessionIds(database)].toSorted()).toEqual(
-        fullEntry ? ["historical", "raw"] : ["raw"],
-      );
-      expect(readSessionEntryCount(database)).toBe(Object.keys(full).length);
-      expect([...iterateSessionEntryKeys(database)]).toEqual(Object.keys(full));
-      if (fullEntry) {
-        expect(readExactSessionEntryRow(database, key, "list")?.entry).toEqual(fullEntry);
-      } else {
-        expect(() => readExactSessionEntryRow(database, key)).toThrow(
-          "invalid persisted session row",
+      ["literal NUL", "\u0000", undefined],
+      ["literal NUL and suffix", "\u0000garbage", undefined],
+      ["valid escaped NUL", "", undefined],
+      ["raw noncharacters", "", "noncharacters"],
+      ["raw high surrogate", "", "high"],
+      ["raw low surrogate", "", "low"],
+      ["raw noncharacters with NUL", "\u0000", "noncharacters"],
+      ["raw high surrogate with NUL", "\u0000", "high"],
+      ["raw low surrogate with NUL", "\u0000", "low"],
+    ] as const)(
+      "preserves %s metadata parsing and prompt projection",
+      (_name, suffix, rawLabel) => {
+        const database = openDatabase(encoding);
+        const key = "agent:main:survivor";
+        const prompt = "unused saved prompt".repeat(32);
+        const json =
+          JSON.stringify({
+            sessionId: "raw",
+            updatedAt: 1,
+            previousSessionId: "historical",
+            label: rawLabel ? "RAW_LABEL" : "escaped\u0000日本語🦞",
+            skillsSnapshot: { prompt, skills: [] },
+          }) + suffix;
+        let stored: string | Buffer = json;
+        if (rawLabel) {
+          const bytes = {
+            noncharacters: {
+              "UTF-8": "efbfbeefbfbf",
+              "UTF-16le": "feffffff",
+              "UTF-16be": "fffeffff",
+            },
+            high: { "UTF-8": "eda080", "UTF-16le": "00d8", "UTF-16be": "d800" },
+            low: { "UTF-8": "edb080", "UTF-16le": "00dc", "UTF-16be": "dc00" },
+          }[rawLabel][encoding];
+          const encode = (value: string) => {
+            const buffer = Buffer.from(value, encoding === "UTF-8" ? "utf8" : "utf16le");
+            return encoding === "UTF-16be" ? buffer.swap16() : buffer;
+          };
+          const marker = json.indexOf("RAW_LABEL");
+          stored = Buffer.concat([
+            encode(json.slice(0, marker)),
+            Buffer.from(bytes, "hex"),
+            encode(json.slice(marker + "RAW_LABEL".length)),
+          ]);
+        }
+        insertEntry(database, key, "raw", stored);
+        const storedBytes = database.db.prepare(
+          "SELECT hex(entry_json) AS bytes FROM session_nodes",
         );
-        expect(() => readExactSessionEntryRow(database, key, "list")).toThrow(
-          "invalid persisted session row",
+        const bytesBefore = storedBytes.get()?.bytes;
+        // Compare the actual full-reader contract, including older Node TEXT bindings.
+        const full = readSessionEntryStore(database, { allowCanonicalRepair: true });
+        const fullEntry = full[key];
+        const metadata = fullEntry ? { ...fullEntry } : undefined;
+        if (metadata) {
+          delete metadata.skillsSnapshot;
+          // SQLite's JSON projection normalizes raw UTF-16 noncharacters; full TEXT reads retain them.
+          if (rawLabel === "noncharacters" && encoding !== "UTF-8" && !suffix) {
+            metadata.label = "\uFFFD\uFFFD";
+          }
+        }
+        expect(readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set() })).toEqual(
+          metadata ? { [key]: metadata } : {},
         );
-      }
-      expect(
-        readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set([key]) }),
-      ).toEqual({});
-      expect([...readReferencedSessionIds(database, new Set([key]))]).toEqual([]);
-    });
+        expect([...readReferencedSessionIds(database)].toSorted()).toEqual(
+          fullEntry ? ["historical", "raw"] : ["raw"],
+        );
+        expect(readSessionEntryCount(database)).toBe(Object.keys(full).length);
+        expect([...iterateSessionEntryKeys(database)]).toEqual(Object.keys(full));
+        if (fullEntry) {
+          const listed = readExactSessionEntryRow(database, key, "list");
+          expect(listed?.entry).toEqual(metadata);
+          if (!suffix) {
+            expect(listed?.row.entry_json).not.toContain(prompt);
+          }
+        } else {
+          expect(() => readExactSessionEntryRow(database, key)).toThrow(
+            "invalid persisted session row",
+          );
+          expect(() => readExactSessionEntryRow(database, key, "list")).toThrow(
+            "invalid persisted session row",
+          );
+        }
+        expect(
+          readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set([key]) }),
+        ).toEqual({});
+        expect([...readReferencedSessionIds(database, new Set([key]))]).toEqual([]);
+        expect(storedBytes.get()?.bytes).toBe(bytesBefore);
+      },
+    );
   });
 
   it.each([

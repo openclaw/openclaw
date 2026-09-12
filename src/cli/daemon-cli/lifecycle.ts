@@ -5,6 +5,10 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  assertGatewayServiceFallbackAllowed,
+} from "../../daemon/service-update-authority.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   findInstalledSystemdGatewayScope,
@@ -480,6 +484,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     fail(NON_INTERACTIVE_GATEWAY_STOP_MESSAGE);
     return;
   }
+  assertGatewayServiceUpdateCurrent();
   assertGatewayServiceMutationAllowed("stop the gateway");
   const service = resolveGatewayService();
   return await runServiceStop({
@@ -501,6 +506,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
           return { result: "stopped" };
         }
       }
+      assertGatewayServiceFallbackAllowed("unmanaged stop");
       // An unmanaged run loop keeps its lock port across config edits, so use it
       // for discovery the way restart already does; otherwise a valid port
       // override makes the running gateway look like it is already stopped.
@@ -525,9 +531,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     throw new Error("--skip-deferral requires --safe");
   }
   if (isGatewayExternallySupervised()) {
+    assertGatewayServiceFallbackAllowed("external-supervisor restart");
     return await runExternalSupervisorRestart(opts);
   }
   if (opts.safe) {
+    assertGatewayServiceFallbackAllowed("safe RPC restart");
     return await runSafeGatewayRestart(opts);
   }
   const jsonOutput = Boolean(opts.json);
@@ -590,6 +598,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           return result;
         },
     onNotLoaded: async () => {
+      assertGatewayServiceFallbackAllowed("unmanaged restart");
       if (preserveDefinition) {
         return null;
       }
@@ -622,7 +631,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return null;
     },
-    postRestartCheck: async ({ warnings, fail, stdout, warn }) => {
+    postRestartCheck: async ({ warnings, fail, stdout, warn, activationAccepted: accepted }) => {
+      let activationAccepted = accepted;
       if (restartedWithoutServiceManager) {
         // Unmanaged restarts have no service-manager state to watch; use listener health and,
         // when targeted delivery required it, prove the previous lock owner was replaced.
@@ -656,6 +666,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         fail(
           `Gateway restart timed out after ${unmanagedRestartWaitSeconds}s waiting for health checks.`,
           [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+          activationAccepted ? "restart-health-failed" : undefined,
         );
         throw new Error("unreachable after gateway restart health failure");
       }
@@ -693,6 +704,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }
+        activationAccepted = true;
         health = await waitForHealthy();
       }
 
@@ -726,10 +738,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         warnings.push(...diagnostics);
       }
 
-      fail(failure.failMessage, [
-        formatCliCommand("openclaw gateway status --deep"),
-        formatCliCommand("openclaw doctor"),
-      ]);
+      fail(
+        failure.failMessage,
+        [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+        activationAccepted ? "restart-health-failed" : undefined,
+      );
       throw new Error("unreachable after gateway restart failure");
     },
   });

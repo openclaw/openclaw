@@ -38,6 +38,8 @@ type SessionCatalogRequestEntrySnapshot = {
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
+  /** Bound one delivery's lookups; provider planning retains the full snapshot. */
+  sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
   const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
   const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
@@ -48,6 +50,21 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   let catalogEntries:
     | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
     | undefined;
+  const entryAgentId = (sessionKey: string) =>
+    resolveAgentIdFromSessionKey(
+      sessionKey,
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
+    );
+  const selectedKeysByAgentId = params.sessionKeys ? new Map<string, Set<string>>() : undefined;
+  if (selectedKeysByAgentId) {
+    for (const sessionKey of new Set(params.sessionKeys)) {
+      const agentId = entryAgentId(sessionKey);
+      const keys = selectedKeysByAgentId.get(agentId) ?? new Set<string>();
+      keys.add(sessionKey);
+      keys.add(resolveStoredSessionKeyForAgentStore({ cfg: params.cfg, agentId, sessionKey }));
+      selectedKeysByAgentId.set(agentId, keys);
+    }
+  }
 
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
     const agentId = normalizeAgentId(rawAgentId);
@@ -57,7 +74,14 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
       entriesByAgentId.set(
         agentId,
-        listSessionEntriesReadOnly({ agentId, clone: false, projection: "list" }),
+        listSessionEntriesReadOnly({
+          agentId,
+          clone: false,
+          projection: "list",
+          ...(selectedKeysByAgentId
+            ? { sessionKeys: [...(selectedKeysByAgentId.get(agentId) ?? [])] }
+            : {}),
+        }),
       );
     }
     return entriesByAgentId.get(agentId) ?? [];
@@ -91,10 +115,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   };
 
   const entryForSession = (sessionKey: string): SessionEntry | undefined => {
-    const agentId = resolveAgentIdFromSessionKey(
-      sessionKey,
-      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
-    );
+    const agentId = entryAgentId(sessionKey);
     const index = entryIndexForAgent(agentId);
     const canonicalKey = resolveStoredSessionKeyForAgentStore({
       cfg: params.cfg,

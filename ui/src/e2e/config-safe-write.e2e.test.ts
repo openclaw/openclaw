@@ -391,12 +391,13 @@ suite.define(() => {
         const patchedResponse = configResponse(patchedConfig, "snapshot-2", "snapshot-1");
         await gateway.setMethodResponse("config.get", patchedResponse);
         await gateway.resolveDeferred("config.patch", {
+          config: patchedConfig,
           hash: "snapshot-2",
           ok: true,
         });
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBe(configGetsBeforePatch + 1);
+          .toBe(configGetsBeforePatch);
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
         await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
         await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
@@ -513,7 +514,7 @@ suite.define(() => {
     );
   });
 
-  it("refreshes config after reconnect and client replacement before the next save", async () => {
+  it("config.set refreshes config after reconnect and client replacement before the next save", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -578,8 +579,8 @@ suite.define(() => {
         );
         const configGetsBeforeReplacement = (await gateway.getRequests("config.get")).length;
         const connectsBeforeReplacement = (await gateway.getRequests("connect")).length;
-        await page.getByRole("textbox", { name: "WebSocket URL" }).fill("ws://127.0.0.1:19999");
-        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await page.getByRole("textbox", { name: "Gateway URL" }).fill("ws://127.0.0.1:19999");
+        await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
         await expect
           .poll(async () => (await gateway.getRequests("connect")).length)
           .toBe(connectsBeforeReplacement + 1);
@@ -600,7 +601,10 @@ suite.define(() => {
           tools: {},
         });
         expect(await gateway.getRequests("config.set")).toHaveLength(setsBeforeEdit + 1);
-        await gateway.resolveDeferred("config.set", { hash: "snapshot-saved" });
+        await gateway.resolveDeferred("config.set", {
+          config: JSON.parse(String(save.raw)),
+          hash: "snapshot-saved",
+        });
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
@@ -609,7 +613,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
+  it("config.set keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -703,7 +707,10 @@ suite.define(() => {
             "hmac-sha256:v1:opaque-next",
           ),
         );
-        await gateway.resolveDeferred("config.set", { hash: "hmac-sha256:v1:opaque-next" });
+        await gateway.resolveDeferred("config.set", {
+          config: JSON.parse(String(save.raw)),
+          hash: "hmac-sha256:v1:opaque-next",
+        });
         await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
       },
     );

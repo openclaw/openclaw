@@ -2,6 +2,7 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -1157,10 +1158,10 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      currentRollup.version = 2;
+      currentRollup.version = 3;
       currentRollup.rollup.untimestamped.totals.totalTokens = 9_999;
       expect(
-        writeSessionCostUsageRollup({
+        await writeSessionCostUsageRollup({
           agentId: "main",
           rollupId: sessionFile,
           previousValueJson: currentRow.valueJson,
@@ -1206,7 +1207,7 @@ describe("session cost usage", () => {
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
-      expect(appendedRollup.version).toBe(3);
+      expect(appendedRollup.version).toBe(4);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],
@@ -1225,7 +1226,7 @@ describe("session cost usage", () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-incremental.jsonl");
-    const assistantEntry = (timestamp: string, totalTokens: number) =>
+    const assistantEntry = (timestamp: string, totalTokens: number, content = "") =>
       JSON.stringify({
         type: "message",
         timestamp,
@@ -1233,6 +1234,7 @@ describe("session cost usage", () => {
           role: "assistant",
           provider: "openai",
           model: "gpt-5.5",
+          content,
           usage: {
             input: totalTokens,
             output: 0,
@@ -1244,7 +1246,7 @@ describe("session cost usage", () => {
     await fs.writeFile(
       sessionFile,
       [
-        assistantEntry("2026-02-05T12:00:00.000Z", 10),
+        assistantEntry("2026-02-05T12:00:00.000Z", 10, "🦞".repeat(32 * 1024)),
         assistantEntry("2026-02-05T12:01:00.000Z", 20),
       ].join("\n"),
       "utf-8",
@@ -1947,15 +1949,18 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const lock = acquireSessionCostUsageRefreshLock("main");
+      const lock = await acquireSessionCostUsageRefreshLock("main");
       expect(lock.acquired).toBe(true);
-      const releaseTimer = setTimeout(lock.release, 40);
+      const released = delay(40).then(lock.release);
       try {
-        const summary = await loadSessionCostSummary({ agentId: "main", sessionFile });
+        const [summary] = await Promise.all([
+          loadSessionCostSummary({ agentId: "main", sessionFile }),
+          released,
+        ]);
         expect(summary?.totalTokens).toBe(12);
       } finally {
-        clearTimeout(releaseTimer);
-        lock.release();
+        await released;
+        await lock.release();
       }
     });
   });
@@ -2305,11 +2310,6 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       const sessions = await discoverAllSessions();
       expect(sessions.map((session) => session.sessionId)).toEqual(["sess-deleted", "sess-reset"]);
-      expect(
-        sessions
-          .map((session) => session.firstUserMessage)
-          .toSorted((a, b) => String(a).localeCompare(String(b))),
-      ).toEqual(["deleted transcript", "reset transcript"]);
     });
   });
 
@@ -2353,7 +2353,6 @@ describe("session cost usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.sessionId).toBe("sess-shared");
       expect(sessions[0]?.sessionFile).toContain(".jsonl.deleted.");
-      expect(sessions[0]?.firstUserMessage).toBe("newer archive");
     });
   });
 
@@ -2394,40 +2393,6 @@ describe("session cost usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.sessionId).toBe("sess-live");
       expect(sessions[0]?.sessionFile).toBe(activePath);
-      expect(sessions[0]?.firstUserMessage).toBe("active transcript");
-    });
-  });
-
-  it("keeps discovered first-message text on a UTF-16 boundary", async () => {
-    const root = await makeSessionCostRoot("discover-utf16-first-message");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const content = `${"a".repeat(99)}🚀tail`;
-    const fixtures = [
-      { sessionId: "sess-string", content },
-      { sessionId: "sess-block", content: [{ type: "text", text: content }] },
-    ];
-    for (const fixture of fixtures) {
-      await fs.writeFile(
-        path.join(sessionsDir, `${fixture.sessionId}.jsonl`),
-        JSON.stringify({
-          type: "message",
-          timestamp: "2026-02-21T17:47:00.000Z",
-          message: { role: "user", content: fixture.content },
-        }),
-        "utf-8",
-      );
-    }
-
-    await withStateDir(root, async () => {
-      const messages = new Map(
-        (await discoverAllSessions()).map((session) => [
-          session.sessionId,
-          session.firstUserMessage,
-        ]),
-      );
-      expect(messages.get("sess-string")).toBe("a".repeat(99));
-      expect(messages.get("sess-block")).toBe("a".repeat(99));
     });
   });
 
@@ -2743,6 +2708,42 @@ describe("session cost usage", () => {
     expect(logs?.[0]?.content).toBe("hello there");
   });
 
+  it.each([
+    {
+      name: "indented message-ID code",
+      content: "    [message_id: literal]",
+      expected: "[message_id: literal]",
+    },
+    {
+      name: "fenced code after a generated hint",
+      content: "[message_id: generated]\n```text\n[message_id: literal]\n```",
+      expected: "```text\n[message_id: literal]\n```",
+    },
+    {
+      name: "visible text after internal context",
+      content:
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nvisible user text",
+      expected: "visible user text",
+    },
+  ])("preserves $name in user usage logs", async ({ content, expected }) => {
+    const root = await makeSessionCostRoot("logs-user-display");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "user", content },
+      }),
+      "utf-8",
+    );
+    await withStateDir(root, async () => {
+      const logs = await loadSessionLogs({ sessionFile });
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toBe(expected);
+    });
+  });
+
   it("does not split surrogate pairs when truncating session log content", async () => {
     const root = await makeSessionCostRoot("logs-utf16");
     const sessionFile = path.join(root, "session.jsonl");
@@ -3053,58 +3054,61 @@ describe("session cost usage", () => {
     expect(series?.points.map((point) => point.cumulativeCost)).toEqual([0.01, 0.03]);
   });
 
-  it("preserves totals and cumulative values when downsampling timeseries", async () => {
-    const root = await makeSessionCostRoot("timeseries-downsample");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-downsample.jsonl");
-
-    const entries = Array.from({ length: 10 }, (_, i) => {
-      const idx = i + 1;
-      return {
+  it.each([3, 2.5, 0.5])(
+    "preserves sampled fields, stable ties, and cumulative values with maxPoints=%s",
+    async (maxPoints) => {
+      const root = await makeSessionCostRoot("timeseries-downsample");
+      const sessionFile = path.join(root, "session.jsonl");
+      // The tied points cross a bucket boundary and must retain transcript order.
+      const entries = [8, 3, 1, 5, 2, 4, 10, 6, 9, 7].map((idx) => ({
         type: "message",
-        timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx, 0)).toISOString(),
+        timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx === 5 ? 4 : idx)).toISOString(),
         message: {
           role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
           usage: {
             input: idx,
             output: idx * 2,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: idx * 3,
-            cost: { total: idx * 0.001 },
+            cacheRead: idx * 3,
+            cacheWrite: idx * 4,
+            totalTokens: idx * 11,
+            cost: { total: idx * 0.001, totalOrigin: "provider-billed" },
           },
         },
-      };
-    });
+      }));
+      await fs.writeFile(
+        sessionFile,
+        entries.map((entry) => JSON.stringify(entry)).join("\n"),
+        "utf-8",
+      );
 
-    await fs.writeFile(
-      sessionFile,
-      entries.map((entry) => JSON.stringify(entry)).join("\n"),
-      "utf-8",
-    );
-
-    const timeseries = await loadSessionUsageTimeSeries({
-      sessionFile,
-      maxPoints: 3,
-    });
-
-    const series = requireValue(timeseries, "session usage timeseries missing");
-    expect(series.points).toHaveLength(3);
-
-    const points = series.points;
-    const totalTokens = points.reduce((sum, point) => sum + point.totalTokens, 0);
-    const totalCost = points.reduce((sum, point) => sum + point.cost, 0);
-    const lastPoint = points[points.length - 1];
-
-    // Full-series totals: sum(1..10)*3 = 165 tokens, sum(1..10)*0.001 = 0.055 cost.
-    expect(totalTokens).toBe(165);
-    expect(totalCost).toBeCloseTo(0.055, 8);
-    expect(lastPoint?.cumulativeTokens).toBe(165);
-    expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
-  });
+      const series = requireValue(
+        await loadSessionUsageTimeSeries({ sessionFile, maxPoints }),
+        "session usage timeseries missing",
+      );
+      // Chronological groups are [1,2,3,5], [4,6,7,8], [9,10], or one complete bucket.
+      const expected =
+        maxPoints < 1
+          ? [{ weight: 55, cumulativeWeight: 55, minute: 10 }]
+          : [
+              { weight: 11, cumulativeWeight: 11, minute: 4 },
+              { weight: 25, cumulativeWeight: 36, minute: 8 },
+              { weight: 19, cumulativeWeight: 55, minute: 10 },
+            ];
+      expect(series.points).toEqual(
+        expected.map(({ weight, cumulativeWeight, minute }) => ({
+          timestamp: Date.UTC(2026, 1, 12, 10, minute),
+          input: weight,
+          output: weight * 2,
+          cacheRead: weight * 3,
+          cacheWrite: weight * 4,
+          totalTokens: weight * 11,
+          cost: expect.closeTo(weight * 0.001, 12),
+          cumulativeTokens: cumulativeWeight * 11,
+          cumulativeCost: expect.closeTo(cumulativeWeight * 0.001, 12),
+        })),
+      );
+    },
+  );
 
   it("returns empty points for zero, negative, and non-finite maxPoints", async () => {
     const root = await makeSessionCostRoot("timeseries-invalid-max-points");

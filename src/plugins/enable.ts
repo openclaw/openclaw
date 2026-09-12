@@ -1,4 +1,5 @@
 // Resolves plugin enablement state from config and channel context.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
@@ -11,6 +12,26 @@ import { setPluginEnabledInConfig } from "./toggle-config.js";
 type PluginEnableOptions = {
   updateChannelConfig?: boolean;
 };
+
+/** Keep install policy while staging a plugin whose required settings are not configured yet. */
+export function prepareConfigForDisabledInstall(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  const entry = config.plugins?.entries?.[pluginId];
+  const policy = isRecord(entry) ? { ...entry } : {};
+  delete policy.config;
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: { ...policy, enabled: false },
+      },
+    },
+  };
+}
 
 /** Result of enabling a plugin in config. */
 export type PluginEnableResult = {

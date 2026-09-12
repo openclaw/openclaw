@@ -398,11 +398,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       const targetName = pointerElement?.closest<
         HTMLElementTagNameMap["openclaw-board-widget-cell"]
       >("openclaw-board-widget-cell")?.widget?.name;
-      const targetCell = layout(items).find((rect) => rect.name === targetName) ?? {
+      this.previewItems = previewDrag(items, gesture.name, {
+        name: targetName,
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
-      };
-      this.previewItems = previewDrag(items, gesture.name, targetCell).items;
+      });
       return;
     }
 
@@ -637,7 +637,10 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     const activeTabId = activeTab?.tabId ?? this.activeTabId;
     const widgets = activeTab ? orderedWidgets(snapshot, activeTab.tabId) : [];
     return html`
-      <section class="board-view" aria-label=${t("board.label")}>
+      <section
+        class=${`board-view ${widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS ? "board-view--single-full-width" : ""}`}
+        aria-label=${t("board.label")}
+      >
         ${renderBoardTabs({
           tabs,
           activeTabId,

@@ -129,6 +129,7 @@ const presentationMessageSchema = Type.Object(
 );
 
 function buildSendSchema(options: {
+  includeClawHub?: boolean;
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
@@ -194,6 +195,21 @@ function buildSendSchema(options: {
       }),
     ),
   };
+  if (options.includeClawHub) {
+    props.clawhub = Type.Optional(
+      Type.Object(
+        {
+          query: Type.String({ minLength: 1, maxLength: 160 }),
+          kind: Type.Optional(stringEnum(["plugin", "skill"])),
+        },
+        {
+          additionalProperties: false,
+          description:
+            "Search official ClawHub capabilities and show install or Installed cards in the current Control UI conversation. Omit kind to check plugins, then skills. This presents options; the user chooses installation.",
+        },
+      ),
+    );
+  }
   if (options.includePresentation) {
     props.presentation = Type.Optional(presentationMessageSchema);
   }

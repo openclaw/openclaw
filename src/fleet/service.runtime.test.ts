@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
@@ -86,7 +87,10 @@ function createContainerMock(
       runningInspection({
         state: start ? "running" : "created",
         running: start,
-        labels: fleetLabels(profile.tenantId, profile.attemptId),
+        labels: {
+          ...fleetLabels(profile.tenantId, profile.attemptId),
+          "openclaw.fleet.env-keys": profile.userEnvironmentKeys.toSorted().join(","),
+        },
         environment: { ...profile.environment },
         containerId: `container-${profile.attemptId}`,
         imageId: `sha256:${profile.attemptId}`,
@@ -228,6 +232,7 @@ describe("fleet service", () => {
       OPENCLAW_GATEWAY_TOKEN: "gw-token",
       FEATURE: "a=b",
     });
+    expect(profile?.userEnvironmentKeys).toEqual(["FEATURE"]);
 
     const dataDir = path.join(root, "fleet", "cells", "acme");
     const config = JSON.parse(await fs.readFile(path.join(dataDir, "openclaw.json"), "utf8")) as {
@@ -553,12 +558,12 @@ describe("fleet service", () => {
     await service.create({ tenant: "acme", gatewayToken: "token" });
     containers.inspect.mockResolvedValue(runningInspection());
 
-    await expect(
-      service.logs({ tenant: "acme", follow: true, tail: 100, since: "10m" }),
-    ).resolves.toBeUndefined();
+    const logOptions = { tenant: "acme", follow: true, timestamps: true, tail: 100, since: "10m" };
+    await expect(service.logs(logOptions)).resolves.toBeUndefined();
 
     expect(containers.logs).toHaveBeenCalledWith("docker", "container-id", {
       follow: true,
+      timestamps: true,
       tail: 100,
       since: "10m",
       redactValues: ["old-token"],
@@ -596,7 +601,26 @@ describe("fleet service", () => {
     expect(containers.logs).not.toHaveBeenCalled();
   });
 
-  it("carries inspected environment and resources through upgrade", async () => {
+  it.each([
+    {
+      name: "generated previous default",
+      cache: "/home/node/.cache",
+      keys: "FEATURE",
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit matching default",
+      cache: "/home/node/.openclaw/cache",
+      keys: "FEATURE,XDG_CACHE_HOME",
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit previous default",
+      cache: "/home/node/.cache",
+      keys: "FEATURE,XDG_CACHE_HOME",
+      expectedCache: "/home/node/.cache",
+    },
+  ])("carries resources and $name through upgrade", async ({ cache, keys, expectedCache }) => {
     const containers = createContainerMock();
     const service = createFleetService({
       env,
@@ -609,10 +633,22 @@ describe("fleet service", () => {
     containers.run.mockClear();
     // The disk limit replays from the fleet label because Podman inspect has no
     // HostConfig.StorageOpt; the label is the cross-runtime carrier.
-    const diskLabels = { ...fleetLabels(), "openclaw.fleet.disk-limit": "10g" };
+    const diskLabels = {
+      ...fleetLabels(),
+      "openclaw.fleet.disk-limit": "10g",
+      "openclaw.fleet.env-keys": keys,
+    };
+    const upgradedEnvironment = {
+      ...runningInspection().environment,
+      XDG_CACHE_HOME: cache,
+    };
     containers.inspect
-      .mockResolvedValue(runningInspection({ labels: diskLabels }))
-      .mockResolvedValueOnce(runningInspection({ labels: diskLabels }))
+      .mockResolvedValue(
+        runningInspection({ labels: diskLabels, environment: upgradedEnvironment }),
+      )
+      .mockResolvedValueOnce(
+        runningInspection({ labels: diskLabels, environment: upgradedEnvironment }),
+      )
       .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
 
     const result = await service.upgrade("acme", "ghcr.io/openclaw/openclaw:v2");
@@ -640,7 +676,9 @@ describe("fleet service", () => {
         HOME: "/home/node",
         OPENCLAW_GATEWAY_TOKEN: "old-token",
         FEATURE: "enabled",
+        XDG_CACHE_HOME: expectedCache,
       },
+      userEnvironmentKeys: keys.split(","),
     });
     expect(profile?.environment).not.toHaveProperty("NODE_VERSION");
     expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:v2");
@@ -954,24 +992,26 @@ describe("fleet service", () => {
 
   it("serializes same-tenant mutations across service instances", async () => {
     const containers = createContainerMock();
-    let releaseNetwork: (() => void) | undefined;
-    containers.createNetwork.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          releaseNetwork = resolve;
-        }),
-    );
+    const networkStarted = createDeferred();
+    const releaseNetwork = createDeferred();
+    containers.createNetwork.mockImplementation(async () => {
+      networkStarted.resolve();
+      await releaseNetwork.promise;
+    });
     const first = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     const second = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
 
     const creating = first.create({ tenant: "acme", gatewayToken: "token" });
-    await vi.waitFor(() => expect(containers.createNetwork).toHaveBeenCalledOnce());
-    await expect(second.create({ tenant: "acme", gatewayToken: "other-token" })).rejects.toThrow(
-      /fleet create.*already running/iu,
-    );
-
-    releaseNetwork?.();
-    await expect(creating).resolves.toMatchObject({ tenant: "acme" });
+    try {
+      await networkStarted.promise;
+      expect(containers.createNetwork).toHaveBeenCalledOnce();
+      await expect(second.create({ tenant: "acme", gatewayToken: "other-token" })).rejects.toThrow(
+        /fleet create.*already running/iu,
+      );
+    } finally {
+      releaseNetwork.resolve();
+      await expect(creating).resolves.toMatchObject({ tenant: "acme" });
+    }
   });
 
   it("releases a failed operation lease for a retry", async () => {

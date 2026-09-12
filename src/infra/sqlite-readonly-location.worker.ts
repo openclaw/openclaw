@@ -1,7 +1,8 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { formatSqliteErrorCodeSuffix } from "./sqlite-error-diagnostics.js";
 import {
-  SQLITE_READONLY_CHILD_ARG,
+  inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
@@ -12,7 +13,8 @@ import {
 async function runWorker(): Promise<void> {
   const mode = process.argv[3];
   const pathname = process.argv[4];
-  if ((mode !== "sync" && mode !== "async") || !pathname) {
+  const stagingRoot = process.argv[5];
+  if ((mode !== "sync" && mode !== "async" && mode !== "schema-header") || !pathname) {
     process.exitCode = 1;
     process.stdout.write(
       JSON.stringify({
@@ -23,10 +25,15 @@ async function runWorker(): Promise<void> {
     return;
   }
   try {
+    if (mode === "schema-header") {
+      const header = await inspectSqliteSchemaHeaderInProcess(pathname, stagingRoot);
+      process.stdout.write(JSON.stringify({ ok: true, header }));
+      return;
+    }
     const prepared =
       mode === "sync"
-        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
-        : await prepareSqliteReadOnlyLocationInProcess(pathname);
+        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
+        : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     process.stdout.write(JSON.stringify({ ok: true, location: prepared.location }));
   } catch (error) {
     process.exitCode = 1;

@@ -248,22 +248,24 @@ function writePatchedRuntimeFixture(bundling = "default") {
     sourceManifest.dependencies["unpatched-sibling"] = "1.0.0";
     registryVersions.push(packRegistryDependency("unpatched-sibling"));
   }
-  if (bundling === "range-policy") {
+  if (["range-policy", "locked-optional"].includes(bundling)) {
     delete sourceManifest.dependencies["unpatched-sibling"];
     sourceManifest.overrides = {
       "local-runtime-dep@^1.0.0": { ".": "^1.0.0", "unpatched-sibling": "1.0.0" },
     };
     registryVersions.push(packRegistryDependency("unpatched-sibling"));
-    writeJsonFile(join(packageDir, "deps", "unpatched-sibling", "package.json"), {
-      name: "unpatched-sibling",
-      version: "1.1.0",
-      main: "index.js",
-    });
-    writeFileText(
-      join(packageDir, "deps", "unpatched-sibling", "index.js"),
-      "module.exports = 4;\n",
-    );
-    registryVersions.push(packRegistryDependency("unpatched-sibling"));
+    if (bundling === "range-policy") {
+      writeJsonFile(join(packageDir, "deps", "unpatched-sibling", "package.json"), {
+        name: "unpatched-sibling",
+        version: "1.1.0",
+        main: "index.js",
+      });
+      writeFileText(
+        join(packageDir, "deps", "unpatched-sibling", "index.js"),
+        "module.exports = 4;\n",
+      );
+      registryVersions.push(packRegistryDependency("unpatched-sibling"));
+    }
   }
   if (optionalDirect) {
     sourceManifest.dependencies["local-runtime-dep"] = "0.0.0";
@@ -277,7 +279,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
   writeJsonFile(join(packageDir, "package.json"), sourceManifest);
   writeFileText(
     join(packageDir, "dist", "index.js"),
-    bundling === "range-policy"
+    ["range-policy", "locked-optional"].includes(bundling)
       ? 'import dep from "local-runtime-dep"; export default dep.value; export const sibling = dep.child;\n'
       : 'export { default } from "local-runtime-dep";\n' +
           (bundling.startsWith("nested-")
@@ -290,7 +292,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
     name: "local-runtime-dep",
     version: "1.0.0",
     main: "index.js",
-    ...(bundling === "range-policy"
+    ...(["range-policy", "locked-optional"].includes(bundling)
       ? { optionalDependencies: { "unpatched-sibling": "^1.0.0" } }
       : {}),
     ...(bundling === "skipped-optional"
@@ -300,10 +302,9 @@ function writePatchedRuntimeFixture(bundling = "default") {
       ? { devEngines: { packageManager: { name: "pnpm", version: "11.9.0", onFail: "error" } } }
       : {}),
   });
-  const installedSource =
-    bundling === "range-policy"
-      ? 'module.exports = {value: 2, child: require("unpatched-sibling")};\n'
-      : "module.exports = 2;\n";
+  const installedSource = ["range-policy", "locked-optional"].includes(bundling)
+    ? 'module.exports = {value: 2, child: require("unpatched-sibling")};\n'
+    : "module.exports = 2;\n";
   writeFileText(join(installedDir, "index.js"), installedSource);
   const patch = `--- a/index.js\n+++ b/index.js\n@@ -1 +1 @@\n-module.exports = 1;\n+${installedSource}`;
   const patchHash = createHash("sha256").update(patch).digest("hex");
@@ -585,59 +586,67 @@ describe("plugin npm package manifest staging", () => {
     expect(generateCalls).toBe(1);
   });
 
-  it("overlays generated channel configs while packing and restores source manifest", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
-    const packageDir = join(repoDir, "extensions", "twitch");
-    mkdirSync(packageDir, { recursive: true });
-    const sourceManifest = {
-      id: "twitch",
-      channels: ["twitch"],
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-    };
-    writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);
-    writeGeneratedChannelMetadata(repoDir);
+  it.each([undefined, "providerCatalogEntry", "capabilityCatalogEntry"] as const)(
+    "overlays manifest-only channel configs and restores catalog metadata (%s)",
+    (catalogField) => {
+      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
+      const packageDir = join(repoDir, "extensions", "twitch");
+      mkdirSync(packageDir, { recursive: true });
+      const sourceManifest = {
+        id: "twitch",
+        ...(catalogField ? { [catalogField]: "./catalog.ts" } : {}),
+        channels: ["twitch"],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      };
+      writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);
+      writeGeneratedChannelMetadata(repoDir);
 
-    const resolved = resolveAugmentedPluginNpmManifest({
-      repoRoot: repoDir,
-      packageDir,
-    });
-    expect(resolved.changed).toBe(true);
-    expect(resolved.manifest).toEqual({
-      id: "twitch",
-      channels: ["twitch"],
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      channelConfigs: {
-        twitch: {
-          description: "Twitch chat integration",
-          label: "Twitch",
-          schema: {
-            type: "object",
-            required: ["channelName"],
-            properties: {
-              channelName: { type: "string" },
+      const resolved = resolveAugmentedPluginNpmManifest({
+        repoRoot: repoDir,
+        packageDir,
+      });
+      expect(resolved.changed).toBe(true);
+      expect(resolved.manifest).toEqual({
+        ...sourceManifest,
+        channelConfigs: {
+          twitch: {
+            description: "Twitch chat integration",
+            label: "Twitch",
+            schema: {
+              type: "object",
+              required: ["channelName"],
+              properties: {
+                channelName: { type: "string" },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    const originalText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
-    withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
-      const stagedManifest = JSON.parse(
-        readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8"),
+      const originalText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
+      const result = withAugmentedPluginNpmManifestForPackage(
+        { repoRoot: repoDir, packageDir },
+        (context) => {
+          const stagedManifest = JSON.parse(
+            readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8"),
+          );
+          expect(stagedManifest.channelConfigs.twitch.description).toBe("Twitch chat integration");
+          expect(context.packageJsonApplied).toBe(false);
+          if (catalogField) {
+            expect(stagedManifest[catalogField]).toBe("./catalog.ts");
+          }
+          return "overlay-ran";
+        },
       );
-      expect(stagedManifest.channelConfigs.twitch.description).toBe("Twitch chat integration");
-    });
-    expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalText);
-  });
+      expect(result).toBe("overlay-ran");
+      expect(existsSync(join(packageDir, "package.json"))).toBe(false);
+      expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalText);
+    },
+  );
 
   it("overlays package-local runtime metadata while packing and restores source package json", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-");
@@ -737,7 +746,7 @@ describe("plugin npm package manifest staging", () => {
     { name: "missing specifier", partial: { exportName: "hasState" } },
     { name: "blank specifier", partial: { specifier: " \t", exportName: "hasState" } },
   ])(
-    "packs and loads both channel-state probes from one package artifact ($name)",
+    "packs the plugin icon and loads both channel-state probes from one artifact ($name)",
     ({ partial }) => {
       const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-state-runtime-");
       const packageDir = writePublishablePluginPackage(repoDir);
@@ -773,6 +782,8 @@ describe("plugin npm package manifest staging", () => {
       );
       writeFileText(join(packageDir, "dist", "index.cjs"), "module.exports = {};\n");
       writeFileText(join(packageDir, "dist", "setup-entry.cjs"), "module.exports = {};\n");
+      writeFileText(join(packageDir, "assets", "icon.png"), "portable-package-icon");
+      writeFileText(join(packageDir, "assets", "design-source.svg"), "unpublished-design");
       writeFileText(
         join(packageDir, "dist", "configured-state.cjs"),
         "exports.hasConfiguredChannelState = () => true;\n",
@@ -830,6 +841,8 @@ describe("plugin npm package manifest staging", () => {
         const packedFiles = packedPackage.files.map((file) => file.path);
         expect(packedFiles).toContain("dist/configured-state.cjs");
         expect(packedFiles).toContain("dist/auth-presence.cjs");
+        expect(packedFiles).toContain("assets/icon.png");
+        expect(packedFiles).not.toContain("assets/design-source.svg");
         expect(packedFiles).not.toContain("configured-state.ts");
         expect(packedFiles).not.toContain("auth-presence.ts");
 
@@ -844,6 +857,9 @@ describe("plugin npm package manifest staging", () => {
         expect(extract.status, extract.stderr).toBe(0);
 
         const packageRoot = join(consumerDir, "package");
+        expect(readFileSync(join(packageRoot, "assets", "icon.png"), "utf8")).toBe(
+          "portable-package-icon",
+        );
         if (partial) {
           const channel = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
             .openclaw.channel;
@@ -923,111 +939,126 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     },
   );
 
-  it.each(["default destination", "relative destination", "split destination", "failed command"])(
-    "preserves source dependencies while staging npm bundles with %s",
-    (scenario) => {
-      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
-      const packageDir = writePublishablePluginPackage(repoDir);
-      writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
-      writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
-      writeOptionalPlatformDependencyPackage(packageDir);
-      writeLocalDependencyPackage(packageDir, {
-        optionalDependencySpec: "file:../../deps/optional-platform-dep",
+  it.each([
+    "default destination",
+    "relative destination",
+    "split destination",
+    "failed command",
+    "ancestor optional",
+  ])("preserves source dependencies while staging npm bundles with %s", (scenario) => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeOptionalPlatformDependencyPackage(packageDir);
+    writeLocalDependencyPackage(packageDir, {
+      optionalDependencySpec: "file:../../deps/optional-platform-dep",
+    });
+    writeJsonFile(join(packageDir, "package.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
+      dependencies: { "local-runtime-dep": "file:./deps/local-runtime-dep" },
+      devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: { pluginApi: ">=2026.4.30" },
+        release: { publishToNpm: true },
+      },
+    });
+    if (scenario === "ancestor optional") {
+      writeJsonFile(join(repoDir, "node_modules", "optional-platform-dep", "package.json"), {
+        name: "optional-platform-dep",
+        version: "99.0.0",
       });
-      writeJsonFile(join(packageDir, "package.json"), {
-        name: "@openclaw/diffs",
-        version: "2026.5.3",
-        type: "module",
-        dependencies: { "local-runtime-dep": "file:./deps/local-runtime-dep" },
-        devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
-        openclaw: {
-          extensions: ["./index.ts"],
-          setupEntry: "./setup-entry.ts",
-          compat: { pluginApi: ">=2026.4.30" },
-          release: { publishToNpm: true },
-        },
-      });
-      const sourceDependencyPath = join(
+    }
+    const sourceDependencyPath = join(
+      packageDir,
+      "node_modules",
+      "local-runtime-dep",
+      "package.json",
+    );
+    const sourceVersion = '{"name":"local-runtime-dep","version":"9.0.0"}\n';
+    writeFileText(sourceDependencyPath, sourceVersion);
+    const sourceOnlyPath = join(packageDir, "node_modules", "source-only", "marker");
+    writeFileText(sourceOnlyPath, "keep\n");
+    const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+    const outputDir =
+      scenario.includes("destination") && scenario !== "default destination"
+        ? join(packageDir, "artifacts")
+        : packageDir;
+    mkdirSync(outputDir, { recursive: true });
+    const command =
+      scenario === "failed command"
+        ? [process.execPath, "-e", "console.log(process.cwd()); process.exit(7);"]
+        : [
+            "npm",
+            "pack",
+            "--json",
+            "--ignore-scripts",
+            ...(scenario === "relative destination"
+              ? ["--pack-destination=artifacts"]
+              : scenario === "split destination"
+                ? ["--pack-destination", "artifacts"]
+                : []),
+          ];
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        tsxImport,
+        fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mts", import.meta.url)),
+        "--run",
         packageDir,
-        "node_modules",
-        "local-runtime-dep",
-        "package.json",
-      );
-      const sourceVersion = '{"name":"local-runtime-dep","version":"9.0.0"}\n';
-      writeFileText(sourceDependencyPath, sourceVersion);
-      const sourceOnlyPath = join(packageDir, "node_modules", "source-only", "marker");
-      writeFileText(sourceOnlyPath, "keep\n");
-      const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
-      const outputDir =
-        scenario.includes("destination") && scenario !== "default destination"
-          ? join(packageDir, "artifacts")
-          : packageDir;
-      mkdirSync(outputDir, { recursive: true });
-      const command =
-        scenario === "failed command"
-          ? [process.execPath, "-e", "console.log(process.cwd()); process.exit(7);"]
-          : [
-              "npm",
-              "pack",
-              "--json",
-              "--ignore-scripts",
-              ...(scenario === "relative destination"
-                ? ["--pack-destination=artifacts"]
-                : scenario === "split destination"
-                  ? ["--pack-destination", "artifacts"]
-                  : []),
-            ];
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          tsxImport,
-          fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mts", import.meta.url)),
-          "--run",
-          packageDir,
-          "--",
-          ...command,
-        ],
-        {
-          cwd: repoDir,
-          encoding: "utf8",
-          env: { ...process.env, OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1" },
+        "--",
+        ...command,
+      ],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1",
+          ...(scenario === "ancestor optional"
+            ? { TMPDIR: repoDir, TMP: repoDir, TEMP: repoDir }
+            : {}),
         },
-      );
-      expect(result.status, result.stderr).toBe(scenario === "failed command" ? 7 : 0);
-      expect(readFileSync(sourceDependencyPath, "utf8")).toBe(sourceVersion);
-      expect(readFileSync(sourceOnlyPath, "utf8")).toBe("keep\n");
-      expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
-      expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
-      if (scenario === "failed command") {
-        const stagingDir = result.stdout.trim();
-        expect(stagingDir).not.toBe("");
-        expect(stagingDir).not.toBe(packageDir);
-        expect(existsSync(stagingDir)).toBe(false);
-        return;
-      }
-      const packed = parseNpmPackResult(result.stdout);
-      const tarball = join(outputDir, packed.filename);
-      expect(existsSync(tarball)).toBe(true);
-      const files = packed.files.map((entry) => entry.path);
-      expect(files).toContain("node_modules/local-runtime-dep/package.json");
-      expect(files).toContain("node_modules/optional-platform-dep/package.json");
-      expect(files.some((file) => file.includes("source-only"))).toBe(false);
-      expect(files).not.toContain("package-lock.json");
-      expect(files).not.toContain("npm-shrinkwrap.json");
-      const extract = (file: string) => {
-        const extraction = spawnSync("tar", ["-xOf", tarball, `package/${file}`], {
-          encoding: "utf8",
-        });
-        expect(extraction.status, extraction.stderr).toBe(0);
-        return JSON.parse(extraction.stdout);
-      };
-      const manifest = extract("package.json");
-      expect(manifest.bundledDependencies).toEqual(["local-runtime-dep"]);
-      expect(manifest.devDependencies).toBeUndefined();
-      expect(extract("node_modules/local-runtime-dep/package.json").version).toBe("1.0.0");
-    },
-  );
+      },
+    );
+    expect(result.status, result.stderr).toBe(scenario === "failed command" ? 7 : 0);
+    expect(readFileSync(sourceDependencyPath, "utf8")).toBe(sourceVersion);
+    expect(readFileSync(sourceOnlyPath, "utf8")).toBe("keep\n");
+    expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
+    expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+    if (scenario === "failed command") {
+      const stagingDir = result.stdout.trim();
+      expect(stagingDir).not.toBe("");
+      expect(stagingDir).not.toBe(packageDir);
+      expect(existsSync(stagingDir)).toBe(false);
+      return;
+    }
+    const packed = parseNpmPackResult(result.stdout);
+    const tarball = join(outputDir, packed.filename);
+    expect(existsSync(tarball)).toBe(true);
+    const files = packed.files.map((entry) => entry.path);
+    expect(files).toContain("node_modules/local-runtime-dep/package.json");
+    expect(files).toContain("node_modules/optional-platform-dep/package.json");
+    expect(files.some((file) => file.includes("source-only"))).toBe(false);
+    expect(files).not.toContain("package-lock.json");
+    expect(files).not.toContain("npm-shrinkwrap.json");
+    const extract = (file: string) => {
+      const extraction = spawnSync("tar", ["-xOf", tarball, `package/${file}`], {
+        encoding: "utf8",
+      });
+      expect(extraction.status, extraction.stderr).toBe(0);
+      return JSON.parse(extraction.stdout);
+    };
+    const manifest = extract("package.json");
+    expect(manifest.bundledDependencies).toEqual(["local-runtime-dep"]);
+    expect(manifest.devDependencies).toBeUndefined();
+    expect(extract("node_modules/local-runtime-dep/package.json").version).toBe("1.0.0");
+  });
 
   it.each([
     "default",
@@ -1044,6 +1075,7 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     "skipped-optional",
     "dev-engine",
     "range-policy",
+    "locked-optional",
   ])("preserves patched dependency packaging contracts (%s)", async (bundling) => {
     const { repoDir, packageDir, sourceManifest, installedDir, installedSource, registryVersions } =
       writePatchedRuntimeFixture(bundling);
@@ -1160,7 +1192,7 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
             "--run",
             packageDir,
             "--",
-            ...(bundling === "range-policy"
+            ...(["range-policy", "locked-optional"].includes(bundling)
               ? [
                   process.execPath,
                   "--input-type=module",
@@ -1185,7 +1217,7 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
           return;
         }
         const packed = await packing;
-        if (bundling === "range-policy") {
+        if (["range-policy", "locked-optional"].includes(bundling)) {
           expect(JSON.parse(packed.stdout)).toEqual([2, 3]);
           return;
         }

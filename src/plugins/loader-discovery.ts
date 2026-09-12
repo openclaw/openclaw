@@ -5,7 +5,7 @@ import {
 } from "./discovery.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
 import { buildProvenanceIndex, warnWhenAllowlistIsOpen } from "./loader-provenance.js";
-import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
+import { createPluginCandidatesFromManifestRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   loadPluginManifestRegistryCore,
@@ -13,7 +13,6 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import type { PluginLogger } from "./types.js";
 
 type ResolvedPluginLoadDiscovery = {
@@ -62,14 +61,14 @@ export function resolvePluginLoadDiscovery(params: {
       installRecords:
         Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
     });
-  pushDiagnostics(params.diagnostics, manifestRegistry.diagnostics);
+  params.diagnostics.push(...manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
     emitWarning: params.emitWarning,
     logger: params.logger,
     pluginsEnabled: context.normalized.enabled,
     allow: context.normalized.allow,
     warningCacheKey: params.warningCacheKey,
-    warningCache: pluginLoaderCacheState,
+    warningCache: context.cacheState,
     explicitlyEnabledPluginIds: new Set(
       Object.entries(context.normalized.entries)
         .filter(([, entry]) => entry.enabled === true)

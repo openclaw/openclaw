@@ -17,6 +17,7 @@ import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-regi
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -52,7 +53,7 @@ let state: OpenClawTestState;
 describe("prepared reply fallback ownership", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
     vi.clearAllMocks();
     const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
     vi.spyOn(agentScope, "resolveAgentConfig").mockImplementation(actual.resolveAgentConfig);
@@ -70,6 +71,25 @@ describe("prepared reply fallback ownership", () => {
     );
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it("publishes healthy configured runtimes while a divergent agent is refused", async () => {
+    mocks.configuredAgentIds = ["main", "cleaner"];
+    recordAgentDatabaseAdmissions([
+      {
+        agentId: "cleaner",
+        paths: ["/synthetic/agents/cleaner/openclaw-agent.cleaner.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch",
+        reason: "Refused agent cleaner: its database belongs to main.",
+        repairHint: "Quarantine the cleaner copy and restart.",
+      },
+    ]);
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }),
+    ).resolves.toMatchObject({ agentId: "main" });
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
     { scope: "agent", source: "auto", locked: false },
@@ -234,7 +254,7 @@ describe("prepared reply fallback ownership", () => {
             }),
           ).rejects.toThrow("reason=owner-plugin-degraded, ownerPluginId=broken-harness");
         }
-        nested.release();
+        await nested[Symbol.asyncDispose]();
         return { text: "fallback admitted" };
       });
       const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>

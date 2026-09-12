@@ -63,6 +63,7 @@ const localOnboarding = vi.hoisted(() => {
       (params: {
         configPath: string;
         workspace: string;
+        teamCoordinatorId?: string;
         securityAcknowledgedAt: string;
         replace?: boolean;
         expectedRunId?: string;
@@ -78,6 +79,7 @@ const localOnboarding = vi.hoisted(() => {
           runId: params.runId,
           configPath: params.configPath,
           workspace: params.workspace,
+          ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
           securityAcknowledgedAt: params.securityAcknowledgedAt,
           startedAtMs: 1,
         };
@@ -294,7 +296,11 @@ export function setupGuidedCustodianTestSuite() {
       .mockReset()
       .mockImplementation(async (effect) => await effect(localOnboarding.persisted.config ?? {}));
     restoreTerminalState.mockClear();
-    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockReset()
+      .mockImplementation(
+        async ({ additionalGroups }) => additionalGroups?.[0]?.options[0]?.value ?? "skip",
+      );
     ensureAuthProfileStore.mockClear();
     detectAvailableSetupProviderIds.mockReset();
     detectAvailableSetupProviderIds.mockResolvedValue(new Set());
@@ -323,6 +329,7 @@ export function setupGuidedCustodianTestSuite() {
     candidate,
     detection,
     existingModelCandidate,
+    ensureAuthProfileStore,
     localOnboarding,
     makeRuntime,
     pendingLocalSetup,

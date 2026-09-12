@@ -1,7 +1,7 @@
 // Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -12,6 +12,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { resolveDiscordClientAccountContext } from "./client.js";
+import { getDiscordEndpointRuntime } from "./endpoint-runtime.js";
 import {
   DiscordError,
   RateLimitError,
@@ -19,8 +20,13 @@ import {
   readDiscordMessage,
   readRetryAfter,
 } from "./internal/rest-errors.js";
-import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { prepareDiscordOutboundText } from "./outbound-text.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
+import {
+  createReusableDiscordReplyReference,
+  resolveDiscordReplyMessageId,
+  type DiscordReplyReference,
+} from "./reply-reference.js";
 import { createDiscordRetryRunner, recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import {
   resolveDiscordMessageFlags,
@@ -38,10 +44,13 @@ type DiscordWebhookSendOpts = {
   webhookToken: string;
   accountId?: string;
   threadId?: string | number;
-  replyTo?: string;
+  replyTo?: string | DiscordReplyReference;
   username?: string;
   avatarUrl?: string;
+  tableMode?: MarkdownTableMode;
   wait?: boolean;
+  /** Opt into configured line limits; omission preserves character-only chunking. */
+  chunking?: { maxChars?: number; maxLines?: number };
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
@@ -104,15 +113,19 @@ export async function sendWebhookMessageDiscord(
     throw new Error("Discord webhook id/token are required");
   }
 
-  const replyTo = normalizeOptionalString(opts.replyTo) ?? "";
-  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const reply =
+    typeof opts.replyTo === "string"
+      ? createReusableDiscordReplyReference(normalizeOptionalString(opts.replyTo))
+      : opts.replyTo;
   const { account, proxyFetch } = resolveDiscordClientAccountContext({
     cfg: opts.cfg,
     accountId: opts.accountId,
   });
-  const rewrittenText = rewriteDiscordKnownMentions(text, {
-    accountId: account.accountId,
-    mentionAliases: account.config.mentionAliases,
+  const { textWithMentions, textLimit } = prepareDiscordOutboundText(text, {
+    cfg: opts.cfg,
+    account,
+    tableMode: opts.tableMode,
+    textLimit: opts.chunking?.maxChars,
   });
   const flags = resolveDiscordMessageFlags({
     suppressEmbeds: resolveDiscordSuppressEmbeds({ configured: account.config.suppressEmbeds }),
@@ -129,8 +142,10 @@ export async function sendWebhookMessageDiscord(
     });
   }
 
+  const endpoint = getDiscordEndpointRuntime();
+  const restApiBaseUrl = endpoint?.descriptor.restApiBaseUrl ?? "https://discord.com/api/v10";
   const url = new URL(
-    `https://discord.com/api/v10/webhooks/${encodeURIComponent(webhookId)}/${encodeURIComponent(webhookToken)}`,
+    `${restApiBaseUrl}/webhooks/${encodeURIComponent(webhookId)}/${encodeURIComponent(webhookToken)}`,
   );
   url.searchParams.set("wait", opts.wait === false ? "false" : "true");
   if (opts.threadId != null && opts.threadId !== "") {
@@ -143,15 +158,24 @@ export async function sendWebhookMessageDiscord(
   const request = createDiscordRetryRunner({ signal: deadline.signal });
   // Alias expansion happens after the outer delivery planner. Bound the actual
   // wire text here, retaining each accepted part before another can fail.
-  const chunks = chunkDiscordTextWithMode(rewrittenText, { maxLines: Number.MAX_SAFE_INTEGER });
+  const chunks = chunkDiscordTextWithMode(textWithMentions, {
+    maxChars: textLimit,
+    maxLines: opts.chunking
+      ? (opts.chunking.maxLines ?? account.config.maxLinesPerMessage)
+      : Number.MAX_SAFE_INTEGER,
+  });
   const results: DiscordSendResult[] = [];
   try {
     for (const content of chunks.length ? chunks : [""]) {
+      const replyTo = resolveDiscordReplyMessageId(reply, results.length === 0);
+      const messageReference = replyTo
+        ? { message_id: replyTo, fail_if_not_exists: false }
+        : undefined;
       const response = await request(
         async () => {
           await opts.onPlatformSendDispatch?.();
           opts.assertPlatformSendAuthorized?.();
-          const attemptResponse = await (proxyFetch ?? fetch)(url.toString(), {
+          const attemptResponse = await (endpoint?.fetch ?? proxyFetch ?? fetch)(url.toString(), {
             method: "POST",
             headers: {
               "content-type": "application/json",
@@ -203,7 +227,7 @@ export async function sendWebhookMessageDiscord(
         fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
         kind: "text",
         ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
-        ...(replyTo ? { replyToId: replyTo } : {}),
+        reply: createReusableDiscordReplyReference(replyTo),
       });
       const resultConversationId = result.channelId.trim();
       if (result.messageId && resultConversationId) {

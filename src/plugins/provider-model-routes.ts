@@ -1,6 +1,10 @@
 /** Generic adapter for provider-owned model route public artifacts. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+} from "../agents/agent-runtime-id.js";
+import {
   createModelProviderRouteOverrideResolver,
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
@@ -11,32 +15,68 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
+  ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../plugin-sdk/provider-model-types.js";
+import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "./plugin-metadata-snapshot-required.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   resolveDirectBundledProviderPolicySurface,
   type BundledProviderPolicySurface,
 } from "./provider-policy-surface.js";
+import { resolveProviderPolicySurface } from "./provider-public-artifacts.js";
 
 type ProviderModelRouteObservation = {
   modelId?: string;
   observedRoutes?: readonly ProviderModelRouteSource[];
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
 };
 
 type ProviderModelRoutesResolver = (
   observed?: ProviderModelRouteObservation,
 ) => ProviderModelRouteResolution | null;
 
+/** Resolves policy through the bundled or selected trusted installed owner. */
+export function resolveProviderModelPolicySurface(
+  providerId: string,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
+) {
+  const provider = normalizeProviderId(providerId);
+  const bundled = resolveDirectBundledProviderPolicySurface(provider);
+  if (bundled) {
+    return bundled;
+  }
+  const metadata =
+    metadataSnapshot ??
+    getCurrentPluginMetadataSnapshotRequiredRuntime({
+      allowScopedSnapshot: true,
+      allowWorkspaceScopedSnapshot: true,
+    });
+  return metadata ? resolveProviderPolicySurface(provider, { manifestRegistry: metadata }) : null;
+}
+
+/** Binds one provider's identity facts for an authored-row lookup. */
+export function createProviderModelCatalogIdNormalizer(
+  providerId: string,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
+) {
+  const provider = normalizeProviderId(providerId);
+  const surface = provider ? resolveProviderModelPolicySurface(provider, metadataSnapshot) : null;
+  return (modelId: string) =>
+    resolveProviderModelCatalogId({ provider, modelId, surface }) ?? modelId;
+}
+
 /** Resolves provider-owned catalog id equivalence without loading its runtime. */
 export function resolveProviderModelCatalogId(params: {
   provider: string;
   modelId: string;
   surface?: BundledProviderPolicySurface | null;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | null {
   const provider = normalizeProviderId(params.provider);
   const surface =
     params.surface === undefined
-      ? resolveDirectBundledProviderPolicySurface(provider)
+      ? resolveProviderModelPolicySurface(provider, params.metadataSnapshot)
       : params.surface;
   const normalized = surface?.normalizeModelCatalogId?.({
     provider,
@@ -72,17 +112,15 @@ export function createProviderModelRoutesResolver(params: {
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   surface?: BundledProviderPolicySurface | null;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
 }): ProviderModelRoutesResolver {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
     return () => null;
   }
-  // Runtime selection is a hot path and currently has one canonical OpenAI
-  // owner. Alias/secondary-owner discovery remains on the cold artifact path.
+  // Use the selected metadata generation; runtime lookups must not discover plugins.
   const surface =
-    params.surface === undefined
-      ? resolveDirectBundledProviderPolicySurface(provider)
-      : params.surface;
+    params.surface === undefined ? resolveProviderModelPolicySurface(provider) : params.surface;
   const resolveModelRoutes = surface?.resolveModelRoutes;
   if (!resolveModelRoutes) {
     return () => null;
@@ -96,6 +134,7 @@ export function createProviderModelRoutesResolver(params: {
   const configuredProvider = providerConfig
     ? { api: providerConfig.api, baseUrl: providerConfig.baseUrl }
     : undefined;
+  const providerRuntimeId = providerConfig?.agentRuntime?.id?.trim();
   const canonicalizeModelId = (modelId: string) =>
     normalizeModelId(provider, modelId, surface) ?? modelId.trim();
   const configuredModels = new Map(
@@ -104,7 +143,11 @@ export function createProviderModelRoutesResolver(params: {
         models: providerConfig?.models,
         normalizeModelId: canonicalizeModelId,
       }),
-      ([modelId, model]) => [modelId, projectConfiguredModelRoute(model)] as const,
+      ([modelId, model]) =>
+        [
+          modelId,
+          { route: projectConfiguredModelRoute(model), runtimeId: model.agentRuntime?.id?.trim() },
+        ] as const,
     ),
   );
   const resolveRouteOverridePresence =
@@ -127,6 +170,16 @@ export function createProviderModelRoutesResolver(params: {
   return (observed) => {
     const modelId = normalizeModelId(provider, observed?.modelId, surface);
     const configuredModel = modelId ? configuredModels.get(modelId) : undefined;
+    const configuredRuntimeId = normalizeOptionalAgentRuntimeId(
+      configuredModel?.runtimeId || providerRuntimeId,
+    );
+    const preparedIntent = observed?.routeIntent ?? params.routeIntent;
+    const routeIntent =
+      preparedIntent?.source === "explicit"
+        ? preparedIntent
+        : configuredRuntimeId && !isDefaultAgentRuntimeId(configuredRuntimeId)
+          ? { runtimeId: configuredRuntimeId, source: "explicit" as const }
+          : preparedIntent;
     const requestTransportOverrides = modelId
       ? (routeOverridePresenceByModel.get(modelId) ?? providerRouteOverridePresence)
       : providerRouteOverridePresence;
@@ -138,8 +191,9 @@ export function createProviderModelRoutesResolver(params: {
         provider,
         ...(modelId ? { modelId } : {}),
         requestTransportOverrides,
-        ...(configuredModel ? { configuredModel } : {}),
+        ...(configuredModel ? { configuredModel: configuredModel.route } : {}),
         ...(configuredProvider ? { configuredProvider } : {}),
+        ...(routeIntent ? { routeIntent } : {}),
         env,
         ...(observedRoutes && observedRoutes.length > 0 ? { observedRoutes } : {}),
       }) ?? null
@@ -157,6 +211,7 @@ export function resolveProviderModelRoutes(params: {
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   surface?: BundledProviderPolicySurface | null;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
 }): ProviderModelRouteResolution | null {
   const resolveRoutes = createProviderModelRoutesResolver(params);
   return resolveRoutes({

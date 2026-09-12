@@ -1,4 +1,3 @@
-import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -7,13 +6,12 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
-import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -63,7 +61,9 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { readSessionFallbackModel } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
+import { createStatusModelAuthResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
@@ -76,7 +76,6 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "google-gemini-cli",
   "openai",
 ]);
-const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
 function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
@@ -262,15 +261,6 @@ function resolveStatusRuntimeProvider(params: {
   return params.provider;
 }
 
-function resolveStatusCodexCliCredentialsHome(params: {
-  agentDir: string;
-  effectiveHarness?: string;
-}): string | undefined {
-  return normalizeOptionalLowercaseString(params.effectiveHarness) === "codex"
-    ? path.join(params.agentDir, CODEX_APP_SERVER_HOME_DIRNAME)
-    : undefined;
-}
-
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
@@ -331,11 +321,15 @@ export async function buildStatusReplyParts(
   const parseSelectedProvider = Boolean(
     sessionEntry?.modelOverride?.trim() && !sessionEntry?.providerOverride?.trim(),
   );
+  const modelParams = { selectedProvider, selectedModel, sessionEntry, parseSelectedProvider };
+  const activeModel = readSessionFallbackModel({
+    ...modelParams,
+    config: cfg,
+    sessionScope: { agentId: statusAgentId, sessionKey, storePath },
+  });
   const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider,
-    selectedModel,
-    sessionEntry,
-    parseSelectedProvider,
+    ...modelParams,
+    sessionEntry: activeModel ?? sessionEntry,
   });
   const selectedLookupProvider = modelRefs.selected.provider || selectedProvider || provider;
   const selectedLookupModel = modelRefs.selected.model || selectedModel || model;
@@ -349,9 +343,23 @@ export async function buildStatusReplyParts(
       sessionKey,
       sessionEntry,
     }));
-  const codexCliCredentialsHome = resolveStatusCodexCliCredentialsHome({
+  const { getPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
+    await import("../agents/prepared-model-catalog.js");
+  const preparedOwner = getPreparedModelCatalogOwnerSnapshot({
+    config: cfg,
+    agentId: statusAgentId,
     agentDir: statusAgentDir,
-    effectiveHarness,
+    workspaceDir: statusWorkspaceDir,
+    readOnly: true,
+  });
+  // This lookup borrows existing facts; status never starts inventory discovery.
+  const resolveAuth = createStatusModelAuthResolver({
+    cfg,
+    agentId: statusAgentId,
+    agentDir: statusAgentDir,
+    workspaceDir: statusWorkspaceDir,
+    sessionEntry,
+    owner: preparedOwner ? materializePreparedModelCatalogOwner(preparedOwner) : undefined,
   });
   const selectedStatusProvider = resolveStatusRuntimeProvider({
     provider: selectedLookupProvider,
@@ -374,28 +382,20 @@ export async function buildStatusReplyParts(
   });
   let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
-    : resolveModelAuthLabel({
+    : await resolveAuth({
         provider: selectedStatusProvider,
+        model: selectedLookupModel,
+        runtimeId: effectiveHarness,
         acceptedProviderIds: selectedAuthProviders,
-        cfg,
-        sessionEntry,
-        agentDir: statusAgentDir,
-        workspaceDir: statusWorkspaceDir,
-        codexCliCredentialsHome,
-        includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
-      ? resolveModelAuthLabel({
+      ? await resolveAuth({
           provider: activeStatusProvider,
+          model: modelRefs.active.model || model,
+          runtimeId: effectiveHarness,
           acceptedProviderIds: activeAuthProviders,
-          cfg,
-          sessionEntry,
-          agentDir: statusAgentDir,
-          workspaceDir: statusWorkspaceDir,
-          codexCliCredentialsHome,
-          includeExternalProfiles: false,
         })
       : selectedModelAuth;
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
@@ -650,6 +650,8 @@ export async function buildStatusReplyParts(
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
+    modelRefs,
+    activeModel,
     selectedContextWindow: selectedCatalogEntry?.contextWindow,
     selectedContextTokens:
       selectedCatalogEntry?.contextTokens ??
@@ -657,7 +659,9 @@ export async function buildStatusReplyParts(
     thinkingCatalog,
     runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
     runtimeContextTokens:
-      activeRuntimeIsAuthoritative && (initialActiveCatalogEntry || fallbackState.active)
+      activeRuntimeIsAuthoritative &&
+      (initialActiveCatalogEntry || fallbackState.active) &&
+      (!activeModel || (activeModel.modelProvider === provider && activeModel.model === model))
         ? preparedContextTokens
         : undefined,
     sessionEntry,

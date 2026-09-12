@@ -27,6 +27,45 @@ export type MessageActionDetails = {
   replyTarget?: MessageReplyTarget;
 };
 
+// Loading and completion each advance the revision: three automatic attempts.
+export const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
+
+function resolveSourceMessageId(message: unknown): string | undefined {
+  const record = asNullableRecord(message);
+  const metadata = asNullableRecord(record?.["__openclaw"]);
+  return typeof metadata?.id === "string"
+    ? metadata.id
+    : typeof record?.messageId === "string"
+      ? record.messageId
+      : undefined;
+}
+
+export function resolveCappedMessageId(message: unknown, role: string): string | undefined {
+  const record = asNullableRecord(message);
+  const metadata = asNullableRecord(record?.["__openclaw"]);
+  const messageId = resolveSourceMessageId(message);
+  // Only the Gateway marker proves a display cap; sentinel text can be literal.
+  // Pending user inputs share read-only recovery with assistant messages.
+  return (normalizeRoleForGrouping(role) === "assistant" ||
+    messageId?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) &&
+    !record?.openclawMessageToolMirror &&
+    metadata?.truncated === true
+    ? messageId
+    : undefined;
+}
+
+// Options and action handlers outlive a render; keep this preparation separate from them.
+export function prepareChatMessageRender(message: unknown) {
+  const normalizedMessage = normalizeMessage(message);
+  return {
+    message,
+    normalizedMessage,
+    displayMarkdown: resolveMessageDisplayMarkdown(message, normalizedMessage),
+  };
+}
+
+export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;
+
 // An explicit Markdown value is the displayed expansion, even when it is empty.
 export function resolveMessageReplyText(
   message: unknown,
@@ -36,43 +75,30 @@ export function resolveMessageReplyText(
   return markdown || extractMessageMediaText(message, normalizedMessage.content);
 }
 
-export function resolveMessageActionDetails(params: {
-  message: unknown;
-  messageId: string;
-  canFetchFullMessage?: boolean;
-  getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
-  onReply?: (target: MessageReplyTarget) => void;
-  senderLabel: string;
-}): MessageActionDetails | null {
-  const { message, messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
-  const record = message as Record<string, unknown>;
-  const transcriptMeta = asNullableRecord(record["__openclaw"]);
-  const messageId =
-    typeof transcriptMeta?.id === "string"
-      ? transcriptMeta.id
-      : typeof record.messageId === "string"
-        ? record.messageId
-        : undefined;
-  const normalizedMessage = normalizeMessage(message);
+export function resolveMessageActionDetails(
+  { message, normalizedMessage, displayMarkdown: previewMarkdown }: ChatMessageRenderPreparation,
+  params: {
+    messageId: string;
+    canFetchFullMessage?: boolean;
+    getAssistantMessageExpansion?: (
+      messageId: string,
+    ) => AssistantMessageExpansionState | undefined;
+    onReply?: (target: MessageReplyTarget) => void;
+    senderLabel: string;
+  },
+): MessageActionDetails | null {
+  const { messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
   const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const pendingInput = messageId?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
-  const previewMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
-  // The Gateway records every display-cap truncation as __openclaw.truncated, so
-  // that marker is the whole contract: sniffing the in-band sentinel would fetch
-  // for any reply that merely contains the text. Pending user inputs share the
-  // same read-only expansion, without becoming transcript reply/rewind targets.
-  const fullMessage =
-    (role === "assistant" || pendingInput) &&
-    canFetchFullMessage &&
-    messageId &&
-    !record.openclawMessageToolMirror &&
-    transcriptMeta?.truncated === true
-      ? { messageId, state: params.getAssistantMessageExpansion?.(messageId) }
-      : undefined;
+  const pendingInput =
+    resolveSourceMessageId(message)?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
+  const cappedMessageId = canFetchFullMessage ? resolveCappedMessageId(message, role) : undefined;
+  const fullMessage = cappedMessageId
+    ? { messageId: cappedMessageId, state: params.getAssistantMessageExpansion?.(cappedMessageId) }
+    : undefined;
   const expansion = fullMessage?.state;
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
-    role === "assistant" ? stripThinkingTags(expandedMarkdown).trim() : expandedMarkdown;
+    role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
   const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
   const replyText =
     onReply && !pendingInput

@@ -5,7 +5,7 @@ import {
   loadPatternListFromEnv,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
-import { preserveIndependentVitestProject, sharedVitestConfig } from "./vitest.shared.config.ts";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 import { controlUiE2eTestGlobs } from "./vitest.ui-paths.mjs";
 
@@ -25,14 +25,28 @@ const uiE2eIncludePatterns = [
   automationManagementRealGatewayTest,
 ];
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
+  "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+  "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
+  "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+  "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
+  "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
   sessionHostCommandStateRealGatewayTest,
   "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
@@ -44,28 +58,42 @@ export const uiE2eRealGatewayTestFiles = [
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
+  "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
+  "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
+  "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
+  "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/community-invite-showing.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
+  "ui/src/e2e/config-raw-save.e2e.test.ts",
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/cron-loading.e2e.test.ts",
+  "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+  "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
   "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
   "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
+  "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
+  "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
@@ -153,6 +181,8 @@ export function createUiE2eVitestConfig(
       projects: [
         {
           ...base,
+          // Each resource owner supplies its complete inventory and setup.
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-bundled",
           test: {
             ...projectTest,
@@ -165,6 +195,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-standalone",
           test: {
             ...projectTest,
@@ -176,6 +207,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial",
           test: {
             ...projectTest,
@@ -188,6 +220,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial-standalone",
           test: {
             ...projectTest,
@@ -197,7 +230,7 @@ export function createUiE2eVitestConfig(
             name: "ui-e2e-serial-standalone",
           },
         },
-      ].map(preserveIndependentVitestProject),
+      ],
       // Refit needs native file totals; verbose still reports cases to the output watchdog.
       reporters: [...baseTest.reporters, "default"],
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },

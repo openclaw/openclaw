@@ -11,6 +11,7 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import { isToolResultError } from "../tool-result-error.js";
 import {
   takeCodeModeResponseSource,
   prepareCodeModeSourceAppend,
@@ -23,6 +24,7 @@ import type {
 } from "./agent-session-types.js";
 import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
+import type { CompactionRequestBudget } from "./compaction/request-budget.js";
 import {
   type ExtensionCommandContextActions,
   type ExtensionErrorListener,
@@ -41,7 +43,7 @@ import {
   type TurnEndEvent,
   type TurnStartEvent,
 } from "./extensions/index.js";
-import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import type { CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
@@ -74,8 +76,6 @@ export abstract class AgentSessionBase {
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;
 
-  protected scopedModelEntries: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
-
   // Event subscription state
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
@@ -100,10 +100,6 @@ export abstract class AgentSessionBase {
   // Retry state
   protected retryAbortController: AbortController | undefined = undefined;
   protected retryCount = 0;
-
-  // Bash execution state
-  protected bashAbortController: AbortController | undefined = undefined;
-  protected pendingBashMessages: BashExecutionMessage[] = [];
 
   // Extension system
   protected currentExtensionRunner!: ExtensionRunner;
@@ -147,7 +143,6 @@ export abstract class AgentSessionBase {
     this.agent = config.agent;
     this.sessionManager = config.sessionManager;
     this.settingsManager = config.settingsManager;
-    this.scopedModelEntries = config.scopedModels ?? [];
     this.sessionResourceLoader = config.resourceLoader;
     this.customTools = config.customTools ?? [];
     this.cwd = config.cwd;
@@ -256,9 +251,11 @@ export abstract class AgentSessionBase {
     };
 
     this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+      // Normalize adapted failures before middleware, which may explicitly recover.
+      const resultIsError = isError || isToolResultError(result);
       const runner = this.currentExtensionRunner;
       if (!runner.hasHandlers("tool_result")) {
-        return undefined;
+        return { isError: resultIsError };
       }
 
       const hookResult = await this.runWithSessionWriteSettlement(
@@ -270,21 +267,23 @@ export abstract class AgentSessionBase {
             input: args as Record<string, unknown>,
             content: result.content,
             details: result.details,
-            isError,
+            isError: resultIsError,
             ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
 
-      if (!hookResult) {
-        return undefined;
+      if (hookResult) {
+        this.extensionModifiedToolResultIds.add(toolCall.id);
       }
-      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
         ...hookResult,
-        isError: hookResult.isError ?? isError,
+        isError: hookResult?.isError ?? resultIsError,
       };
     };
+    // Pre-execution failures skip afterToolCall and its recovery handlers.
+    this.agent.afterToolOutcome = async ({ executionStarted, result, isError }) =>
+      executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
 
   // =========================================================================
@@ -472,23 +471,13 @@ export abstract class AgentSessionBase {
       return false;
     }
 
-    for (const message of event.messages.toReversed()) {
-      if (message.role === "assistant") {
-        return this.isRetryableError(message);
-      }
-    }
-    return false;
+    const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
+    return lastAssistant !== undefined && this.isRetryableError(lastAssistant);
   }
 
   /** Find the last assistant message in agent state (including aborted ones) */
   protected findLastAssistantMessage(): AssistantMessage | undefined {
-    const messages = this.agent.state.messages;
-    for (const msg of messages.toReversed()) {
-      if (msg.role === "assistant") {
-        return msg;
-      }
-    }
-    return undefined;
+    return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
   /** Emit extension events based on agent events */
@@ -616,7 +605,6 @@ export abstract class AgentSessionBase {
       () => this.abortRetry(),
       () => this.abortCompaction(),
       () => this.abortBranchSummary(),
-      () => this.abortBash(),
       () => this.agent.abort(),
     ];
     for (const abortOperation of abortOperations) {
@@ -784,16 +772,6 @@ export abstract class AgentSessionBase {
     return this.sessionManager.getSessionName();
   }
 
-  /** Scoped models for cycling (from --models flag) */
-  get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
-    return this.scopedModelEntries;
-  }
-
-  /** Update scoped models for cycling */
-  setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void {
-    this.scopedModelEntries = scopedModels;
-  }
-
   /** File-based prompt templates */
   get promptTemplates(): ReadonlyArray<PromptTemplate> {
     return this.sessionResourceLoader.getPrompts().prompts;
@@ -885,10 +863,9 @@ export abstract class AgentSessionBase {
   protected abstract checkCompaction(
     assistantMessage: AssistantMessage,
     skipAbortedCheck?: boolean,
+    requestBudget?: CompactionRequestBudget,
   ): Promise<boolean>;
   abstract abortRetry(): void;
   abstract abortCompaction(): void;
   abstract abortBranchSummary(): void;
-  abstract abortBash(): void;
-  protected abstract flushPendingBashMessages(): void;
 }

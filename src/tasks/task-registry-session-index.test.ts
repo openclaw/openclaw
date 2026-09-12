@@ -4,7 +4,8 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createNextAcpTaskBackingDetail } from "./task-backing-authority.js";
 import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
 import { createTaskFlowForTask } from "./task-flow-registry.js";
-import { publishTaskRecordAfterAtomicStore, updateTask } from "./task-registry-mutation.js";
+import { updateTask } from "./task-registry-mutation.js";
+import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import {
   deleteTaskRecordById,
   hasActiveTaskForChildSessionKey,
@@ -14,7 +15,7 @@ import {
 import { createTaskRecord, linkTaskToFlowById } from "./task-registry-record-api.js";
 import { reloadTaskRegistryFromStore } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
-import { upsertTaskRegistryRecordToSqlite } from "./task-registry.store.sqlite.js";
+import { upsertTaskWithDeliveryStateToSqlite } from "./task-registry.store.sqlite.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -92,7 +93,11 @@ it("publishes requester membership through create, update, restore, atomic publi
   ]);
 
   const published = { ...task, requesterSessionKey: "agent:main:published" };
-  upsertTaskRegistryRecordToSqlite(published);
+  const deliveryState = store.loadSnapshot().deliveryStates.get(task.taskId);
+  upsertTaskWithDeliveryStateToSqlite({
+    task: published,
+    ...(deliveryState ? { deliveryState } : {}),
+  });
   publishTaskRecordAfterAtomicStore(published);
   expect(await taskIds({ sessionKey: published.requesterSessionKey })).toEqual([task.taskId]);
   expect(await taskIds({ sessionKey: task.ownerKey })).toEqual([task.taskId]);

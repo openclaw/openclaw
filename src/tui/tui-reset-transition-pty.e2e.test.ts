@@ -5,16 +5,64 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   objectFieldEquals,
   readFixtureLog,
+  startTuiFixture,
   waitForFixtureLogEntry,
+  waitForSynchronizedFrameRows,
   writeTuiPtyFixtureScript,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { startPty } from "./tui-pty-test-support.js";
+import { startRuntimePty } from "./tui-pty-test-support.js";
 
 const STARTUP_TIMEOUT_MS = 20_000;
 const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 8_000;
 const TEST_TIMEOUT_MS = 25_000;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it(
+  "keeps multiline exit paste in chat and preserves shared stop behavior",
+  async () => {
+    const stateDir = tempDirs.make("openclaw-tui-input-pty-");
+    const fixture = await startTuiFixture({
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        OPENCLAW_OFFLINE: "1",
+      },
+    });
+    try {
+      await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+      await fixture.run.write("\u001b[200~/exit\n\u001b[201~\r", { delay: false });
+      await waitForSynchronizedFrameRows(
+        fixture.run,
+        (frame) => frame.some((row) => row.includes("PTY_RESPONSE: /exit")),
+        OUTPUT_TIMEOUT_MS,
+      );
+      await fixture.run.write("  ordinary input  \r", { delay: false });
+      const rows = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (frame) => frame.some((row) => row.includes("PTY_RESPONSE: ordinary input")),
+        OUTPUT_TIMEOUT_MS,
+      );
+      await fixture.run.write("\u001b[200~/stop\n\u001b[201~\r", { delay: false });
+      await fixture.waitForLogEntry((entry) => entry.method === "abortChat");
+      const sends = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "sendChat",
+      );
+      expect(sends).toEqual([
+        expect.objectContaining({ payload: expect.objectContaining({ message: "/exit" }) }),
+        expect.objectContaining({
+          payload: expect.objectContaining({ message: "ordinary input" }),
+        }),
+      ]);
+      console.info("[behavior-evidence] tui-multiline-exit", JSON.stringify({ rows, sends }));
+      await fixture.run.write("/exit\r", { delay: false });
+      expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+  TEST_TIMEOUT_MS,
+);
 
 describe.each([
   { input: "typed suffix", nativePaste: false },
@@ -31,7 +79,7 @@ describe.each([
         ? Array.from({ length: 11 }, (_, index) => `line-${index}`).join("\n")
         : "newer suffix";
       const preservedDraft = `overlap during reset\n${newerDraft}`;
-      const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
+      const run = await startRuntimePty(process.execPath, ["--import", "tsx", scriptPath], {
         cwd: process.cwd(),
         env: {
           OPENCLAW_THEME: "dark",

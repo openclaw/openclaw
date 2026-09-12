@@ -2,19 +2,23 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
-import type { TaskSuggestion } from "../../../../../packages/gateway-protocol/src/index.js";
+import type {
+  TaskSuggestion,
+  TaskSuggestionsAcceptParams,
+} from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { repoName } from "../../../lib/session-display.ts";
-import type { TaskSuggestionAcceptMode } from "../../../lib/task-suggestion-acceptance.ts";
 
-type TaskSuggestionCloudProfile = { id: string };
+export type TaskSuggestionStartMode = Extract<
+  TaskSuggestionsAcceptParams["mode"],
+  "local" | "worktree" | "session"
+>;
 
 export type ChatTaskSuggestionTrayProps = {
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
-  taskSuggestionCloudProfiles?: TaskSuggestionCloudProfile[];
   taskSuggestionCopiedIds?: ReadonlySet<string>;
   activeTaskSuggestionId?: string;
   taskSuggestionSwapDirection?: "next" | "previous";
@@ -22,13 +26,8 @@ export type ChatTaskSuggestionTrayProps = {
   onNavigateTaskSuggestion?: (taskId: string, direction: "next" | "previous") => void;
   onCopyTaskSuggestionPrompt?: (suggestion: TaskSuggestion) => void;
   canAcceptTaskSuggestions?: boolean;
-  canAcceptTaskSuggestionModes?: boolean;
   canDismissTaskSuggestions?: boolean;
-  onAcceptTaskSuggestion?: (
-    suggestion: TaskSuggestion,
-    mode: TaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ) => void;
+  onAcceptTaskSuggestion?: (suggestion: TaskSuggestion, mode: TaskSuggestionStartMode) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
 };
 
@@ -36,17 +35,14 @@ export function renderChatTaskSuggestionTray(props: ChatTaskSuggestionTrayProps)
   return renderChatTaskSuggestions({
     suggestions: props.taskSuggestions ?? [],
     busyIds: props.taskSuggestionBusyIds ?? new Set(),
-    cloudProfiles: props.taskSuggestionCloudProfiles ?? [],
     copiedIds: props.taskSuggestionCopiedIds ?? new Set(),
     activeId: props.activeTaskSuggestionId,
     swapDirection: props.taskSuggestionSwapDirection,
     swapGeneration: props.taskSuggestionSwapGeneration ?? 0,
     onCopyPrompt: (suggestion) => props.onCopyTaskSuggestionPrompt?.(suggestion),
     canAccept: props.canAcceptTaskSuggestions === true,
-    canAcceptModes: props.canAcceptTaskSuggestionModes === true,
     canDismiss: props.canDismissTaskSuggestions === true,
-    onAccept: (suggestion, mode, cloudProfileId) =>
-      props.onAcceptTaskSuggestion?.(suggestion, mode, cloudProfileId),
+    onAccept: (suggestion, mode) => props.onAcceptTaskSuggestion?.(suggestion, mode),
     onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
     onNavigate: (taskId, direction) => props.onNavigateTaskSuggestion?.(taskId, direction),
   });
@@ -71,16 +67,10 @@ function renderChatTaskSuggestions(props: {
   busyIds: ReadonlySet<string>;
   canAccept: boolean;
   canDismiss: boolean;
-  cloudProfiles: TaskSuggestionCloudProfile[];
-  onAccept: (
-    suggestion: TaskSuggestion,
-    mode: TaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ) => void;
+  onAccept: (suggestion: TaskSuggestion, mode: TaskSuggestionStartMode) => void;
   onDismiss: (suggestion: TaskSuggestion) => void;
   onCopyPrompt: (suggestion: TaskSuggestion) => void;
   copiedIds: ReadonlySet<string>;
-  canAcceptModes: boolean;
   activeId?: string;
   swapDirection?: "next" | "previous";
   swapGeneration: number;
@@ -102,13 +92,13 @@ function renderChatTaskSuggestions(props: {
         const cwd = sanitizeTaskSuggestionText(suggestion.cwd);
         const prompt = sanitizeTaskSuggestionText(suggestion.prompt);
         const repo = sanitizeTaskSuggestionText(repoName(cwd));
-        const cloudProfiles = props.cloudProfiles.map((profile) => ({
-          id: profile.id,
-          label: sanitizeTaskSuggestionText(profile.id),
-        }));
-        const accept = (mode: TaskSuggestionAcceptMode, cloudProfileId?: string) => {
+        const copied = props.copiedIds.has(suggestion.id);
+        const copyLabel = copied
+          ? t("chat.taskSuggestions.promptCopied")
+          : t("chat.taskSuggestions.copyPrompt");
+        const accept = (mode: TaskSuggestionStartMode) => {
           if (!busy && props.canAccept) {
-            props.onAccept(suggestion, mode, cloudProfileId);
+            props.onAccept(suggestion, mode);
           }
         };
         const active = suggestion.id === activeId;
@@ -131,6 +121,15 @@ function renderChatTaskSuggestions(props: {
                 }
               </div>
               <div class="task-suggestion__header-actions">
+                <button
+                  class="task-suggestion__header-action task-suggestion__copy"
+                  type="button"
+                  aria-label=${copyLabel}
+                  title=${copyLabel}
+                  @click=${() => props.onCopyPrompt(suggestion)}
+                >
+                  ${copied ? icons.check : icons.copy}
+                </button>
                 ${
                   multiple
                     ? html`
@@ -203,105 +202,48 @@ function renderChatTaskSuggestions(props: {
               </details>
             </div>
             <div class="task-suggestion__actions">
-              <div class="task-suggestion__split">
+              <button
+                class="btn task-suggestion__start task-suggestion__start--primary"
+                type="button"
+                ?disabled=${busy || !props.canAccept}
+                title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
+                @click=${() => accept("local")}
+              >
+                ${icons.play}
+                ${
+                  busy ? t("chat.taskSuggestions.starting") : t("chat.taskSuggestions.startSession")
+                }
+              </button>
+              <wa-dropdown
+                placement="top-end"
+                ?disabled=${busy || !props.canAccept}
+                @wa-select=${(event: CustomEvent<{ item: { value: string } }>) => {
+                  const mode = event.detail.item.value;
+                  if (mode === "local" || mode === "worktree" || mode === "session") {
+                    accept(mode);
+                  }
+                }}
+              >
                 <button
-                  class="btn task-suggestion__start"
+                  slot="trigger"
+                  class="btn task-suggestion__start task-suggestion__start--options"
                   type="button"
                   ?disabled=${busy || !props.canAccept}
+                  aria-label=${t("chat.taskSuggestions.startOptions")}
                   title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
-                  @click=${() => accept("worktree")}
                 >
-                  ${icons.play}
-                  ${
-                    busy
-                      ? t("chat.taskSuggestions.starting")
-                      : t("chat.taskSuggestions.startWorktree")
-                  }
+                  ${icons.chevronDown}
                 </button>
-                ${html`
-                  <wa-dropdown
-                    class="task-suggestion__menu"
-                    placement="bottom-end"
-                    @wa-select=${(
-                      event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
-                    ) => {
-                      const item = event.detail.item;
-                      if (item.value === "local") {
-                        accept("local");
-                      } else if (item.value === "session") {
-                        accept("session");
-                      } else if (item.value === "cloud") {
-                        const profileId = item.dataset.cloudProfile;
-                        if (profileId) {
-                          accept("cloud", profileId);
-                        }
-                      } else if (item.value === "copy-prompt") {
-                        props.onCopyPrompt(suggestion);
-                      }
-                    }}
-                  >
-                    <button
-                      slot="trigger"
-                      class="btn task-suggestion__menu-trigger"
-                      type="button"
-                      ?disabled=${busy}
-                      aria-label=${t("chat.taskSuggestions.moreActions")}
-                      aria-haspopup="menu"
-                      aria-expanded="false"
-                    >
-                      ${icons.chevronDown}
-                    </button>
-                    ${
-                      props.canAcceptModes
-                        ? html`
-                            <wa-dropdown-item value="local" ?disabled=${busy || !props.canAccept}>
-                              ${t("chat.taskSuggestions.startLocal")}
-                            </wa-dropdown-item>
-                            ${
-                              cloudProfiles.length === 0
-                                ? html`
-                                    <wa-dropdown-item
-                                      value="cloud"
-                                      disabled
-                                      title=${t("chat.taskSuggestions.noCloudConfigured")}
-                                    >
-                                      ${t("chat.taskSuggestions.startCloudGeneric")}
-                                    </wa-dropdown-item>
-                                  `
-                                : cloudProfiles.map(
-                                    (profile) => html`
-                                      <wa-dropdown-item
-                                        value="cloud"
-                                        data-cloud-profile=${profile.id}
-                                        ?disabled=${busy || !props.canAccept}
-                                      >
-                                        ${
-                                          cloudProfiles.length > 1
-                                            ? t("chat.taskSuggestions.startCloud", {
-                                                profile: profile.label,
-                                              })
-                                            : t("chat.taskSuggestions.startCloudGeneric")
-                                        }
-                                      </wa-dropdown-item>
-                                    `,
-                                  )
-                            }
-                            <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
-                              ${t("chat.taskSuggestions.fixInSession")}
-                            </wa-dropdown-item>
-                          `
-                        : nothing
-                    }
-                    <wa-dropdown-item value="copy-prompt">
-                      ${
-                        props.copiedIds.has(suggestion.id)
-                          ? t("chat.taskSuggestions.promptCopied")
-                          : t("chat.taskSuggestions.copyPrompt")
-                      }
-                    </wa-dropdown-item>
-                  </wa-dropdown>
-                `}
-              </div>
+                <wa-dropdown-item value="local" ?disabled=${busy || !props.canAccept}>
+                  ${t("chat.taskSuggestions.startSession")}
+                </wa-dropdown-item>
+                <wa-dropdown-item value="worktree" ?disabled=${busy || !props.canAccept}>
+                  ${t("chat.taskSuggestions.startWorktree")}
+                </wa-dropdown-item>
+                <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
+                  ${t("chat.taskSuggestions.startCurrentSession")}
+                </wa-dropdown-item>
+              </wa-dropdown>
             </div>
           </article>
         `;

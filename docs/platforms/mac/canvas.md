@@ -9,7 +9,7 @@ doc-schema-version: 1
 ---
 
 The macOS app includes a native panel for presenting hosted widget documents.
-The Canvas plugin owns this presentation path; it is not a standalone visual
+The Canvas plugin owns this presentation path. It is not a standalone visual
 workspace or an A2UI push target.
 
 The recommended agent path is [`show_widget`](/tools/show-widget) with
@@ -30,7 +30,7 @@ surfaces, not in the panel.
 - Only one widget panel is visible at a time.
 - The app remembers the panel's size and position per session.
 
-Canvas can be disabled from **Settings -> Allow Canvas**. When it is disabled,
+Canvas can be disabled from **Dashboard → Settings → This Mac → Capabilities**. When it is disabled,
 panel commands return `CANVAS_DISABLED`.
 
 ## Agent path
@@ -67,7 +67,7 @@ openclaw nodes canvas hide --node <id>
 
 Hosted paths under `/__openclaw__/canvas/` are resolved through the node
 session's current scoped `pluginSurfaceUrls.canvas` URL. The app refreshes that
-short-lived capability before navigation; callers should pass the document
+short-lived capability before navigation. Callers should pass the document
 path, not construct or copy a capability URL.
 
 The app-local scheme remains available for app-owned content:
@@ -100,7 +100,7 @@ warns and retains the source locator for retry. It may move the older setting
 into the plugin config while preserving the path. A root that already points to
 canonical storage, including through a symlink, needs no copy.
 
-Fix the reported permissions or target conflict, then rerun the command; do not
+Fix the reported permissions or target conflict, then rerun the command. Do not
 remove the root setting yourself. Hosted routes serve only the canonical folder,
 so remaining legacy documents are unavailable until migration completes.
 

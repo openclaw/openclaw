@@ -6,6 +6,7 @@ import {
 } from "./io.observe-recovery.js";
 import { recoverConfigFromJsonRootSuffixWithContext } from "./io.recovery.js";
 import {
+  prepareConfigRecoveryFromContext,
   readBestEffortConfigSnapshotFromContext,
   readConfigFileSnapshotForWriteFromContext,
   readConfigFileSnapshotFromContext,
@@ -16,10 +17,14 @@ import {
 import type { ConfigIoFactoryOptions, ConfigSnapshotReadOptions } from "./io.types.js";
 import type { writeConfigFileFromContext } from "./io.write.js";
 import type { ConfigFileSnapshot } from "./types.js";
+import { withConfigWriteLock } from "./write-lock.js";
 
 export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
   const context = createConfigIoContext(options);
-  const readInternal = () => readConfigFileSnapshotInternal(context);
+  const readInternal = (observe?: boolean) =>
+    readConfigFileSnapshotInternal(
+      observe === false ? { ...context, deps: { ...context.deps, observe: false } } : context,
+    );
   return {
     configPath: context.configPath,
     env: context.deps.env,
@@ -34,7 +39,10 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       readConfigFileSnapshotFromContext(context, readOptions),
     readConfigFileSnapshotWithPluginMetadata: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
-    readConfigFileSnapshotForWrite: () => readConfigFileSnapshotForWriteFromContext(context),
+    readConfigFileSnapshotForWrite: (readOptions?: Pick<ConfigSnapshotReadOptions, "observe">) =>
+      readConfigFileSnapshotForWriteFromContext(context, readOptions),
+    prepareConfigRecovery: (current: ConfigFileSnapshot) =>
+      prepareConfigRecoveryFromContext(context, current),
     promoteConfigSnapshotToLastKnownGood: (snapshot: ConfigFileSnapshot) =>
       promoteConfigSnapshotToLastKnownGoodCore({
         deps: context.deps,
@@ -54,8 +62,18 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       config: Parameters<typeof writeConfigFileFromContext>[1],
       writeOptions: Parameters<typeof writeConfigFileFromContext>[2] = {},
     ) => {
+      writeOptions.assertConfigPathForWrite?.();
       const { writeConfigFileFromContext } = await import("./io.write.js");
-      return writeConfigFileFromContext(context, config, writeOptions, readInternal);
+      writeOptions.assertConfigPathForWrite?.();
+      return withConfigWriteLock(
+        context.configPath,
+        () =>
+          writeConfigFileFromContext(context, config, writeOptions, () =>
+            readInternal(writeOptions.observe),
+          ),
+        context.deps.env,
+        writeOptions.assertCurrent,
+      );
     },
   };
 }

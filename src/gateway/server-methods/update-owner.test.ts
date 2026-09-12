@@ -4,10 +4,12 @@ import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller
 import { createGatewayTool } from "../../agents/tools/gateway-tool.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { resolveGatewayScopedTools } from "../tool-resolution.js";
 import type { GatewayRequestContext } from "./types.js";
 import {
   adoptUpdateCampaignMock,
   detectRespawnSupervisorMock,
+  initializeGatewayUpdateStatusMock,
   runGatewayUpdateMock,
   scheduleGatewaySigusr1RestartMock,
   sendGatewayLifecycleNoticeMock,
@@ -124,6 +126,73 @@ describe("update.run current owner authority", () => {
     );
   });
 
+  it("carries the trusted Gateway-scoped sender through current owner authorization", async () => {
+    config = {
+      plugins: { enabled: false },
+      tools: { profile: "coding" },
+      commands: { ownerAllowFrom: ["slack:owner"] },
+    };
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    const { tools } = resolveGatewayScopedTools({
+      cfg: config,
+      sessionKey: "agent:main:slack:dm:owner:thread:123",
+      messageProvider: "slack",
+      accountId: "primary",
+      agentTo: "owner",
+      senderIsOwner: true,
+      channelContext: { sender: { id: "owner" } },
+      surface: "loopback",
+    });
+    const tool = expectDefined(
+      tools.find((candidate) => candidate.name === "gateway"),
+      "Gateway-scoped update tool",
+    );
+    const result = await tool.execute("update", {
+      action: "update.run",
+      requesterSenderId: "model-supplied-sender",
+    });
+
+    expect(result.details).toMatchObject({ ok: true });
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+      }),
+    );
+  });
+
+  it.each([false, true])(
+    "refuses before acknowledgement after discovery revokes ownership (managed=%s)",
+    async (managed) => {
+      detectRespawnSupervisorMock.mockReturnValue(managed ? "launchd" : null);
+      initializeGatewayUpdateStatusMock.mockImplementationOnce(async () => {
+        config = { commands: { ownerAllowFrom: ["replacement"] } };
+        return {
+          root: "/tmp/openclaw",
+          status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+          installReceipt: null,
+        };
+      });
+
+      const result = await runOwnerTool(
+        createGatewayTool({ senderIsOwner: true, requesterSenderId: "owner" }),
+      );
+
+      expect(result.details).toMatchObject({
+        ok: false,
+        reason: "owner_required",
+        ackDelivered: false,
+      });
+      expect(listUpdateRuns()).toEqual([
+        expect.objectContaining({ phase: "finished", status: "failed", reason: "owner_required" }),
+      ]);
+      expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
+      expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(sentinelState.capturedPayload).toBeUndefined();
+    },
+  );
+
   it.each([false, true])("rechecks after awaited acknowledgement (managed=%s)", async (managed) => {
     detectRespawnSupervisorMock.mockReturnValue(managed ? "launchd" : null);
     sendGatewayLifecycleNoticeMock.mockImplementationOnce(async () => {
@@ -145,12 +214,6 @@ describe("update.run current owner authority", () => {
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(sentinelState.capturedPayload).toBeUndefined();
-    expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining(
-          'openclaw config set commands.ownerAllowFrom \'["replacement","slack:owner"]\'',
-        ),
-      }),
-    );
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
   });
 });

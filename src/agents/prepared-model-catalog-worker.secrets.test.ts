@@ -13,21 +13,19 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
 import * as modelsConfig from "./models-config.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
-import {
-  prepareAgentCatalogSource,
-  prepareWorkspaceBuildGroup,
-} from "./prepared-model-runtime.facts.js";
+import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
+import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 
 // Run the real worker entrypoint without attaching it to Vitest's own worker port.
 vi.mock("node:worker_threads", async (importOriginal) => ({

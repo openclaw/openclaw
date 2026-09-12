@@ -1,5 +1,6 @@
 // Shared reply dispatcher type contracts for visible and message-tool delivery.
 import type { ReplyPayload } from "../types.js";
+import type { NormalizeReplyOutcome } from "./normalize-reply-skip-reason.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -14,6 +15,8 @@ export type ReplyDispatchSettledCounts = {
 export type ReplyDispatchReceipt = {
   counts: Record<ReplyDispatchKind, ReplyDispatchSettledCounts>;
   anyVisibleDelivered: boolean;
+  /** Delivery is queued or ambiguous; another send could duplicate it. */
+  hasPendingDelivery?: true;
 };
 
 export function mapReplyDispatchCounts<T>(
@@ -33,6 +36,8 @@ export type ReplyFollowupAdmissionBarrierTimeoutPolicy = {
 export type ReplyDispatchRuntimeInfo = {
   kind: ReplyDispatchKind;
   assistantMessageIndex?: number;
+  /** Display identity for replies in a configured multi-agent group. */
+  participant?: { agentId: string; name: string };
   /** @internal Claim direct-send custody immediately before recipient-visible platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Synchronously fence custody after claiming it and before provider I/O. */
@@ -53,6 +58,11 @@ export type ReplyDispatchBeforeDeliverOptions = {
 };
 
 export type ReplyDispatcher = {
+  /** @internal Preserve the delivery owner's preparation through dispatcher wrappers. */
+  prepareReplyPayload?: (
+    kind: ReplyDispatchKind,
+    payload: ReplyPayload,
+  ) => NormalizeReplyOutcome<ReplyPayload>;
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;

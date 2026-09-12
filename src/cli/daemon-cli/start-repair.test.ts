@@ -129,7 +129,6 @@ describe("repairLoadedGatewayServiceForStart", () => {
     resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
-      tokenRefConfigured: false,
       warnings: [],
     });
     readConfigFileSnapshotForWriteMock.mockResolvedValue({
@@ -286,11 +285,18 @@ describe("repairLoadedGatewayServiceForStart", () => {
     { status: "supported", expectedRuntime: "bun" },
     { status: "unsupported", expectedRuntime: "node" },
     { status: "probe-failed", expectedRuntime: null },
+    { status: "unsupported", sqliteSelectionError: true, expectedRuntime: null },
   ])(
-    "repairs an installed Bun Gateway only when its probe result is known ($status)",
-    async ({ status, expectedRuntime }) => {
+    "repairs an installed Bun Gateway only when its probe result is known ($status, selection error: $sqliteSelectionError)",
+    async ({ status, sqliteSelectionError, expectedRuntime }) => {
       const error = new Error("Bun runtime probe failed (cwd /root): EACCES");
-      resolveBunRuntimeInfoMock.mockResolvedValue({ status, error });
+      const selectionError =
+        "Cannot use SQLite library /opt/broken/libsqlite3.dylib: missing file. Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
+      resolveBunRuntimeInfoMock.mockResolvedValue({
+        status,
+        error,
+        ...(sqliteSelectionError ? { sqliteSelectionError: selectionError } : {}),
+      });
       const service = {
         install: vi.fn(async () => {}),
         isLoaded: vi.fn(async () => true),
@@ -319,8 +325,11 @@ describe("repairLoadedGatewayServiceForStart", () => {
         json: true,
         stdout: process.stdout,
       });
-      if (status === "probe-failed") {
-        await expect(repair).rejects.toBe(error);
+      if (expectedRuntime === null) {
+        // Neither an unreadable probe nor an operator's broken override may rewrite the service to Node.
+        await expect(repair).rejects.toThrow(
+          status === "probe-failed" ? error.message : selectionError,
+        );
         expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
         expect(service.install).not.toHaveBeenCalled();
         return;
@@ -570,4 +579,53 @@ describe("repairLoadedGatewayServiceForStart", () => {
     expect(installMock).not.toHaveBeenCalled();
     expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { action: "start", probe: "throws" },
+    { action: "restart", probe: "throws" },
+    { action: "start", probe: "returns false" },
+    { action: "restart", probe: "returns false" },
+  ] as const)(
+    "fails $action repair when the post-install probe $probe",
+    async ({ action, probe }) => {
+      const error = new Error("systemd show failed");
+      const service = {
+        install: vi.fn(async () => {}),
+        isLoaded: vi.fn(async () => {
+          if (probe === "throws") {
+            throw error;
+          }
+          return false;
+        }),
+      };
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        env: {},
+        command: {
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          environment: { HOME: "/home/openclaw" },
+        },
+      };
+      const params = {
+        service,
+        state,
+        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        json: true,
+        stdout: process.stdout,
+      };
+      const repair =
+        action === "restart"
+          ? repairLoadedGatewayServiceForStart({ ...params, action })
+          : repairLoadedGatewayServiceForStart(params);
+
+      if (probe === "throws") {
+        await expect(repair).rejects.toBe(error);
+      } else {
+        await expect(repair).rejects.toThrow("Gateway service is not loaded after repair.");
+      }
+      expect(service.install).toHaveBeenCalledTimes(1);
+    },
+  );
 });

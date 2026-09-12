@@ -9,6 +9,7 @@ import {
   normalizeAccountId,
   promptAccountId,
   promptChannelAccessConfig,
+  setSetupChannelEnabled,
   splitSetupEntries,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
@@ -671,11 +672,5 @@ export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
     });
   },
   dmPolicy,
-  disable: (cfg) => ({
-    ...(cfg as CoreConfig),
-    channels: {
-      ...(cfg as CoreConfig).channels,
-      matrix: { ...(cfg as CoreConfig).channels?.["matrix"], enabled: false },
-    },
-  }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

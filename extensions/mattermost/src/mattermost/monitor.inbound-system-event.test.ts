@@ -528,6 +528,19 @@ const testRuntime = (): RuntimeEnv =>
     }) as RuntimeEnv["exit"],
   }) satisfies RuntimeEnv;
 
+function startTestMonitor(
+  config: OpenClawConfig,
+  abortController: AbortController,
+  socket: FakeWebSocket,
+): Promise<void> {
+  return monitorMattermostProvider({
+    config,
+    runtime: testRuntime(),
+    abortSignal: abortController.signal,
+    webSocketFactory: () => socket,
+  });
+}
+
 async function emitMattermostChannelPost(
   socket: FakeWebSocket,
   params: {
@@ -691,12 +704,7 @@ describe("mattermost inbound user posts", () => {
     const startProvider = async () => {
       const socket = new FakeWebSocket();
       const abortController = new AbortController();
-      const monitor = monitorMattermostProvider({
-        config: testConfig,
-        runtime: testRuntime(),
-        abortSignal: abortController.signal,
-        webSocketFactory: () => socket,
-      });
+      const monitor = startTestMonitor(testConfig, abortController, socket);
       for (let tick = 0; tick < 20 && socket.openListenerCount === 0; tick += 1) {
         await Promise.resolve();
       }
@@ -914,12 +922,7 @@ describe("mattermost inbound user posts", () => {
       mockState.abortController = abortController;
       mockState.resolveMattermostMedia.mockResolvedValueOnce(failedMedia);
 
-      const monitor = monitorMattermostProvider({
-        config: testConfig,
-        runtime: testRuntime(),
-        abortSignal: abortController.signal,
-        webSocketFactory: () => socket,
-      });
+      const monitor = startTestMonitor(testConfig, abortController, socket);
 
       await vi.waitFor(() => {
         expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1003,12 +1006,7 @@ describe("mattermost inbound user posts", () => {
     };
     mockState.runtimeCore = createRuntimeCore(config);
 
-    const monitor = monitorMattermostProvider({
-      config,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(config, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1088,12 +1086,7 @@ describe("mattermost inbound user posts", () => {
       });
       mockState.runtimeCore = runtimeCore;
 
-      const monitor = monitorMattermostProvider({
-        config,
-        runtime: testRuntime(),
-        abortSignal: abortController.signal,
-        webSocketFactory: () => socket,
-      });
+      const monitor = startTestMonitor(config, abortController, socket);
 
       await vi.waitFor(() => {
         expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1321,12 +1314,7 @@ describe("mattermost inbound user posts", () => {
     mockState.abortController = abortController;
     mockState.runtimeCore = createRuntimeCore(testConfig, undefined, { verboseDebug });
 
-    const monitor = monitorMattermostProvider({
-      config: testConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(testConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1366,12 +1354,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = monitorMattermostProvider({
-      config: testConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(testConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1484,9 +1467,16 @@ describe("mattermost inbound user posts", () => {
     },
   );
 
-  it.each([undefined, false, true])(
-    "keeps Mattermost progress useful and clears after delivery with toolProgress=%s",
-    async (toolProgress) => {
+  it.each([
+    { toolProgress: undefined, label: "Working", mode: "progress" },
+    { toolProgress: false, label: "Working", mode: "progress" },
+    { toolProgress: true, label: "Working", mode: "progress" },
+    { toolProgress: false, label: false, mode: "progress" },
+    { toolProgress: true, label: false, mode: "partial" },
+    { toolProgress: true, label: false, mode: "block" },
+  ] as const)(
+    "keeps Mattermost $mode progress with $toolProgress and label $label",
+    async ({ toolProgress, label, mode }) => {
       const socket = new FakeWebSocket();
       const abortController = new AbortController();
       mockState.abortController = abortController;
@@ -1494,6 +1484,8 @@ describe("mattermost inbound user posts", () => {
         update: vi.fn(),
         flush: vi.fn(async () => {}),
         clear: vi.fn(async () => {}),
+        deleteCurrentMessage: vi.fn(async () => {}),
+        forceNewMessage: vi.fn(async () => {}),
         stop: vi.fn(async () => {}),
       };
       mockState.createMattermostDraftStream.mockReturnValue(draftStream);
@@ -1507,9 +1499,9 @@ describe("mattermost inbound user posts", () => {
             dmPolicy: "open",
             groupPolicy: "open",
             streaming: {
-              mode: "progress",
+              mode,
               progress: {
-                label: "Working",
+                label,
                 toolProgress,
               },
             },
@@ -1517,7 +1509,42 @@ describe("mattermost inbound user posts", () => {
         },
       };
       mockState.runtimeCore = createRuntimeCore(progressConfig);
+      let firstPlanRetractionDeletes = 0;
+      let resumedProgress: string | undefined;
+      let retractedProgress: string | undefined;
+      let secondPlanRetractionDeletes = 0;
       mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+        if (label === false) {
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: "update",
+            steps: [{ step: "Inspect", status: "in_progress" }],
+          });
+          await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+          firstPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: "update",
+            steps: [{ step: "Resume", status: "in_progress" }],
+          });
+          params.replyOptions?.onAssistantMessageStart?.();
+          await params.replyOptions?.onItemEvent?.({
+            itemId: "card-rejected",
+            kind: "tool",
+            name: "progress_card",
+            phase: "end",
+            status: "blocked",
+          });
+          params.replyOptions?.onAssistantMessageStart?.();
+          await params.replyOptions?.onToolStart?.({
+            toolCallId: "exec-boundary",
+            name: "exec",
+            phase: "start",
+          });
+          resumedProgress = draftStream.update.mock.calls.at(-1)?.[0];
+          params.replyOptions?.onAssistantMessageStart?.();
+          await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+          retractedProgress = draftStream.update.mock.calls.at(-1)?.[0];
+          secondPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
+        }
         await params.replyOptions?.onToolStart?.({
           toolCallId: "read-1",
           name: "read",
@@ -1553,16 +1580,25 @@ describe("mattermost inbound user posts", () => {
           name: "exec",
           status: "failed",
         });
+        await params.replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "1/2 complete",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        });
+        await params.replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Progress updated",
+          steps: [],
+        });
+        await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
         await params.replyOptions?.onObservedReplyDelivery?.();
         abortController.abort();
       });
 
-      const monitor = monitorMattermostProvider({
-        config: progressConfig,
-        runtime: testRuntime(),
-        abortSignal: abortController.signal,
-        webSocketFactory: () => socket,
-      });
+      const monitor = startTestMonitor(progressConfig, abortController, socket);
 
       await vi.waitFor(() => {
         expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1595,18 +1631,41 @@ describe("mattermost inbound user posts", () => {
       const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
       expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       expect(draftStream.clear).toHaveBeenCalledTimes(1);
+      if (label === false) {
+        expect(firstPlanRetractionDeletes).toBe(1);
+        expect(resumedProgress).toContain("▸ Resume");
+        if (toolProgress) {
+          expect(resumedProgress).toContain("blocked");
+          expect(resumedProgress).toContain("Exec");
+          expect(retractedProgress).not.toContain("Resume");
+          expect(retractedProgress).toContain("blocked");
+          expect(secondPlanRetractionDeletes).toBe(1);
+        } else {
+          expect(resumedProgress).not.toContain("blocked");
+          expect(resumedProgress).not.toContain("Exec");
+          expect(secondPlanRetractionDeletes).toBe(2);
+        }
+      }
       const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
       if (toolProgress) {
         expect(updates.at(-1)).toContain("Read");
         expect(updates.at(-1)).toContain("done");
+        expect(updates.at(-1)).toContain("failed");
       } else {
-        expect(updates[0]).toBe("Working");
+        expect(updates[0]).toBe(label === false ? "▸ Inspect" : "Working");
         expect(updates.at(-1)).not.toContain("Read");
         expect(updates.at(-1)).not.toContain("done");
+        expect(updates.join("\n")).not.toContain("failed");
       }
-      expect(updates.at(-1)).toContain("failed");
-      expect(updates.at(-1)).toContain("Checking");
+      if (mode === "progress") {
+        expect(updates.at(-1)).toContain("Checking");
+      }
       expect(updates.at(-1)).not.toContain("ThinkingChecking");
+      expect(updates.some((text) => text.includes("1/2 complete"))).toBe(true);
+      expect(updates.some((text) => text.includes("✅ Inspect"))).toBe(true);
+      expect(updates.some((text) => text.includes("▸ Patch"))).toBe(true);
+      expect(updates.some((text) => text.includes("Progress updated"))).toBe(true);
+      expect(updates.join("\n")).not.toContain("<progress");
     },
   );
 
@@ -1634,12 +1693,7 @@ describe("mattermost inbound user posts", () => {
       shouldHandleTextCommands: () => true,
     });
 
-    const monitor = monitorMattermostProvider({
-      config: inlineCommandConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(inlineCommandConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1719,12 +1773,7 @@ describe("mattermost inbound user posts", () => {
       type: "D",
     });
 
-    const monitor = monitorMattermostProvider({
-      config: directConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(directConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1791,12 +1840,7 @@ describe("mattermost inbound user posts", () => {
       shouldHandleTextCommands: () => true,
     });
 
-    const monitor = monitorMattermostProvider({
-      config: mentionConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(mentionConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1831,12 +1875,7 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = runtimeCore;
     mockState.resolveChannelInfo.mockResolvedValue(null);
 
-    const monitor = monitorMattermostProvider({
-      config: testConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(testConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1896,12 +1935,7 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = runtimeCore;
     mockState.resolveChannelInfo.mockResolvedValue(null);
 
-    const monitor = monitorMattermostProvider({
-      config: channelTypeConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(channelTypeConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -1956,12 +1990,7 @@ describe("mattermost inbound user posts", () => {
       createInboundDebouncer,
     });
 
-    const monitor = monitorMattermostProvider({
-      config,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(config, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2031,12 +2060,7 @@ describe("mattermost inbound user posts", () => {
     });
     mockState.runtimeCore = runtimeCore;
 
-    const monitor = monitorMattermostProvider({
-      config: mentionConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(mentionConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2120,12 +2144,7 @@ describe("mattermost inbound user posts", () => {
       team_id: "team-1",
       type: "D",
     });
-    const monitor = monitorMattermostProvider({
-      config: directConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(directConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2268,12 +2287,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = monitorMattermostProvider({
-      config: offConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(offConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2302,12 +2316,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = monitorMattermostProvider({
-      config: testConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(testConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2343,12 +2352,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = monitorMattermostProvider({
-      config: testConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(testConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2542,12 +2546,7 @@ describe("mattermost inbound user posts", () => {
       abortController.abort();
     });
 
-    const monitor = monitorMattermostProvider({
-      config: blockConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(blockConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2653,12 +2652,7 @@ describe("mattermost inbound user posts", () => {
       abortController.abort();
     });
 
-    const monitor = monitorMattermostProvider({
-      config: blockConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(blockConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2732,12 +2726,7 @@ describe("mattermost inbound user posts", () => {
       abortController.abort();
     });
 
-    const monitor = monitorMattermostProvider({
-      config: blockConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(blockConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2812,12 +2801,7 @@ describe("mattermost inbound user posts", () => {
       }
     });
 
-    const monitor = monitorMattermostProvider({
-      config: blockConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(blockConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
@@ -2902,12 +2886,7 @@ describe("mattermost inbound user posts", () => {
       },
     );
 
-    const monitor = monitorMattermostProvider({
-      config: progressConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+    const monitor = startTestMonitor(progressConfig, abortController, socket);
 
     await vi.waitFor(() => {
       expect(socket.openListenerCount).toBeGreaterThan(0);

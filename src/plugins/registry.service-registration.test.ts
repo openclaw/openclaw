@@ -1,8 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createPluginRecord } from "./loader-records.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { createPluginRegistry } from "./registry.js";
+import {
+  clearActivePluginRegistry,
+  disposePluginRegistryInstances,
+  setActivePluginRegistry,
+} from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { startPluginServices } from "./services.js";
+
+const registries: ReturnType<typeof createPluginRegistry>["registry"][] = [];
+
+afterEach(async () => {
+  await clearActivePluginRegistry();
+  for (const registry of registries.splice(0)) {
+    await disposePluginRegistryInstances(registry);
+  }
+});
 
 class ClassBackedLifecycleService {
   starts = 0;
@@ -30,18 +46,56 @@ function createRegistrationFixture() {
     runtime: {} as PluginRuntime,
     activateGlobalSideEffects: false,
   });
-  const createRecord = (id: string) =>
-    createPluginRecord({
+  registries.push(builder.registry);
+  const createRecord = (id: string) => {
+    const record = createPluginRecord({
       id,
       source: `/plugins/${id}/index.ts`,
       origin: "global",
       enabled: true,
       configSchema: false,
     });
+    builder.registry.plugins.push(record);
+    return record;
+  };
   return { builder, createRecord };
 }
 
 describe("plugin service registration identity", () => {
+  it("runs native-backed service methods in their registering instance's runtime scope", async () => {
+    const { builder, createRecord } = createRegistrationFixture();
+    const record = createRecord("native-service-owner");
+    const instance = new PluginInstance(record.id, { record, registry: builder.registry });
+    const store = createPluginRuntimeStore<object>("native service runtime missing");
+    const runtime = {};
+    const calls: Array<{ phase: string; value: number; runtime: object | null }> = [];
+    class NativeService extends Date {
+      readonly id = "native-service";
+      start() {
+        calls.push({ phase: "start", value: this.getTime(), runtime: store.tryGetRuntime() });
+      }
+      stop() {
+        calls.push({ phase: "stop", value: this.getTime(), runtime: store.tryGetRuntime() });
+      }
+    }
+    const service = new NativeService(37);
+    instance.run(() => {
+      store.setRuntime(runtime);
+      builder.createApi(record, { config: {} }).registerService(service);
+    });
+    const services = await startPluginServices({ registry: builder.registry, config: {} });
+    try {
+      await services.stop();
+      expect(calls).toEqual([
+        { phase: "start", value: 37, runtime },
+        { phase: "stop", value: 37, runtime },
+      ]);
+      expect(calls.every((call) => call.runtime === runtime)).toBe(true);
+    } finally {
+      await services.stop();
+    }
+  });
+
   it.each([
     { surface: "service", id: "" },
     { surface: "service", id: "   " },
@@ -124,7 +178,11 @@ describe("plugin service registration identity", () => {
           ? builder.registry.services
           : builder.registry.gatewayDiscoveryServices;
       expect(registrations).toHaveLength(1);
-      expect(registrations[0]?.service).toBe(firstService);
+      expect(registrations[0]).toMatchObject({
+        pluginId: firstRecord.id,
+        source: firstRecord.source,
+        service: { id: firstService.id },
+      });
       expect(registrations[0]?.service).toBeInstanceOf(ClassBackedLifecycleService);
 
       const recordIds =
@@ -148,13 +206,23 @@ describe("plugin service registration identity", () => {
         ).toEqual([]);
       }
 
+      setActivePluginRegistry(builder.registry);
       if (surface === "service") {
         const handle = await startPluginServices({ registry: builder.registry, config: {} });
-        expect(firstService.starts).toBe(1);
-        expect(secondService.starts).toBe(0);
-        await handle.stop();
+        try {
+          expect(firstService.starts).toBe(1);
+          expect(secondService.starts).toBe(0);
+        } finally {
+          await handle.stop();
+        }
       } else {
-        await builder.registry.gatewayDiscoveryServices[0]?.service.advertise({} as never);
+        await builder.registry.gatewayDiscoveryServices[0]!.service.advertise({
+          machineDisplayName: "fixture",
+          gatewayPort: 18789,
+          gatewayTlsEnabled: false,
+          gatewayDirectReachable: true,
+          minimal: true,
+        });
         expect(firstService.advertisements).toBe(1);
         expect(secondService.advertisements).toBe(0);
       }

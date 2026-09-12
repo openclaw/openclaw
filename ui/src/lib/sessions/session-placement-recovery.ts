@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import type { HumanMention } from "../chat/chat-types.ts";
 import { readHumanMentions } from "../chat/human-mentions.ts";
@@ -17,7 +18,7 @@ import {
 } from "./session-placement-recovery-storage-key.ts";
 
 export type SessionPlacementTarget =
-  | { kind: "profile"; profileId: string; machineClass?: string }
+  | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
   | { kind: "device"; deviceId: string }
   | { kind: "auto-device" };
 
@@ -27,8 +28,10 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   message: "";
   projectId?: string;
   visibility?: "draft";
-  worktree: true;
-};
+} & (
+    | { worktree: true; repository?: undefined }
+    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+  );
 
 type SessionPlacementSubmission = {
   sessionKey: string;
@@ -62,6 +65,7 @@ const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
   "displayName",
+  "titleSource",
   "model",
   "contextWindow",
   "thinkingLevel",
@@ -76,6 +80,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "agentId",
   "message",
   "worktree",
+  "repository",
   "incognito",
   "visibility",
   "permissionMode",
@@ -98,7 +103,15 @@ export function parseSessionPlacementCreateParams(
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
-    record.worktree !== true ||
+    (record.repository === undefined
+      ? record.worktree !== true
+      : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
+        record.worktree !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.worktreeName !== undefined ||
+        record.catalogId !== undefined) ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
     (record.fastMode !== undefined &&
@@ -107,6 +120,8 @@ export function parseSessionPlacementCreateParams(
       !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
     (record.toolOverrides !== undefined &&
       !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
+    (record.titleSource !== undefined &&
+      !Value.Check(SessionsCreateParamsSchema.properties.titleSource, record.titleSource)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -145,9 +160,10 @@ function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | n
   if (
     value.kind === "profile" &&
     Object.keys(value).every(
-      (key) => key === "kind" || key === "profileId" || key === "machineClass",
+      (key) => key === "kind" || key === "profileId" || key === "os" || key === "machineClass",
     ) &&
     isNonEmptyString(value.profileId) &&
+    (value.os === undefined || (isNonEmptyString(value.os) && value.os.length <= 64)) &&
     (value.machineClass === undefined ||
       (isNonEmptyString(value.machineClass) && value.machineClass.length <= 128))
   ) {
@@ -520,7 +536,7 @@ export function pauseSessionPlacementRecovery(
     ...recovery,
     phase: "paused",
     reason,
-    error: formatUiError(error).slice(0, SESSION_PLACEMENT_ERROR_MAX_LENGTH),
+    error: truncateUtf16Safe(formatUiError(error), SESSION_PLACEMENT_ERROR_MAX_LENGTH),
   };
   const persisted = persistent && writeSessionPlacementRecoveryIfAvailable(paused);
   if (persistent && !persisted) {
@@ -539,11 +555,10 @@ export function pauseSessionPlacementRecovery(
         recovery.messageId,
       );
     }
-    paused.error =
-      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`.slice(
-        0,
-        SESSION_PLACEMENT_ERROR_MAX_LENGTH,
-      );
+    paused.error = truncateUtf16Safe(
+      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`,
+      SESSION_PLACEMENT_ERROR_MAX_LENGTH,
+    );
   }
   return { recovery: paused, persisted };
 }

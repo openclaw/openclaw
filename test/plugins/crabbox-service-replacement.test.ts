@@ -56,17 +56,20 @@ describe("Crabbox service replacement", () => {
           }
         }
         return {
-          stdout: JSON.stringify({
-            id: "cbx_replacement",
-            providerMetadata: { instanceProfileAttached: false },
-            host: "worker.example.test",
-            sshHost: "worker.example.test",
-            sshKey: "/mock/worker-key",
-            sshPort: 2222,
-            sshUser: "openclaw",
-            ready: true,
-            state: "running",
-          }),
+          stdout:
+            argv[1] === "--version"
+              ? "0.56.0"
+              : JSON.stringify({
+                  id: "cbx_replacement",
+                  providerMetadata: { instanceProfileAttached: false },
+                  host: "worker.example.test",
+                  sshHost: "worker.example.test",
+                  sshKey: "/mock/worker-key",
+                  sshPort: 2222,
+                  sshUser: "openclaw",
+                  ready: true,
+                  state: "running",
+                }),
           stderr: "",
           code: 0,
           signal: null,

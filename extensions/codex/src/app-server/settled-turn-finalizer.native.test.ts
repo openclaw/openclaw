@@ -4,7 +4,10 @@ import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readVisibleSessionTranscriptMessageEntries,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
 import * as authBridge from "./auth-bridge.js";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
@@ -27,11 +30,13 @@ import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   seedCodexTestBinding,
+  testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import * as settledContext from "./settled-turn-context.js";
 import { runCodexSettledTurnFinalization } from "./settled-turn-finalizer.js";
 import * as sharedClients from "./shared-client.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { runCodexAppServerSideQuestion } from "./side-question.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -49,10 +54,10 @@ const SUMMARY = "The action completed once.";
 type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 type NativeRunParams = ReturnType<typeof createNativeRunParams>;
 type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "summary" | "health";
+type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health";
 
 async function closeNativeClient(client: CodexAppServerClient): Promise<void> {
-  expect(await client.closeAndWait()).toBe(true);
+  expect(await client.closeAndWait()).toMatchObject({ exited: true });
 }
 
 async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {
@@ -64,6 +69,7 @@ async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {
     }
   }
   const requests: Array<{ body: JsonObject; account: string | undefined }> = [];
+  let requestReceived = createDeferred<void>();
   let phase: NativePhase = "probe";
   let actionRequests = 0;
   const server = http.createServer((request, response) => {
@@ -85,6 +91,7 @@ async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {
         }
         const account = request.headers.authorization;
         requests.push({ body: parsed, account });
+        requestReceived.resolve();
         if (account !== `Bearer ${NATIVE_KEY}` && account !== `Bearer ${HOST_KEY}`) {
           response.writeHead(401).end();
           return;
@@ -93,11 +100,18 @@ async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {
           response.writeHead(400).end();
           return;
         }
-        if (phase === "action") {
+        if (phase === "hold") {
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.write(
+            `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: `response-${requests.length}` } })}\n\n`,
+          );
+          return;
+        }
+        if (phase === "action" || phase === "side") {
           actionRequests += 1;
         }
         const item =
-          phase === "action"
+          phase === "action" || (phase === "side" && actionRequests === 1)
             ? actionRequests === 1
               ? {
                   type: "function_call",
@@ -115,7 +129,12 @@ async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {
                 type: "message",
                 role: "assistant",
                 id: `answer-${requests.length}`,
-                content: [{ type: "output_text", text: phase === "summary" ? SUMMARY : "Ready." }],
+                content: [
+                  {
+                    type: "output_text",
+                    text: phase === "summary" || phase === "side" ? SUMMARY : "Ready.",
+                  },
+                ],
               };
         const events = [
           { type: "response.created", response: { id: `response-${requests.length}` } },
@@ -183,9 +202,11 @@ async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {
     authProfileStore,
     requests,
     marker: path.join(native.cwd, "completed-actions.txt"),
+    waitForRequest: () => requestReceived.promise,
     setPhase(next: NativePhase) {
       phase = next;
       requests.length = 0;
+      requestReceived = createDeferred<void>();
       actionRequests = 0;
     },
   };
@@ -387,6 +408,223 @@ function trackSharedClient(cleanups: Cleanup[]) {
 describe.skipIf(process.platform === "win32")(
   "stock Codex settled-turn finalization ownership",
   () => {
+    it.each(["before completion", "after completion"] as const)(
+      "settles a bounded turn when the native process closes %s",
+      { timeout: 60_000 },
+      async (closure) => {
+        await withNativeFixture(async (fixture, cleanups) => {
+          const pluginConfig = {
+            ...fixture.pluginConfig,
+            appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
+          };
+          await writeNativeConfig(
+            fixture,
+            authBridge.resolveCodexAppServerHomeDir(fixture.agentDir),
+            "openai",
+          );
+          fixture.setPhase(closure === "before completion" ? "hold" : "probe");
+          const admittedClient = createDeferred<CodexAppServerClient>();
+          const run = runBoundedCodexAppServerTurn({
+            model: { mode: "required", id: HOST_MODEL },
+            profile: HOST_PROFILE,
+            authProfileStore: fixture.authProfileStore,
+            agentDir: fixture.agentDir,
+            timeoutMs: 15_000,
+            taskLabel: "client close proof",
+            developerInstructions: "Wait for the answer.",
+            input: [{ type: "text", text: "Start the request.", text_elements: [] }],
+            requiredModalities: ["text"],
+            isolation: "configured-transport",
+            requireNoExternalCapabilities: true,
+            options: {
+              pluginConfig,
+              clientFactory: async (options) => {
+                const client = await sharedClients.createIsolatedCodexAppServerClient({
+                  ...options,
+                  authProfileStore: fixture.authProfileStore,
+                });
+                if (closure === "after completion") {
+                  client.addNotificationHandler((notification) => {
+                    if (notification.method === "turn/completed") {
+                      // The router receives this native frame synchronously; close before
+                      // its asynchronous projections run to exercise terminal precedence.
+                      queueMicrotask(() => client.close());
+                    }
+                  });
+                }
+                admittedClient.resolve(client);
+                cleanups.push(async () => {
+                  await closeNativeClient(client);
+                  await settled;
+                });
+                return client;
+              },
+            },
+          });
+          const settled = run.then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          await Promise.race([
+            fixture.waitForRequest(),
+            settled.then((error) => {
+              throw new Error("Bounded turn ended before provider admission", { cause: error });
+            }),
+          ]);
+          const client = await admittedClient.promise;
+          if (closure === "before completion") {
+            client.close();
+            await expect(run).rejects.toThrow("closed");
+          } else {
+            await expect(run).resolves.toMatchObject({ text: "Ready." });
+            expect(client.getCloseError()).toBeDefined();
+          }
+        });
+      },
+    );
+
+    it(
+      "runs and cancels ephemeral side forks without changing the parent",
+      { timeout: 60_000 },
+      async () => {
+        await withNativeFixture(async (fixture, cleanups) => {
+          const pluginConfig = {
+            ...fixture.pluginConfig,
+            appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
+          };
+          await writeNativeConfig(
+            fixture,
+            authBridge.resolveCodexAppServerHomeDir(fixture.agentDir),
+            "openai",
+          );
+          const params = await createRunParams(fixture);
+          usePreparedApiKey(params, fixture.baseUrl);
+          const shared = trackSharedClient(cleanups);
+          const initialized = await runCodexAppServerAttempt(
+            { ...params, prompt: "Initialize the source." },
+            {
+              pluginConfig,
+              clientFactory: shared.factory,
+              nativeHookRelay: { enabled: false },
+            },
+          );
+          expect(initialized.terminal).toEqual({ kind: "ok" });
+          const binding = await readCodexAppServerBinding(params.sessionFile);
+          if (!binding || !params.runtimePlan) {
+            throw new Error("Missing initialized native parent");
+          }
+          const client = shared.client();
+          const before = await client.request("thread/read", {
+            threadId: binding.threadId,
+            includeTurns: true,
+          });
+          const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
+            transcriptTarget(params),
+          );
+          const closeSideHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+          cleanups.push(async () => closeSideHost());
+          const side = {
+            cfg: params.config ?? {},
+            agentDir: fixture.agentDir,
+            agentId: "main",
+            provider: "openai",
+            model: NATIVE_MODEL,
+            runtimeModel: params.model,
+            question: "Record the completed action once.",
+            preparedRuntimeAuth: {
+              plan: params.runtimePlan.auth,
+              authProfileStore: fixture.authProfileStore,
+              authStorage: params.authStorage,
+              modelRegistry: params.modelRegistry,
+              resolvedApiKey: HOST_KEY,
+            },
+            sessionEntry: {
+              sessionId: params.sessionId,
+              updatedAt: 1,
+              permissionMode: "full" as const,
+            },
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            storePath: params.sessionTarget?.storePath,
+            workspaceDir: fixture.native.cwd,
+            resolvedReasoningLevel: "off" as const,
+            isNewSession: false,
+            hostCapabilities: params.hostCapabilities,
+          };
+          const options = {
+            pluginConfig,
+            bindingStore: testCodexAppServerBindingStore,
+            nativeHookRelay: { enabled: false },
+          };
+          const calls = vi.spyOn(client, "request");
+          fixture.setPhase("side");
+          await expect(runCodexAppServerSideQuestion(side, options)).resolves.toEqual({
+            text: SUMMARY,
+          });
+          expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
+          const forks = calls.mock.calls.filter(([method]) => method === "thread/fork");
+          expect(forks).toHaveLength(1);
+          expect(forks[0]?.[1]).toMatchObject({
+            threadId: binding.threadId,
+            ephemeral: true,
+            excludeTurns: true,
+          });
+          expect(
+            (
+              await client.request("thread/read", {
+                threadId: binding.threadId,
+                includeTurns: true,
+              })
+            ).thread.turns,
+          ).toEqual(before.thread.turns);
+          expect(
+            await readVisibleSessionTranscriptMessageEntries(transcriptTarget(params)),
+          ).toEqual(transcriptBefore);
+          expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(binding);
+
+          fixture.setPhase("hold");
+          const controller = new AbortController();
+          const cancelled = runCodexAppServerSideQuestion(
+            {
+              ...side,
+              question: "Wait for cancellation.",
+              opts: { abortSignal: controller.signal },
+            },
+            options,
+          );
+          const settled = cancelled.then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          try {
+            await Promise.race([
+              fixture.waitForRequest(),
+              settled.then((error) => {
+                throw new Error("Side turn ended before provider admission", { cause: error });
+              }),
+            ]);
+            controller.abort("native side cancellation proof");
+            await expect(cancelled).rejects.toThrow("aborted");
+          } finally {
+            controller.abort("native side proof cleanup");
+            await settled;
+          }
+          expect(calls.mock.calls.filter(([method]) => method === "turn/interrupt")).toHaveLength(
+            1,
+          );
+          expect(
+            calls.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
+          ).toHaveLength(2);
+          expect(client.getCloseError()).toBeUndefined();
+          fixture.setPhase("health");
+          await runNativePrompt(client, binding.threadId, "Confirm the parent still works.");
+          expect(fixture.requests).toHaveLength(1);
+          expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
+        });
+      },
+    );
+
     it(
       "refuses supervised finalization even when different host credentials and model work",
       { timeout: 60_000 },
@@ -583,18 +821,28 @@ describe.skipIf(process.platform === "win32")(
         homeScope: "agent" as const,
         preserveNativeModel: false,
         prepared: true,
+        priorCount: 0,
       },
       {
         label: "preserveNativeModel-only host profile",
         homeScope: "agent" as const,
         preserveNativeModel: true,
         prepared: false,
+        priorCount: 0,
       },
       {
         label: "ordinary user-home private host profile",
         homeScope: "user" as const,
         preserveNativeModel: false,
         prepared: false,
+        priorCount: 0,
+      },
+      {
+        label: "long conversation",
+        homeScope: "agent" as const,
+        preserveNativeModel: false,
+        prepared: true,
+        priorCount: 201,
       },
     ])(
       "persists a host-authorized summary with the actual native selection ($label)",
@@ -644,6 +892,16 @@ describe.skipIf(process.platform === "win32")(
             });
             params.modelId = HOST_MODEL;
             params.model = { ...params.model, id: HOST_MODEL };
+          }
+          for (let index = 0; index < scenario.priorCount; index += 1) {
+            await appendSessionTranscriptMessageByIdentity({
+              ...transcriptTarget(params),
+              message: {
+                role: "user",
+                content: `Earlier synthetic request ${index}.`,
+                timestamp: index + 1,
+              },
+            });
           }
           fixture.setPhase("action");
           params.runId = "run-settled-action";
@@ -703,6 +961,21 @@ describe.skipIf(process.platform === "win32")(
           expect(
             fixture.requests.map(({ body, account }) => ({ model: body.model, account })),
           ).toEqual([{ model: NATIVE_MODEL, account: `Bearer ${HOST_KEY}` }]);
+          expect(fixture.requests[0]?.body.input).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                role: "developer",
+                content: expect.arrayContaining([
+                  expect.objectContaining({
+                    type: "input_text",
+                    text: expect.stringContaining(
+                      "Earlier conversation may be omitted; do not infer missing earlier facts.",
+                    ),
+                  }),
+                ]),
+              }),
+            ]),
+          );
           expect(
             summaryRequests?.mock.calls
               .filter(([method]) => method === "account/login/start")

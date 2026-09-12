@@ -1,4 +1,4 @@
-import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Tests provider-compatible tool schema normalization.
@@ -25,23 +25,12 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import {
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
+  getBeforeToolCallHookContext,
+  getBeforeToolCallSourceTool,
 } from "./before-tool-call-metadata.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
-const beforeToolCallTesting = {
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-};
-
-const TEST_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const TEST_USAGE = createZeroUsageFixture();
 
 describe("direct exec tool schema", () => {
   it("keeps model-facing descriptions compact without hiding runtime constraints", () => {
@@ -408,6 +397,27 @@ describe("normalizeToolParameterSchema", () => {
       enum: ["a", "b"],
     });
   });
+
+  it.each(["own", "inherited"] as const)(
+    "inlines definitions attached to %s array roots",
+    (kind) => {
+      const schemas = [{ $ref: "#/$defs/Value" }, { $ref: "#/definitions/Value" }];
+      const definitions = {
+        $defs: { Value: { type: "string" } },
+        definitions: { Value: { type: "integer" } },
+      };
+      if (kind === "own") {
+        Object.assign(schemas, definitions);
+      } else {
+        Object.setPrototypeOf(schemas, Object.assign(Object.create(Array.prototype), definitions));
+      }
+
+      expect(normalizeToolParameterSchema(schemas)).toEqual([
+        { type: "string" },
+        { type: "integer" },
+      ]);
+    },
+  );
 
   it("inlines nested local $ref schemas for provider-neutral tools", () => {
     expect(
@@ -1026,11 +1036,9 @@ describe("normalizeToolParameters", () => {
     const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
 
     const normalized = normalizeToolParameters(wrapped);
-    const tagged = normalized as unknown as Record<symbol, unknown>;
-
     expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
-    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_SOURCE_TOOL]).toBe(source);
-    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT]).toBe(hookContext);
+    expect(getBeforeToolCallSourceTool(normalized)).toBe(source);
+    expect(getBeforeToolCallHookContext(normalized)).toBe(hookContext);
   });
 
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
@@ -1375,6 +1383,9 @@ describe("normalizeToolParameters", () => {
         properties: Object.fromEntries([
           ["__proto__", { type: "array", items: {} }],
           ["emptyItems", { type: "array" }],
+          ["undefinedItems", { type: "array", items: undefined }],
+          ["unionItems", { type: ["array", "null"], items: {} }],
+          ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
           ["typedItems", { type: "array", items: { type: "string" } }],
           ["falseItems", { type: "array", items: false }],
           ["nullItems", { type: "array", items: null }],
@@ -1394,6 +1405,9 @@ describe("normalizeToolParameters", () => {
       properties: Object.fromEntries([
         ["__proto__", { type: "array" }],
         ["emptyItems", { type: "array" }],
+        ["undefinedItems", { type: "array" }],
+        ["unionItems", { type: ["array", "null"] }],
+        ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
         ["typedItems", { type: "array", items: { type: "string" } }],
         ["falseItems", { type: "array", items: false }],
         ["nullItems", { type: "array", items: null }],

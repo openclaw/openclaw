@@ -75,11 +75,7 @@ import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../media-contract.js";
-import {
-  getCachedIMessagePrivateApiStatus,
-  imessageRpcSupportsMethod,
-  probeIMessage,
-} from "../probe.js";
+import { imessageRpcSupportsMethod, probeIMessage, probeIMessagePrivateApi } from "../probe.js";
 import {
   hasIMessageQuestionReactionTarget,
   maybeResolveIMessageQuestionReaction,
@@ -937,10 +933,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
-    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+    // A bridge stall invalidates the process-wide capability snapshot before
+    // recovery re-injects the helper. Re-resolve a missing/expired snapshot so
+    // later inbound turns can resume typing and read receipts without waiting
+    // for an unrelated action or a gateway restart to populate the cache.
+    const privateApiStatus = await probeIMessagePrivateApi(cliPath, probeTimeoutMs);
     const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
     const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
-    if (privateApiStatus?.available === true) {
+    if (privateApiStatus.available) {
       // Surface a single warning per restart when the bridge is up but we
       // had to gate off typing/read because the imsg build pre-dates the
       // capability list. Otherwise the user sees no typing bubble / no
@@ -1222,12 +1222,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
-          // visible tool-progress message. The suppress flag is what lets
-          // dispatch forward this callback even when verbose progress is off;
-          // allowProgress covers message_tool_only source delivery. Keep this on
-          // the direct instant/default path even when older imsg builds do not
-          // report native typing support.
+          // visible tool-progress message. The lifecycle flag lets dispatch
+          // forward it while text progress is hidden; allowProgress covers
+          // message_tool_only source delivery. Keep this on the direct
+          // instant/default path even when older imsg builds do not report
+          // native typing support.
           suppressDefaultToolProgressMessages: true,
+          allowToolLifecycleWhenProgressHidden: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;

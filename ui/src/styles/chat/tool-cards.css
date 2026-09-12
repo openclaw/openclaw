@@ -30,7 +30,7 @@
 
 .chat-inline-disclosure:focus-visible {
   color: var(--text);
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -70,21 +70,24 @@
 }
 
 .chat-tool-msg-summary,
-.chat-activity-group__summary {
-  --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
-
+.chat-activity-group__summary,
+.chat-subagent-activity__row {
+  font-family: inherit;
   font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
   line-height: 1.5;
+}
+
+.chat-tool-msg-summary,
+.chat-activity-group__summary {
+  --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
+
   color: var(--chat-tool-activity-color);
 }
 
 .chat-tool-msg-summary :where(span, code, button),
 .chat-activity-group__summary :where(span, code, button) {
-  font-family: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-  line-height: inherit;
+  font: inherit;
   letter-spacing: inherit;
 }
 
@@ -158,7 +161,6 @@
   border: 0;
   background: transparent;
   color: inherit;
-  font: inherit;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 18%, transparent);
   text-underline-offset: 2px;
@@ -220,6 +222,12 @@
   flex-shrink: 0;
 }
 
+.chat-tool-msg-summary__icon img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
 .chat-tool-msg-summary__icon svg {
   width: 16px;
   height: 16px;
@@ -230,32 +238,30 @@
   stroke-linejoin: round;
 }
 
-/* Collapsed rows stay on one line; measured overflow gets a fade while the
-   complete value remains available in the expanded detail. */
+/* Labels stay intact; only the following summary truncates. */
 .chat-tool-msg-summary__label {
-  flex: 0 1 auto;
+  flex: none;
+  white-space: nowrap;
+}
+
+.chat-tool-msg-summary__names,
+.chat-tool-msg-summary__preview,
+.chat-progress-card-receipt__text,
+.chat-subagent-activity__snippet {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  font: inherit;
-  color: inherit;
 }
 
 .chat-tool-msg-summary__names,
 .chat-tool-msg-summary__preview {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  font: inherit;
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
 /* ── Kind-aware tool rows ── */
 .chat-tool-row__prompt {
   flex-shrink: 0;
-  font: inherit;
-  color: inherit;
 }
 
 .chat-tool-row__title {
@@ -263,7 +269,6 @@
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font: inherit;
   color: var(--text);
 }
 
@@ -277,8 +282,6 @@
 
 .chat-tool-row__verb {
   flex-shrink: 0;
-  font: inherit;
-  color: inherit;
 }
 
 .chat-tool-row__target {
@@ -286,8 +289,6 @@
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font: inherit;
-  color: inherit;
 }
 
 .chat-tool-row__detail {
@@ -295,8 +296,6 @@
   min-width: 24px;
   overflow: hidden;
   white-space: nowrap;
-  font: inherit;
-  color: inherit;
 }
 
 .chat-tool-row--running .chat-tool-msg-summary__icon {
@@ -371,6 +370,7 @@
   display: flex;
   align-items: baseline;
   min-width: max-content;
+  min-height: 1lh;
   padding-right: 12px;
 }
 
@@ -565,7 +565,6 @@
 
 .chat-bubble--tool-shell .chat-tool-msg-body > .chat-text {
   max-height: min(46vh, 540px);
-  margin: 0;
   padding: 12px 14px 14px;
   overflow: auto;
   font-family: var(--mono);
@@ -740,7 +739,6 @@
 .chat-tool-card__detail-link:hover,
 .chat-tool-card__detail-link:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .chat-tool-card__block {
@@ -846,7 +844,6 @@
 }
 
 .chat-tool-card__preview[data-has-widget-actions] {
-  margin-top: 40px;
   overflow: visible;
 }
 
@@ -860,11 +857,14 @@
 .chat-tool-card__preview-actions {
   position: absolute;
   z-index: 2;
-  top: -34px;
-  right: 0;
+  top: 0;
+  left: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
+  width: max-content;
   gap: 4px;
+  padding-left: 4px;
 }
 
 .chat-tool-card__preview-panel {
@@ -877,9 +877,14 @@
   flex-shrink: 0;
 }
 
-/* Chromium can retain a skipped row's pre-menu geometry. Fully lay out the
-   active widget row so closing its top-layer menu cannot move the disclosure. */
-.chat-virtual-row:has(.chat-tool-card__widget-actions[open]) {
+/* Keep outside actions reachable and avoid restoring stale row geometry when
+   the active widget's top-layer menu closes. */
+.chat-virtual-row:has(
+  .chat-tool-card__preview:hover,
+  .chat-tool-card__preview:focus-within,
+  .chat-tool-card__preview[data-widget-actions-above],
+  .chat-tool-card__widget-actions[open]
+) {
   content-visibility: visible;
 }
 
@@ -899,41 +904,40 @@
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
-.chat-tool-card__widget-actions-trigger,
-.chat-tool-card__widget-action {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+.chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
+  top: auto;
+  bottom: 100%;
+  left: auto;
+  right: 0;
+  flex-direction: row;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 76%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 88%, transparent);
-  box-shadow: var(--shadow-sm);
-  color: var(--muted);
-}
-
-.chat-tool-card__widget-actions-trigger:hover,
-.chat-tool-card__widget-actions-trigger:focus-visible,
-.chat-tool-card__widget-action:hover,
-.chat-tool-card__widget-action:focus-visible {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.chat-tool-card__widget-actions-trigger svg,
-.chat-tool-card__widget-action svg {
-  width: 16px;
-  height: 16px;
+  opacity: 0.6;
+  pointer-events: auto;
 }
 
 [data-widget-actions] {
-  opacity: 0.45;
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease-out;
 }
 
 .chat-tool-card__preview:hover [data-widget-actions],
-.chat-tool-card__preview:focus-within [data-widget-actions] {
+.chat-tool-card__preview:focus-within [data-widget-actions],
+[data-widget-actions]:has(.chat-tool-card__widget-actions[open]) {
   opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch keeps actions reachable; focus, hover, and an open menu reveal them. */
+@media (hover: none) {
+  [data-widget-actions] {
+    opacity: 0.6;
+    pointer-events: auto;
+  }
+
+  .chat-virtual-row:has(.chat-tool-card__preview[data-has-widget-actions]) {
+    content-visibility: visible;
+  }
 }
 
 .chat-tool-card__widget-action[data-pinned] {
@@ -956,8 +960,8 @@
 }
 
 .chat-tool-card__preview-image-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
 }
 
 .chat-tool-card__preview-frame {
@@ -1099,6 +1103,12 @@
   color: inherit;
 }
 
+.chat-activity-group__duration {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-group--activity .chat-activity-group__label {
   color: inherit;
 }
@@ -1181,7 +1191,6 @@
   color: var(--muted);
   font: inherit;
   cursor: var(--cursor-action);
-  text-decoration: none;
 }
 
 .chat-tasks-status__link:hover,
@@ -1281,12 +1290,11 @@ openclaw-tooltip.chat-tasks-status__preview {
 
 .chat-subagent-activity__row {
   display: grid;
-  grid-template-columns: 18px auto minmax(0, 1fr) auto;
+  grid-template-columns: 18px auto minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   min-height: 22px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
 }
 
 .chat-subagent-activity__row--interactive {
@@ -1295,7 +1303,6 @@ openclaw-tooltip.chat-tasks-status__preview {
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  font: inherit;
   text-align: left;
   cursor: var(--cursor-action);
   transition:
@@ -1336,14 +1343,6 @@ openclaw-tooltip.chat-tasks-status__preview {
 
 .chat-subagent-activity__label {
   color: var(--text);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.chat-subagent-activity__snippet {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1465,4 +1464,18 @@ openclaw-tooltip.chat-tasks-status__preview {
   .chat-tool-card__block-content {
     max-height: min(360px, 55vh);
   }
+}
+.chat-tool-failure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px 8px 28px;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.chat-tool-failure__status {
+  flex: none;
+  font-weight: 500;
 }

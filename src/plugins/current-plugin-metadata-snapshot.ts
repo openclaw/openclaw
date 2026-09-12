@@ -1,4 +1,3 @@
-/** Tracks the current plugin metadata snapshot for control-plane lookups. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -7,33 +6,31 @@ import {
   getGatewayPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
-  type CurrentPluginMetadataSnapshotRevision,
+  selectCurrentPluginMetadataCache,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
-  adoptProcessPluginCache,
   getPluginMetadataSnapshotCache,
+  getScopedPluginCaches,
+  invalidatePluginCacheMetadata,
   getProcessPluginCache,
   getScopedPluginCache,
+  runOutsidePluginCache,
   withPluginCache,
+  type PluginCache,
 } from "./plugin-cache.js";
 import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
-import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
 } from "./plugin-metadata-snapshot.types.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
-
-type CurrentPluginMetadataSnapshotState = ReturnType<
-  typeof getCurrentPluginMetadataSnapshotState
-> & {
-  configIdentities: WeakSet<OpenClawConfig>;
-};
 
 type CurrentPluginMetadataSnapshotOptions = {
   config?: OpenClawConfig;
@@ -42,17 +39,6 @@ type CurrentPluginMetadataSnapshotOptions = {
   /** Only immutable runtime generations may trust identity across policy drift. */
   trustConfigIdentity?: boolean;
   workspaceDir?: string;
-};
-
-type TemporaryPluginMetadataSnapshotLeaseState = {
-  parent: TemporaryPluginMetadataSnapshotLeaseState | undefined;
-  previousState: CurrentPluginMetadataSnapshotState;
-  revision: CurrentPluginMetadataSnapshotRevision;
-  released: boolean;
-};
-
-type TemporaryPluginMetadataSnapshotLease = {
-  release: () => boolean;
 };
 
 type CurrentPluginMetadataSnapshotParams = {
@@ -78,6 +64,9 @@ type PluginMetadataSnapshotCandidate = {
 };
 
 type ScopedPluginMetadataSnapshot = PluginMetadataSnapshotCandidate & {
+  snapshot: PluginMetadataSnapshot;
+  cache: PluginCache;
+  metadata: PluginCache["metadata"];
   parent?: ScopedPluginMetadataSnapshot;
 };
 
@@ -88,10 +77,6 @@ export type PluginMetadataSnapshotScopeRunner = <T>(
   },
   run: () => T,
 ) => T;
-
-let activeTemporaryPluginMetadataSnapshotLease:
-  | TemporaryPluginMetadataSnapshotLeaseState
-  | undefined;
 
 const SCOPED_PLUGIN_METADATA_SNAPSHOT_KEY = Symbol.for("openclaw.scopedPluginMetadataSnapshot");
 const scopedPluginMetadataSnapshot = resolveGlobalSingleton<
@@ -108,15 +93,11 @@ function resolvePluginMetadataControlPlaneFingerprint(
   });
 }
 
-function publishCurrentPluginMetadataSnapshot(
+function prepareCurrentPluginMetadataSnapshotPublication(
   snapshot: PluginMetadataSnapshot,
   options: CurrentPluginMetadataSnapshotOptions,
   owner: "gateway" | "operation" = "operation",
-): CurrentPluginMetadataSnapshotRevision {
-  if (getCurrentPluginMetadataSnapshotState().owner === "gateway") {
-    throw new Error("Gateway plugin metadata can only be replaced after shutdown");
-  }
-  currentPluginMetadataConfigIdentityCache.clear();
+): () => void {
   const fingerprint = (config: OpenClawConfig | undefined, policyHash: string | undefined) =>
     resolvePluginMetadataControlPlaneFingerprint(config, {
       env: options.env,
@@ -136,50 +117,66 @@ function publishCurrentPluginMetadataSnapshot(
     configFingerprint === defaultDiscoveryConfigFingerprint ||
     snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
     Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint));
-  const revision = setCurrentPluginMetadataSnapshotState(
-    snapshot,
-    configFingerprint,
-    compatiblePolicyHashes,
-    compatibleConfigFingerprints,
-    owner === "gateway" || defaultDiscoveryCompatible
-      ? snapshot.owners.modelIdNormalizationPolicies
-      : undefined,
-    owner,
-    resolvePluginMetadataEnvFingerprint(options.env),
-    defaultDiscoveryCompatible,
-  );
+  const envFingerprint = resolvePluginMetadataEnvFingerprint(options.env);
+  const configIdentities = [...(options.compatibleConfigs ?? [])];
   if (options.config) {
     const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
     if (
       policyHash === snapshot.policyHash ||
       Boolean(compatiblePolicyHashes?.includes(policyHash))
     ) {
-      currentPluginMetadataConfigIdentityCache.add(options.config);
+      configIdentities.push(options.config);
     }
   }
-  for (const config of options.compatibleConfigs ?? []) {
-    currentPluginMetadataConfigIdentityCache.add(config);
-  }
-  return revision;
+  return () => {
+    if (getCurrentPluginMetadataSnapshotState().owner === "gateway" && owner !== "gateway") {
+      throw new Error("Gateway plugin metadata can only be replaced after shutdown");
+    }
+    currentPluginMetadataConfigIdentityCache.clear();
+    setCurrentPluginMetadataSnapshotState(
+      snapshot,
+      configFingerprint,
+      compatiblePolicyHashes,
+      compatibleConfigFingerprints,
+      owner === "gateway" || defaultDiscoveryCompatible
+        ? snapshot.owners.modelIdNormalizationPolicies
+        : undefined,
+      owner,
+      envFingerprint,
+      defaultDiscoveryCompatible,
+    );
+    for (const config of configIdentities) {
+      currentPluginMetadataConfigIdentityCache.add(config);
+    }
+  };
 }
 
-/** Publishes package facts once; config reload only replaces their runtime bindings. */
+/** Prepares fingerprints before the Gateway's synchronous runtime publication edge. */
+export function prepareGatewayPluginMetadataSnapshotPublication(
+  snapshot: PluginMetadataSnapshot,
+  options: CurrentPluginMetadataSnapshotOptions = {},
+): () => void {
+  if (snapshot.pluginIds !== undefined) {
+    throw new Error("Gateway plugin metadata must include the complete startup inventory");
+  }
+  const cache = getPluginMetadataSnapshotCache(snapshot);
+  const publish = withPluginCache(cache, () =>
+    prepareCurrentPluginMetadataSnapshotPublication(snapshot, options, "gateway"),
+  );
+  return () => {
+    selectCurrentPluginMetadataCache(cache);
+    publish();
+  };
+}
+
+/** Only the Gateway lifecycle publishes a complete replacement inventory. */
 export function setGatewayPluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot | undefined,
   options: CurrentPluginMetadataSnapshotOptions = {},
 ): void {
-  if (!snapshot) {
-    return;
+  if (snapshot) {
+    prepareGatewayPluginMetadataSnapshotPublication(snapshot, options)();
   }
-  if (snapshot.pluginIds !== undefined) {
-    throw new Error("Gateway plugin metadata must include the complete startup inventory");
-  }
-  if (getCurrentPluginMetadataSnapshotState().owner === "gateway") {
-    throw new Error("Gateway plugin metadata can only be replaced after shutdown");
-  }
-  adoptProcessPluginCache(getPluginMetadataSnapshotCache(snapshot));
-  activeTemporaryPluginMetadataSnapshotLease = undefined;
-  publishCurrentPluginMetadataSnapshot(snapshot, options, "gateway");
 }
 
 /** Publishes a prepared CLI snapshot without displacing a lifecycle owner. */
@@ -193,99 +190,33 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   ) {
     return;
   }
-  activeTemporaryPluginMetadataSnapshotLease = undefined;
-  publishCurrentPluginMetadataSnapshot(snapshot, options);
+  prepareCurrentPluginMetadataSnapshotPublication(snapshot, options)();
+}
+
+/** Installation revokes operation facts even when it runs between metadata scopes. */
+function revokeCurrentPluginMetadataSnapshotScopes(): void {
+  const caches = new Set(getScopedPluginCaches());
+  const runtimeCaches = new Set();
+  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (scoped.immutableRuntimeGeneration) {
+      runtimeCaches.add(scoped.cache);
+    } else {
+      caches.add(scoped.cache);
+    }
+  }
+  for (const cache of caches) {
+    if (cache.kind === "operation" && !runtimeCaches.has(cache)) {
+      invalidatePluginCacheMetadata(cache);
+    }
+  }
 }
 
 function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): boolean {
+  if (!scoped.immutableRuntimeGeneration && scoped.metadata !== scoped.cache.metadata) {
+    return false;
+  }
   const cache = getScopedPluginCache();
-  return (
-    cache?.kind !== "operation" ||
-    !scoped.snapshot ||
-    getPluginMetadataSnapshotCache(scoped.snapshot) === cache
-  );
-}
-
-function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
-  return {
-    ...getCurrentPluginMetadataSnapshotState(),
-    configIdentities: currentPluginMetadataConfigIdentityCache.capture(),
-  };
-}
-
-function restoreCapturedCurrentPluginMetadataSnapshotState(
-  state: CurrentPluginMetadataSnapshotState,
-): CurrentPluginMetadataSnapshotRevision {
-  currentPluginMetadataConfigIdentityCache.restore(state.configIdentities);
-  return setCurrentPluginMetadataSnapshotState(
-    state.snapshot,
-    state.configFingerprint,
-    state.compatiblePolicyHashes,
-    state.compatibleConfigFingerprints,
-    state.modelIdNormalizationPolicies,
-    state.owner,
-    state.envFingerprint,
-    state.defaultDiscoveryCompatible,
-  );
-}
-
-function resolveTemporaryPluginMetadataSnapshotLeaseParent():
-  | TemporaryPluginMetadataSnapshotLeaseState
-  | undefined {
-  const active = activeTemporaryPluginMetadataSnapshotLease;
-  if (active && getCurrentPluginMetadataSnapshotState().revision !== active.revision) {
-    activeTemporaryPluginMetadataSnapshotLease = undefined;
-    return undefined;
-  }
-  return active;
-}
-
-function releaseTemporaryPluginMetadataSnapshotLease(
-  lease: TemporaryPluginMetadataSnapshotLeaseState,
-): boolean {
-  if (lease.released) {
-    return false;
-  }
-  lease.released = true;
-  if (activeTemporaryPluginMetadataSnapshotLease !== lease) {
-    return false;
-  }
-
-  let restored = false;
-  while (activeTemporaryPluginMetadataSnapshotLease?.released) {
-    const current: TemporaryPluginMetadataSnapshotLeaseState =
-      activeTemporaryPluginMetadataSnapshotLease;
-    if (getCurrentPluginMetadataSnapshotState().revision !== current.revision) {
-      activeTemporaryPluginMetadataSnapshotLease = undefined;
-      return restored;
-    }
-    const restoredRevision = restoreCapturedCurrentPluginMetadataSnapshotState(
-      current.previousState,
-    );
-    activeTemporaryPluginMetadataSnapshotLease = current.parent;
-    if (activeTemporaryPluginMetadataSnapshotLease) {
-      activeTemporaryPluginMetadataSnapshotLease.revision = restoredRevision;
-    }
-    restored = true;
-  }
-  return restored;
-}
-
-/** Temporarily publishes metadata without restoring over lifecycle-owned replacements. */
-export function installTemporaryCurrentPluginMetadataSnapshot(
-  snapshot: PluginMetadataSnapshot,
-  options: CurrentPluginMetadataSnapshotOptions = {},
-): TemporaryPluginMetadataSnapshotLease {
-  const lease: TemporaryPluginMetadataSnapshotLeaseState = {
-    parent: resolveTemporaryPluginMetadataSnapshotLeaseParent(),
-    previousState: captureCurrentPluginMetadataSnapshotState(),
-    revision: publishCurrentPluginMetadataSnapshot(snapshot, options),
-    released: false,
-  };
-  activeTemporaryPluginMetadataSnapshotLease = lease;
-  return {
-    release: () => releaseTemporaryPluginMetadataSnapshotLease(lease),
-  };
+  return cache?.kind !== "operation" || scoped.cache === cache;
 }
 
 /** Carries one owner-prepared metadata generation through nested async plugin lookups. */
@@ -328,10 +259,13 @@ export function withPluginMetadataSnapshotScope<T>(
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);
   }
-  return withPluginCache(getPluginMetadataSnapshotCache(snapshot), () =>
+  const cache = getPluginMetadataSnapshotCache(snapshot);
+  return withPluginCache(cache, () =>
     scopedPluginMetadataSnapshot.run(
       {
         snapshot,
+        cache,
+        metadata: cache.metadata,
         configFingerprint,
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
         compatiblePolicyHashes,
@@ -343,6 +277,10 @@ export function withPluginMetadataSnapshotScope<T>(
       run,
     ),
   );
+}
+
+export function runOutsidePluginMetadataSnapshotScope<T>(run: () => T): T {
+  return scopedPluginMetadataSnapshot.exit(() => runOutsidePluginCache(run));
 }
 
 function resolveCompatiblePluginMetadataSnapshot(
@@ -485,7 +423,7 @@ export function getCurrentPluginMetadataSnapshot(
   } = getCurrentPluginMetadataSnapshotState();
   return resolveCompatiblePluginMetadataSnapshot(
     {
-      snapshot: snapshot as PluginMetadataSnapshot | undefined,
+      snapshot,
       configFingerprint,
       envFingerprint,
       defaultDiscoveryCompatible,
@@ -504,4 +442,8 @@ export function getCurrentPluginMetadataSnapshot(
 registerPluginMetadataSnapshotReaders({
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
+});
+
+registerPluginMetadataProcessMemoLifecycleClear(revokeCurrentPluginMetadataSnapshotScopes, {
+  owner: "operation",
 });

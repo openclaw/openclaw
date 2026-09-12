@@ -81,9 +81,9 @@ import {
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPluginIds,
   resolveConfiguredChannelPresencePolicy,
+  createGatewayStartupMetadataPluginIdScope,
   loadGatewayStartupPluginPlanWithMetadata,
   resolveGatewayStartupMetadataPluginIds,
-  resolveGatewayStartupPluginIdsFromRegistry,
   resolveGatewayStartupPluginPlanFromRegistry,
 } from "./channel-plugin-ids.js";
 
@@ -418,7 +418,7 @@ function expectStartupPluginIds(params: {
 }) {
   const manifestRegistry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   expect(
-    resolveGatewayStartupPluginIdsFromRegistry({
+    resolveGatewayStartupPluginPlanFromRegistry({
       config: params.config,
       ...(params.activationSourceConfig !== undefined
         ? { activationSourceConfig: params.activationSourceConfig }
@@ -429,8 +429,33 @@ function expectStartupPluginIds(params: {
       ...(params.workerProviderIds !== undefined
         ? { workerProviderIds: params.workerProviderIds }
         : {}),
-    }),
+    }).pluginIds,
   ).toEqual(params.expected);
+}
+
+function createBraveSearchStartupConfig(params: {
+  searchEnabled: boolean;
+  pluginEnabled: boolean;
+}): OpenClawConfig {
+  return {
+    channels: {},
+    tools: {
+      web: {
+        search: {
+          enabled: params.searchEnabled,
+          provider: "brave",
+        },
+      },
+    },
+    plugins: {
+      allow: ["brave"],
+      entries: {
+        brave: {
+          enabled: params.pluginEnabled,
+        },
+      },
+    },
+  };
 }
 
 function createStartupConfig(params: {
@@ -511,7 +536,7 @@ function createStartupConfig(params: {
   return config as OpenClawConfig;
 }
 
-describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
+describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
       if (Object.hasOwn(config, "channels")) {
@@ -1055,71 +1080,17 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
     ],
     [
       "includes explicitly selected external web search providers at startup",
-      {
-        channels: {},
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["brave"],
-          entries: {
-            brave: {
-              enabled: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBraveSearchStartupConfig({ searchEnabled: true, pluginEnabled: true }),
       ["brave"],
     ],
     [
       "honors disabled web search when selecting startup providers",
-      {
-        channels: {},
-        tools: {
-          web: {
-            search: {
-              enabled: false,
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["brave"],
-          entries: {
-            brave: {
-              enabled: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBraveSearchStartupConfig({ searchEnabled: false, pluginEnabled: true }),
       [],
     ],
     [
       "honors explicit plugin disablement for configured web search providers",
-      {
-        channels: {},
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["brave"],
-          entries: {
-            brave: {
-              enabled: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBraveSearchStartupConfig({ searchEnabled: true, pluginEnabled: false }),
       [],
     ],
     [
@@ -2020,6 +1991,52 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         index,
       }),
     ).toEqual(["browser", "demo-channel"]);
+  });
+
+  it("recomputes shared config facts when a metadata scope resolves again", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "gpt-5.4@work" } },
+      channels: {},
+      plugins: { allow: ["browser"], slots: { memory: "none" } },
+    };
+    const index = createInstalledPluginIndexFixture(createManifestRegistryFixture());
+    const scope = createGatewayStartupMetadataPluginIdScope({
+      config,
+      activationSourceConfig: config,
+      env: createPluginPlanningTestEnv(),
+    });
+
+    expect(scope.resolve({ index })).toEqual(["browser", "openai"]);
+    config.agents = { defaults: { model: "anthropic/claude-test" } };
+    expect(scope.resolve({ index })).toEqual(["anthropic", "browser"]);
+    config.plugins = { ...config.plugins, deny: ["anthropic"] };
+    expect(scope.resolve({ index })).toEqual(["browser"]);
+  });
+
+  it("preserves both config roles and their exclusions in metadata scopes", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-test" } },
+      channels: { "demo-other-channel": { token: "configured" } },
+      plugins: { allow: ["browser"], deny: ["qa-lab"], slots: { memory: "none" } },
+    };
+    const activationSourceConfig: OpenClawConfig = {
+      channels: { "demo-channel": { token: "configured" } },
+      cloudWorkers: { profiles: { development: { provider: "static-ssh" } } },
+      plugins: {
+        allow: ["demo-channel"],
+        entries: { openai: { enabled: false } },
+        slots: { memory: "none" },
+      },
+    };
+
+    expect(
+      resolveGatewayStartupMetadataPluginIds({
+        config,
+        activationSourceConfig,
+        env: createPluginPlanningTestEnv(),
+        index: createInstalledPluginIndexFixture(createManifestRegistryFixture()),
+      }),
+    ).toEqual(["browser", "demo-channel", "demo-other-channel"]);
   });
 
   it("keeps config-path activation owners in restrictive startup metadata scopes", () => {

@@ -1,6 +1,7 @@
 // Cron ops regression tests cover service operation regressions.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createAbortAwareIsolatedRunner,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
@@ -90,13 +91,9 @@ describe("cron service ops regressions", () => {
     const runnerStarted = createDeferred();
     const finished = createDeferred();
     let terminalEvent: CronEvent | undefined;
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => {
         runnerStarted.resolve();
         await enterRunner.promise;
@@ -150,13 +147,9 @@ describe("cron service ops regressions", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     const finished = createDeferred<CronEvent>();
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       onEvent: (event) => {
         if (event.jobId === job.id && event.action === "finished") {
@@ -180,12 +173,8 @@ describe("cron service ops regressions", () => {
   it("repairs missing job state during startup", async () => {
     const scheduledAt = Date.now() + 60_000;
     const store = opsRegressionFixtures.makeStorePath();
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const job = createIsolatedRegressionJob({
@@ -254,12 +243,8 @@ describe("cron service ops regressions", () => {
         ),
     );
 
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt: CronEvent) => {
         events.push(evt);
@@ -330,13 +315,9 @@ describe("cron service ops regressions", () => {
       );
     });
 
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt: CronEvent) => {
         if (evt.jobId === job.id && evt.action === "finished") {
@@ -425,7 +406,7 @@ describe("cron service ops regressions", () => {
       scheduledAt: nowMs,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs - 60_000 },
       payload: { kind: "agentTurn", message: "manual paced due slot" },
-      state: { nextRunAtMs: dueSlot, pacedNextRunAtMs: dueSlot },
+      state: { nextRunAtMs: dueSlot, pacedNextRunAtMs: dueSlot, startupCatchupAtMs: dueSlot },
     });
     job.pacing = { min: "15m", max: "4h" };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
@@ -446,6 +427,7 @@ describe("cron service ops regressions", () => {
     expect(stored?.state.nextRunAtMs).toBe(dueSlot);
     expect(stored?.state.pacedNextRunAtMs).toBe(dueSlot);
     expect(stored?.state.forcePreservedNextRunAtMs).toBe(dueSlot);
+    expect(stored?.state.startupCatchupAtMs).toBe(dueSlot);
 
     const restarted = createCronServiceState({
       cronEnabled: false,
@@ -462,6 +444,7 @@ describe("cron service ops regressions", () => {
     expect(reloaded?.state.nextRunAtMs).toBe(dueSlot);
     expect(reloaded?.state.pacedNextRunAtMs).toBe(dueSlot);
     expect(reloaded?.state.forcePreservedNextRunAtMs).toBe(dueSlot);
+    expect(reloaded?.state.startupCatchupAtMs).toBe(dueSlot);
   });
 
   it("passes the rehydrated agentTurn payload message to isolated manual runs", async () => {
@@ -597,13 +580,9 @@ describe("cron service ops regressions", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -655,13 +634,9 @@ describe("cron service ops regressions", () => {
         activeRuns -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt) => {
         if (evt.action === "finished" && evt.jobId === second.id && evt.status === "ok") {
@@ -719,14 +694,10 @@ describe("cron service ops regressions", () => {
     const terminal = createDeferred();
     const events: CronEvent[] = [];
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       cronConfig: { triggers: { enabled: true } },
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       evaluateCronTrigger: vi.fn(async () => ({
         kind: "evaluated" as const,
         fire: false,
@@ -786,13 +757,9 @@ describe("cron service ops regressions", () => {
 
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const events: CronEvent[] = [];
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt) => events.push(evt),
     });
@@ -857,13 +824,9 @@ describe("cron service ops regressions", () => {
     const releaseProvider = createDeferred();
     const providerExited = createDeferred();
     const events: CronEvent[] = [];
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ abortSignal, onExecutionStarted }) => {
         if (!abortSignal) {
           throw new Error("expected isolated cron abort signal");
@@ -959,13 +922,9 @@ describe("cron service ops regressions", () => {
     let dispatchCount = 0;
     let inFlight = 0;
     let peakInFlight = 0;
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ abortSignal }) => {
         dispatchCount += 1;
         inFlight += 1;

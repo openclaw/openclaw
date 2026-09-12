@@ -182,7 +182,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       message: providerFailure,
       errorType: "model_error",
     });
-    await peer.destroying;
+    await peer.detaching;
     expect(catalog?.current).toBeUndefined();
     host.hostCapabilities.assertActive();
     expect(callController.signal.aborted).toBe(false);
@@ -206,7 +206,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       aborts,
       waitResult,
     };
-    peer.releaseDestroy();
+    peer.releaseDetach();
     const attemptResult = await attempt;
     if (!("terminal" in attemptResult)) {
       throw new Error("Expected a canonical Copilot attempt terminal");
@@ -273,7 +273,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     });
   } finally {
     gate.resolve();
-    peer.releaseDestroy();
+    peer.releaseDetach();
     await attempt;
     host.closeHost();
     host.closeAdmission();

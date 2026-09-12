@@ -19,13 +19,15 @@ import {
 import { publishTaskRecordAfterAtomicStore } from "../../../tasks/runtime-internal.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
 import { formatTaskBlockedFollowupMessage } from "../../../tasks/task-executor-policy.js";
+import { syncFlowFromTaskAfterTaskMutation } from "../../../tasks/task-registry-mutation.js";
 import {
   bindTaskRecord,
   readTaskRecord,
   upsertTaskRunRowInDatabase,
-} from "../../../tasks/task-registry.store.sqlite.js";
+} from "../../../tasks/task-registry.store.kernel.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
+import { resolveFinalizedSubagentTaskState } from "../registry/subagent-registry-completion.js";
 import {
   loadPendingFinalDeliveryPayload,
   markRequesterSettleWakePending,
@@ -65,7 +67,12 @@ export function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskR
   } else {
     subagentRuns.set(subagent.runId, subagent);
   }
-  publishTaskRecordAfterAtomicStore(task);
+  const deferredObserverEvents: Array<() => void> = [];
+  const published = publishTaskRecordAfterAtomicStore(task, { deferredObserverEvents });
+  syncFlowFromTaskAfterTaskMutation(published, "atomic completion admission");
+  for (const emitObserverEvent of deferredObserverEvents) {
+    emitObserverEvent();
+  }
 }
 
 function assertCorrelatedEntry(params: {
@@ -183,12 +190,22 @@ export function blockSubagentCompletionDelivery(params: {
       !subagent ||
       !task ||
       task.runtime !== "subagent" ||
-      task.status !== "succeeded" ||
       subagent.execution.status !== "terminal" ||
-      subagent.execution.outcome?.status !== "ok" ||
       subagent.expectsCompletionMessage !== true ||
       (subagent.taskRunId ?? subagent.runId) !== task.runId ||
       (subagent.delivery?.generation ?? 1) !== generation
+    ) {
+      return false;
+    }
+    const successful = task.status === "succeeded" && subagent.execution.outcome?.status === "ok";
+    // A terminal non-success still owns its failed requester wake. Classify the
+    // persisted pair; a missing or superseded owner is not permission to settle.
+    if (
+      !successful &&
+      (params.suspendedReason !== undefined ||
+        !["cancelled", "failed", "timed_out"].includes(task.status) ||
+        resolveFinalizedSubagentTaskState(subagent)?.status !== task.status ||
+        !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
     ) {
       return false;
     }
@@ -213,15 +230,20 @@ export function blockSubagentCompletionDelivery(params: {
     } else {
       subagent.suppressCompletionDelivery = true;
     }
-    const terminal = resolveRequiredCompletionDeliveryFailureTerminalResult(params.reason);
+    if (successful) {
+      const terminal = resolveRequiredCompletionDeliveryFailureTerminalResult(params.reason);
+      Object.assign(task, {
+        ...terminal,
+        error: params.reason,
+        cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
+      });
+    }
     Object.assign(task, {
       deliveryStatus: "failed" as const,
-      ...terminal,
-      error: params.reason,
-      cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
       lastEventAt: now,
     });
-    const text = task.notifyPolicy === "silent" ? null : formatTaskBlockedFollowupMessage(task);
+    const text =
+      successful && task.notifyPolicy !== "silent" ? formatTaskBlockedFollowupMessage(task) : null;
     const queued = text
       ? prepareClaimedSessionDelivery(
           {

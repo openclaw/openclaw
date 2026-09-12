@@ -12,6 +12,8 @@ export type AgentHarnessUserInputQuestion = {
   id: string;
   header: string;
   question: string;
+  /** External step to open without answering the question. */
+  url?: string;
   multiSelect?: boolean;
   isOther?: boolean;
   isSecret?: boolean;
@@ -109,16 +111,14 @@ function buildAgentHarnessQuestionPresentation(params: {
     return undefined;
   }
   // The question stays in its own leading text block so reaction/native
-  // adapters can keep it while replacing the tap-only guidance below.
+  // adapters can keep it while replacing the reply guidance below.
   const optionGuidance = [
     ...options.map(
       (option) =>
         `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
     ),
     "",
-    question.isOther
-      ? "Tap an option, or reply with the option text or your own answer."
-      : "Tap an option, or reply with the option number or text.",
+    questionReplyGuidance(params.questions),
   ].join("\n");
   return {
     blocks: [
@@ -127,6 +127,10 @@ function buildAgentHarnessQuestionPresentation(params: {
       {
         type: "buttons",
         buttons: [
+          // Navigation must not resolve the question before the external step completes.
+          ...(question.url
+            ? [{ label: "Open link", action: { type: "url" as const, url: question.url } }]
+            : []),
           ...options.map((option) => ({
             label: formatText(option.label),
             action: {

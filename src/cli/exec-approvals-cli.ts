@@ -43,6 +43,7 @@ import {
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
@@ -365,7 +366,10 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
   } else if (params.source === "local") {
     // Announced at the write, not at target resolution: no-op allowlist edits and
     // rejected `set` input never reach here and must not claim a write happened.
-    defaultRuntime.log(theme.muted("Writing local approvals."));
+    // JSON mode owns stdout: the written snapshot below is the record of the write.
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.muted("Writing local approvals."));
+    }
     next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
@@ -948,8 +952,13 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       : null,
   ].filter((part): part is string => part != null);
   const agents = file.agents ?? {};
-  const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
-    [];
+  const allowlistRows: Array<{
+    Target: string;
+    Agent: string;
+    Pattern: string;
+    Scope: string;
+    LastUsed: string;
+  }> = [];
   const now = Date.now();
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
@@ -963,6 +972,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
         Target: targetLabel,
         Agent: agentId,
         Pattern: pattern,
+        Scope: classifyExecAllowlistScope(entry),
         LastUsed: lastUsedAt ? formatTimeAgo(Math.max(0, now - lastUsedAt)) : muted("unknown"),
       });
     }
@@ -1014,6 +1024,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
           { key: "Target", header: "Target", minWidth: 10 },
           { key: "Agent", header: "Agent", minWidth: 8 },
           { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+          { key: "Scope", header: "Scope", minWidth: 10 },
           { key: "LastUsed", header: "Last Used", minWidth: 10 },
         ],
         rows: allowlistRows,

@@ -10,11 +10,17 @@ import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ProviderModelRouteRuntimePolicy,
+  ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
 import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
+import {
+  resolveAgentRuntimePolicyAgentId,
+  resolveModelRouteIntent,
+  type AgentRuntimePolicyScope,
+} from "../model-runtime-policy.js";
+import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
 import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
@@ -95,20 +101,20 @@ export function projectPreparedModelProvider(params: {
 }
 
 /** Builds the provider/model facts passed to registered harness support probes. */
-export function buildAgentHarnessSupportContext(params: {
-  provider: string;
-  modelId?: string;
-  /** Prepared provider facts take precedence over config rediscovery. */
-  modelProvider?: AgentHarnessSupportContext["modelProvider"];
-  requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  /** Finalized route/auth selection; missing runtimePolicy stays undeclared. */
-  preparedModelProvider?: boolean;
-  /** Prepared selection fact; read-only projections omit it to avoid plugin metadata discovery. */
-  providerOwnership?: HarnessProviderOwnership;
-}): AgentHarnessSupportContext {
+export function buildAgentHarnessSupportContext(
+  params: {
+    provider: string;
+    modelId?: string;
+    /** Prepared provider facts take precedence over config rediscovery. */
+    modelProvider?: AgentHarnessSupportContext["modelProvider"];
+    requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
+    config?: OpenClawConfig;
+    /** Finalized route/auth selection; missing runtimePolicy stays undeclared. */
+    preparedModelProvider?: boolean;
+    /** Prepared selection fact; read-only projections omit it to avoid plugin metadata discovery. */
+    providerOwnership?: HarnessProviderOwnership;
+  } & AgentRuntimePolicyScope,
+): AgentHarnessSupportContext {
   const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
   const authoredConfig = params.config
     ? projectConfigOntoRuntimeSourceSnapshot(params.config)
@@ -121,14 +127,7 @@ export function buildAgentHarnessSupportContext(params: {
           normalizeModelId(params.provider, configuredModelId),
       }).get(modelId)
     : undefined;
-  const agentId =
-    params.config && (params.agentId?.trim() || params.sessionKey?.trim())
-      ? resolveSessionAgentIds({
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        }).sessionAgentId
-      : params.agentId;
+  const agentId = resolveAgentRuntimePolicyAgentId(params);
   const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider,
@@ -180,6 +179,20 @@ export function buildAgentHarnessSupportContext(params: {
           modelId: params.modelId,
           modelProvider: modelProviderFacts,
           config: params.config,
+          routeIntent: resolveModelRouteIntent({
+            config: params.config,
+            provider: params.provider,
+            modelId: params.modelId,
+            agentId,
+            primaryModel: params.config
+              ? resolveDefaultModelForAgent({
+                  cfg: params.config,
+                  agentId,
+                  allowManifestNormalization: false,
+                  allowPluginNormalization: false,
+                })
+              : undefined,
+          }),
         });
   const modelProvider =
     modelProviderFacts || routeRuntimeContract.owned
@@ -208,6 +221,7 @@ function resolveHarnessRouteRuntimePolicy(params: {
   modelId?: string;
   modelProvider?: AgentHarnessSupportContext["modelProvider"];
   config?: OpenClawConfig;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
 }): { owned: boolean; policy?: ProviderModelRouteRuntimePolicy } {
   const resolution = resolveProviderModelRoutes({
     provider: params.provider,
@@ -215,6 +229,7 @@ function resolveHarnessRouteRuntimePolicy(params: {
     api: params.modelProvider?.api as ModelApi | undefined,
     baseUrl: params.modelProvider?.baseUrl,
     config: params.config,
+    routeIntent: params.routeIntent,
     requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
   });
   if (!resolution) {
@@ -241,13 +256,15 @@ function resolveHarnessRouteRuntimePolicy(params: {
 }
 
 /** Resolves the registered plugin harness that auto selection would choose. */
-export function resolveAutoAgentHarnessId(params: {
-  provider: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-}): string | undefined {
+export function resolveAutoAgentHarnessId(
+  params: {
+    provider: string;
+    modelId?: string;
+    config?: OpenClawConfig;
+    modelProvider?: AgentHarnessSupportContext["modelProvider"];
+    preparedModelProvider?: boolean;
+  } & AgentRuntimePolicyScope,
+): string | undefined {
   const registeredHarnesses = listRegisteredAgentHarnesses();
   if (registeredHarnesses.length === 0) {
     return undefined;

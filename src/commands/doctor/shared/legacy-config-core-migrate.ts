@@ -2,6 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
 import { migrateLegacyContextBudgetConfig } from "../../../config/legacy.context-budget.js";
+import { removeLegacyCopilotDiscovery } from "../../../config/legacy.github-copilot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
@@ -125,10 +126,16 @@ export function normalizeCompatibilityConfigValues(
   warnings?: string[];
 } {
   const changes: string[] = [];
-  let contextBudgetConfig = cfg;
+  const copilotConfig = removeLegacyCopilotDiscovery(cfg);
+  if (copilotConfig !== cfg) {
+    changes.push(
+      "The GitHub Copilot discovery switch was retired and has been removed. Configured Copilot access now refreshes its model list automatically. Use the model allow list (agents.defaults.modelPolicy.allow) to hide Copilot models; it does not stop discovery requests.",
+    );
+  }
+  let contextBudgetConfig = copilotConfig;
   let contextBudgetWarnings: string[];
   if (options.sourceConfigBeforeMigrations === undefined) {
-    const migration = migrateLegacyContextBudgetConfig(cfg);
+    const migration = migrateLegacyContextBudgetConfig(copilotConfig);
     contextBudgetConfig = migration.config;
     changes.push(...migration.changes.map(({ message }) => message));
     contextBudgetWarnings = migration.warnings.map(({ message }) => message);

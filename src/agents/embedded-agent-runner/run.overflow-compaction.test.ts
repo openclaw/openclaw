@@ -38,7 +38,8 @@ afterEach(() => {
   }
 });
 const completionMocks = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<typeof import("../simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
@@ -139,11 +140,9 @@ function makeRecoveryInput(
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
-    provider: "openai",
-    modelId: "gpt-5.5",
+    modelSelection: { provider: "openai", model: "gpt-5.5", authProfileIdSource: "auto" },
     harnessRuntime: "openclaw",
     thinkLevel: "off",
-    authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
     buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
       buildContextEngineRuntimeSettings({
@@ -172,16 +171,17 @@ function makeRecoveryInput(
 describe("compactEmbeddedRunForRecovery", () => {
   beforeEach(() => {
     compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
-    completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
+    completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
     completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
     completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
-    completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+    completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
       selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" },
       model: {
         provider: "openai",
         id: "gpt-5.5",
         name: "gpt-5.5",
         api: "openai",
+        baseUrl: "https://fixture.invalid/v1",
         input: ["text"],
         reasoning: false,
         contextWindow: 128_000,
@@ -189,6 +189,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
+      async [Symbol.asyncDispose]() {},
     });
     completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
@@ -233,8 +234,12 @@ describe("compactEmbeddedRunForRecovery", () => {
         attempt: makeAttempt({ promptCache }),
         runtimeAuthPlan,
         thinkLevel: "ultra",
-        authProfileId: "openai:work",
-        authProfileIdSource: "user",
+        modelSelection: {
+          provider: "openai",
+          model: "gpt-5.5",
+          authProfileId: "openai:work",
+          authProfileIdSource: "user",
+        },
       }),
       {
         tokenBudget: 200_000,
@@ -350,13 +355,20 @@ describe("compactEmbeddedRunForRecovery", () => {
         reason: expect.stringContaining("not bound to an active session agent"),
       },
     });
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
   it.each(["returned", "failed", "cancelled", "failed-result"] as const)(
     "keeps committed context chronology when the backend is %s",
     async (outcome) => {
       const state = createEmbeddedRunContextRecoveryState();
+      const requestBudget = {
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 4_000,
+        pendingTokens: 100,
+      };
+      state.compactionRequestBudget = requestBudget;
       const controller = new AbortController();
       const error = new Error("backend settled after the committed replacement");
       const usageAccumulator = createUsageAccumulator();
@@ -364,8 +376,10 @@ describe("compactEmbeddedRunForRecovery", () => {
       const compact = vi.fn<ContextEngine["compact"]>(async ({ runtimeContext }) => {
         progressReset = runtimeContext?.compactionTimeoutReset;
         const recorder = readCompactionAccountingRecorder(runtimeContext);
-        recorder?.recordUsage({ input: 100, output: 50, total: 150 });
-        recorder?.recordCompaction(40);
+        expect(recorder?.requestBudget).toBe(requestBudget);
+        expect(runtimeContext).not.toHaveProperty("requestBudget");
+        recorder?.recordUsage?.({ input: 100, output: 50, total: 150 });
+        recorder?.recordCompaction?.(40);
         state.observeContextAccounting({ kind: "model", contextTokens: 20 });
         if (outcome === "failed") {
           throw error;
@@ -452,7 +466,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       if (!usage) {
         throw new Error("expected normalized usage");
       }
-      readCompactionAccountingRecorder(params.runtimeContext)?.recordUsage(usage);
+      readCompactionAccountingRecorder(params.runtimeContext)?.recordUsage?.(usage);
       return { ok: false as const, compacted: false as const, reason: "invalid summary" };
     });
     const usageAccumulator = createUsageAccumulator();
@@ -563,6 +577,32 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     });
     expect(fixture.sessionPromptState.sessionId).toBe("rotated-session");
     expect(fixture.sessionPromptState.committedCompactionSuccessor).toBeUndefined();
+  });
+
+  it("retires MCP predecessors when an in-memory compaction rotates identity", async () => {
+    const fixture = await createRuntime();
+    const { getOrCreateSessionMcpRuntime } =
+      await import("../agent-bundle-mcp-manager.test-support.js");
+    const { getSessionMcpRuntimeManagerForTesting } =
+      await import("../agent-bundle-mcp-manager-api.js");
+    const manager = getSessionMcpRuntimeManagerForTesting();
+    const create = (sessionId: string) =>
+      getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey: fixture.currentTarget.sessionKey,
+        workspaceDir: path.dirname(fixture.currentTarget.storePath),
+        cfg: { mcp: { servers: {} } },
+        manifestRegistry: { plugins: [] },
+      });
+    try {
+      await create(fixture.currentTarget.sessionId);
+      const successor = await create("rotated-session");
+      await fixture.runtime.adoptCompactionTranscript(fixture.compactResult);
+      expect(manager.peekSession({ sessionId: fixture.currentTarget.sessionId })).toBeUndefined();
+      expect(manager.peekSession({ sessionId: successor.sessionId })).toBe(successor);
+    } finally {
+      await manager.disposeAll();
+    }
   });
 
   it("fires ownership hooks against the rotated compacted transcript", async () => {

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
@@ -7,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
+  NEW_SESSION_MODEL_CATALOG,
   SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
@@ -14,6 +16,7 @@ import {
   captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   expectPendingSessionPlacementStartupBeforeRuntime,
@@ -49,7 +52,10 @@ suite.define(() => {
               {
                 id: "aws",
                 providerId: "crabbox",
-                machines: [{ id: "fast", label: "Fast" }],
+                machines: [
+                  { id: "standard", label: "Standard", default: true },
+                  { id: "fast", label: "Fast" },
+                ],
               },
               { id: "machine0", providerId: "crabbox" },
             ],
@@ -69,19 +75,17 @@ suite.define(() => {
       const trigger = page.locator("#new-session-where-trigger");
       const place = page.locator("wa-popover.new-session-page__where-popover");
       await trigger.click();
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
-      await trigger.click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       await place.getByRole("button", { name: "Fast", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await place.getByRole("button", { name: "Cloud · machine0" }).click();
+      await place.getByRole("button", { name: "machine0", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("machine0");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
-      await trigger.click();
       await expect
-        .poll(() => place.getByRole("button", { name: "Cloud · machine0" }).isDisabled())
+        .poll(() => place.getByRole("button", { name: "machine0", exact: true }).isDisabled())
         .toBe(false);
-      expect(await place.getByText("Machine", { exact: true }).count()).toBe(0);
-      expect(await place.locator('[data-value^="machine:"]').count()).toBe(0);
+      await expect.poll(() => place.getByText("Machine", { exact: true }).isVisible()).toBe(false);
+      await expect.poll(() => place.locator('[data-value^="machine:"]:visible').count()).toBe(0);
       await captureUiProof(suite, page, "optionless-cloud-profile.png");
       await page.keyboard.press("Escape");
 
@@ -112,6 +116,7 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.clock.install();
     const runtimeLoad = createDeferred();
     let runtimeRequested = false;
     await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
@@ -122,6 +127,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      models: NEW_SESSION_MODEL_CATALOG,
       operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
@@ -135,20 +141,7 @@ suite.define(() => {
       workspaceGit: true,
       sessionKey: "agent:cloud:neutral-e2e",
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "projects.list": {
           projects: [
             {
@@ -237,14 +230,14 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await trigger.click();
       await place.getByText("Machine", { exact: true }).waitFor();
-      await place.getByRole("button", { name: /Fast/ }).click();
+      await place.locator('[data-value="machine:fast"]').click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
+      expect(await trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await page.keyboard.press("Escape");
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
@@ -373,17 +366,20 @@ suite.define(() => {
         await trigger.click();
         await writeFile(
           path.join(suite.artifactDir, "cloud-profile-refresh-retention", "01-before-refresh.png"),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            place.getByRole("button", { name: "Cloud · aws" }),
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator('wa-popup.popover > [part="popup"]'),
+            [place.locator('[data-value="cloud:aws"]')],
+          ),
         );
         await page.keyboard.press("Escape");
       }
 
-      await page.clock.install();
-      await gateway.setMethodResponse("environments.list", {
-        __mockError: { code: "UNAVAILABLE", message: "profile catalog remains unavailable" },
-      });
+      const profileCatalogError = {
+        code: "UNAVAILABLE",
+        message: "profile catalog remains unavailable",
+      };
+      await gateway.setMethodResponse("environments.list", { __mockError: profileCatalogError });
       await gateway.deferNext("environments.list");
       const requestsBeforePersistentFailure = (await gateway.getRequests("environments.list"))
         .length;
@@ -398,15 +394,19 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startButton]),
         );
       }
-      await gateway.rejectDeferred("environments.list", {
-        code: "UNAVAILABLE",
-        message: "profile catalog remains unavailable",
-      });
+      await gateway.rejectDeferred("environments.list", profileCatalogError);
 
+      // A recorded request is not a processed failure. Let the page settle and
+      // schedule its next retry before advancing the clock.
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
       for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
+        await gateway.deferNext("environments.list");
         const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
         await page.clock.fastForward(delayMs + 1);
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
+        await expect.poll(() => startButton.isDisabled()).toBe(true);
+        await gateway.rejectDeferred("environments.list", profileCatalogError);
+        await expect.poll(() => startButton.isDisabled()).toBe(false);
       }
       await page.clock.resume();
       expect(await gateway.getRequests("environments.list")).toHaveLength(
@@ -414,15 +414,16 @@ suite.define(() => {
       );
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
+      expect(await trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await expect.poll(() => startButton.isDisabled()).toBe(false);
       await trigger.click();
-      const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
+      const retainedCloudProfile = place.locator('[data-value="cloud:aws"]');
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
-      await expect
-        .poll(() => tooltipTitleText(retainedCloudProfile))
-        .toBe("Cloud worker provider: crabbox");
-      await expect.poll(() => place.getByRole("button", { name: /Fast/ }).isVisible()).toBe(true);
+      await retainedCloudProfile.click();
+      const retainedMachine = place.locator('[data-value="machine:fast"]');
+      await expect.poll(() => retainedMachine.isVisible()).toBe(true);
+      expect(await retainedMachine.getAttribute("aria-pressed")).toBe("true");
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(
@@ -430,9 +431,11 @@ suite.define(() => {
             "cloud-profile-refresh-retention",
             "03-after-retry-exhaustion.png",
           ),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            retainedCloudProfile,
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator(".new-session-page__cloud-configuration"),
+            [retainedCloudProfile, place.locator('[data-value="machine:fast"]')],
+          ),
         );
       }
       await page.keyboard.press("Escape");
@@ -443,6 +446,7 @@ suite.define(() => {
       expect(create.params).toMatchObject({
         agentId: "cloud",
         message: "",
+        titleSource: message,
         projectId: "openclaw",
         worktree: true,
         worktreeBaseRef: "main",
@@ -477,8 +481,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startupStatus]),
         );
       }
-      const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
-        .length;
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
@@ -535,11 +538,24 @@ suite.define(() => {
         ["starting", 4, "Starting…"],
       ] as const) {
         await publishPlacement(state, generation, label, state === "starting");
+        await page.clock.runFor(250);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
-      expect(await gateway.getRequests("sessions.describe")).toHaveLength(
-        describeRequestsAfterNavigation,
-      );
+      // This single-page fixture pairs each Swarm child read with its parent read.
+      // Placement updates must not add an unpaired describe for the same session.
+      const parentReads = (await gateway.getRequests()).filter((request) => {
+        const params = asNullableRecord(request.params);
+        return (
+          (request.method === "sessions.describe" && params?.key === sessionKey) ||
+          (request.method === "sessions.list" && params?.spawnedBy === sessionKey)
+        );
+      });
+      for (let index = 0; index < parentReads.length; index += 2) {
+        expect(parentReads.slice(index, index + 2)).toMatchObject([
+          { method: "sessions.list", params: { spawnedBy: sessionKey } },
+          { method: "sessions.describe", params: { key: sessionKey } },
+        ]);
+      }
       const neutralRow = page.locator('[data-session-key="agent:cloud:neutral-e2e"] a');
       await neutralRow.waitFor();
       await neutralRow.click();

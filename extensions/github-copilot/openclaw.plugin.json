@@ -1,5 +1,6 @@
 {
   "id": "github-copilot",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -99,6 +100,7 @@
             "name": "Gemini 3.6 Flash",
             "api": "openai-completions",
             "compat": {
+              "codeMode": "capable",
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsUsageInStreaming": false,
@@ -114,6 +116,7 @@
             "name": "Gemini 3.1 Pro Preview",
             "api": "openai-completions",
             "compat": {
+              "codeMode": "capable",
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsUsageInStreaming": false,
@@ -129,6 +132,7 @@
             "name": "Gemini 3.5 Flash",
             "api": "openai-completions",
             "compat": {
+              "codeMode": "capable",
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsUsageInStreaming": false,
@@ -270,7 +274,7 @@
     "providers": [
       {
         "id": "github-copilot",
-        "envVars": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+        "envVars": ["COPILOT_GITHUB_TOKEN"]
       }
     ]
   },
@@ -308,24 +312,6 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {
-      "discovery": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": { "type": "boolean" }
-        }
-      }
-    }
-  },
-  "uiHints": {
-    "discovery": {
-      "label": "Model Discovery",
-      "help": "Plugin-owned controls for GitHub Copilot model auto-discovery."
-    },
-    "discovery.enabled": {
-      "label": "Enable Discovery",
-      "help": "When false, OpenClaw keeps the GitHub Copilot plugin available but skips implicit startup discovery from ambient Copilot credentials."
-    }
+    "properties": {}
   }
 }

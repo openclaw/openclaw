@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { captureEnv, setTestEnvValue } from "./env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 const HOME_ENV_KEYS = [
@@ -11,6 +11,7 @@ const HOME_ENV_KEYS = [
   "USERPROFILE",
   "HOMEDRIVE",
   "HOMEPATH",
+  "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
 ] as const;
 
@@ -56,6 +57,7 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", home);
     setTestEnvValue("USERPROFILE", home);
+    deleteTestEnvValue("OPENCLAW_HOME");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     if (process.platform === "win32") {

@@ -6,12 +6,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
+import {
+  cloneProjectCheckout,
+  ensureProjectCheckoutCommit,
+  ProjectCloneError,
+  refreshProjectCheckout,
+} from "./project-clone-runtime.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
   registerClonedProjectRegistry,
   removeProjectCheckoutReference,
+  resolveProjectCloneRefreshOwner,
   type ProjectRegistryRecord,
   withProjectCheckoutLifecycle,
 } from "./project-registry.js";
@@ -32,7 +38,7 @@ function existingCanonicalProject(
 
 /** Materializes and registers a project from an accepted GitHub remote. */
 export async function materializeProjectClone(
-  input: { cfg: OpenClawConfig; gitUrl: string; name?: string },
+  input: { cfg: OpenClawConfig; gitUrl: string; name?: string; requiredCommit?: string },
   options: OpenClawStateDatabaseOptions & {
     signal?: AbortSignal;
     timeoutMs?: number;
@@ -69,10 +75,20 @@ export async function materializeProjectClone(
         }
         const existing = await withProjectCheckoutLifecycle(
           candidate.repoRoot,
-          options,
-          async () => {
+          { ...options, signal: lease.signal },
+          async (checkoutLease) => {
             const current = existingCanonicalProject(input.cfg, parsed.url, options);
-            return current?.repoRoot === candidate.repoRoot ? current : undefined;
+            if (current?.repoRoot !== candidate.repoRoot) {
+              return undefined;
+            }
+            if (input.requiredCommit) {
+              await ensureProjectCheckoutCommit(
+                { url: parsed.url, target: current.repoRoot, commit: input.requiredCommit },
+                { ...options, env, signal: checkoutLease.signal },
+              );
+              checkoutLease.assertOwned();
+            }
+            return current;
           },
         );
         if (existing) {
@@ -83,7 +99,7 @@ export async function materializeProjectClone(
       const directoryName = slugifyWorktreeTitle(displayName) ?? "project";
       const target = path.join(resolveStateDir(env), "projects", fingerprint, directoryName);
       await cloneProjectCheckout(
-        { url: parsed.url, target },
+        { url: parsed.url, target, requiredCommit: input.requiredCommit },
         {
           env,
           signal: lease.signal,
@@ -103,6 +119,46 @@ export async function materializeProjectClone(
       }
     },
   );
+}
+
+/** Refreshes an existing project clone while holding its checkout lifecycle lease. */
+export async function refreshProjectClone(
+  project: ProjectRegistryRecord,
+  options: OpenClawStateDatabaseOptions & {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    token?: string;
+  } = {},
+): Promise<void> {
+  if (project.source !== "cloned") {
+    return;
+  }
+  await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) => {
+    // Removal and registration share this lease. Re-read now so a queued stale record cannot
+    // authorize network, object-store, or ref effects after checkout ownership changes.
+    const current = resolveProjectCloneRefreshOwner(project, lease, options);
+    if (!current) {
+      throw new ProjectCloneError(
+        "clone_failed",
+        "This project is no longer a Gateway-managed clone. Reselect the repository and retry.",
+      );
+    }
+    // Materialization validates the source URL; retries retain that registry identity.
+    const originUrl = current.originUrl;
+    if (!originUrl) {
+      throw new ProjectCloneError(
+        "invalid_url",
+        "Saved project repository is invalid; select the repository and retry.",
+      );
+    }
+    // The registry owns source identity; origin can be changed inside the shared checkout.
+    await refreshProjectCheckout(
+      { target: current.repoRoot, url: originUrl },
+      { ...options, signal: lease.signal },
+    );
+    lease.assertOwned();
+  });
 }
 
 async function resolveClonedProjectCheckout(

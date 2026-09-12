@@ -115,6 +115,7 @@ function executablePathCacheKey(
   pathEnv: string,
   env: NodeJS.ProcessEnv | undefined,
   includeExtensionless: boolean | undefined,
+  requestedCwd: string | undefined,
 ): string {
   const pathExt =
     resolveEnvironmentValue(env, "PATHEXT") ??
@@ -123,11 +124,11 @@ function executablePathCacheKey(
   let cwd = "";
   try {
     // Relative PATH entries resolve against cwd, so changing directories must invalidate them.
-    cwd = process.cwd();
+    cwd = requestedCwd ?? process.cwd();
   } catch {
     // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
   }
-  return `${process.platform}\0${executable}\0${pathEnv}\0${pathExt}\0${includeExtensionless !== false}\0${cwd}`;
+  return `${process.platform}\0${executable}\0${pathEnv}\0${pathExt}\0${includeExtensionless !== false}\0${cwd}\0${requestedCwd !== undefined}`;
 }
 
 /** Clears process-local PATH probe results after the runtime environment changes. */
@@ -139,10 +140,18 @@ export function resolveExecutableFromPathEnv(
   executable: string,
   pathEnv: string,
   env?: NodeJS.ProcessEnv,
-  options?: { includeExtensionless?: boolean },
+  options?: { includeExtensionless?: boolean; cwd?: string; useCache?: boolean },
 ): string | undefined {
-  const cacheKey = executablePathCacheKey(executable, pathEnv, env, options?.includeExtensionless);
-  const cached = executablePathCache.get(cacheKey);
+  const cwd = options?.cwd?.trim() ? path.resolve(options.cwd.trim()) : undefined;
+  const useCache = options?.useCache !== false;
+  const cacheKey = executablePathCacheKey(
+    executable,
+    pathEnv,
+    env,
+    options?.includeExtensionless,
+    cwd,
+  );
+  const cached = useCache ? executablePathCache.get(cacheKey) : undefined;
   const now = Date.now();
   if (cached && cached.expiresAt > now) {
     // Hits and misses remain valid while the same PATH/PATHEXT/cwd key is used; config reload clears
@@ -157,7 +166,9 @@ export function resolveExecutableFromPathEnv(
     executablePathCache.delete(cacheKey);
   }
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
-  const entries = pathEnv.split(delimiter).filter(Boolean);
+  const entries = pathEnv
+    .split(delimiter)
+    .filter((entry) => Boolean(entry) || (cwd !== undefined && process.platform !== "win32"));
   const extensions = resolveWindowsExecutableExtensions(
     executable,
     env,
@@ -165,20 +176,27 @@ export function resolveExecutableFromPathEnv(
   );
   for (const entry of entries) {
     for (const ext of extensions) {
-      const candidate = path.join(entry, executable + ext);
+      const candidate = path.join(
+        cwd === undefined ? entry : path.resolve(cwd, entry),
+        executable + ext,
+      );
       if (isExecutableFile(candidate, { env })) {
-        cacheExecutablePath(cacheKey, candidate);
+        if (useCache) {
+          cacheExecutablePath(cacheKey, candidate);
+        }
         return candidate;
       }
     }
   }
-  cacheExecutablePath(cacheKey, undefined);
+  if (useCache) {
+    cacheExecutablePath(cacheKey, undefined);
+  }
   return undefined;
 }
 
 export function resolveExecutablePath(
   rawExecutable: string,
-  options?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv; useCache?: boolean },
 ): string | undefined {
   const candidate = resolveExecutablePathCandidate(rawExecutable, options);
   if (!candidate) {
@@ -191,7 +209,10 @@ export function resolveExecutablePath(
     resolveEnvironmentValue(options?.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??
     "";
-  return resolveExecutableFromPathEnv(candidate, envPath, options?.env);
+  return resolveExecutableFromPathEnv(candidate, envPath, options?.env, {
+    cwd: options?.cwd,
+    useCache: options?.useCache,
+  });
 }
 
 /**

@@ -1,5 +1,6 @@
 import { svg } from "lit";
 import { t } from "../../i18n/index.ts";
+import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
 import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
 
 export type TerminalPanelTab = {
@@ -11,6 +12,7 @@ export type TerminalPanelTab = {
   status: "connecting" | "live" | "exited";
   exitReason?: string;
   exitCode?: number | null;
+  exitSignal?: number | null;
   /** Set for PTYs an agent opened; surfaces an "agent" pill on the tab. */
   agentOwned?: boolean;
 };
@@ -37,9 +39,24 @@ function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
   if (tab.exitReason === "detached") {
     return t("terminal.detached");
   }
+  if (typeof tab.exitSignal === "number" && tab.exitSignal > 0) {
+    return t("terminal.exitedSignal", { signal: String(tab.exitSignal) });
+  }
   return tab.exitReason === "process_exit" && typeof tab.exitCode === "number"
     ? t("terminal.exitedCode", { code: String(tab.exitCode) })
     : t("terminal.exited");
+}
+
+export function terminalPanelHostedTabs(tabs: TerminalPanelTab[]): PanelHostedTab[] {
+  return tabs.map((tab) => ({
+    id: tab.id,
+    label: terminalTabLabel(tab),
+    title: terminalTabHint(tab),
+    icon: TERMINAL_GLYPH,
+    statusLabel: terminalTabStatusLabel(tab),
+    badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,
+    className: `is-${tab.status}`,
+  }));
 }
 
 export function renderTerminalPanelTabs(params: {
@@ -50,20 +67,12 @@ export function renderTerminalPanelTabs(params: {
   onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
 }) {
-  const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {
-    const label = terminalTabLabel(tab);
-    return {
-      id: tab.id,
+  const tabs: PanelTabStripTab[] = terminalPanelHostedTabs(params.tabs).map((tab) =>
+    Object.assign(tab, {
       domId: `terminal-tab-${tab.id}`,
-      label,
-      title: terminalTabHint(tab),
-      icon: TERMINAL_GLYPH,
-      statusLabel: terminalTabStatusLabel(tab),
-      badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,
-      className: `is-${tab.status}`,
-      closeLabel: `${t("terminal.closeSession")}: ${label}`,
-    };
-  });
+      closeLabel: `${t("terminal.closeSession")}: ${tab.label}`,
+    }),
+  );
   return renderPanelTabStrip({
     tabs,
     activeId: params.activeId,

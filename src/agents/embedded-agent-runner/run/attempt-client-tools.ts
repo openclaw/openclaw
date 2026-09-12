@@ -11,6 +11,7 @@ import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
+import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
   createToolDefinitionFromAgentTool,
@@ -30,8 +31,7 @@ import {
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;
@@ -112,12 +112,22 @@ export function prepareEmbeddedAttemptClientTools(params: {
     : [];
   const buildSurface = () => {
     // Raw names gate trusted local media passthrough; normalized aliases are insufficient.
-    const builtinToolNames = new Set(
-      params.uncompactedEffectiveTools.flatMap((tool) => {
-        const name = (tool.name ?? "").trim();
-        return name ? [name] : [];
-      }),
-    );
+    const builtinToolNames = new Set<string>();
+    const trustedLocalMediaToolNames = new Set<string>();
+    for (const tool of params.uncompactedEffectiveTools) {
+      const name = (tool.name ?? "").trim();
+      if (!name) {
+        continue;
+      }
+      builtinToolNames.add(name);
+      const pluginMeta = getPluginToolMeta(tool);
+      if (
+        pluginMeta?.trustedLocalMedia === true ||
+        (!pluginMeta && isCoreToolResultMediaTrustedName(name))
+      ) {
+        trustedLocalMediaToolNames.add(name);
+      }
+    }
     const coreBuiltinToolNames = collectCoreBuiltinToolNames(params.uncompactedEffectiveTools, {
       isPluginTool: (tool) =>
         Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
@@ -206,6 +216,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       codeModeExecToolNames,
       sideEffectToolOwners,
       sessionToolAllowlist,
+      trustedLocalMediaToolNames,
     };
   };
   const current = buildSurface();
@@ -225,6 +236,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "coreBuiltinToolNames",
         "replaySafeToolNames",
         "codeModeExecToolNames",
+        "trustedLocalMediaToolNames",
       ] as const) {
         current[key].clear();
         for (const name of next[key]) {

@@ -64,6 +64,8 @@ export type MeetingAgentConsultParams = {
   requesterSessionKey?: string;
   args: unknown;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  /** Meeting-owned cancellation for the active consult. */
+  abortSignal?: AbortSignal;
 };
 
 export type MeetingRealtimeToolCallParams = {
@@ -163,6 +165,8 @@ export async function startMeetingRealtimeEngine(params: {
       outputClearAfterActive = false;
       invalidateOutputQueue();
       toolContinuity.reset("meeting realtime stopped");
+      harness.talkback?.close();
+      harness.forcedConsults.clear();
     }
     if (stopPromise) {
       await stopPromise;
@@ -170,14 +174,15 @@ export async function startMeetingRealtimeEngine(params: {
     }
     const cleanup = Promise.resolve().then(async () => {
       if (!bridgeClosed) {
-        bridgeClosed = true;
-        harness.close();
         try {
-          bridge?.close();
+          await bridge?.close();
         } catch (error) {
           params.logger.debug?.(
             `${params.platform.logScope} ${realtimeLogScope}${params.logPrefix ? "" : " voice"} bridge close ignored: ${formatErrorMessage(error)}`,
           );
+        } finally {
+          bridgeClosed = true;
+          harness.close();
         }
       }
       let cleanupError: unknown;
@@ -439,12 +444,13 @@ export async function startMeetingRealtimeEngine(params: {
       logPrefix: `${params.platform.logScope} ${realtimeLogScope} agent`,
       responseStyle: "Brief, natural spoken answer for a live meeting.",
       fallbackText: "I hit an error while checking that. Please try again.",
-      consult: ({ question, responseStyle }) =>
+      consult: ({ question, responseStyle, signal }) =>
         params.consultAgent({
           meetingSessionId: params.meetingSessionId,
           requesterSessionKey: params.requesterSessionKey,
           args: { question, responseStyle },
           transcript: harness.transcript,
+          abortSignal: signal,
         }),
       deliver: (text) => {
         bridge?.sendUserMessage(buildMeetingSpeakExactUserMessage(text));
@@ -562,7 +568,7 @@ export async function startMeetingRealtimeEngine(params: {
               return;
             }
           }
-          if (role === "user" && strategy === "agent") {
+          if (!stopped && role === "user" && strategy === "agent") {
             harness.talkback?.enqueue(text);
           }
         }
@@ -664,7 +670,7 @@ export async function startMeetingRealtimeEngine(params: {
       ...params.transport.getHealth?.(),
       lastClearAt,
       clearCount,
-      bridgeClosed: stopped,
+      bridgeClosed,
     }),
     stop,
   };

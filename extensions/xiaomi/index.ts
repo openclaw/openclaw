@@ -19,14 +19,14 @@ import {
   upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   applyModelCompatPatch,
   buildProviderReplayFamilyHooks,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
 import {
-  applyXiaomiConfig,
+  applyXiaomiConnectionConfig,
   applyXiaomiTokenPlanConfig,
   XIAOMI_DEFAULT_MODEL_REF,
   XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF,
@@ -105,17 +105,17 @@ async function resolveXiaomiCatalog(params: {
   if (params.requireBaseUrl === true && !explicitBaseUrl) {
     return null;
   }
-  return {
-    provider: await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: params.providerId,
-      providerConfig: {
-        ...params.buildProvider(),
-        ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-      },
-      apiKey: auth.apiKey,
-      discoveryApiKey: auth.discoveryApiKey,
-    }),
-  };
+  return await buildOpenAICompatibleLiveProviderCatalog({
+    discoveryMode: "strict",
+    providerId: params.providerId,
+    providerConfig: {
+      ...params.buildProvider(),
+      ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+    },
+    apiKey: auth.apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+  });
 }
 
 function buildXiaomiKeyMismatchMessage(params: {
@@ -299,7 +299,7 @@ function createPaygAuthMethod(): ProviderAuthMethod {
         promptMessage: "Enter Xiaomi MiMo API key (pay-as-you-go, sk-...)",
         expectedKind: "payg",
         defaultModel: XIAOMI_DEFAULT_MODEL_REF,
-        applyConfig: applyXiaomiConfig,
+        applyConfig: applyXiaomiConnectionConfig,
       }),
     runNonInteractive: async (ctx) =>
       await runXiaomiApiKeyAuthNonInteractive(ctx, {
@@ -308,7 +308,7 @@ function createPaygAuthMethod(): ProviderAuthMethod {
         flagName: PAYG_FLAG_NAME,
         envVar: PAYG_ENV_VAR,
         expectedKind: "payg",
-        applyConfig: applyXiaomiConfig,
+        applyConfig: applyXiaomiConnectionConfig,
       }),
   };
 }

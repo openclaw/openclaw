@@ -54,6 +54,8 @@ export function refreshClientPresence(
       peer.personPresence = { ...timing };
     }
     upsertPresence(peer.presenceKey!, {
+      clientId: peer.connect.client.id,
+      mode: peer.connect.client.mode,
       user: buildAuthenticatedPresenceUser(peer),
       ...peer.personPresence,
     });

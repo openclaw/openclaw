@@ -183,7 +183,7 @@ describe("post-core bundled plugin retirement", () => {
     expect(installAttempts).toBe(0);
     expect(projectsAfterFirst).toHaveLength(1);
     expect(fs.readdirSync(path.join(stateDir, "npm", "projects"))).toEqual(projectsAfterFirst);
-    expect(await readPersistedInstalledPluginIndexInstallRecords({ env })).not.toHaveProperty(
+    expect(readPersistedInstalledPluginIndexInstallRecords({ env })).not.toHaveProperty(
       "bundleddemo",
     );
     expect(first.installRecords).not.toHaveProperty("bundleddemo");

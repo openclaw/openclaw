@@ -33,6 +33,7 @@ type InteractiveJob = {
   failureValue: JsonValue;
   run: (signal: AbortSignal) => Promise<JsonValue | undefined>;
   resolve: (value: JsonValue) => void;
+  onResponse?: (value: JsonValue) => void;
 };
 
 type CodexInputRequest = { id: number | string; params?: JsonValue };
@@ -44,6 +45,11 @@ export function createCodexUserInputBridge(params: {
   turnId: string;
   signal?: AbortSignal;
   gatewayCall?: Parameters<typeof structuredInput.run>[0]["gatewayCall"];
+  onOrdinaryResponse?: (result: {
+    itemId: string;
+    questions: readonly AgentHarnessUserInputQuestion[];
+    response: JsonValue;
+  }) => void;
 }) {
   const jobs: InteractiveJob[] = [];
   let activeCompletion: Promise<void> | undefined;
@@ -63,7 +69,9 @@ export function createCodexUserInputBridge(params: {
       .then((value) => {
         // Lifecycle cancellation owns the request once observed, so a late
         // answer cannot cross into the queued replacement.
-        job.resolve(job.abort.signal.aborted ? job.cancelValue : (value ?? job.failureValue));
+        const response = job.abort.signal.aborted ? job.cancelValue : (value ?? job.failureValue);
+        job.onResponse?.(response);
+        job.resolve(response);
       })
       .finally(() => {
         if (jobs[0] === job) {
@@ -149,6 +157,15 @@ export function createCodexUserInputBridge(params: {
         abort: new AbortController(),
         cancelValue,
         failureValue: cancelValue,
+        // Secret requests never enter the transcript, including cancelled or mixed forms.
+        onResponse: requestParams.questions.some((question) => question.isSecret)
+          ? undefined
+          : (response) =>
+              params.onOrdinaryResponse?.({
+                itemId: requestParams.itemId,
+                questions: requestParams.questions,
+                response,
+              }),
         run: async (signal) => {
           const result = await execute(input, timeoutMs, signal);
           return result.status === "answered"
@@ -158,11 +175,11 @@ export function createCodexUserInputBridge(params: {
       });
     },
     async handleElicitationRequest(request: CodexInputRequest) {
-      if (readRawOwnString(request.params, "threadId") !== params.threadId) {
+      if (readOwnDataString(request.params, "threadId") !== params.threadId) {
         return undefined;
       }
       const requestSnapshot = structuredInput.snapshot(request.params);
-      if (requestSnapshot === undefined) {
+      if (!structuredInput.isRecord(requestSnapshot)) {
         const cancelValue = createCodexElicitationResponse("cancel");
         return await enqueue({
           requestId: request.id,
@@ -184,10 +201,12 @@ export function createCodexUserInputBridge(params: {
           },
         });
       }
+      if (readOwnDataString(requestSnapshot, "threadId") !== params.threadId) {
+        return undefined;
+      }
       const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
       const compiled = compileCodexOrdinaryElicitation({
-        value: requestSnapshot,
-        threadId: params.threadId,
+        snapshot: requestSnapshot,
         turnId: params.turnId,
       });
       if (compiled.kind === "ignored") {
@@ -226,7 +245,7 @@ export function createCodexUserInputBridge(params: {
       const requestId = readRequestId(notification.params);
       if (
         requestId === undefined ||
-        readOwnString(notification.params, "threadId") !== params.threadId
+        readOwnDataString(notification.params, "threadId") !== params.threadId
       ) {
         return;
       }
@@ -252,6 +271,7 @@ function readUserInputParams(value: JsonValue | undefined):
   | {
       threadId: string;
       turnId: string;
+      itemId: string;
       questions: AgentHarnessUserInputQuestion[];
       isBlocking: boolean;
     }
@@ -278,6 +298,7 @@ function readUserInputParams(value: JsonValue | undefined):
   return {
     threadId,
     turnId,
+    itemId,
     questions: parsed,
     isBlocking: readValue(snapshot, "isBlocking") !== false,
   };
@@ -355,14 +376,7 @@ function readArray(
   return Array.isArray(value) && value.length <= maximum ? value : undefined;
 }
 
-function readOwnString(record: JsonObject, key: string): string | undefined {
-  const descriptor = Object.getOwnPropertyDescriptor(record, key);
-  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
-    ? descriptor.value
-    : undefined;
-}
-
-function readRawOwnString(value: unknown, key: string): string | undefined {
+function readOwnDataString(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }

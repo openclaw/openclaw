@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
@@ -59,6 +60,14 @@ function hasAllowedPluginForAuthTest(cfg: unknown, pluginId: string): boolean {
   return Array.isArray(plugins?.allow) && plugins.allow.includes(pluginId);
 }
 
+// Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
+vi.mock("../../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+    kind: "ready",
+    validate: () => undefined,
+  })),
+}));
+
 vi.mock("../../agents/auth-profiles.js", () => {
   const store = () => ({
     version: 1,
@@ -112,18 +121,12 @@ vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
   persistStickyModelSelectionBestEffort: (params: {
     agentId: string;
     model: string;
-    target?: "agent" | "defaults";
+    target: "agent" | "defaults";
   }) => stickyModelMock.persistBestEffort(params),
 }));
 
-vi.mock("./directive-handling.auth.js", () => ({
-  formatAuthLabel: (auth: { label: string; source: string }) => {
-    if (!auth.source || auth.source === auth.label || auth.source === "missing") {
-      return auth.label;
-    }
-    return `${auth.label} (${auth.source})`;
-  },
-  resolveAuthLabel: async (
+vi.mock("../../agents/model-catalog-auth-labels.js", () => {
+  const resolveAuthLabel = (
     provider: string,
     cfg: unknown,
     _modelsPath: string,
@@ -171,10 +174,50 @@ vi.mock("./directive-handling.auth.js", () => ({
       };
     }
     return { label: "missing", source: "missing" };
-  },
-}));
+  };
+  return {
+    formatModelCatalogAuthLabel: (label: string) => label,
+    prepareModelCatalogAuthLabels: (params: {
+      config: OpenClawConfig;
+      workspaceDir?: string;
+      providers: Iterable<string>;
+    }) =>
+      new Map(
+        [...params.providers].map((provider) => {
+          const format = (acceptedProfileTypes?: readonly string[]) => {
+            const auth = resolveAuthLabel(
+              provider,
+              params.config,
+              "",
+              undefined,
+              undefined,
+              params.workspaceDir,
+              { acceptedProfileTypes },
+            );
+            return auth.source && auth.source !== "missing"
+              ? `${auth.label} (${auth.source})`
+              : auth.label;
+          };
+          return [provider, { all: format(), apiKey: format(["api_key"]) }];
+        }),
+      ),
+  };
+});
 
-vi.mock("../../agents/auth-profiles/store.js", () => {
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  return {
+    ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    getRuntimeAuthProfileStoreSnapshot: store,
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+  };
+});
+vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   const store = () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
@@ -182,10 +225,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
   return {
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreForLocalUpdate: store,
-    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
-      authProfilesStoreMock.profiles[profileId],
-    getRuntimeAuthProfileStoreSnapshot: store,
-    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
     loadAuthProfileStore: store,
     loadAuthProfileStoreForRuntime: store,
     loadAuthProfileStoreForSecretsRuntime: store,
@@ -321,16 +360,24 @@ import {
 } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionEntry,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import * as transcriptReaders from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type InternalHookEvent,
 } from "../../hooks/internal-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
@@ -339,7 +386,6 @@ let buildModelAliasIndex: typeof import("../../agents/model-selection.js").build
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
 let parseInlineSessionDirectives: typeof import("./directive-handling.parse.js").parseInlineSessionDirectives;
 let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
-let createFastTestModelSelectionState: typeof import("./model-selection.js").createFastTestModelSelectionState;
 
 beforeAll(async () => {
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
@@ -350,7 +396,6 @@ beforeAll(async () => {
     await import("./directive-handling.model-selection.js"));
   ({ parseInlineSessionDirectives } = await import("./directive-handling.parse.js"));
   ({ applyInlineDirectiveOverrides } = await import("./get-reply-directives-apply.js"));
-  ({ createFastTestModelSelectionState } = await import("./model-selection.js"));
 });
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
@@ -368,14 +413,75 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
-vi.mock("../../agents/prepared-model-catalog.js", () => {
-  const loadModelCatalog = vi.fn(async () => [
+vi.mock("../../agents/prepared-model-catalog.js", async () => {
+  const { setPreparedModelRuntimeAuthStore, setPreparedModelRuntimeAuthLabels } =
+    await vi.importActual<typeof import("../../agents/prepared-model-runtime-auth.js")>(
+      "../../agents/prepared-model-runtime-auth.js",
+    );
+  const { prepareModelCatalogAuthLabels } =
+    await import("../../agents/model-catalog-auth-labels.js");
+  const { createPluginMetadataSnapshotFixture } =
+    await import("../../plugins/plugin-metadata.test-support.js");
+  const { loadPluginMetadataSnapshot } = await import("../../plugins/plugin-metadata-snapshot.js");
+  const entries = [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
-  ]);
+  ];
+  const loadModelCatalog = vi.fn(async () => entries);
   return {
-    loadPreparedModelCatalog: loadModelCatalog,
+    readPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
+    loadPreparedModelCatalogOwnerSnapshot: vi.fn(() => {
+      throw new Error("Status should use the published catalog owner");
+    }),
+    getPublishedPreparedModelCatalogOwnerSnapshot: (params: {
+      config: OpenClawConfig;
+      agentId?: string;
+      agentDir?: string;
+      workspaceDir?: string;
+    }) => {
+      const owner = {
+        config: params.config,
+        observationConfig: params.config,
+        agentId: params.agentId ?? "main",
+        agentDir: params.agentDir ?? "/tmp/agent",
+        workspaceDir: params.workspaceDir ?? "/tmp",
+        modelCatalog: { entries, routeVariants: entries },
+        authModes: {},
+        metadataSnapshot: params.workspaceDir
+          ? loadPluginMetadataSnapshot({
+              config: params.config,
+              workspaceDir: params.workspaceDir,
+              allowCurrent: false,
+              preferPersisted: false,
+            })
+          : createPluginMetadataSnapshotFixture(),
+        isCurrent: () => true,
+      };
+      setPreparedModelRuntimeAuthLabels(
+        owner,
+        prepareModelCatalogAuthLabels({
+          config: params.config,
+          agentDir: owner.agentDir,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+          store: { version: 1, profiles: authProfilesStoreMock.profiles },
+          providers: [
+            "openai",
+            "anthropic",
+            "openrouter",
+            "localai",
+            ...Object.keys(params.config.models?.providers ?? {}),
+          ],
+        }),
+      );
+      setPreparedModelRuntimeAuthStore(owner, {
+        version: 1,
+        profiles: authProfilesStoreMock.profiles,
+      });
+      return owner;
+    },
+    materializePreparedModelCatalogOwner: (owner: object) => owner,
     withPreparedModelCatalogOwner: async (
       _params: unknown,
       read: (owner: {
@@ -384,9 +490,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
         isCurrent: () => boolean;
       }) => unknown,
     ) => {
-      const entries = await loadModelCatalog();
+      const catalog = await loadModelCatalog();
       return read({
-        modelCatalog: { entries, routeVariants: entries },
+        modelCatalog: { entries: catalog, routeVariants: catalog },
         authModes: {},
         isCurrent: () => true,
       });
@@ -448,7 +554,7 @@ function modelDefinition(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
-function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
+function createSessionEntry(overrides?: Partial<InternalSessionEntry>): InternalSessionEntry {
   return {
     sessionId: "s1",
     updatedAt: Date.now(),
@@ -619,7 +725,7 @@ async function persistModelDirectiveForTest(params: {
   const model = params.model ?? "claude-opus-4-6";
   const agentId = params.agentId ?? "main";
   const sessionKey = `agent:${agentId}:dm:1`;
-  const modelState = createFastTestModelSelectionState({
+  const modelState = createModelSelectionStateFixture({
     agentCfg: cfg.agents?.defaults,
     provider,
     model,
@@ -973,7 +1079,7 @@ describe("/model chat UX", () => {
       defaultProvider: "openai",
       defaultModel: "gpt-5.6-luna",
       currentThinkLevel: "ultra",
-      sessionEntry: { agentRuntimeOverride: "codex" },
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "codex" }),
     });
 
     expect(reply?.text).toContain("Think: max (change with /think <level>)");
@@ -1024,22 +1130,198 @@ describe("/model chat UX", () => {
     );
   });
 
-  it("shows active runtime model when different from selected model", async () => {
-    const reply = await resolveModelInfoReply({
-      provider: "fireworks",
-      model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      defaultProvider: "fireworks",
-      defaultModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      sessionEntry: {
-        modelProvider: "deepinfra",
-        model: "moonshotai/Kimi-K2.5",
-      },
-    });
+  it.each([
+    [
+      "fireworks",
+      "accounts/fireworks/routers/kimi-k2p5-turbo",
+      "deepinfra",
+      "moonshotai/Kimi-K2.5",
+    ],
+    ["custom", "custom/model", "custom", "model"],
+  ])(
+    "shows selected %s/%s and active %s/%s when they differ",
+    async (selectedProvider, selectedModel, activeProvider, activeModel) => {
+      const reply = await resolveModelInfoReply({
+        provider: selectedProvider,
+        model: selectedModel,
+        defaultProvider: selectedProvider,
+        defaultModel: selectedModel,
+        sessionEntry: createSessionEntry({
+          modelProvider: activeProvider,
+          model: activeModel,
+        }),
+      });
 
-    expect(reply?.text).toContain(
-      "Current: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo (selected)",
-    );
-    expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
+      expect(reply?.text).toContain(`Current: ${selectedProvider}/${selectedModel} (selected)`);
+      expect(reply?.text).toContain(`Active: ${activeProvider}/${activeModel} (runtime)`);
+    },
+  );
+
+  describe.each(["/model", "/model status"])("%s terminal fallback display", (command) => {
+    const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+    const scenarios: Array<{
+      name: string;
+      entry?: Partial<InternalSessionEntry>;
+      selectedModel?: string;
+      runId?: string;
+      stopReason?: "stop" | "length" | "toolUse";
+      laterUser?: boolean;
+      expectedActive: boolean;
+    }> = [
+      {
+        name: "settled fallback without runtime fields",
+        stopReason: "length",
+        expectedActive: true,
+      },
+      {
+        name: "settled fallback with stale runtime fields",
+        entry: { modelProvider: "anthropic", model: "claude-opus-4-6" },
+        expectedActive: true,
+      },
+      { name: "running session", entry: { status: "running" }, expectedActive: false },
+      { name: "another run's terminal row", runId: "previous-run", expectedActive: false },
+      { name: "changed selection", selectedModel: "claude-sonnet-4-6", expectedActive: false },
+      {
+        name: "mismatched active notice",
+        entry: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "anthropic/claude-opus-4-6",
+            activeModel: "anthropic/claude-sonnet-4-6",
+            reason: "rate limit",
+          },
+        },
+        expectedActive: false,
+      },
+      {
+        name: "missing fallback notice",
+        entry: { fallbackNotice: undefined },
+        expectedActive: false,
+      },
+      { name: "nonterminal assistant row", stopReason: "toolUse", expectedActive: false },
+      { name: "user row after the terminal answer", laterUser: true, expectedActive: false },
+    ];
+
+    it.each(scenarios)("uses only matching terminal evidence: $name", async (scenario) => {
+      const tempRoot = tempDirs.make("openclaw-model-terminal-display-");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }, async () => {
+        const sessionKey = "agent:main:main";
+        const runtimePolicySessionKey = "agent:main:telegram:default:direct:fixture-user";
+        const storePath = path.join(tempRoot, "custom-store", "openclaw-agent.sqlite");
+        const scope = { agentId: "main", sessionKey, sessionId: "terminal-display", storePath };
+        const selectedModel = scenario.selectedModel ?? "claude-opus-4-6";
+        try {
+          await replaceSessionEntry(
+            scope,
+            createSessionEntry({
+              sessionId: scope.sessionId,
+              status: "done",
+              lastRunId: "settled-run",
+              fallbackNotice: {
+                kind: "active",
+                selectedModel: "anthropic/claude-opus-4-6",
+                activeModel: "anthropic/claude-haiku-4-5",
+                reason: "rate limit",
+              },
+              ...scenario.entry,
+            }),
+          );
+          const turn = await persistSessionTranscriptTurn(scope, {
+            runId: scenario.runId ?? "settled-run",
+            messages: [
+              {
+                eventId: "terminal-answer",
+                parentId: null,
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "The fallback answered." }],
+                  provider: "anthropic",
+                  model: "claude-haiku-4-5",
+                  stopReason: scenario.stopReason ?? "stop",
+                },
+              },
+              ...(scenario.laterUser
+                ? [
+                    {
+                      eventId: "later-user",
+                      parentId: "terminal-answer",
+                      message: { role: "user", content: "A new question." },
+                    },
+                  ]
+                : []),
+            ],
+            touchSessionEntry: false,
+            updateMode: "none",
+          });
+          expect(turn.appendedCount).toBe(scenario.laterUser ? 2 : 1);
+          const sessionEntry = expectDefined(loadSessionEntry(scope), "persisted model session");
+          const before = structuredClone(sessionEntry);
+          if (scenario.expectedActive) {
+            expect(sessionEntry).toMatchObject({
+              sessionId: scope.sessionId,
+              status: "done",
+              lastRunId: "settled-run",
+              fallbackNotice: {
+                kind: "active",
+                selectedModel: "anthropic/claude-opus-4-6",
+                activeModel: "anthropic/claude-haiku-4-5",
+              },
+            });
+            const terminal = transcriptReaders.readSessionTranscriptBoundedMessageTailPage(scope, {
+              maxBytes: 256 * 1024,
+              maxMessages: 1,
+              offset: 0,
+            });
+            expect(terminal.events).toMatchObject([
+              {
+                event: {
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "The fallback answered." }],
+                    provider: "anthropic",
+                    model: "claude-haiku-4-5",
+                    stopReason: scenario.stopReason ?? "stop",
+                    __openclaw: { runId: "settled-run" },
+                  },
+                },
+              },
+            ]);
+          }
+          const readTail = vi.spyOn(
+            transcriptReaders,
+            "readSessionTranscriptBoundedMessageTailPage",
+          );
+          try {
+            const reply = await handleDirectiveOnly(
+              createDirectiveHandlingParams({
+                directives: parseInlineSessionDirectives(command),
+                sessionEntry,
+                sessionKey,
+                storePath,
+                model: selectedModel,
+                ctx: { RuntimePolicySessionKey: runtimePolicySessionKey },
+              }),
+            );
+
+            expect(reply?.text).toContain(`Current: anthropic/${selectedModel}`);
+            if (scenario.expectedActive) {
+              expect(reply?.text).toContain("Active: anthropic/claude-haiku-4-5 (runtime)");
+              // The policy key can share a database; assert the actual reader's locator too.
+              expect(readTail).toHaveBeenCalledWith({ ...scope }, expect.anything());
+            } else {
+              expect(reply?.text).not.toContain("Active:");
+            }
+            expect(sessionEntry).toEqual(before);
+            expect(loadSessionEntry(scope)).toEqual(before);
+          } finally {
+            readTail.mockRestore();
+          }
+        } finally {
+          closeOpenClawAgentDatabasesForTest(tempRoot);
+          closeOpenClawStateDatabaseForTest();
+        }
+      });
+    });
   });
 
   it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
@@ -1127,7 +1409,9 @@ describe("/model chat UX", () => {
       allowedModelCatalog: policy.allowedCatalog,
     });
 
-    expect(policy.allowsKey("openrouter/meta-llama/llama-3.3-70b-instruct:free")).toBe(true);
+    expect(
+      policy.allows({ provider: "openrouter", model: "meta-llama/llama-3.3-70b-instruct:free" }),
+    ).toBe(true);
     expect(reply?.text).toContain("openrouter/meta-llama/llama-3.3-70b-instruct:free");
     expect(reply?.text).not.toContain("anthropic/openrouter:free");
   });
@@ -1347,9 +1631,9 @@ describe("/model chat UX", () => {
       model: "gpt-5.5",
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
-      sessionEntry: {
+      sessionEntry: createSessionEntry({
         agentRuntimeOverride: "codex",
-      },
+      }),
       cfg: {
         commands: { text: true },
         agents: {
@@ -1388,9 +1672,9 @@ describe("/model chat UX", () => {
       model: "gpt-5.5",
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
-      sessionEntry: {
+      sessionEntry: createSessionEntry({
         agentHarnessId: "codex",
-      },
+      }),
       cfg: {
         commands: { text: true },
         agents: {
@@ -1992,7 +2276,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
-  it("preserves an authorized unscoped effective-default selection", async () => {
+  it("keeps an authorized selection session-only without a default target", async () => {
     const sessionEntry = createSessionEntry();
     const result = await runHandleCommand("/model openai/gpt-4o", {
       sessionEntry,
@@ -2001,13 +2285,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
-    expect(result?.text).toContain("Configured default update requested.");
+    expect(result?.text).toContain("for this session only; configured default unchanged.");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
-      agentId: "main",
-      model: "openai/gpt-4o",
-    });
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("preserves a compatible auth profile for a mixed model directive", async () => {

@@ -35,7 +35,7 @@ export type ApiKeyCredential = {
 };
 
 /** Static token credential that OpenClaw does not refresh. */
-export type TokenCredential = {
+type TokenCredential = {
   /**
    * Static bearer-style token (often OAuth access token / PAT).
    * Not refreshable by OpenClaw (unlike `type: "oauth"`).
@@ -66,8 +66,22 @@ export type OAuthCredential = OAuthCredentials & {
   displayName?: string;
 };
 
+export type SavedSetupCredential = {
+  apiKeyHeader?: true;
+  agentRuntimeId?: string;
+  replacement: boolean;
+  modelRef: string;
+  /** Setup validates the connection config when retrying, outside auth hot paths. */
+  configJson: string;
+  authChoice?: string;
+  pluginId?: string;
+};
+
 /** Credential variants supported by auth profiles. */
-export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
+export type AuthProfileCredential = (ApiKeyCredential | TokenCredential | OAuthCredential) & {
+  /** Replacement credentials stay unavailable until their verified connection is activated. */
+  setup?: SavedSetupCredential;
+};
 
 /** Closed reasons that drive cooldown, disable, and failure counters. */
 export type AuthProfileFailureReason =
@@ -110,6 +124,7 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /** Most recent quota probe or successful provider use. */
   lastProbeAt?: number;
 };
 
@@ -148,11 +163,21 @@ export type AuthProfileStore = AuthProfileSecretsStore &
     runtimeExternalProfileIdsAuthoritative?: boolean;
   };
 
+/** Physical origin of a canonical credential selected into a session read view. */
+export type AuthProfileCredentialSource = {
+  readonly databasePath: string;
+  readonly provider: string;
+};
+
 /** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
 export type RuntimeAuthProfileStore = AuthProfileStore & {
+  /** Physical sources of the selected rows; retained only in session read views. */
+  runtimeCredentialSources?: Record<string, AuthProfileCredentialSource>;
   /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
   runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
+  /** Provider orders stored by this owner; [] means no local override, even with inherited priority. */
+  runtimeLocalOrderProviderIds?: string[];
   runtimeInheritsMainState?: boolean;
 };
 

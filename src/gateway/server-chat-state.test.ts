@@ -32,6 +32,52 @@ describe("createChatRunState", () => {
     },
   );
 
+  it("expires idle recipients while activity extends another run's lifetime", () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const state = createChatRunState();
+      state.toolEventRecipients.add("idle", "conn-idle");
+      state.toolEventRecipients.add("active", "conn-active");
+      now = 301_000;
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+      now = 600_999;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(true);
+      now += 1;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(false);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "expires new recipients after clock rollback (clear previous state: %s)",
+    (clear) => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const state = createChatRunState();
+        state.toolEventRecipients.add("previous", "conn-previous");
+        if (clear) {
+          state.clear();
+        }
+        now = 1_000;
+        state.toolEventRecipients.add("early", "conn-early");
+        now = 500_000;
+        state.toolEventRecipients.add("active", "conn-active");
+        now = 601_000;
+        expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+        expect(state.runs.has("early")).toBe(false);
+        expect(state.runs.has("previous")).toBe(!clear);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("clears transient projection state without dropping run ownership or abort tombstones", () => {
     const state = createChatRunState();
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
@@ -133,6 +179,63 @@ describe("createChatRunState", () => {
       expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
         { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
       ]);
+    },
+  );
+
+  it.each(["full", "summary"] as const)(
+    "retains retry waits after completed work and clears them on resumed %s activity",
+    (mode) => {
+      const state = createChatRunState();
+      let seq = 0;
+      const event = (stream: string, data: Record<string, unknown>) =>
+        state.recordProgressEvent(
+          "run-1",
+          { runId: "run-1", seq: ++seq, stream, ts: seq, data },
+          mode,
+        );
+      event("tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" });
+      for (const stream of ["assistant", "tool", "item"]) {
+        const retry = {
+          phase: "retrying",
+          message: "Rate limited. Retrying in 2 seconds (attempt 2/8).",
+          retryAttempt: 2,
+          maxRetries: 8,
+          delayMs: 2_000,
+        };
+        event("run_status", retry);
+        event("usage", { outputTokens: 100 });
+        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
+          expect.objectContaining({ stream: "run_status", data: retry }),
+        );
+        event(
+          stream,
+          stream === "assistant"
+            ? { text: "Continuing" }
+            : stream === "tool"
+              ? { phase: "start", toolCallId: "read-2", name: "read" }
+              : { kind: "preamble", itemId: "resumed", progressText: "Continuing" },
+        );
+        expect(
+          state.runs
+            .get("run-1")
+            ?.progressSnapshot?.events.some((entry) => entry.stream === "run_status"),
+        ).toBe(false);
+        if (stream === "assistant") {
+          expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual({
+            runId: "run-1",
+            seq,
+            stream: "assistant",
+            ts: seq,
+            data: {},
+          });
+        }
+        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
+          expect.objectContaining({
+            stream: "tool",
+            data: expect.objectContaining({ toolCallId: "read-1", phase: "result" }),
+          }),
+        );
+      }
     },
   );
 
@@ -284,6 +387,45 @@ describe("createChatRunState", () => {
       toolCallId: "tool-78",
     });
   });
+
+  it.each(["tool", "notice"])(
+    "recounts changed payloads before %s activity evicts multiple reconnect owners",
+    (stream) => {
+      const state = createChatRunState();
+      const args = { text: "x".repeat(1_024) };
+      for (let seq = 1; seq <= 50; seq += 1) {
+        state.recordProgressEvent("run-1", {
+          runId: "run-1",
+          seq,
+          stream: "tool",
+          ts: seq,
+          data: { phase: "start", toolCallId: `tool-${seq}`, args },
+        });
+      }
+      // Tool producers can retain and update nested payload objects between events.
+      args.text = "é".repeat(2_048);
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq: 51,
+        stream,
+        ts: 51,
+        data:
+          stream === "tool"
+            ? { phase: "start", toolCallId: "latest" }
+            : { phase: "warning", message: "Still running" },
+      });
+      const snapshot = state.runs.get("run-1")?.progressSnapshot;
+      expect(snapshot?.events.at(-1)?.seq).toBe(51);
+      expect(snapshot?.events.length).toBeLessThan(49);
+      expect(snapshot?.byteLength).toBe(
+        snapshot?.events.reduce(
+          (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
+          0,
+        ),
+      );
+      expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
+    },
+  );
 
   it("keeps a review-heavy reconnect bounded, adverse, and attached to its owner", () => {
     const state = createChatRunState();

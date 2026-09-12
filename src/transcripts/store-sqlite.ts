@@ -43,6 +43,21 @@ export function meetingTranscriptSessionQuery(
     .where("started_at", "=", session.startedAt);
 }
 
+export function transcriptSummaryInputRevisionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "next_utterance_seq" | "title" | "source_json" | "metadata_json" | "stopped_at"
+  >,
+): string {
+  return JSON.stringify({
+    next_utterance_seq: row.next_utterance_seq,
+    title: row.title,
+    source_json: row.source_json,
+    metadata_json: row.metadata_json,
+    stopped_at: row.stopped_at,
+  });
+}
+
 export function readTranscriptSummaryInputRevision(
   database: DatabaseSync,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
@@ -58,7 +73,17 @@ export function readTranscriptSummaryInputRevision(
     ]),
   );
   // Export bookkeeping is not summary input and must not invalidate a reader.
-  return row ? JSON.stringify(row) : undefined;
+  return row ? transcriptSummaryInputRevisionFromRow(row) : undefined;
+}
+
+export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
+  const rows = executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_summaries")
+      .select(["session_id", "session_started_at"]),
+  ).rows;
+  return new Set(rows.map((row) => `${row.session_id}\0${row.session_started_at}`));
 }
 
 export function readRecentStoppedTranscriptSession(
@@ -66,7 +91,7 @@ export function readRecentStoppedTranscriptSession(
   source: TranscriptSourceLocator,
   stoppedAfter: string,
   stoppedBefore: string,
-): TranscriptSessionDescriptor | undefined {
+): { session: TranscriptSessionDescriptor; inputRevision: string } | undefined {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)
@@ -92,7 +117,9 @@ export function readRecentStoppedTranscriptSession(
       .orderBy("session_id", "asc")
       .limit(1),
   );
-  return row ? sessionFromRow(row) : undefined;
+  return row
+    ? { session: sessionFromRow(row), inputRevision: transcriptSummaryInputRevisionFromRow(row) }
+    : undefined;
 }
 
 export function meetingTranscriptUtteranceQuery(
@@ -191,7 +218,12 @@ function parseOptionalJsonRecord(value: string | null): Record<string, unknown> 
   return asOptionalRecord(JSON.parse(value));
 }
 
-export function sessionFromRow(row: MeetingTranscriptSessionRow): TranscriptSessionDescriptor {
+export function sessionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "session_id" | "source_json" | "metadata_json" | "started_at" | "title" | "stopped_at"
+  >,
+): TranscriptSessionDescriptor {
   const source = parseOptionalJsonRecord(row.source_json);
   const metadata = parseOptionalJsonRecord(row.metadata_json);
   if (!source || typeof source.providerId !== "string") {

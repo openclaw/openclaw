@@ -8,6 +8,7 @@ import type {
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
@@ -17,12 +18,12 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareAgentRunUserTurn } from "../agent-turn/agent-run-user-turn.js";
 import type { AgentTurnContext } from "../agent-turn/types.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -121,14 +122,7 @@ function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscrip
       stopReason: "toolUse",
       timestamp: 200,
     },
-    {
-      role: "toolResult",
-      toolCallId: "call-read-1",
-      toolName: "read",
-      content: [{ type: "text", text: "Workspace ready." }],
-      isError: false,
-      timestamp: 300,
-    },
+    makeTextToolResult("call-read-1", "read", "Workspace ready.", false, 300),
   ];
 }
 
@@ -170,6 +164,7 @@ function requireAppendableWorkerMessage(
 describe("worker transcript commit application", () => {
   let root: string;
   let sessionsDir: string;
+  let stateDatabasePath: string;
   let storePath: string;
   let sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   let cfg: OpenClawConfig;
@@ -179,6 +174,7 @@ describe("worker transcript commit application", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-turn-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     sessionsDir = path.join(root, "agents", "main", "sessions");
     storePath = path.join(sessionsDir, "sessions.json");
     cfg = {
@@ -202,9 +198,8 @@ describe("worker transcript commit application", () => {
       sessionKey: SESSION_KEY,
       storePath,
     });
-    const database = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
-    });
+    const database = openOpenClawStateDatabase();
+    stateDatabasePath = database.path;
     ledgerStore = createWorkerTranscriptCommitStore({ database });
     committer = createWorkerTranscriptCommitter({
       getConfig: () => cfg,
@@ -215,8 +210,14 @@ describe("worker transcript commit application", () => {
   afterEach(async () => {
     unsubscribe?.();
     clearRuntimeConfigSnapshot();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+    try {
+      await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+      await closeOpenClawAgentDatabasesAsync(root);
+      closeOpenClawStateDatabaseByPath(stateDatabasePath);
+      await fs.rm(root, { recursive: true, force: true });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("persists and reopens image-bearing worker results above the control-frame budget", async () => {
@@ -396,6 +397,66 @@ describe("worker transcript commit application", () => {
       }),
     ]);
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
+  });
+
+  it("commits a non-default agent's global session", async () => {
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    const workStorePath = path.join(root, "agents", "work", "sessions", "sessions.json");
+    cfg = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+      session: {
+        scope: "global",
+        store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    await upsertSessionEntryCore(
+      { agentId: "work", sessionKey: "global", storePath: workStorePath },
+      { sessionId: SESSION_ID, updatedAt: 20 },
+    );
+    const workTarget = await resolveSessionTranscriptRuntimeTarget({
+      agentId: "work",
+      sessionId: SESSION_ID,
+      sessionKey: "global",
+      storePath: workStorePath,
+    });
+    const outcome = await committer.commit({
+      ...ADMITTED_OWNER,
+      request: createRequest({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Persist in the owning agent" }],
+            timestamp: 100,
+          },
+        ],
+      }),
+    });
+
+    expect(outcome.ok, "WORKER_OWNER_COMMIT_139216").toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`expected global transcript commit, received ${outcome.reason}`);
+    }
+    expect(SessionManager.open(workTarget).getEntries()).toEqual([
+      expect.objectContaining({
+        id: outcome.result.newLeafId,
+        message: expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Persist in the owning agent" }],
+        }),
+      }),
+    ]);
+    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([]);
+    expect(updates).toEqual([
+      expect.objectContaining({
+        agentId: "work",
+        sessionId: SESSION_ID,
+        sessionKey: "global",
+        messageId: outcome.result.newLeafId,
+      }),
+    ]);
   });
 
   it("rejects a stale base leaf without appending", async () => {

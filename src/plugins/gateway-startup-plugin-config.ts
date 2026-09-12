@@ -25,10 +25,7 @@ import {
   resolveSelectedContextEnginePluginIdFromConfig,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type {
-  ManifestRegistryLookup,
-  NormalizedPluginsConfig,
-} from "./gateway-startup-plugin-contracts.js";
+import type { NormalizedPluginsConfig } from "./gateway-startup-plugin-contracts.js";
 import { sortUniquePluginIds } from "./gateway-startup-plugin-contracts.js";
 import {
   collectConfiguredGenerationProviderIds,
@@ -37,9 +34,12 @@ import {
   collectConfiguredWebSearchProviderIds,
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
-import type { InstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
-import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexRecord,
+  InstalledPluginIndexScopeLookup,
+} from "./installed-plugin-index-types.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributions.js";
 
 export function readStartupBundledDiscoveryMode(
@@ -258,36 +258,6 @@ export function shouldConsiderForGatewayStartup(params: {
   return params.memorySlotStartupPluginId === params.plugin.pluginId;
 }
 
-export function hasConfiguredStartupChannel(params: {
-  plugin: InstalledPluginIndexRecord;
-  manifestLookup: ManifestRegistryLookup;
-  configuredChannelIds: ReadonlySet<string>;
-}): boolean {
-  return listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
-    params.configuredChannelIds.has(channelId),
-  );
-}
-
-export function createManifestRegistryLookup(
-  manifestRegistry: PluginManifestRegistry,
-): ManifestRegistryLookup {
-  return new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
-}
-
-export function listManifestChannelIds(
-  manifestLookup: ManifestRegistryLookup,
-  pluginId: string,
-): readonly string[] {
-  return manifestLookup.get(pluginId)?.channels ?? [];
-}
-
-export function findManifestPlugin(
-  manifestLookup: ManifestRegistryLookup,
-  pluginId: string,
-): PluginManifestRecord | undefined {
-  return manifestLookup.get(pluginId);
-}
-
 export function hasConfiguredActivationPath(params: {
   manifest: PluginManifestRecord | undefined;
   config: OpenClawConfig;
@@ -374,22 +344,19 @@ export function addConfiguredSlotPluginIds(
 }
 
 export function collectConfiguredStartupChannelIds(params: {
-  activationSourceConfig: OpenClawConfig;
-  config: OpenClawConfig;
+  configs: readonly OpenClawConfig[];
   env: NodeJS.ProcessEnv;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   includePersistedAuthState?: boolean;
 }): string[] {
-  return sortUniquePluginIds([
-    ...listPotentialEnabledChannelIds(params.config, params.env, {
-      ambientEnvTriggers: params.ambientEnvTriggers,
-      includePersistedAuthState: params.includePersistedAuthState,
-    }),
-    ...listPotentialEnabledChannelIds(params.activationSourceConfig, params.env, {
-      ambientEnvTriggers: params.ambientEnvTriggers,
-      includePersistedAuthState: params.includePersistedAuthState,
-    }),
-  ]);
+  return sortUniquePluginIds(
+    params.configs.flatMap((config) =>
+      listPotentialEnabledChannelIds(config, params.env, {
+        ambientEnvTriggers: params.ambientEnvTriggers,
+        includePersistedAuthState: params.includePersistedAuthState,
+      }),
+    ),
+  );
 }
 
 export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
@@ -409,7 +376,7 @@ export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
   ]);
 }
 
-export function collectValidationConfiguredProviderIds(config: OpenClawConfig): string[] {
+export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   const providerIds: string[] = [];
   const pushProviderId = (value: unknown) => {
     if (typeof value !== "string") {
@@ -434,23 +401,24 @@ export function collectValidationConfiguredProviderIds(config: OpenClawConfig): 
       pushProviderId(providerId);
     }
   }
+  const shorthandModelRefs: string[] = [];
   for (const ref of collectConfiguredModelRefs(config)) {
     const slashIndex = ref.value.indexOf("/");
     if (slashIndex > 0) {
       pushProviderId(ref.value.slice(0, slashIndex));
+    } else if (slashIndex < 0) {
+      shorthandModelRefs.push(ref.value);
     }
   }
   pushProviderId(config.tools?.web?.search?.provider);
   pushProviderId(config.tools?.web?.fetch?.provider);
-  return sortUniquePluginIds(providerIds);
+  return { providerIds: sortUniquePluginIds(providerIds), shorthandModelRefs };
 }
 
-export function collectValidationConfiguredShorthandModelIds(config: OpenClawConfig): string[] {
+export function collectValidationConfiguredShorthandModelIds(
+  modelRefs: readonly string[],
+): string[] {
   return sortUniquePluginIds(
-    collectConfiguredModelRefs(config)
-      .map((ref) => ref.value)
-      .filter((ref) => !ref.includes("/"))
-      .map((ref) => splitTrailingAuthProfile(ref).model.trim())
-      .filter(Boolean),
+    modelRefs.map((ref) => splitTrailingAuthProfile(ref).model.trim()).filter(Boolean),
   );
 }

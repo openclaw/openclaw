@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
@@ -57,6 +58,99 @@ function buildInstructions(overrides: Partial<EmbeddedRunAttemptParams> = {}): s
   });
 }
 
+describe("buildDeveloperInstructions Git co-authors", () => {
+  it.each([{}, { promptMode: "minimal" }, { promptMode: "none" }, { disableTools: true }] as const)(
+    "includes exact session credit before extra instructions (%j)",
+    (overrides) => {
+      const params = createParams({
+        agentId: "work",
+        sessionKey: "agent:work:shared",
+        gitCoauthorPrompt:
+          "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+          "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+        extraSystemPrompt: "Extra system instructions.",
+        ...overrides,
+      });
+      const instructions = buildDeveloperInstructions(params);
+
+      expect(instructions.split("\n\n").slice(-2)).toEqual([
+        "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+          "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+        "Extra system instructions.",
+      ]);
+    },
+  );
+
+  it("omits the section when there is nobody to credit", () => {
+    expect(buildInstructions()).not.toContain("Git co-authors:");
+  });
+});
+
+describe("buildDeveloperInstructions credential routing", () => {
+  const tool = (name: string) => ({
+    type: "function" as const,
+    name,
+    description: name,
+    inputSchema: { type: "object" },
+  });
+  const cases: {
+    name: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    disableTools?: boolean;
+    terminalSetup: boolean;
+  }[] = [
+    { name: "no controls", dynamicTools: [], terminalSetup: true },
+    { name: "openclaw", dynamicTools: [tool("openclaw")], terminalSetup: false },
+    { name: "gateway", dynamicTools: [tool("gateway")], terminalSetup: false },
+    {
+      name: "both controls",
+      dynamicTools: [tool("openclaw"), tool("gateway")],
+      terminalSetup: false,
+    },
+    {
+      name: "disabled controls",
+      dynamicTools: [tool("openclaw"), tool("gateway")],
+      disableTools: true,
+      terminalSetup: true,
+    },
+    {
+      name: "deferred gateway",
+      dynamicTools: [{ ...tool("gateway"), deferLoading: true }],
+      terminalSetup: false,
+    },
+    {
+      name: "namespaced control",
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw_direct",
+          description: "Tools",
+          tools: [tool("openclaw")],
+        },
+      ],
+      terminalSetup: false,
+    },
+    {
+      name: "namespace name without a control",
+      dynamicTools: [
+        { type: "namespace", name: "openclaw", description: "Tools", tools: [tool("message")] },
+      ],
+      terminalSetup: true,
+    },
+  ];
+
+  it.each(cases)("routes setup with $name", ({ dynamicTools, disableTools, terminalSetup }) => {
+    const instructions = buildDeveloperInstructions(createParams({ disableTools }), {
+      dynamicTools,
+    });
+
+    expect(instructions.includes("openclaw channels add <channel>")).toBe(terminalSetup);
+    expect(instructions.includes("openclaw configure")).toBe(terminalSetup);
+    expect(instructions).toContain("only to the requesting user in private");
+    expect(instructions).toContain("then acknowledge in the group without them");
+  });
+});
+
 describe("buildDeveloperInstructions delegation guidance", () => {
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();
@@ -68,9 +162,6 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),
-    );
-    expect(instructions.indexOf("## Delegation")).toBeLessThan(
-      instructions.indexOf("For the current source conversation"),
     );
   });
 
@@ -100,76 +191,14 @@ describe("buildDeveloperInstructions delegation guidance", () => {
   });
 });
 
-describe("buildDeveloperInstructions credential guidance", () => {
-  const secretTool: CodexDynamicToolSpec = {
-    type: "function",
-    name: "secrets",
-    description: "Request protected credentials",
-    inputSchema: { type: "object" },
-  };
-
-  it.each([
-    { name: "direct", dynamicTools: [secretTool], toolName: "secrets" },
-    {
-      name: "deferred",
-      dynamicTools: [{ ...secretTool, deferLoading: true }],
-      toolName: "secrets",
-    },
-    {
-      name: "namespaced",
-      dynamicTools: [
-        { type: "namespace", name: "openclaw", description: "Tools", tools: [secretTool] },
-      ],
-      toolName: "openclaw.secrets",
-    },
-  ] satisfies { name: string; dynamicTools: CodexDynamicToolSpec[]; toolName: string }[])(
-    "teaches the actual $name credential route",
-    ({ dynamicTools, toolName }) => {
-      const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
-      expect(instructions).toContain(`\`${toolName}\`: list metadata first`);
-      expect(instructions).toContain("request only missing task-needed credentials: name + reason");
-      expect(instructions).toContain("exact allowedHosts for egress");
-      expect(instructions).toContain("Human masked entry -> protected shared store");
-      expect(instructions).toContain("metadata/ref only");
-      expect(instructions).toContain("returned store SecretRef on supported config fields");
-      expect(instructions).toContain("Gateway egress needs enabled proxy + allowed hosts");
-      expect(instructions).toContain("no plaintext fallback");
-      expect(instructions).toContain("auto-injected opaque env sentinel under stored name");
-      expect(instructions).toContain("No secret templates; never override/print that variable");
-      expect(instructions).toContain("Native shell/sandbox/node: no protected injection");
-      expect(instructions).toContain("late saves need next turn");
-      expect(instructions).toContain(
-        "no_answer: report blocker or continue with best judgment; never ask in chat",
-      );
-    },
-  );
-
-  it.each([
-    { name: "absent", options: { dynamicTools: [] }, overrides: {} },
-    { name: "unsupplied", options: {}, overrides: {} },
-    {
-      name: "disabled",
-      options: { dynamicTools: [secretTool] },
-      overrides: { disableTools: true },
-    },
-  ])("keeps safety but hides the named credential route when $name", ({ options, overrides }) => {
-    const instructions = buildDeveloperInstructions(createParams(overrides), options);
-    expect(instructions).not.toContain("`secrets`");
-    expect(instructions).not.toContain("SecretRef");
-    expect(instructions).toContain("host-owned masked credential entry");
-    expect(instructions).toContain("safe external setup");
-  });
-});
-
 describe("buildDeveloperInstructions UI presentation guidance", () => {
-  const uiTools = ["show_widget", "dashboard", "portal"].map(
-    (name) =>
-      ({
-        type: "function",
-        name,
-        description: `Use ${name}`,
-        inputSchema: { type: "object" },
-      }) satisfies CodexDynamicToolSpec,
+  const uiTools = ["show_widget", "dashboard", "portal", "message"].map(
+    (name): CodexDynamicToolFunctionSpec => ({
+      type: "function",
+      name,
+      description: `Use ${name}`,
+      inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
+    }),
   );
 
   it.each([
@@ -204,6 +233,11 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       expect(instructions).toContain("publicUrl");
       expect(instructions).toContain("result.presentation");
       expect(instructions).toContain("inline support varies by surface");
+      expect(instructions).toContain(
+        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
+      );
+      expect(instructions).toContain("including when it is already installed");
+      expect(instructions).toContain("desktop app does not establish");
     },
   );
 
@@ -220,6 +254,21 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
     expect(instructions).not.toContain("`show_widget`");
   });
 
+  it("does not advertise ClawHub for a message schema without that capability", () => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "message",
+          description: "Reply to source",
+          inputSchema: { type: "object", properties: { message: { type: "string" } } },
+        },
+      ],
+    });
+
+    expect(instructions).not.toContain("ClawHub");
+  });
+
   it.each([
     { name: "absent", dynamicTools: [], overrides: {} },
     { name: "unsupplied", dynamicTools: undefined, overrides: {} },
@@ -234,5 +283,30 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
     const instructions = buildDeveloperInstructions(createParams(overrides), { dynamicTools });
 
     expect(instructions).not.toContain("## UI Presentation");
+  });
+});
+
+describe("buildDeveloperInstructions delivery-mode stability", () => {
+  it.each([false, true])("keeps thread policy stable with message available=%s", (available) => {
+    const dynamicTools: CodexDynamicToolSpec[] = available
+      ? [
+          {
+            type: "function",
+            name: "message",
+            description: "Send messages",
+            inputSchema: { type: "object" },
+          },
+        ]
+      : [];
+    const instructions = (["automatic", "message_tool_only", "automatic"] as const).map(
+      (sourceReplyDeliveryMode) =>
+        buildDeveloperInstructions(createParams({ sourceReplyDeliveryMode }), { dynamicTools }),
+    );
+
+    expect(instructions[1]).toBe(instructions[0]);
+    expect(instructions[2]).toBe(instructions[0]);
+    if (!available) {
+      expect(instructions[0]).not.toContain("message(action=send)");
+    }
   });
 });

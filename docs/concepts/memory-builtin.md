@@ -27,6 +27,29 @@ Native sqlite-vec queries run in a separate, read-only process so a slow query
 does not block the Gateway event loop. Cancelling a search terminates its query
 process; OpenClaw does not retry that native query on the Gateway thread.
 
+If semantic retrieval reaches the 15-second tool deadline after keyword matches
+from memory files are ready, `memory_search` returns those matches with a
+partial-result warning. Session transcript hits require fresh visibility checks
+and are excluded from timeout recovery. A partial response does not put the
+entire memory corpus into the timeout cooldown.
+
+## When to use
+
+The builtin engine is the right choice for most users:
+
+- Works out of the box with no extra dependencies.
+- Handles keyword and vector search well.
+- Supports all embedding providers.
+- Hybrid search combines the best of both retrieval approaches.
+
+The builtin engine can index directories outside the workspace with
+`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
+conversational recall, but it does not provide a learned or model-based relevance
+reranking stage. Its MMR pass is deterministic and local.
+
+Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
+with automatic user modeling.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -47,8 +70,9 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force local GGUF embeddings, install and configure the official llama.cpp
-provider, then point `local.modelPath` at a GGUF file:
+To force local GGUF embeddings, install and configure the official
+[llama.cpp provider](/plugins/llama-cpp), then point `local.modelPath` at a
+GGUF file:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
@@ -116,9 +140,26 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+When the index identity reports an OpenClaw chunking-implementation change,
+a normal or CLI search rebuilds it before returning results. The rebuild uses
+the agent's current embedding settings; status inspection remains read-only.
+
 Search-triggered maintenance applies pending memory and session changes
 incrementally while searches remain available. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+If a memory file changes or disappears during indexing, only that file's
+unfinished work is retried incrementally. Other files finish indexing, and
+the changed file's obsolete chunks are not published.
+
+If the host runs out of native file-watch capacity, Memory Core logs one warning
+and disables its watchers. Later searches trigger incremental synchronization
+to discover file changes. A search can return the previous index while that
+background work finishes; subsequent searches see the updated content. Restart
+the Gateway after restoring watch capacity to enable native watching again.
+
+Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
+another SQLite writer is active. Cache pruning removes the oldest entries in
+bounded batches, yielding between batches while preserving the existing cache cap.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
@@ -186,30 +227,14 @@ install the [llama.cpp provider](/plugins/llama-cpp) and set
 `memory.search.provider: "local"`; without an embedding provider, builtin uses
 BM25 keyword search only.
 
-## When to use
-
-The builtin engine is the right choice for most users:
-
-- Works out of the box with no extra dependencies.
-- Handles keyword and vector search well.
-- Supports all embedding providers.
-- Hybrid search combines the best of both retrieval approaches.
-
-The builtin engine can index directories outside the workspace with
-`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
-conversational recall, but it does not provide a learned or model-based relevance
-reranking stage. Its MMR pass is deterministic and local.
-
-Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
-with automatic user modeling.
-
 ## Troubleshooting
 
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
-**Local provider not detected?** Run interactive llama.cpp setup once, confirm
-the local path exists, and run:
+**Local provider not detected?** Run the interactive
+[llama.cpp](/plugins/llama-cpp) setup once with `openclaw onboard`, confirm the
+local path exists, and run:
 
 ```bash
 openclaw memory status --deep --agent main

@@ -167,7 +167,7 @@ function assertAllowedOsc(body: string) {
   if (
     target === undefined ||
     (target !== "" &&
-      (!/^https?:\/\/\S+$/u.test(target) ||
+      (!/^(?:https?:\/\/|mailto:)\S+$/u.test(target) ||
         ansi.sanitizeForLog(target) !== target ||
         !URL.canParse(target)))
   ) {
@@ -570,19 +570,15 @@ async function exerciseGatewayOutputSafety(
     await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
     await fixture.run.waitForOutput("(no output)", startupTimeoutMs);
-    await assertTerminalAttackSanitized(fixture, idlePayload, startupTimeoutMs);
-    const raw = fixture.run.output();
-    for (const attack of systemAttacks) {
-      expect(raw).not.toContain(attack);
-    }
-    expect(
-      latestFrameHasRow(
-        fixture.run.output(),
-        fixture.run,
-        (row) =>
-          idlePayload.markers.every((marker) => row.includes(marker)) && /\| idle/u.test(row),
-      ),
-    ).toBe(true);
+    // Replay omits zero-width bidi isolates but preserves authenticated cells.
+    // The complete disconnect row must exist before reconnect replaces it.
+    await assertHistoricalTerminalAttackSanitized(
+      fixture,
+      idlePayload,
+      idlePayload.markers,
+      `local runtime stopped: ${idlePayload.expectedLine} | idle`,
+      startupTimeoutMs,
+    );
     await waitForSynchronizedFrameRows(
       fixture.run,
       (rows) =>
@@ -590,6 +586,11 @@ async function exerciseGatewayOutputSafety(
         rows.some((row) => row.includes("local ready | idle")),
       startupTimeoutMs,
     );
+    const raw = fixture.run.output();
+    for (const attack of [...systemAttacks, ...idlePayload.attacks]) {
+      expect(raw).not.toContain(attack);
+    }
+    expect(raw).not.toContain("\uFFFD");
 
     const helpOffset = fixture.run.visibleOutput().length;
     await fixture.run.write("/help\r", { delay: false });

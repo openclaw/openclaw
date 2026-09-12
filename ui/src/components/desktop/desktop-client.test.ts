@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { DesktopClient } from "./desktop-client.ts";
+import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 
 type RfbConstructor = NonNullable<ConstructorParameters<typeof DesktopClient>[0]>;
 type RfbClient = InstanceType<RfbConstructor>;
@@ -22,7 +23,9 @@ function createFakeRfb() {
     background = "";
     viewOnly = false;
     scaleViewport = false;
+    resizeSession = false;
     readonly disconnect = vi.fn();
+    readonly sendKey = vi.fn();
 
     constructor(
       readonly target: HTMLElement,
@@ -37,6 +40,129 @@ function createFakeRfb() {
 }
 
 describe("DesktopClient", () => {
+  it.each([
+    { trusted: true, held: false },
+    { trusted: true, held: true },
+    { trusted: false, held: false },
+  ])(
+    "reconciles keyboard focus snapshots only when trusted=$trusted, held=$held",
+    async ({ trusted, held }) => {
+      const { Rfb } = createFakeRfb();
+      const client = new DesktopClient(Rfb, (url) => new FakeSocket(url) as unknown as WebSocket);
+      const target = document.createElement("div");
+      const canvas = document.createElement("canvas");
+      target.append(canvas);
+      const handle = await client.connect({
+        target,
+        wsUrl: "ws://control.example.test/desktop/observe",
+        viewOnly: false,
+        isCurrent: () => true,
+      });
+      const input = document.createElement("textarea");
+      const keyboard = new DesktopMobileKeyboard({
+        connection: () => handle,
+        controlling: () => true,
+        input: () => input,
+      });
+      input.addEventListener("input", (event) => keyboard.handleInput(event as InputEvent));
+      const events: string[] = [];
+      for (const type of ["keydown", "keyup"]) {
+        canvas.addEventListener(type, (event) => {
+          events.push(`${event.type}:${(event as KeyboardEvent).key}`);
+        });
+      }
+      try {
+        keyboard.reset();
+        keyboard.handleKeyboardEvent(
+          new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", shiftKey: true }),
+        );
+        const snapshot = new MouseEvent("click", { shiftKey: held });
+        keyboard.focus(
+          new Proxy(snapshot, {
+            get(snapshotEvent, key) {
+              if (key === "isTrusted") {
+                return trusted;
+              }
+              if (key === "getModifierState") {
+                return snapshotEvent.getModifierState.bind(snapshotEvent);
+              }
+              return Reflect.get(snapshotEvent, key);
+            },
+          }),
+        );
+        input.value += "p";
+        input.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", data: "p" }));
+        // noVNC turns the Unidentified text keydown into a balanced wire press.
+        expect(events).toEqual([
+          "keydown:Shift",
+          "keyup:Shift",
+          "keydown:p",
+          ...(trusted && !held ? [] : ["keydown:Shift"]),
+        ]);
+      } finally {
+        keyboard.reset();
+        handle.disconnect();
+      }
+    },
+  );
+
+  it.each(["blur", "reset", "replacement", "view-only"])(
+    "does not restore old keyboard modifiers after %s",
+    async (transition) => {
+      const { Rfb } = createFakeRfb();
+      const client = new DesktopClient(Rfb, (url) => new FakeSocket(url) as unknown as WebSocket);
+      const target = document.createElement("div");
+      const canvas = document.createElement("canvas");
+      target.append(canvas);
+      const connect = () =>
+        client.connect({
+          target,
+          wsUrl: "ws://control.example.test/desktop/observe",
+          viewOnly: false,
+          isCurrent: () => true,
+        });
+      const original = await connect();
+      let handle = original;
+      let controlling = true;
+      const input = document.createElement("textarea");
+      const keyboard = new DesktopMobileKeyboard({
+        connection: () => handle,
+        controlling: () => controlling,
+        input: () => input,
+      });
+      input.addEventListener("input", (event) => keyboard.handleInput(event as InputEvent));
+      const keys: string[] = [];
+      canvas.addEventListener("keydown", (event) => keys.push(event.key));
+      try {
+        keyboard.reset();
+        keyboard.handleKeyboardEvent(
+          new KeyboardEvent("keydown", {
+            key: "Control",
+            code: "ControlLeft",
+            ctrlKey: true,
+            location: 1,
+          }),
+        );
+        if (transition === "blur") {
+          window.dispatchEvent(new Event("blur"));
+        } else if (transition === "reset") {
+          keyboard.reset();
+        } else if (transition === "replacement") {
+          original.disconnect();
+          handle = await connect();
+        } else {
+          controlling = false;
+        }
+        input.value += "p";
+        input.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", data: "p" }));
+        expect(keys).toEqual(transition === "view-only" ? ["Control"] : ["Control", "p"]);
+      } finally {
+        keyboard.reset();
+        handle.disconnect();
+      }
+    },
+  );
+
   it.each([false, true])(
     "opens a socket after the RFB loader only while the operation remains current (%s)",
     async (remainsCurrent) => {
@@ -119,7 +245,7 @@ describe("DesktopClient", () => {
       credentials: { username: "operator", password: "secret" },
       background: "rgb(8, 8, 8)",
       viewOnly: false,
-      scaleViewport: false,
+      sizingMode: "actual",
       target,
     });
 
@@ -130,7 +256,7 @@ describe("DesktopClient", () => {
       credentials: { username: "operator", password: "secret" },
     });
 
-    handle.setScaleViewport(true);
+    handle.setSizingMode("fit");
     expect(instances[0]?.scaleViewport).toBe(true);
     handle.sendKeyboardEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
     expect(onKeyDown).toHaveBeenCalledOnce();
@@ -138,8 +264,9 @@ describe("DesktopClient", () => {
     handle.sendText("m");
     handle.sendBackspace();
     expect(onKeyDown.mock.calls.map((call) => (call[0] as KeyboardEvent | undefined)?.key)).toEqual(
-      ["k", "m", "Backspace"],
+      ["k", "m"],
     );
+    expect(instances[0]?.sendKey).toHaveBeenCalledExactlyOnceWith(0xff08, "Backspace");
 
     handle.disableInput();
     expect(instances[0]?.viewOnly).toBe(true);
@@ -147,6 +274,71 @@ describe("DesktopClient", () => {
     handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { canResize: true, viewOnly: false, resizes: true },
+    { canResize: true, viewOnly: true, resizes: false },
+    { canResize: false, viewOnly: false, resizes: false },
+    { canResize: undefined, viewOnly: false, resizes: false },
+  ])(
+    "gates Match at the authenticated controller boundary ($canResize/$viewOnly)",
+    async ({ canResize, viewOnly, resizes }) => {
+      const { Rfb, instances } = createFakeRfb();
+      const client = new DesktopClient(Rfb, (url) => new FakeSocket(url) as unknown as WebSocket);
+      const handle = await client.connect({
+        target: document.createElement("div"),
+        wsUrl: "ws://control.example.test/desktop/observe",
+        isCurrent: () => true,
+        canResize,
+        viewOnly,
+        sizingMode: "match",
+      });
+      const rfb = instances[0]!;
+      expect(rfb.scaleViewport).toBe(true);
+      expect(rfb.resizeSession).toBe(false);
+      rfb.dispatchEvent(new Event("connect"));
+      expect(rfb.resizeSession).toBe(resizes);
+      handle.setSizingMode("actual");
+      expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([false, false]);
+      handle.setSizingMode("match");
+      expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([true, resizes]);
+      handle.setSizingMode("fit");
+      expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([true, false]);
+      handle.disconnect();
+    },
+  );
+
+  it.each(["disableInput", "disconnect", "securityfailure", "stale", "onConnect"] as const)(
+    "never re-enables resizing after %s",
+    async (transition) => {
+      const { Rfb, instances } = createFakeRfb();
+      const client = new DesktopClient(Rfb, (url) => new FakeSocket(url) as unknown as WebSocket);
+      let current = true;
+      const handle = await client.connect({
+        target: document.createElement("div"),
+        wsUrl: "ws://control.example.test/desktop/observe",
+        isCurrent: () => current,
+        canResize: true,
+        viewOnly: false,
+        sizingMode: "match",
+        onConnect: transition === "onConnect" ? () => handle.disconnect() : undefined,
+      });
+      const rfb = instances[0]!;
+      rfb.dispatchEvent(new Event("connect"));
+      if (transition === "stale") {
+        current = false;
+      } else if (transition === "securityfailure") {
+        rfb.dispatchEvent(new CustomEvent("securityfailure", { detail: { status: 1 } }));
+      } else if (transition !== "onConnect") {
+        handle[transition]();
+        expect(rfb.resizeSession).toBe(false);
+      }
+      handle.setSizingMode("match");
+      rfb.dispatchEvent(new Event("connect"));
+      expect(rfb.resizeSession).toBe(false);
+      handle.disconnect();
+    },
+  );
 
   it.each([
     { clean: true, close: { code: 4000, reason: "control-taken" } },
@@ -186,7 +378,6 @@ describe("DesktopClient", () => {
     ["LF", "é\nΩ", ["é", "Enter", "Ω"]],
     ["CRLF", "é\r\nΩ", ["é", "Enter", "Ω"]],
     ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
-    ["astral Unicode", "🦞\nΩ", ["\ud83e", "\udd9e", "Enter", "Ω"]],
     ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
   ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
     const { Rfb } = createFakeRfb();

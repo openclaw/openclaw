@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
+import { buildSourcePage } from "./source-page.test-helpers.js";
 
 const { fsRootMock } = vi.hoisted(() => ({ fsRootMock: vi.fn() }));
 
@@ -18,30 +18,6 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
     },
   };
 });
-
-function buildSourcePage(raw: string, updatedAt: string): string {
-  return renderWikiMarkdown({
-    frontmatter: {
-      pageType: "source",
-      id: "source.imported",
-      title: "imported",
-      sourceType: "memory-unsafe-local",
-      status: "active",
-      updatedAt,
-    },
-    body: [
-      "# imported",
-      "",
-      "## Content",
-      renderMarkdownFence(raw, "text"),
-      "",
-      "## Notes",
-      "<!-- openclaw:human:start -->",
-      "<!-- openclaw:human:end -->",
-      "",
-    ].join("\n"),
-  });
-}
 
 describe("writeImportedSourcePage", () => {
   let suiteRoot: string;

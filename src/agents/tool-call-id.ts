@@ -11,7 +11,11 @@ import {
  */
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import {
+  createCompletedToolCallPredicate,
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
@@ -84,7 +88,7 @@ export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolRes
   return extractPairingToolResultIds(msg);
 }
 
-function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
+export function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -100,6 +104,7 @@ function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
 function isReplaySafeThinkingAssistantMessage(
   message: Extract<AgentMessage, { role: "assistant" }>,
   allowedToolNames: Set<string> | null,
+  isCompleted: ReturnType<typeof createCompletedToolCallPredicate>,
 ): boolean {
   const content = message.content;
   if (!Array.isArray(content)) {
@@ -127,7 +132,7 @@ function isReplaySafeThinkingAssistantMessage(
       !hasToolCallInput(typedBlock) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !isAllowedToolCallName(typedBlock.name, allowedToolNames) ||
+      !isAllowedToolCallName(typedBlock.name, isCompleted(typedBlock) ? null : allowedToolNames) ||
       toolCallNeedsReplayMutation(typedBlock)
     ) {
       return false;
@@ -143,13 +148,14 @@ function collectReplaySafeThinkingToolIds(
 ): { reservedIds: Set<string>; preservedIndexes: Set<number> } {
   const reserved = new Set<string>();
   const preservedIndexes = new Set<number>();
+  const isCompleted = createCompletedToolCallPredicate(messages);
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (!message || typeof message !== "object" || message.role !== "assistant") {
       continue;
     }
     const assistant = message;
-    if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames)) {
+    if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames, isCompleted)) {
       continue;
     }
     const toolCalls = extractToolCallsFromAssistant(assistant);

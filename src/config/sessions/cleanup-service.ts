@@ -2,7 +2,6 @@
 // Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
 
 import fs from "node:fs";
-import path from "node:path";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
@@ -17,7 +16,7 @@ import {
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
 } from "./disk-budget.js";
-import { resolveSessionStorePathCore } from "./paths.js";
+import { resolveSessionArtifactDirectory, resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
   inspectTranscriptEventsSync,
@@ -30,16 +29,12 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
-  archiveStaleDashboardEntries,
-  capEntryCount,
   countUnarchivedSessionEntries,
-  pruneStaleModelRunEntries,
-  pruneStaleEntries,
   shouldPreserveMaintenanceEntry,
-  shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import {
@@ -81,6 +76,7 @@ type SessionsCleanupRunResult = {
     modelRunPrunedKeys: Set<string>;
     archivedKeys?: Set<string>;
     capArchivedKeys?: Set<string>;
+    ageArchivedKeys?: Set<string>;
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     dmScopeRetiredKeys: Set<string>;
@@ -270,7 +266,7 @@ function addEntryArtifactPathsToSet(params: {
   storePath: string;
   keys: ReadonlySet<string>;
 }): void {
-  const sessionsDir = path.dirname(params.storePath);
+  const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   for (const key of params.keys) {
     const entry = params.store[key];
     if (!entry) {
@@ -306,6 +302,7 @@ async function previewStoreCleanup(params: {
   const modelRunPrunedKeys = new Set<string>();
   const archivedKeys = new Set<string>();
   const capArchivedKeys = new Set<string>();
+  const ageArchivedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -334,55 +331,38 @@ async function previewStoreCleanup(params: {
     store: previewStore,
     baseKeys: [params.activeKey],
   });
-  const modelRunPruned = shouldRunModelRunPrune({
+  const {
+    modelRunPruned,
+    archived: totalArchived,
+    capArchived,
+    pruned,
+    capped,
+  } = planSessionEntryMaintenance({
+    profile: "write",
     maintenance: params.maintenance,
-    entryCount: countUnarchivedSessionEntries(previewStore),
-    // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
-    // preview caps unconditionally below), so mirror that here: prune stale probes before the
-    // forced cap can evict real sessions in their place.
-    force: true,
-  })
-    ? pruneStaleModelRunEntries(previewStore, params.maintenance.modelRunPruneAfterMs, {
-        log: false,
-        preserveKeys: preserveSessionKeys,
-        preserveRecentMs: params.maintenance.preserveRecentMs,
-        onPruned: ({ key }) => {
-          modelRunPrunedKeys.add(key);
-        },
-      })
-    : 0;
-  const archived = archiveStaleDashboardEntries(
-    previewStore,
-    params.maintenance.archiveDashboardAfterMs,
-    {
-      log: false,
-      onArchived: ({ key }) => {
-        archivedKeys.add(key);
-      },
-      preserveKeys: preserveSessionKeys,
-    },
-  );
-  const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
-    log: false,
+    initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
+    // Cleanup previews apply the same immediate cap as the apply path.
+    forceMaintenance: true,
     preserveKeys: preserveSessionKeys,
-    preserveRecentMs: params.maintenance.preserveRecentMs,
-    onPruned: ({ key }) => {
-      staleKeys.add(key);
+    log: false,
+    readAgeCandidates: () => previewStore,
+    readCapCandidates: () => ({ store: previewStore, maxEntries: params.maintenance.maxEntries }),
+    onRemoved: ({ key }, reason) => {
+      const keys =
+        reason === "model-run-pruned"
+          ? modelRunPrunedKeys
+          : reason === "pruned"
+            ? staleKeys
+            : cappedKeys;
+      keys.add(key);
+    },
+    onArchived: ({ key }, phase) => {
+      const keys =
+        phase === "dashboard" ? archivedKeys : phase === "age" ? ageArchivedKeys : capArchivedKeys;
+      keys.add(key);
     },
   });
-  let capArchived = 0;
-  const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
-    log: false,
-    preserveKeys: preserveSessionKeys,
-    preserveRecentMs: params.maintenance.preserveRecentMs,
-    onArchived: ({ key }) => {
-      capArchived += 1;
-      capArchivedKeys.add(key);
-    },
-    onRemoved: ({ key }) => {
-      cappedKeys.add(key);
-    },
-  });
+  const archived = totalArchived - capArchived;
   const entryCleanupArtifactPaths = new Set<string>();
   addEntryArtifactPathsToSet({
     paths: entryCleanupArtifactPaths,
@@ -465,6 +445,7 @@ async function previewStoreCleanup(params: {
     modelRunPrunedKeys,
     archivedKeys,
     capArchivedKeys,
+    ageArchivedKeys,
     staleKeys,
     cappedKeys,
     dmScopeRetiredKeys,
@@ -476,6 +457,7 @@ export async function runSessionsCleanup(params: {
   cfg: OpenClawConfig;
   opts: SessionsCleanupOptions;
   targets?: SessionStoreTarget[];
+  reclamationMode?: "worker" | "in-process";
 }): Promise<SessionsCleanupRunResult> {
   const { cfg, opts } = params;
   const maintenance = resolveMaintenanceConfig();
@@ -590,6 +572,7 @@ export async function runSessionsCleanup(params: {
           storePath: target.storePath,
           mode,
           maintenance,
+          reclamationMode: params.reclamationMode,
         });
         const finalStore =
           (appliedDiskBudget?.removedEntries ?? 0) > 0

@@ -3,6 +3,7 @@ import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/p
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildComfyConfig,
+  fetchGuardJson,
   mockComfyCloudJobResponses,
   mockComfyProviderApiKey,
   parseComfyJsonBody,
@@ -39,27 +40,14 @@ function mockLocalVideoResponses(params: {
   };
 }) {
   fetchWithSsrFGuardMock
-    .mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ prompt_id: params.promptId }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      release: vi.fn(async () => {}),
-    })
-    .mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          [params.promptId]: {
-            outputs: params.outputs,
-          },
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
+    .mockResolvedValueOnce(fetchGuardJson({ prompt_id: params.promptId }))
+    .mockResolvedValueOnce(
+      fetchGuardJson({
+        [params.promptId]: {
+          outputs: params.outputs,
         },
-      ),
-      release: vi.fn(async () => {}),
-    });
+      }),
+    );
 
   if (params.download) {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -124,31 +112,18 @@ describe("comfy video-generation provider", () => {
 
   it("submits a local workflow, waits for history, and downloads videos", async () => {
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "local-video-1": {
-              outputs: {
-                "9": {
-                  gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
-                },
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-video-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-video-1": {
+            outputs: {
+              "9": {
+                gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
               },
             },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
           },
-        ),
-        release: vi.fn(async () => {}),
-      })
+        }),
+      )
       .mockResolvedValueOnce({
         response: new Response(Buffer.from("mp4-data"), {
           status: 200,
@@ -319,31 +294,18 @@ describe("comfy video-generation provider", () => {
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "local-video-1": {
-              outputs: {
-                "9": {
-                  gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
-                },
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-video-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-video-1": {
+            outputs: {
+              "9": {
+                gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
               },
             },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
           },
-        ),
-        release: vi.fn(async () => {}),
-      })
+        }),
+      )
       .mockResolvedValueOnce({
         response: new Response(Buffer.from("too-large"), {
           status: 200,
@@ -375,6 +337,66 @@ describe("comfy video-generation provider", () => {
     ).rejects.toThrow("Comfy video output download exceeds 1 bytes");
   });
 
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])(
+    "rejects a successful $name output download as generated video",
+    async ({ contentType, body }) => {
+      mockLocalVideoResponses({
+        promptId: "local-video-invalid-download",
+        outputs: {
+          "9": {
+            gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
+          },
+        },
+        download: { body, contentType },
+      });
+
+      await expect(generateLocalVideo()).rejects.toThrow(
+        "Comfy video output download: malformed video response",
+      );
+    },
+  );
+
+  it("releases a rejected video output download without draining its body", async () => {
+    let canceled = false;
+    let bytesPulled = 0;
+    const neverEndingJson = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          bytesPulled += 1;
+          controller.enqueue(new Uint8Array(1024));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const release = vi.fn(async () => {});
+    mockLocalVideoResponses({
+      promptId: "local-video-tee",
+      outputs: {
+        "9": {
+          gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
+        },
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: neverEndingJson, release });
+
+    await expect(generateLocalVideo()).rejects.toThrow(
+      "Comfy video output download: malformed video response",
+    );
+
+    expect(canceled).toBe(true);
+    // The stream never ends, so draining it would have surfaced the byte-cap error instead.
+    expect(bytesPulled).toBeLessThanOrEqual(1);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("uses cloud endpoints for video workflows", async () => {
     mockComfyProviderApiKey();
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
@@ -383,7 +405,6 @@ describe("comfy video-generation provider", () => {
       filename: "cloud.mp4",
       outputKind: "gifs",
       promptId: "cloud-video-1",
-      redirectLocation: "https://cdn.example.com/cloud.mp4",
     });
 
     const provider = buildComfyVideoGenerationProvider();

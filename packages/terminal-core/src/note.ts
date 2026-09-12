@@ -1,8 +1,7 @@
-// Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { splitGraphemes, visibleWidth } from "./ansi.js";
+import { iterateGraphemes, visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
 const MIN_NOTE_COLUMNS = 80;
@@ -20,31 +19,6 @@ function isSuppressedByEnv(value: string | undefined): boolean {
     return false;
   }
   return normalized !== "0" && normalized !== "false" && normalized !== "off";
-}
-
-function splitLongWord(word: string, maxLen: number): string[] {
-  if (maxLen <= 0) {
-    return [word];
-  }
-  // maxLen is a visible-column budget, so accumulate grapheme visible width (CJK/emoji count as 2
-  // columns) instead of code-point count; otherwise a wide-char run overflows the line by up to 2x.
-  const parts: string[] = [];
-  let current = "";
-  let currentWidth = 0;
-  for (const grapheme of splitGraphemes(word)) {
-    const width = visibleWidth(grapheme);
-    if (current && currentWidth + width > maxLen) {
-      parts.push(current);
-      current = "";
-      currentWidth = 0;
-    }
-    current += grapheme;
-    currentWidth += width;
-  }
-  if (current) {
-    parts.push(current);
-  }
-  return parts.length > 0 ? parts : [word];
 }
 
 function isCopySensitiveToken(word: string): boolean {
@@ -70,21 +44,6 @@ function isCopySensitiveToken(word: string): boolean {
   }
   // Preserve common file-like tokens (for example administrators_authorized_keys).
   return word.includes("_") && FILE_LIKE_RE.test(word);
-}
-
-function pushWrappedWordSegments(params: {
-  word: string;
-  available: number;
-  firstPrefix: string;
-  continuationPrefix: string;
-  lines: string[];
-}) {
-  const parts = splitLongWord(params.word, params.available);
-  const first = parts.shift() ?? "";
-  params.lines.push(params.firstPrefix + first);
-  for (const part of parts) {
-    params.lines.push(params.continuationPrefix + part);
-  }
 }
 
 function wrapLine(line: string, maxWidth: number): string[] {
@@ -125,13 +84,22 @@ function wrapLine(line: string, maxWidth: number): string[] {
       (isPrintableAscii ? word.length : visibleWidth(word)) > available &&
       !isCopySensitiveToken(word)
     ) {
-      pushWrappedWordSegments({
-        word,
-        available,
-        firstPrefix: prefix,
-        continuationPrefix: nextPrefix,
-        lines,
-      });
+      // Measure whole graphemes in visible columns so CJK/emoji do not overflow.
+      // Keep this word's initial budget for all fragments, even when the next prefix differs.
+      let currentWidth = 0;
+      for (const grapheme of iterateGraphemes(word)) {
+        const width = visibleWidth(grapheme);
+        if (current && currentWidth + width > available) {
+          lines.push(prefix + current);
+          prefix = nextPrefix;
+          current = "";
+          currentWidth = 0;
+        }
+        current += grapheme;
+        currentWidth += width;
+      }
+      lines.push(prefix + current);
+      current = "";
       prefix = nextPrefix;
       available = nextWidth;
       continue;
@@ -170,7 +138,7 @@ export function wrapNoteMessage(
   const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
   const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
   return text
-    .split("\n")
+    .split(/\r\n?|[\n\u2028\u2029]/u)
     .flatMap((line) => wrapLine(line, maxWidth))
     .join("\n");
 }

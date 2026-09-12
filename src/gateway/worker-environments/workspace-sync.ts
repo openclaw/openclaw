@@ -1,13 +1,16 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
 import type {
   WorkerTunnelHandle,
   WorkerWorkspaceCommand,
+  WorkerLocalWorkspaceSyncRequest,
+  WorkerLocalWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileResult,
   WorkerWorkspaceSyncRequest,
@@ -21,30 +24,21 @@ import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import {
   MAX_WORKSPACE_HASH_MEMO_BYTES,
-  measureLocalWorkspaceReconciliation,
-  pruneWorkspaceHashMemo,
-  withWorkspaceHashMemo,
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
+import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
-  applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
-  assertWorkspaceResultStable,
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceManifest,
-  recoverWorkerWorkspaceReconciliation,
-  type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
-import {
-  workerWorkspaceResultStaging,
-  workerWorkspaceTransferPaths,
-} from "./workspace-result-staging.js";
+import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 import {
   captureRemoteWorkspaceManifest,
   createWorkerWorkspaceRsyncReceiverPathFactory,
@@ -144,6 +138,9 @@ export function createWorkerWorkspaceActions(
   const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(options.bundleHash);
 
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
+    if (isWorkspaceInspectionCommand(command.argv)) {
+      throw new Error("Repository workspace inspection requires a managed node runtime");
+    }
     const timeoutMs = command.timeoutMs ?? WORKSPACE_TIMEOUT_MS;
     const deadlineMs = Date.now() + timeoutMs;
     const signal = command.signal
@@ -206,7 +203,7 @@ export function createWorkerWorkspaceActions(
   });
 
   const syncWorkspaceImpl = async (
-    request: WorkerWorkspaceSyncRequest,
+    request: WorkerLocalWorkspaceSyncRequest,
   ): Promise<WorkerWorkspaceSyncResult> => {
     validateWorkspaceSyncRequest(request);
     const prepared = await waitForPrepared(
@@ -241,7 +238,7 @@ export function createWorkerWorkspaceActions(
       runTask,
     });
     const temporaryDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-sync-"),
     );
     try {
       const receiverContext = {
@@ -432,23 +429,14 @@ export function createWorkerWorkspaceActions(
   };
 
   const reconcileWorkspaceRun = async (
-    request: WorkerWorkspaceReconcileRequest,
+    request: WorkerLocalWorkspaceReconcileRequest,
     metrics: WorkspaceReconcileMetrics,
   ): Promise<WorkerWorkspaceReconcileResult> => {
     if (!path.isAbsolute(request.localPath) || !path.posix.isAbsolute(request.remoteWorkspaceDir)) {
       throw new Error("Worker workspace reconcile paths must be absolute");
     }
-    const pending = request.journal.load();
-    if (pending) {
-      await recoverWorkerWorkspaceReconciliation({ root: request.localPath, journal: pending });
-      request.journal.abort();
-    }
-    pruneWorkspaceHashMemo(placementHashMemo);
     const hashMemo = placementHashMemo;
-    const runLocalReconciliation = <T>(operation: () => Promise<T>): Promise<T> =>
-      measureLocalWorkspaceReconciliation(metrics, () =>
-        withWorkspaceHashMemo(hashMemo, operation, metrics.gateway),
-      );
+    const acceptLocal = await prepareLocalWorkspaceReconciliation({ request, hashMemo, metrics });
     const baseDigest = await resolveRemoteWorkspaceManifest(
       runWorkspaceCommand,
       request.remoteWorkspaceDir,
@@ -459,7 +447,7 @@ export function createWorkerWorkspaceActions(
       "Worker tunnel did not reconnect within the workspace reconciliation timeout",
     );
     const temporaryDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-worker-workspace-reconcile-"),
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-reconcile-"),
     );
     const stagingRoot = path.join(temporaryDirectory, "staging");
     const manifestRoot = path.join(temporaryDirectory, "manifests");
@@ -604,82 +592,64 @@ export function createWorkerWorkspaceActions(
           entries: current.entries.filter((entry) => transferPathSet.has(entry.path)),
         });
       }
-      // Catch additions, deletions, and writes that raced the inbound transfer.
-      // Stop performs this check once more after local acceptance, directly
-      // before destroying the remote owner.
-      await verifyStable(currentRef);
-      const preparedStagedResult = request.stagedResult
-        ? await runLocalReconciliation(
-            async () =>
-              await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
-                request,
-                stagingRoot,
-                currentManifestRef: currentRef,
-                baseManifestRaw: baseRaw,
-                currentManifestRaw: currentRaw,
-                publishAcceptedManifest,
-              }),
-          )
-        : undefined;
-      const stagedResult = preparedStagedResult
-        ? {
-            ...preparedStagedResult,
-            applyPreparedStagedResult: async () =>
-              await runLocalReconciliation(
-                async () => await preparedStagedResult.applyPreparedStagedResult(),
-              ),
-            verifyLocalStable: async () =>
-              await runLocalReconciliation(
-                async () => await preparedStagedResult.verifyLocalStable(),
-              ),
-          }
-        : undefined;
-      let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
-      if (!stagedResult) {
-        appliedWorkspaceResult = await runLocalReconciliation(
-          async () =>
-            await applyStagedWorkerWorkspace({
-              root: request.localPath,
-              stagingRoot,
-              baseManifestRef: request.baseManifestRef,
-              currentManifestRef: currentRef,
-              base,
-              current,
-              journal: request.journal,
-              publishAcceptedManifest,
-            }),
-        );
-      }
-      return {
-        get manifestRef() {
-          return expectedRemoteRef();
-        },
-        changed,
+      return await acceptLocal({
+        stagingRoot,
+        base,
+        current,
+        baseRaw,
+        currentRaw,
+        currentManifestRef: currentRef,
+        publishAcceptedManifest,
+        manifestRef: expectedRemoteRef,
         verifyStable: async () => await verifyStable(expectedRemoteRef()),
-        verifyLocalStable: async () =>
-          await runLocalReconciliation(
-            async () =>
-              await (appliedWorkspaceResult?.verifyLocalStable() ??
-                assertWorkspaceResultStable({ root: request.localPath, base, current })),
-          ),
-        getAppliedWorkspaceResult: () => appliedWorkspaceResult,
-        ...stagedResult,
-      };
+      });
     } finally {
       await fs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
     }
   };
 
-  const reconcileWorkspaceImpl = (
+  const reconcileWorkspaceImpl = async (
     request: WorkerWorkspaceReconcileRequest,
-  ): Promise<WorkerWorkspaceReconcileResult> =>
-    runInstrumentedWorkspaceReconcile((metrics) => reconcileWorkspaceRun(request, metrics));
+  ): Promise<WorkerWorkspaceReconcileResult> => {
+    if (request.source.kind === "repository") {
+      throw new Error(
+        "Repository sessions require a managed node or cloud provider; SSH-only workers cannot preserve repository checkpoints.",
+      );
+    }
+    const localRequest: WorkerLocalWorkspaceReconcileRequest = {
+      remoteWorkspaceDir: request.remoteWorkspaceDir,
+      baseManifestRef: request.baseManifestRef,
+      localPath: request.source.path,
+      journal: request.source.journal,
+      stagedResult: request.source.stagedResult,
+    };
+    return await runInstrumentedWorkspaceReconcile((metrics) =>
+      reconcileWorkspaceRun(localRequest, metrics),
+    );
+  };
 
   return {
     quiesceWorkspace,
     reconcileWorkspace: (request) => track(reconcileWorkspaceImpl(request)),
     runWorkspaceCommand,
     // Keep the outer task registered across local-file phases so tunnel stop drains all owner work.
-    syncWorkspace: (request) => track(syncWorkspaceImpl(request)),
+    syncWorkspace: (request: WorkerWorkspaceSyncRequest) => {
+      if (request.source.kind === "repository") {
+        return Promise.reject(
+          new Error(
+            "Repository sessions require a managed node or cloud provider; SSH-only workers cannot clone repository sessions.",
+          ),
+        );
+      }
+      return track(
+        syncWorkspaceImpl({
+          sessionId: request.sessionId,
+          generation: request.generation,
+          gitAuthor: request.gitAuthor,
+          localPath: request.source.path,
+          projectKey: request.source.projectKey,
+        }),
+      );
+    },
   };
 }

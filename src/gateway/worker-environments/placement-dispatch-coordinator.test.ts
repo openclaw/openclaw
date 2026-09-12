@@ -6,55 +6,19 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import {
+  ACTIVE_PLACEMENT,
+  admittedRecovery,
+  createCoordinatorTestService,
+  MOVE_REQUEST,
+  preparedReclaim,
+  PROVISIONING_PLACEMENT,
+  REQUEST,
+} from "./placement-dispatch-coordinator.test-support.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type {
-  WorkerPlacementDispatchRequest,
-  WorkerPlacementMoveRequest,
-} from "./service-contract.js";
+import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 type DispatchService = WorkerPlacementDispatchService;
-
-function admittedRecovery(
-  run: (
-    placement: Parameters<DispatchService["resumeProvisioning"]>[0],
-    core: Parameters<DispatchService["resumeProvisioning"]>[1],
-  ) => Promise<void>,
-): DispatchService["resumeProvisioning"] {
-  return async (placement, core, _onTransition, admit) => {
-    if (!admit) {
-      throw new Error("Recovery fixture requires the coordinator admission owner");
-    }
-    return await admit(async (signal) => {
-      await run(placement, async () => await core(signal));
-      return undefined;
-    });
-  };
-}
-
-function preparedReclaim(run: () => Promise<unknown>) {
-  return async (
-    _request: unknown,
-    _authorize: unknown,
-    _beforeDrain: unknown,
-    serialize: (operation: () => Promise<unknown>) => Promise<unknown>,
-  ) => await serialize(run);
-}
-
-const REQUEST: WorkerPlacementDispatchRequest = {
-  sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  agentId: "main",
-  profileId: "test",
-  executionMode: "worker-turn",
-};
-
-const MOVE_REQUEST: WorkerPlacementMoveRequest = {
-  sessionId: REQUEST.sessionId,
-  sessionKey: REQUEST.sessionKey,
-  agentId: REQUEST.agentId,
-  source: { generation: 4, environmentId: "worker-source", ownerEpoch: 7 },
-  target: { kind: "gateway" },
-};
 
 describe("worker placement dispatch coordinator", () => {
   it.each([
@@ -390,6 +354,9 @@ describe("worker placement dispatch coordinator", () => {
     await expect(coordinated.dispatch({ ...REQUEST, machineClass: "beast" })).rejects.toThrow(
       `Session ${REQUEST.sessionKey} is already dispatching another request`,
     );
+    await expect(coordinated.dispatch({ ...REQUEST, os: "os-a" })).rejects.toThrow(
+      `Session ${REQUEST.sessionKey} is already dispatching another request`,
+    );
     await expect(
       coordinated.dispatch({
         ...REQUEST,
@@ -550,22 +517,25 @@ describe("worker placement dispatch coordinator", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
-  it("serializes reclaim behind an in-flight dispatch", async () => {
+  it("waits for same-session preparation before reclaim", async () => {
     const dispatchStarted = createDeferredCore();
     const releaseDispatch = createDeferredCore();
     const dispatch = vi.fn(async () => {
       dispatchStarted.resolve();
       await releaseDispatch.promise;
-      return { state: "active" };
+      return ACTIVE_PLACEMENT;
     });
-    const reclaim = vi.fn().mockResolvedValue({ state: "reclaimed" });
-    const service = {
+    const reclaim = vi.fn(async () => ({ ...ACTIVE_PLACEMENT, state: "reclaimed" as const }));
+    const service = createCoordinatorTestService({
       dispatch,
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: preparedReclaim(reclaim),
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
-    } as unknown as DispatchService;
+      reclaim: async (_request, _authorize, _beforeDrain, serialize, pendingOperations) => {
+        await pendingOperations?.settled;
+        if (!serialize) {
+          throw new Error("Reclaim fixture requires the placement fence");
+        }
+        return await serialize(reclaim);
+      },
+    });
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
     const dispatching = coordinated.dispatch(REQUEST);
@@ -576,10 +546,13 @@ describe("worker placement dispatch coordinator", () => {
       agentId: REQUEST.agentId,
     });
 
-    expect(reclaim).not.toHaveBeenCalled();
-    releaseDispatch.resolve();
-    await dispatching;
-    await reclaiming;
+    try {
+      await setImmediatePromise();
+      expect(reclaim).not.toHaveBeenCalled();
+    } finally {
+      releaseDispatch.resolve();
+      await Promise.all([dispatching, reclaiming]);
+    }
     expect(reclaim).toHaveBeenCalledOnce();
   });
 
@@ -987,7 +960,7 @@ describe("worker placement dispatch coordinator", () => {
     const fullSweep = coordinated.reconcile();
     await sweepStarted.promise;
     const destroying = coordinated.forceDestroyEnvironment("worker-exclusive");
-    const joinedRecovery = coordinated.resumeProvisioning({} as never, async () => {
+    const joinedRecovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
       joinedRecoveryStarted.resolve();
       await releaseJoinedRecovery.promise;
     });
@@ -995,7 +968,15 @@ describe("worker placement dispatch coordinator", () => {
     releaseSweep.resolve();
     await setImmediatePromise();
 
-    const lateRecovery = coordinated.resumeProvisioning({} as never, async () => {});
+    const lateRecovery = coordinated.resumeProvisioning(
+      {
+        ...PROVISIONING_PLACEMENT,
+        sessionId: "late-session",
+        sessionKey: "agent:main:late-session",
+        environmentId: "worker-late",
+      },
+      async () => {},
+    );
     await setImmediatePromise();
     expect(resumeProvisioning).toHaveBeenCalledOnce();
     expect(forceDestroyEnvironment).not.toHaveBeenCalled();

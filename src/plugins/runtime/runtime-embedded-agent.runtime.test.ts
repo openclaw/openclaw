@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -31,14 +32,6 @@ vi.mock("../../agents/embedded-agent.js", () => ({
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
 
 import { runPluginEmbeddedAgent } from "./runtime-embedded-agent.runtime.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 const config = {} as OpenClawConfig;
 const params = {
@@ -71,40 +64,52 @@ describe("plugin embedded-agent runtime admission", () => {
     mocks.runEmbeddedAgentCore.mockResolvedValue({ payloads: [] });
   });
 
-  it("binds plugin facts and closes the exact prepared admission after success", async () => {
-    await expect(
-      withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(params)),
-    ).resolves.toEqual({ payloads: [] });
+  it.each(["explicit", "runtime"] as const)(
+    "shares %s config between admission and execution and closes admission",
+    async (configSource) => {
+      const runParams = configSource === "explicit" ? params : { ...params, config: undefined };
+      if (configSource === "runtime") {
+        mocks.getRuntimeConfig.mockReturnValueOnce(config);
+      }
+      await expect(
+        withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+          runPluginEmbeddedAgent(runParams),
+        ),
+      ).resolves.toEqual({ payloads: [] });
 
-    expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledWith({
-      cfg: config,
-      operationalRunInstance: { instanceId: "instance:run-plugin", runId: "run-plugin" },
-      facts: {
-        runId: "run-plugin",
-        agentId: "researcher",
-        ingress: {
-          kind: "plugin",
-          boundary: "plugin-runtime",
-          rawSourceRef: "memory-plugin",
-          state: "present",
+      expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledWith({
+        cfg: config,
+        operationalRunInstance: { instanceId: "instance:run-plugin", runId: "run-plugin" },
+        facts: {
+          runId: "run-plugin",
+          agentId: "researcher",
+          ingress: {
+            kind: "plugin",
+            boundary: "plugin-runtime",
+            rawSourceRef: "memory-plugin",
+            state: "present",
+          },
         },
-      },
-      onAdmitted: expect.any(Function),
-    });
-    expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...params,
-        preparedRunAdmission: expect.objectContaining({ close: mocks.close }),
-      }),
-    );
-    expect(mocks.close).toHaveBeenCalledOnce();
-  });
+        onAdmitted: expect.any(Function),
+      });
+      expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...params,
+          preparedRunAdmission: expect.objectContaining({ close: mocks.close }),
+        }),
+      );
+      expect(mocks.getRuntimeConfig).toHaveBeenCalledTimes(configSource === "runtime" ? 1 : 0);
+      expect(mocks.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("closes the prepared admission when core execution throws", async () => {
     mocks.runEmbeddedAgentCore.mockRejectedValueOnce(new Error("core failed"));
 
     await expect(
-      withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(params)),
+      withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+        runPluginEmbeddedAgent(params),
+      ),
     ).rejects.toThrow("core failed");
     expect(mocks.close).toHaveBeenCalledOnce();
   });
@@ -141,7 +146,7 @@ describe("plugin embedded-agent runtime admission", () => {
       return true;
     });
     try {
-      await withPluginRuntimePluginIdScope("private-plugin-id", () =>
+      await withPluginRuntimePluginScope({ pluginId: "private-plugin-id" }, () =>
         runPluginEmbeddedAgent(params),
       );
     } finally {
@@ -161,7 +166,7 @@ describe("plugin embedded-agent runtime admission", () => {
   });
 
   it("revokes admission immediately when a pending plugin run aborts", async () => {
-    const core = deferred<{ payloads: never[] }>();
+    const core = createDeferred<{ payloads: never[] }>();
     const admittedRunContext: AdmittedRunContext = {
       operationalRunInstance: { instanceId: "instance:run-plugin", runId: "run-plugin" },
       executionIdentityToken: {
@@ -192,7 +197,7 @@ describe("plugin embedded-agent runtime admission", () => {
       return true;
     });
     const controller = new AbortController();
-    const run = withPluginRuntimePluginIdScope("memory-plugin", () =>
+    const run = withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
       runPluginEmbeddedAgent({ ...params, abortSignal: controller.signal }),
     );
     try {
@@ -223,7 +228,7 @@ describe("plugin embedded-agent runtime admission", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("memory-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
         runPluginEmbeddedAgent({ ...params, abortSignal: controller.signal }),
       ),
     ).rejects.toThrow("raced cancellation");
@@ -236,7 +241,7 @@ describe("plugin embedded-agent runtime admission", () => {
     controller.abort(new Error("already cancelled"));
 
     await expect(
-      withPluginRuntimePluginIdScope("memory-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
         runPluginEmbeddedAgent({ ...params, abortSignal: controller.signal }),
       ),
     ).rejects.toThrow("already cancelled");
@@ -255,6 +260,7 @@ describe("plugin embedded-agent runtime admission", () => {
     "preparedRunAdmission",
     "onDeferredLifecycleOwner",
     "onDeferredLifecycleAbort",
+    "onRetryWait",
     "compactionCountOwner",
     "onCompactionAccounting",
     "onContextAccountingEvent",
@@ -262,7 +268,9 @@ describe("plugin embedded-agent runtime admission", () => {
     const value = field === "compactionCountOwner" ? "caller" : {};
     const input = { ...params, [field]: value };
     await expect(
-      withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(input)),
+      withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+        runPluginEmbeddedAgent(input),
+      ),
     ).rejects.toThrow("cannot supply host run authority");
     expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
@@ -277,7 +285,9 @@ describe("plugin embedded-agent runtime admission", () => {
       });
 
       await expect(
-        withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(input)),
+        withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+          runPluginEmbeddedAgent(input),
+        ),
       ).rejects.toThrow("cannot supply host run authority");
       expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
       expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();

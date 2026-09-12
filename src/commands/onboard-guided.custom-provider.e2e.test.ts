@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureFullEnv, setTestEnvValue } from "../test-utils/env.js";
 
@@ -21,6 +23,7 @@ type Scenario = {
   authless?: boolean;
   outcome?: "fail" | "cancel" | "prompt-cancel";
   surface?: "cli" | "gateway";
+  isLocalGateway?: boolean;
 };
 
 async function runCustomSetup(scenario: Scenario) {
@@ -124,8 +127,9 @@ async function runCustomSetup(scenario: Scenario) {
     "fixture-alias",
   ];
   const selectAnswers = [
+    "__more",
     "custom",
-    ...(scenario.surface === "gateway"
+    ...(scenario.surface === "gateway" && !scenario.isLocalGateway
       ? []
       : [...(scenario.secretRef ? ["ref", "env"] : ["plaintext"]), scenario.protocol]),
     "skip",
@@ -167,16 +171,15 @@ async function runCustomSetup(scenario: Scenario) {
       workspace,
       setupComplete: true,
     },
-    autoAttemptedKinds: new Set(),
     config: initialConfig,
     workspace,
     prompter,
     runtime,
-    hasActiveRoute: true,
     activate: async (params) => {
       const result = await activateSetupInference({
         ...params,
         surface: scenario.surface ?? "cli",
+        ...(scenario.isLocalGateway ? { isRemoteProviderAuth: false } : {}),
         signal: controller.signal,
       });
       activationResults.push(result);
@@ -197,6 +200,9 @@ async function runCustomSetup(scenario: Scenario) {
     activationResults,
     textPrompts: vi.mocked(prompter.text).mock.calls,
     config: JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig,
+    authProfiles: loadAuthProfileStoreWithoutExternalProfiles(
+      resolveAgentDir(initialConfig, "main"),
+    ).profiles,
     output: JSON.stringify([
       runtime.log.mock.calls,
       runtime.error.mock.calls,
@@ -208,9 +214,11 @@ async function runCustomSetup(scenario: Scenario) {
 describe("guided custom provider activation", () => {
   it.each<Scenario>([
     { protocol: "openai" as const },
-    { protocol: "openai-responses" as const, secretRef: true },
+    { protocol: "openai-responses" as const },
     { protocol: "anthropic" as const },
     { protocol: "openai" as const, authless: true },
+    { protocol: "openai", surface: "gateway", isLocalGateway: true },
+    { protocol: "anthropic", surface: "gateway", isLocalGateway: true },
   ])(
     "verifies and persists $protocol with its selected credential shape",
     { timeout: 300_000 },
@@ -219,16 +227,26 @@ describe("guided custom provider activation", () => {
       expect(setup.result).toEqual(
         expect.arrayContaining(["Inference verified: fixture-custom/fixture-model"]),
       );
-      expect(setup.requests).toEqual([
-        expect.objectContaining({ stream: false, authorized: true }),
-        expect.objectContaining({ stream: true, authorized: true }),
-      ]);
-      expect(setup.config.models?.providers?.["fixture-custom"]?.apiKey).toEqual(
+      expect(setup.requests).toEqual([expect.objectContaining({ stream: true, authorized: true })]);
+      expect(setup.config.models?.providers?.["fixture-custom"]?.apiKey).toBeUndefined();
+      expect(Object.values(setup.authProfiles)).toEqual(
         scenario.authless
-          ? undefined
-          : scenario.secretRef
-            ? { source: "env", provider: "default", id: "CUSTOM_SETUP_FIXTURE_KEY" }
-            : setup.credential,
+          ? []
+          : [
+              expect.objectContaining({
+                type: "api_key",
+                provider: "fixture-custom",
+                ...(scenario.secretRef
+                  ? {
+                      keyRef: {
+                        source: "env",
+                        provider: "default",
+                        id: "CUSTOM_SETUP_FIXTURE_KEY",
+                      },
+                    }
+                  : { key: setup.credential }),
+              }),
+            ],
       );
       expect(setup.config.agents?.defaults?.model).toContain("fixture-custom/fixture-model");
       expect(setup.config.agents?.defaults?.models?.["fixture-custom/fixture-model"]?.alias).toBe(
@@ -241,24 +259,58 @@ describe("guided custom provider activation", () => {
     },
   );
 
-  it.each(["fail", "cancel"] as const)(
-    "preserves the prior route after completion %s",
+  it("saves an unresolved SecretRef without promoting the prior route", async () => {
+    const setup = await runCustomSetup({ protocol: "openai-responses", secretRef: true });
+    expect(setup.requests).toEqual([]);
+    expect(setup.result).toBeNull();
+    expect(setup.config).toEqual(setup.initialConfig);
+    expect(Object.values(setup.authProfiles)).toEqual([
+      expect.objectContaining({
+        type: "api_key",
+        provider: "fixture-custom",
+        keyRef: {
+          source: "env",
+          provider: "default",
+          id: "CUSTOM_SETUP_FIXTURE_KEY",
+        },
+      }),
+    ]);
+    expect(setup.activationResults).toEqual([
+      expect.objectContaining({
+        ok: false,
+        status: "unknown",
+        disposition: "rejected-before-promotion",
+      }),
+    ]);
+    expect(setup.output).not.toContain(setup.credential);
+  });
+
+  it.each<Scenario>([
+    { protocol: "openai", outcome: "fail" },
+    { protocol: "openai", outcome: "cancel" },
+    { protocol: "openai", outcome: "fail", surface: "gateway", isLocalGateway: true },
+    { protocol: "anthropic", outcome: "cancel", surface: "gateway", isLocalGateway: true },
+  ])(
+    "preserves the prior route after $surface completion $outcome",
     { timeout: 300_000 },
-    async (outcome) => {
-      const setup = await runCustomSetup({ protocol: "openai", outcome });
-      expect(setup.requests).toHaveLength(2);
+    async (scenario) => {
+      const setup = await runCustomSetup(scenario);
+      expect(setup.requests).toHaveLength(1);
       expect(setup.result).toBeNull();
       expect(setup.config).toEqual(setup.initialConfig);
       expect(setup.output).not.toContain(setup.credential);
       expect(setup.activationResults).toEqual([
-        expect.objectContaining({ ok: false, status: outcome === "fail" ? "auth" : "unavailable" }),
+        expect.objectContaining({
+          ok: false,
+          status: scenario.outcome === "fail" ? "auth" : "unavailable",
+        }),
       ]);
     },
   );
 
-  it("preserves the prior route when custom prompts are cancelled after endpoint verification", async () => {
+  it("preserves the prior route when custom prompts are cancelled before deferred verification", async () => {
     const setup = await runCustomSetup({ protocol: "openai", outcome: "prompt-cancel" });
-    expect(setup.requests).toEqual([expect.objectContaining({ stream: false, authorized: true })]);
+    expect(setup.requests).toEqual([]);
     expect(setup.cancelled).toBe(true);
     expect(setup.config).toEqual(setup.initialConfig);
   });
@@ -269,7 +321,9 @@ describe("guided custom provider activation", () => {
     expect(setup.textPrompts).toEqual([]);
     expect(setup.result).toBeNull();
     expect(setup.config).toEqual(setup.initialConfig);
-    expect(setup.output).toContain("run openclaw onboard on the Gateway host");
+    expect(setup.output).toContain(
+      "run openclaw onboard --auth-choice custom-api-key on the Gateway host",
+    );
   });
 });
 
@@ -333,6 +387,13 @@ function writeCompletion(response: ServerResponse, protocol: Scenario["protocol"
       item_id: item.id,
       delta: "OK",
     },
+    {
+      type: "response.output_text.done",
+      output_index: 0,
+      content_index: 0,
+      item_id: item.id,
+      text: "OK",
+    },
     { type: "response.output_item.done", output_index: 0, item },
     {
       type: "response.completed",
@@ -345,5 +406,7 @@ function writeCompletion(response: ServerResponse, protocol: Scenario["protocol"
       },
     },
   ];
-  response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+  response.end(
+    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+  );
 }

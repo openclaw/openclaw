@@ -103,6 +103,7 @@ export type ActivateRuntimeSecrets = ((
     params: RuntimeSecretsActivationParams,
     onActivated?: () => void | Promise<void>,
     canActivate?: () => boolean,
+    checkpoint?: () => Promise<void>,
   ) => Promise<PreparedRuntimeSecretsSnapshot | null>;
 };
 
@@ -183,8 +184,7 @@ export function createRuntimeSecretsActivator(params: {
     ) {
       return;
     }
-    const recoveredMessage =
-      "Secret resolution recovered; runtime remained on last-known-good during the outage.";
+    const recoveredMessage = "Secret resolution recovered.";
     params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
     params.emitStateEvent("SECRETS_RELOADER_RECOVERED", recoveredMessage, config);
     secretsDegraded = false;
@@ -461,6 +461,7 @@ export function createRuntimeSecretsActivator(params: {
     activationParams,
     onActivated,
     canActivate,
+    checkpoint,
   ) => {
     // Resolve the lazy activator before entering the compare-and-activate
     // section so no await separates revision ownership from state publication.
@@ -477,6 +478,9 @@ export function createRuntimeSecretsActivator(params: {
         : await loadActivateRuntimeSecretsSnapshot()
       : undefined;
     return await runWithSecretsActivationLock(async () => {
+      // Resolve source observations inside the lock, then recheck every revision.
+      // No await may separate these final guards from activation/publication.
+      await checkpoint?.();
       if (
         getActiveSecretsRuntimeSnapshotRevisionState() !== expectedRevision ||
         !hasCurrentAuthStoreCredentialsRevision(snapshot) ||

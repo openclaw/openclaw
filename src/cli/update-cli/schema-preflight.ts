@@ -1,3 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
+import { createConfigIO } from "../../config/io.js";
+import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   preflightOpenClawDatabaseSchemas,
@@ -6,6 +15,12 @@ import {
   type OpenClawDatabaseSchemaPreflight,
 } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { UpdatePreMutationError } from "./shared.js";
+
+type TargetDatabaseSchemaContext = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+};
 
 export function formatSchemaRefusalLines(
   schemas: {
@@ -29,13 +44,129 @@ export function formatSchemaRefusalLines(
   ];
 }
 
-export function checkTargetDatabaseSchemas(
+async function checkTargetDatabaseSchemas(
+  supportedVersions: OpenClawSchemaVersions,
+  context: TargetDatabaseSchemaContext,
+): Promise<OpenClawDatabaseSchemaPreflight> {
+  let configuredAgentDatabaseCandidatePaths: string[];
+  try {
+    configuredAgentDatabaseCandidatePaths = resolveConfiguredAgentDatabaseCandidatePaths(
+      context.config,
+      { env: context.env },
+    );
+  } catch (error) {
+    throw new UpdatePreMutationError(
+      "database-schema-preflight",
+      `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+    );
+  }
+  return preflightOpenClawDatabaseSchemas({
+    env: context.env,
+    supportedVersions,
+    // Include default on-disk stores that update-time Doctor can later touch,
+    // without resolving configured candidates into writable migration owners.
+    configuredAgentDatabaseTargets: [],
+    // Inspection keeps registered paths without adopting their migration ownership.
+    configuredAgentDatabaseCandidatePaths,
+  });
+}
+
+export async function captureTargetDatabaseSchemaContext(
+  env: NodeJS.ProcessEnv,
+  options?: { legacyConfigPlan?: LegacyConfigUpdatePlan },
+) {
+  // Do not load plugins, recover config, record observations, or change the
+  // caller's environment just to discover the stores selected by this config.
+  const inspectionEnv = cloneEnvWithPlatformSemantics(env);
+  const readEnv = cloneEnvWithPlatformSemantics(env);
+  const { snapshot, writeOptions } = await createConfigIO({
+    env: inspectionEnv,
+    observe: false,
+    pluginValidation: "core-only",
+  }).readConfigFileSnapshotForWrite();
+  // A Doctor-validated projection is usable only for its exact authored source.
+  // Keep the original snapshot intact for checkpointing and later revalidation;
+  // a caller's plan must not authorize a different managed service's config.
+  const planned = options?.legacyConfigPlan;
+  const before = planned?.snapshot;
+  const legacyConfigPlan =
+    before &&
+    before.path === snapshot.path &&
+    before.exists === snapshot.exists &&
+    before.raw === snapshot.raw &&
+    before.hash === snapshot.hash &&
+    isDeepStrictEqual(before.includedPaths ?? [], snapshot.includedPaths ?? []) &&
+    isDeepStrictEqual(before.includeProvenance ?? [], snapshot.includeProvenance ?? []) &&
+    isDeepStrictEqual(before.sourceConfig, snapshot.sourceConfig) &&
+    isDeepStrictEqual(
+      planned.includeIdentity.includeFileHashesForWrite ?? {},
+      writeOptions.includeFileHashesForWrite ?? {},
+    ) &&
+    isDeepStrictEqual(
+      planned.includeIdentity.includeFileTargetsForWrite ?? {},
+      writeOptions.includeFileTargetsForWrite ?? {},
+    )
+      ? planned
+      : undefined;
+  if (before?.path === snapshot.path && !legacyConfigPlan) {
+    throw new UpdatePreMutationError(
+      "database-schema-preflight",
+      `Update refused: planned configuration changed at ${snapshot.path}. Retry against the current source.`,
+    );
+  }
+  if ((!snapshot.valid && !legacyConfigPlan) || snapshot.readError) {
+    throw new UpdatePreMutationError(
+      "database-schema-preflight",
+      `Update refused: could not inspect configured database paths from ${snapshot.path}. Correct the configuration before retrying.`,
+    );
+  }
+  return {
+    env: inspectionEnv,
+    config: legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config,
+    configSnapshot: snapshot,
+    readEnv,
+    ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
+  };
+}
+
+function canonicalDatabaseIdentity(database: { kind: "agent" | "state"; path: string }): string {
+  let canonical: string;
+  try {
+    // Native traversal must see the original locator before any lexical
+    // normalization: link/../file can name a different database from resolve().
+    canonical = fs.realpathSync.native(database.path);
+  } catch {
+    canonical = path.resolve(database.path);
+  }
+  const comparable = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  return `${database.kind}\0${comparable}`;
+}
+
+/** Inspect the union of caller/service stores without granting migration ownership. */
+export async function checkTargetDatabaseSchemasForContexts(
   supportedVersions: OpenClawSchemaVersions | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): OpenClawDatabaseSchemaPreflight {
-  return supportedVersions
-    ? preflightOpenClawDatabaseSchemas({ env, supportedVersions })
-    : { incompatible: [], indeterminate: [] };
+  contexts: readonly TargetDatabaseSchemaContext[],
+): Promise<OpenClawDatabaseSchemaPreflight> {
+  if (!supportedVersions) {
+    return { incompatible: [], indeterminate: [] };
+  }
+  const incompatible = new Map<string, IncompatibleOpenClawDatabase>();
+  const indeterminate = new Map<string, IndeterminateOpenClawDatabase>();
+  for (const context of contexts) {
+    const result = await checkTargetDatabaseSchemas(supportedVersions, context);
+    for (const database of result.incompatible) {
+      const identity = canonicalDatabaseIdentity(database);
+      incompatible.set(identity, incompatible.get(identity) ?? database);
+      indeterminate.delete(identity);
+    }
+    for (const database of result.indeterminate) {
+      const identity = canonicalDatabaseIdentity(database);
+      if (!incompatible.has(identity) && !indeterminate.has(identity)) {
+        indeterminate.set(identity, database);
+      }
+    }
+  }
+  return { incompatible: [...incompatible.values()], indeterminate: [...indeterminate.values()] };
 }
 
 export function hasSchemaRefusal(schemas: OpenClawDatabaseSchemaPreflight): boolean {

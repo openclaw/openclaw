@@ -7,9 +7,9 @@ import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
   getManagedTaskBackingInstance,
   hasAuthoritativeTaskBacking,
+  readTaskBackingInstance,
 } from "./task-backing-authority.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 import { updateTask } from "./task-registry-mutation.js";
@@ -21,7 +21,7 @@ import {
   loadTaskRegistryControlRuntime,
   tasks,
 } from "./task-registry-state.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
 function ensureTaskCancellationReady(task: TaskRecord): void {
@@ -114,6 +114,7 @@ export async function cancelTaskById(params: {
       return notCancelled("Task backing ownership could not be verified.");
     }
     const managedBacking = getManagedTaskBackingInstance(task);
+    const subagentBacking = managedBacking ?? readTaskBackingInstance(task.detail);
     ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
@@ -172,6 +173,13 @@ export async function cancelTaskById(params: {
             ? { expectedInstanceId: managedBacking.instanceId, expectedOwnerKey: task.ownerKey }
             : {}),
         });
+        // The run owns terminal outcomes published while backend cancellation waits.
+        const current = tasks.get(task.taskId);
+        if (current && isTerminalTaskStatus(current.status)) {
+          return current.status === "cancelled"
+            ? { found: true, cancelled: true, task: cloneTaskRecord(current) }
+            : notCancelled(`Task became ${current.status} while cancellation was in progress.`);
+        }
       } else if (task.runtime === "subagent") {
         const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
         const reconcile = (result: Awaited<ReturnType<typeof killSubagentRunAdmin>>) => {
@@ -237,9 +245,10 @@ export async function cancelTaskById(params: {
         await killSubagentRunAdmin({
           cfg: params.cfg,
           sessionKey: childSessionKey,
-          expectedRunId: task.runId,
-          ...(managedBacking?.runtime === "subagent"
-            ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
+          expectedTaskRunId: task.runId,
+          expectedOwnerKey: task.ownerKey,
+          ...(subagentBacking?.runtime === "subagent"
+            ? { expectedGeneration: subagentBacking.generation }
             : {}),
           onResult: (result) => {
             cancellation = reconcile(result);

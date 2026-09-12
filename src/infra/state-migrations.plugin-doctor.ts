@@ -5,6 +5,7 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listPluginDoctorStateMigrationEntries,
+  PluginDoctorStateMigrationDeclarationError,
   type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationDetection,
 } from "../plugins/doctor-contract-registry.js";
@@ -20,6 +21,7 @@ import type {
   LegacyStateDetection,
   MigrationLogger,
   MigrationMessages,
+  PlannedPluginDoctorAction,
   PluginDoctorRepairAuthority,
 } from "./state-migrations.types.js";
 
@@ -31,6 +33,28 @@ type PluginDoctorInput = Omit<
 const PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS = 250;
 const PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 
+function validatePluginDoctorPlanOrder(params: {
+  actions: readonly PlannedPluginDoctorAction[];
+  plannedActions: readonly PlannedPluginDoctorAction[];
+}): string | undefined {
+  const uniqueActions = new Set(
+    params.actions.map((action) => JSON.stringify([action.pluginId, action.id])),
+  );
+  if (
+    uniqueActions.size !== params.actions.length ||
+    params.actions.length !== params.plannedActions.length ||
+    params.actions.some((action, index) => {
+      const planned = params.plannedActions[index];
+      return action.pluginId !== planned?.pluginId || action.id !== planned?.id;
+    })
+  ) {
+    return `Refused plugin migrations that do not match the immutable action order: ${params.actions
+      .map((action) => `${action.pluginId}:${action.id}`)
+      .join(", ")}.`;
+  }
+  return undefined;
+}
+
 export async function collectPluginDoctorStateMigrationPlans(
   input: PluginDoctorInput,
   params: {
@@ -38,17 +62,44 @@ export async function collectPluginDoctorStateMigrationPlans(
     phase?: PluginDoctorStateMigration["phase"];
     repairAuthority?: PluginDoctorRepairAuthority;
     warnings?: string[];
+    plannedActions?: readonly PlannedPluginDoctorAction[];
+    validateDeclarations?: boolean;
   },
 ): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
   const { config, env } = input;
-  for (const entry of listPluginDoctorStateMigrationEntries({ config, env })) {
-    if (
-      entry.migration.phase !== params.phase ||
-      (entry.migration.doctorOnly === true && params.includeDoctorOnly !== true)
-    ) {
-      continue;
+  let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
+  try {
+    entries = listPluginDoctorStateMigrationEntries({
+      config,
+      env,
+      validateDeclarations: params.validateDeclarations,
+    });
+  } catch (error) {
+    if (!(error instanceof PluginDoctorStateMigrationDeclarationError)) {
+      throw error;
     }
+    params.warnings?.push(error.message);
+    return [];
+  }
+  entries = entries.filter(
+    ({ migration }) =>
+      migration.phase === params.phase &&
+      (migration.doctorOnly !== true || params.includeDoctorOnly === true),
+  );
+  // Validate all exports before detection removes completed actions. Otherwise a
+  // reordered or missing export can hide behind the currently pending subset.
+  if (params.plannedActions) {
+    const refusal = validatePluginDoctorPlanOrder({
+      actions: entries.map(({ pluginId, migration }) => ({ pluginId, id: migration.id })),
+      plannedActions: params.plannedActions,
+    });
+    if (refusal) {
+      params.warnings?.push(refusal);
+      return [];
+    }
+  }
+  for (const entry of entries) {
     let detected: PluginDoctorStateMigrationDetection | null;
     try {
       detected = await entry.migration.detectLegacyState({
@@ -98,6 +149,7 @@ export async function runPluginDoctorStateMigrationPlans(params: {
   detected: LegacyStateDetection;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  plannedActions?: readonly PlannedPluginDoctorAction[];
 }): Promise<MigrationMessages> {
   const input: PluginDoctorInput = {
     config: params.config,
@@ -109,6 +161,7 @@ export async function runPluginDoctorStateMigrationPlans(params: {
   const refreshedPlans = await collectPluginDoctorStateMigrationPlans(input, {
     includeDoctorOnly: params.detected.doctorOnlyStateMigrations,
     warnings,
+    plannedActions: params.plannedActions,
   });
   const hasDetectorFailure = warnings.length > 0;
   // Previously detected plans are only safe when refresh found no current work.
@@ -118,7 +171,11 @@ export async function runPluginDoctorStateMigrationPlans(params: {
       ? refreshedPlans
       : (params.detected.pluginPlans?.plans ?? []);
   const migrated = await migratePluginDoctorStatePlans(input, plans);
-  return { ...migrated, warnings: [...warnings, ...migrated.warnings] };
+  return {
+    ...migrated,
+    warnings: [...warnings, ...migrated.warnings],
+    ...(hasDetectorFailure ? { warningDisposition: undefined } : {}),
+  };
 }
 
 async function migratePluginDoctorStatePlans(
@@ -129,6 +186,7 @@ async function migratePluginDoctorStatePlans(
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
+  let hasRefusal = false;
   if (plans.length === 0) {
     return { changes, warnings };
   }
@@ -181,12 +239,21 @@ async function migratePluginDoctorStatePlans(
         repairAuthority?.assertCurrent();
         changes.push(...result.changes);
         warnings.push(...result.warnings);
+        if (result.warnings.length > 0 && result.warningDisposition !== "recoverable") {
+          hasRefusal = true;
+        }
         notices.push(...(result.notices ?? []));
       } catch (err) {
+        hasRefusal = true;
         warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
       }
     }
-    return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(notices.length > 0 ? { notices } : {}),
+      ...(warnings.length > 0 && !hasRefusal ? { warningDisposition: "recoverable" as const } : {}),
+    };
   };
   // Session repair already holds the Gateway lock and cross-process database fences.
   if (repairAuthority) {
@@ -233,6 +300,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   maintenanceAuthority?: { assertCurrent(): void };
+  plannedActions?: readonly PlannedPluginDoctorAction[];
 }): Promise<MigrationMessages> {
   const stateDir = resolveStateDir(params.env);
   const input: PluginDoctorInput = {
@@ -249,6 +317,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       phase: "after-session-repair",
       repairAuthority,
       warnings,
+      plannedActions: params.plannedActions,
     });
     if (!repairAuthority) {
       return {
@@ -263,13 +332,18 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       };
     }
     const result = await migratePluginDoctorStatePlans(input, plans, repairAuthority);
-    return { ...result, warnings: [...warnings, ...result.warnings] };
+    return {
+      ...result,
+      warnings: [...warnings, ...result.warnings],
+      ...(warnings.length > 0 ? { warningDisposition: undefined } : {}),
+    };
   };
   const maintenance = params.maintenanceAuthority;
   if (!maintenance) {
     return run();
   }
   maintenance.assertCurrent();
+  let completed: MigrationMessages = { changes: [], warnings: [] };
   try {
     return await withAgentDatabaseMaintenanceLease({ env: params.env }, async (agentLease) =>
       withPluginLifecycleLease({ env: params.env, waitMs: 5_000 }, async (pluginLease) => {
@@ -293,7 +367,10 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
           },
         };
         try {
-          return await run(authority);
+          // Lease settlement can reject after the callback's mutations committed.
+          // Retain those facts without treating a failed settlement as success.
+          completed = await run(authority);
+          return completed;
         } finally {
           active = false;
         }
@@ -301,10 +378,9 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     );
   } catch (error) {
     return {
-      changes: [],
-      warnings: [
-        `Skipped plugin session repair: ${String(error)}. Stop active agents and run openclaw doctor --fix again.`,
-      ],
+      ...completed,
+      warnings: [...completed.warnings, `Plugin session repair did not settle: ${String(error)}.`],
+      warningDisposition: undefined,
     };
   }
 }

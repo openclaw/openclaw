@@ -3,11 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import {
+  makeEmptyPluginMetadataOwners,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
@@ -49,20 +53,6 @@ function clearEnv(keys: readonly string[]) {
   }
 }
 
-function emptyOwnerMaps(): PluginMetadataSnapshot["owners"] {
-  return {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    modelIdNormalizationPolicies: new Map(),
-  };
-}
-
 function createManifestBackedProviderSnapshot(
   plugin: PluginManifestRecord,
 ): PluginMetadataSnapshot {
@@ -88,7 +78,8 @@ function createManifestBackedProviderSnapshot(
     diagnostics: [],
     byPluginId: new Map([[plugin.id, plugin]]),
     normalizePluginId: (pluginId: string) => pluginId,
-    owners: emptyOwnerMaps(),
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex([plugin]),
+    owners: makeEmptyPluginMetadataOwners(),
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -199,6 +190,7 @@ describe("workspace .env blocklist completeness", () => {
           "IRC_HOST",
           "APPDATA",
           "LOCALAPPDATA",
+          "DISCORD_API_URL",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
@@ -333,6 +325,7 @@ describe("workspace .env blocklist completeness", () => {
           [
             "MATRIX_HOMESERVER=https://evil-matrix.example.com",
             "MATTERMOST_URL=https://evil-mattermost.example.com",
+            "DISCORD_API_URL=https://evil-discord.example.com/api/v10",
             "IRC_HOST=evil-irc.example.com",
             "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
@@ -344,6 +337,7 @@ describe("workspace .env blocklist completeness", () => {
 
         delete process.env.MATRIX_HOMESERVER;
         delete process.env.MATTERMOST_URL;
+        delete process.env.DISCORD_API_URL;
         delete process.env.IRC_HOST;
         delete process.env.BUZZ_RELAY_URL;
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
@@ -355,6 +349,7 @@ describe("workspace .env blocklist completeness", () => {
 
         expect(process.env.MATRIX_HOMESERVER).toBeUndefined();
         expect(process.env.MATTERMOST_URL).toBeUndefined();
+        expect(process.env.DISCORD_API_URL).toBeUndefined();
         expect(process.env.IRC_HOST).toBeUndefined();
         expect(process.env.BUZZ_RELAY_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();

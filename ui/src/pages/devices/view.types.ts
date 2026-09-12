@@ -1,12 +1,12 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
 // Devices page view contracts.
 import type { PresenceEntry } from "../../api/types.ts";
+import type { DevicePairingList } from "../../lib/nodes/index.ts";
 import type {
-  DevicePairingList,
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
   InventoryRemovalRequest,
-} from "../../lib/nodes/index.ts";
+} from "../../lib/nodes/page-operations.ts";
 
 export type DevicesProps = {
   loading: boolean;
@@ -43,6 +43,12 @@ export type DevicesProps = {
    *  device the operator just clicked, without rederiving the label precedence. */
   onDeviceRotate: (device: { id: string; name: string }, role: string, scopes?: string[]) => void;
   onDeviceRevoke: (deviceId: string, role: string) => void;
+  /**
+   * Opens the alias editor for one paired device. `operatorLabel` is the alias
+   * currently stored for it, undefined while the device still shows its
+   * self-reported name.
+   */
+  onDeviceRename: (device: { id: string; name: string; operatorLabel?: string }) => void;
   onNodeApprove: (requestId: string) => void;
   onNodeReject: (requestId: string) => void;
   onInventoryRemove: (entry: InventoryRemovalRequest) => void;

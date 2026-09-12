@@ -107,38 +107,11 @@ export function readAcpSessionMeta(params: {
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  const storeEntry = readSessionEntryFromStore({
-    sessionKey,
-    agentId: params.agentId,
-    cfg: params.cfg,
-    env: params.env,
+  return readAcpSessionEntry({
+    ...params,
+    sessionKey: params.sessionKey.trim(),
     clone: false,
-  });
-  if (!storeEntry.storePath) {
-    return undefined;
-  }
-  const row = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          storeEntry.storeSessionKey,
-          storeEntry.agentId,
-          storeEntry.cfg,
-          storeEntry.entry,
-        ),
-        entry: storeEntry.entry,
-      }),
-    { env: params.env, path: params.databasePath },
-  );
-  if (!row) {
-    return undefined;
-  }
-  return rowToAcpSessionMeta(row);
+  })?.acp;
 }
 
 export function readAcpSessionMetaForEntry(params: {
@@ -414,21 +387,14 @@ export function readAcpSessionEntry(params: {
   if (!storeEntry.storePath) {
     return null;
   }
-  const row = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          storeEntry.storeSessionKey,
-          storeEntry.agentId,
-          storeEntry.cfg,
-          storeEntry.entry,
-        ),
-        entry: storeEntry.entry,
-      }),
-    { env: params.env, path: params.databasePath },
-  );
-  const acp = row ? rowToAcpSessionMeta(row) : undefined;
+  const acp = readAcpSessionMetaForEntry({
+    sessionKey: storeEntry.storeSessionKey,
+    agentId: storeEntry.agentId,
+    cfg: storeEntry.cfg,
+    entry: storeEntry.entry,
+    env: params.env,
+    databasePath: params.databasePath,
+  });
   return {
     cfg: storeEntry.cfg,
     agentId: storeEntry.agentId,
@@ -518,6 +484,7 @@ function sessionStoreUpdateOptions(params: {
 }
 
 export async function upsertAcpSessionMeta(params: {
+  assertCommitAllowed?: () => void;
   sessionKey: string;
   agentId?: string;
   cfg?: OpenClawConfig;
@@ -592,11 +559,13 @@ export async function upsertAcpSessionMeta(params: {
           {
             ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
             replaceEntry: true,
+            assertCommitAllowed: params.assertCommitAllowed,
           },
         )
       : null;
     runOpenClawStateWriteTransaction(
       (database) => {
+        params.assertCommitAllowed?.();
         const sessionKeysToDelete = new Set([databaseSessionKey]);
         if (currentRowKey) {
           sessionKeysToDelete.add(currentRowKey);
@@ -641,6 +610,7 @@ export async function upsertAcpSessionMeta(params: {
       ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
       fallbackEntry: preparedEntry,
       replaceEntry: true,
+      assertCommitAllowed: params.assertCommitAllowed,
     },
   );
   if (!persisted) {
@@ -653,6 +623,8 @@ export async function upsertAcpSessionMeta(params: {
   });
   runOpenClawStateWriteTransaction(
     (database) => {
+      // The entry patch and legacy cleanup await before this authoritative publication.
+      params.assertCommitAllowed?.();
       const persistedDatabaseSessionKey = buildAcpDatabaseSessionKey(
         persisted.sessionKey,
         storeEntry.agentId,

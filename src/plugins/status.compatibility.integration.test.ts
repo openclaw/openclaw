@@ -11,6 +11,8 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { buildPluginCompatibilitySnapshotNotices } from "./status.js";
 
 function addStartupActivation(pluginDir: string, onStartup: boolean): void {
@@ -91,7 +93,12 @@ describe("plugin compatibility snapshot notices", () => {
       expect(buildPluginCompatibilitySnapshotNotices(params)).toStrictEqual([]);
       expect(fs.existsSync(runtimeMarker)).toBe(false);
 
-      const registry = loadOpenClawPlugins({ ...params, cache: false });
+      // Activate through the resolved runtime context like Gateway and CLI loads do:
+      // the load identity includes the resolved physical sources, and the snapshot
+      // path only reuses an active registry whose identity matches exactly.
+      const registry = loadOpenClawPlugins(
+        buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext(params), { cache: false }),
+      );
       expect(fs.existsSync(runtimeMarker)).toBe(true);
       expect(registry.typedHooks).toEqual([
         expect.objectContaining({ pluginId: plugin.id, hookName: "message_received" }),

@@ -19,7 +19,7 @@ or [Provider Plugins](/plugins/sdk-provider-plugins) instead.
 
 ## Requirements
 
-- Node 22.22.3+, Node 24.15+, or Node 25.9+.
+- Node 24.16+ or Node 26.1+.
 - TypeScript ESM package output.
 - `typebox` in `dependencies` (not just `devDependencies` - the generated
   plugin imports it at runtime).
@@ -174,14 +174,16 @@ call ID string instead.
 Concrete tools can provide `prepareArguments(args)` to normalize input before
 schema validation. The native agent loop also honors
 `executionMode: "sequential"` when tool calls must run one at a time. These
-runtime properties come from the current factory context even when the tool's
-descriptor is cached; argument preparation and execution use the same instance.
+runtime properties, schemas, and display metadata come from the current factory
+context whenever tools are assembled. Argument preparation and execution use the
+same instance. Retained tools stop working when their owning plugin registry is
+retired.
 
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
-final tool result still flow normally. OpenClaw preserves this flag when
-reusing a cached tool or normalizing its schema; omitted or `false` leaves
-normal progress behavior in place. See [Progress drafts](/concepts/progress-drafts).
+final tool result still flow normally. OpenClaw preserves the current factory's
+flag when normalizing its schema; omitted or `false` leaves normal progress
+behavior in place. See [Progress drafts](/concepts/progress-drafts).
 
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
@@ -448,9 +450,8 @@ Install with an explicit ClawHub locator:
 openclaw plugins install clawhub:your-org/stock-quotes
 ```
 
-Bare npm package specs still install from npm during the launch cutover, but
-ClawHub is the preferred discovery and distribution surface for OpenClaw
-plugins. See [ClawHub publishing](/clawhub/publishing) for owner scope and
+Bare npm package specs install from npm, but ClawHub is the preferred
+discovery and distribution surface for OpenClaw plugins. See [ClawHub publishing](/clawhub/publishing) for owner scope and
 release review.
 
 ## Troubleshooting
@@ -502,6 +503,7 @@ Check these in order:
 ## See also
 
 - [Building plugins](/plugins/building-plugins)
+- [Plugin SDK overview](/plugins/sdk-overview)
 - [Plugin entry points](/plugins/sdk-entrypoints)
 - [Plugin SDK subpaths](/plugins/sdk-subpaths)
 - [Plugin manifest](/plugins/manifest)

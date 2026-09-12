@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import {
+  renderUpdateRunNotice,
   renderUpdateRunReport,
   updateRunReportInputFromResult,
   updateRunReportInputFromSentinel,
@@ -30,6 +32,73 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
 }
 
 describe("update run report", () => {
+  it.each(["status", "failure"])(
+    "includes the legacy expiry advisory in the %s report",
+    async (surface) => {
+      const record = run({ status: "failed", reason: "legacy-driver-expired" });
+      const text =
+        surface === "status"
+          ? renderUpdateRunReport(record).markdown
+          : (
+              await prepareUpdateFailureReport(
+                {
+                  attemptId: record.runId,
+                  result: {
+                    status: "error",
+                    mode: "unknown",
+                    reason: record.reason ?? undefined,
+                    steps: [],
+                    durationMs: 0,
+                  },
+                },
+                { stateDir: "/fixture/state", env: {} },
+              )
+            ).body;
+      expect(text).toContain(
+        "A 2026.9.2-era update never progressed past admission; treated as abandoned after 24 h; run `openclaw update` to retry.",
+      );
+    },
+  );
+
+  it.each([
+    ["requester-revoked", "A current command owner must start a new update"],
+    ["repair-requires-config-change", "run openclaw doctor --fix under your own authority"],
+  ])("renders the repair stop reason %s with an unambiguous next action", (reason, guidance) => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: "doctor-failed",
+        repair: [{ attempt: 1, status: "failed", startedAtMs: 1, reason }],
+      }),
+    );
+    expect(report.markdown).toContain(reason);
+    expect(report.markdown).toContain(guidance);
+  });
+
+  it("limits parking notices to the pre-updater milestone without loosening phase notices", () => {
+    const requested = run({ status: "running", phase: "requested" });
+    expect(renderUpdateRunNotice(requested, "parking")).toContain("Restarting the gateway now");
+    expect(renderUpdateRunNotice(requested, "activating")).toBeNull();
+    expect(renderUpdateRunNotice(requested, "verifying")).toBeNull();
+    for (const phase of ["staging", "activating", "verifying"] as const) {
+      const progressed = run({ status: "running", phase });
+      expect(renderUpdateRunNotice(progressed, "parking")).toBeNull();
+      expect(renderUpdateRunNotice(progressed, "ack")).toBeNull();
+    }
+    expect(renderUpdateRunNotice(run(), "parking")).toBeNull();
+  });
+
+  it("reports changed git commits when the package version stays the same", () => {
+    const report = renderUpdateRunReport(
+      run({
+        before: { version: "2026.8.1", sha: "1111111111111111111111111111111111111111" },
+        after: { version: "2026.8.1", sha: "9f3c21a0000000000000000000000000000000aa" },
+      }),
+    );
+    expect(report.headline).toBe("✅ OpenClaw updated to 9f3c21a0 (from 11111111).");
+    expect(report.markdown).toContain(report.headline);
+  });
+
   it("distinguishes all terminal outcomes without claiming unobserved verification", () => {
     const reports = [
       run(),
@@ -102,11 +171,35 @@ describe("update run report", () => {
     expect(renderUpdateRunReport(run({ status: "failed", reason })).markdown).toContain(hint);
   });
 
-  it("keeps producer recovery commands scoped to the selected profile", () => {
-    const nextAction = "Run `openclaw --profile work triage` to repair this installation.";
-    const report = renderUpdateRunReport(run({ status: "failed", origin: { nextAction } }));
-    expect(report.lines).toContain(nextAction);
+  it.each([
+    { reason: null, source: "origin" },
+    { reason: "requester-revoked", source: "origin" },
+    { reason: "repair-requires-config-change", source: "origin" },
+    { reason: "requester-revoked", source: "options" },
+    { reason: "repair-requires-config-change", source: "options" },
+  ])("keeps $source recovery scoped to its profile after $reason", ({ reason, source }) => {
+    const originAction = "Run `openclaw --profile work triage` to repair this installation.";
+    const nextAction =
+      source === "options"
+        ? "Run `openclaw --profile team triage` to repair this installation."
+        : originAction;
+    const report = renderUpdateRunReport(
+      run({ status: "failed", reason, origin: { nextAction: originAction } }),
+      source === "options" ? { nextAction } : {},
+    );
+    expect(report.lines.at(-1)).toBe(nextAction);
+    expect(report.markdown.endsWith(nextAction)).toBe(true);
     expect(report.markdown).not.toContain("Run openclaw triage");
+    expect(report.markdown).not.toContain("run openclaw doctor --fix");
+    expect(report.markdown).not.toContain("operator can run openclaw triage locally");
+    if (source === "options") {
+      expect(report.markdown).not.toContain(originAction);
+    }
+    if (reason === "requester-revoked") {
+      expect(report.markdown).toContain("Further recovery requires a current command owner.");
+    } else if (reason === "repair-requires-config-change") {
+      expect(report.markdown).toContain("Doctor could not promote config changes.");
+    }
   });
 
   it("keeps advisory steps out of failures and shows only the final diagnostic lines", () => {
@@ -156,7 +249,6 @@ describe("update run report", () => {
           booted: true,
           versionMatch: false,
           channelsReady: false,
-          inferenceProbe: "failed",
           pluginErrors: ["Activation failed"],
         },
         repair: [
@@ -168,7 +260,7 @@ describe("update run report", () => {
     expect(report.markdown).not.toContain("openclaw doctor");
     expect(report.markdown).not.toContain("Run the update manually");
     expect(report.markdown).toContain(
-      "version mismatch; channels not ready; inference failed; 1 plugin activation error(s)",
+      "version mismatch; channels not ready; 1 plugin activation error(s)",
     );
     expect(report.markdown).toContain("Repair 1: failed — Plugin still unavailable");
     expect(report.markdown).not.toContain("The gateway is running");

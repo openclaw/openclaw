@@ -4,7 +4,6 @@ import { vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
-  ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
@@ -14,7 +13,10 @@ import {
 } from "../../interactive/payload.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
@@ -120,6 +122,39 @@ export function setMessageActionTestPlugin(plugin: unknown, pluginId: string, or
   setActivePluginRegistry(
     createTestRegistry([{ pluginId, source: "test", ...(origin ? { origin } : {}), plugin }]),
   );
+}
+
+export function createWorkspaceMediaTestPlugin(): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({
+      id: "workspace",
+      label: "Workspace",
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
+        isConfigured: async (account) =>
+          typeof (account as { botToken?: unknown }).botToken === "string" &&
+          (account as { botToken?: string }).botToken!.trim() !== "" &&
+          typeof (account as { appToken?: unknown }).appToken === "string" &&
+          (account as { appToken?: string }).appToken!.trim() !== "",
+      },
+    }),
+    outbound: {
+      deliveryMode: "direct",
+      resolveTarget: ({ to }) => {
+        const trimmed = to?.trim() ?? "";
+        if (!trimmed) {
+          return {
+            ok: false,
+            error: new Error("missing target for workspace"),
+          };
+        }
+        return { ok: true, to: trimmed };
+      },
+      sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
+      sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
+    },
+  };
 }
 
 export function createAlwaysConfiguredPluginConfig(
@@ -263,20 +298,7 @@ export function createPollForwardingPlugin(params: {
 
 async function executePluginAction(params: {
   action: "send" | "poll";
-  ctx: Pick<
-    ChannelMessageActionContext,
-    | "channel"
-    | "cfg"
-    | "params"
-    | "mediaAccess"
-    | "accountId"
-    | "gateway"
-    | "toolContext"
-    | "inboundEventKind"
-  > & {
-    dryRun: boolean;
-    agentId?: string;
-  };
+  ctx: Parameters<typeof import("./outbound-send-service.js").executeSendAction>[0]["ctx"];
 }) {
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
@@ -291,8 +313,8 @@ async function executePluginAction(params: {
         : undefined,
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    inboundEventKind: params.ctx.inboundEventKind,
+    toolContext: params.ctx.input.toolContext,
+    inboundEventKind: params.ctx.input.inboundEventKind,
     dryRun: params.ctx.dryRun,
     agentId: params.ctx.agentId,
   });

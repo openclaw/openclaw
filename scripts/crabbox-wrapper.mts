@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Resolves and delegates to the repo-local or PATH crabbox binary.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   accessSync,
@@ -25,6 +24,11 @@ import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  ensureManagedCrabboxBinary,
+  findCrabboxBinary,
+  type CrabboxBinary,
+} from "../extensions/crabbox/cli-runtime-api.js";
 import { crabboxProviderChain, normalizeCrabboxWorkload } from "./crabbox-routing-policy.mts";
 import {
   prepareCrabboxSourceCapsule,
@@ -61,19 +65,24 @@ type DoctorResult = { ok: boolean; provider: string; checks: DoctorCheck[] };
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
 const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
-// A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
-// exceed the snappy default probe timeout while it renders `run --help` or does
-// first-run init. Retry the metadata probes once with this generous timeout so a
-// single slow probe does not hard-fail the wrapper and block all remote validation.
+// Cold help rendering can exceed the normal metadata deadline.
 const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
-const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.platform);
-const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
-const binary =
-  repoLocal ??
-  pathLocal ??
+const candidateBinary =
+  findCrabboxBinary({
+    openclawRoot: ignoreRepoBinary ? undefined : repoRoot,
+    pathEnv: process.env[resolvePathEnvKey(process.env)],
+  }) ??
   resolveGitCommonCrabboxBinary(process.env, process.platform) ??
   "crabbox";
+let cli: CrabboxBinary;
+try {
+  cli = await ensureManagedCrabboxBinary({ binary: candidateBinary });
+} catch (error) {
+  console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
+const { binary, version } = cli;
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -128,16 +137,6 @@ function commandCandidates(command: string, platform: Platform) {
   return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, `${command}.com`, command];
 }
 
-function resolveCrabboxBinary(platform: Platform) {
-  const base = resolve(repoRoot, "../crabbox/bin/crabbox");
-  for (const candidate of commandCandidates(base, platform)) {
-    if (isExecutableFile(candidate, platform)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 function resolvePathBinary(command: string, env: ProcessEnv, platform: Platform) {
   const pathValue = env[resolvePathEnvKey(env)] ?? "";
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
@@ -170,13 +169,10 @@ function resolveGitCommonCrabboxBinary(env: ProcessEnv, platform: Platform) {
   const absoluteGitCommonDir = isAbsolute(gitCommonDir)
     ? gitCommonDir
     : resolve(repoRoot, gitCommonDir);
-  const base = resolve(absoluteGitCommonDir, "../..", "crabbox/bin/crabbox");
-  for (const candidate of commandCandidates(base, platform)) {
-    if (isExecutableFile(candidate, platform)) {
-      return candidate;
-    }
-  }
-  return null;
+  return findCrabboxBinary({
+    openclawRoot: resolve(absoluteGitCommonDir, ".."),
+    platform,
+  });
 }
 
 function isExecutableFile(path: PathLike, platform: Platform) {
@@ -295,9 +291,6 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/package-mac-dist.sh",
   "scripts/restart-mac.sh",
 ]);
-const minimumBlacksmithCrabboxVersion = [0, 22, 0];
-const minimumSourceCapsuleCrabboxVersion = [0, 37, 0];
-const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
   "while",
@@ -476,99 +469,12 @@ function recoveryCommandArgument(value: string) {
   return `'${text.replaceAll("'", "'\\''")}'`;
 }
 
-// Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
-// A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
-// on the first call, then be instant and clean on the next. Retrying keeps the
-// warm path fast (one ~instant probe) while stopping a single slow probe from
-// tripping the sanity/provider-list guards and blocking all remote validation.
-function probeCrabboxMetadata(command: string, commandArgs: string[]) {
+function probeCrabboxHelp(command: string, commandArgs: string[]) {
   const first = checkedOutput(command, commandArgs);
   if (first.status === 0 && first.text.length > 0) {
     return first;
   }
   return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
-}
-
-function supportsPreparedTestboxArtifacts() {
-  const metadata = checkedOutput(binary, ["providers", "describe", "blacksmith-testbox", "--json"]);
-  if (metadata.status !== 0) {
-    return false;
-  }
-  try {
-    const description: unknown = JSON.parse(metadata.stdout);
-    if (
-      !isRecord(description) ||
-      description.schemaVersion !== 2 ||
-      !isRecord(description.provider) ||
-      description.provider.canonical !== "blacksmith-testbox" ||
-      !isRecord(description.capabilities)
-    ) {
-      return false;
-    }
-    const features = description.capabilities.features;
-    return (
-      Array.isArray(features) &&
-      features.every((feature) => typeof feature === "string") &&
-      features.includes("prepared-artifact-workspace")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function parseCrabboxVersion(value: string) {
-  const match = value.match(/\bv?(\d+)\.(\d+)\.(\d+)(?:-([^\s+]+))?(?:\+[^\s]+)?\b/u);
-  if (!match) {
-    return null;
-  }
-  const major = parseVersionTuplePart(match[1] ?? "");
-  const minor = parseVersionTuplePart(match[2] ?? "");
-  const patch = parseVersionTuplePart(match[3] ?? "");
-  if (major === null || minor === null || patch === null) {
-    return null;
-  }
-  return {
-    tuple: [major, minor, patch],
-    suffix: match[4] ?? "",
-  };
-}
-
-function parseVersionTuplePart(value: string) {
-  if (!/^\d+$/u.test(value)) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-function compareVersionTuples(left: readonly number[], right: readonly number[]) {
-  for (let index = 0; index < 3; index += 1) {
-    const diff = (left[index] ?? 0) - (right[index] ?? 0);
-    if (diff !== 0) {
-      return diff;
-    }
-  }
-  return 0;
-}
-
-function formatVersionTuple(version: readonly number[]) {
-  return version.join(".");
-}
-
-function isPostReleaseDescribeSuffix(suffix: string) {
-  return /^\d+-g[0-9a-f]+(?:-dirty)?$/iu.test(suffix);
-}
-
-function satisfiesMinimumCrabboxVersion(version: string, minimum: number[]) {
-  const parsed = parseCrabboxVersion(version);
-  if (!parsed) {
-    return false;
-  }
-  const comparison = compareVersionTuples(parsed.tuple, minimum);
-  if (comparison !== 0) {
-    return comparison > 0;
-  }
-  return !parsed.suffix || isPostReleaseDescribeSuffix(parsed.suffix);
 }
 
 function gitOutput(commandArgs: string[], extraEnv: ProcessEnv = {}) {
@@ -725,8 +631,34 @@ function parseCommandInvocation(helpText: string, commandArgs: string[]) {
     }
   }
 
+  const fileScript = optionEntries.findLast(({ name }) => name === "script");
+  const stdinScript = optionEntries.findLast(({ name }) => name === "script-stdin");
+  // Go stops at any invalid boolean; loadRunScript rejects two active sources.
+  // Preserve those errors without reading or normalizing either input locally.
+  const invalidStdin = optionEntries.some(
+    ({ name, index, value }) =>
+      name === "script-stdin" &&
+      commandArgs[index]?.includes("=") &&
+      !/^(?:1|t|T|true|TRUE|True|0|f|F|false|FALSE|False)$/u.test(value),
+  );
+  const stdinEnabled = Boolean(
+    stdinScript &&
+    (!commandArgs[stdinScript.index]?.includes("=") ||
+      /^(?:1|t|T|true|TRUE|True)$/u.test(stdinScript.value)),
+  );
+  const scriptRequested = !invalidStdin && Boolean(fileScript?.value || stdinEnabled);
+  const script =
+    invalidStdin || (fileScript?.value && stdinEnabled)
+      ? undefined
+      : fileScript?.value
+        ? fileScript
+        : stdinEnabled
+          ? stdinScript
+          : undefined;
   return {
     args: commandArgs,
+    scriptRequested,
+    script,
     commandArgs: start >= 0 ? commandArgs.slice(start) : [],
     optionEntries,
     options,
@@ -739,11 +671,7 @@ function commandProvider(commandArgsInput: string[]) {
   return optionValue(commandArgsInput, "--provider");
 }
 
-function selectedProvider(
-  commandArgs: string[],
-  advertisedProviders: string[] = [],
-  versionText = "",
-) {
+function selectedProvider(commandArgs: string[], advertisedProviders: string[] = []) {
   const targetContext = effectiveTargetContext(commandArgs);
   if (workloadOption === null) {
     return {
@@ -840,7 +768,7 @@ function selectedProvider(
   const readiness = new Map<string, ProviderReadiness>();
   let selectedProviderName = "";
   for (const candidate of chain) {
-    const status = crabboxProviderReadiness(candidate, versionText, targetContext);
+    const status = crabboxProviderReadiness(candidate, targetContext);
     readiness.set(candidate, status);
     if (status.ready) {
       selectedProviderName = candidate;
@@ -877,28 +805,8 @@ function requestedWorkload(commandArgs: string[]) {
   return normalizeCrabboxWorkload(raw);
 }
 
-function crabboxProviderReadiness(provider: string, version: string, context: TargetContext) {
+function crabboxProviderReadiness(provider: string, context: TargetContext) {
   const canonicalProvider = canonicalProviderName(provider);
-  if (
-    canonicalProvider === "blacksmith-testbox" &&
-    !satisfiesMinimumCrabboxVersion(version, minimumBlacksmithCrabboxVersion)
-  ) {
-    return {
-      ready: false,
-      reason: `requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for Blacksmith Testbox`,
-      recovery: "update Crabbox, then retry",
-    };
-  }
-  if (
-    canonicalProvider === "daytona" &&
-    !satisfiesMinimumCrabboxVersion(version, minimumBrokeredDaytonaCrabboxVersion)
-  ) {
-    return {
-      ready: false,
-      reason: `requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered Daytona`,
-      recovery: "update Crabbox, then retry",
-    };
-  }
   const doctorArgs = ["doctor", "--provider", canonicalProvider];
   if (context.target) {
     doctorArgs.push("--target", context.target);
@@ -1023,30 +931,6 @@ function directCloudOverrideEnabled(providerName: string) {
   );
 }
 
-function enforceBrokeredDaytonaVersion(
-  commandArgs: string[],
-  providerName: string,
-  versionText: string,
-  explicitProviderRequested: boolean | undefined,
-) {
-  if (
-    canonicalProviderName(providerName) !== "daytona" ||
-    !shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested) ||
-    satisfiesMinimumCrabboxVersion(versionText, minimumBrokeredDaytonaCrabboxVersion)
-  ) {
-    return;
-  }
-  console.error(
-    [
-      `[crabbox] provider=daytona requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered execution.`,
-      `[crabbox] selected binary reported version=${versionText || "unknown"}.`,
-      "[crabbox] update Crabbox before brokered Daytona execution.",
-      "[crabbox] direct Daytona debugging requires an original `--provider daytona`, no `--workload`, and OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.",
-    ].join("\n"),
-  );
-  process.exit(2);
-}
-
 function enforceBrokeredCloud(
   commandArgs: string[],
   provider: string,
@@ -1059,7 +943,7 @@ function enforceBrokeredCloud(
   const canonicalProvider = canonicalProviderName(provider);
   const readiness =
     routedReadiness ??
-    crabboxProviderReadiness(canonicalProvider, version.text, effectiveTargetContext(commandArgs));
+    crabboxProviderReadiness(canonicalProvider, effectiveTargetContext(commandArgs));
   if ("brokerAuthFailure" in readiness && readiness.brokerAuthFailure) {
     const instructions = [
       `[crabbox] provider=${canonicalProvider} requires managed Crabbox broker authentication for OpenClaw proof.`,
@@ -2727,8 +2611,7 @@ function injectRemotePosixHydratedNodeModulesBootstrap(invocation: CommandInvoca
   if (
     invocation.args[0] !== "run" ||
     isWindowsRemoteTarget(invocation.args) ||
-    invocation.options.has("script") ||
-    invocation.options.has("script-stdin") ||
+    invocation.script ||
     invocation.start < 0
   ) {
     return invocation.args;
@@ -2740,8 +2623,17 @@ function injectRemotePosixHydratedNodeModulesBootstrap(invocation: CommandInvoca
   );
 }
 
-function remotePosixJsEnvBootstrap() {
+function remotePosixJsEnvBootstrap(packageManager = false) {
   return [
+    ...(packageManager
+      ? [
+          'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
+          'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
+          'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
+          'export PATH="$PNPM_HOME:$PATH";',
+          'corepack enable --install-directory "$PNPM_HOME" || return 1;',
+        ]
+      : []),
     "openclaw_crabbox_env() {",
     "openclaw_env_args=();",
     "openclaw_env_ignore=0;",
@@ -2820,18 +2712,11 @@ function remoteAwsMacosJsBootstrap({
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
     ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
-    bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
-      "pnpm --version >&2;",
-    );
+    bootstrap.push("pnpm --version >&2;");
   }
   // Raw AWS macOS boxes skip setup-node-env, so Bun needs its own user-local pin.
   if (bun) {
@@ -2921,18 +2806,17 @@ function remoteWsl2JsBootstrap({ packageManager = false, sourceBootstrap = "" } 
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
     ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
     bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
       "pnpm --version >&2;",
-      "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+      ...(sourceBootstrap
+        ? []
+        : [
+            "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+          ]),
     );
   }
   bootstrap.push('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
@@ -3340,24 +3224,30 @@ function injectRemoteAwsMacosSwiftBootstrap(
   );
 }
 
-function replaceRunFlagWithScript(commandArgs: string[], flagName: string, scriptPath: string) {
-  const invocation = parseCommandInvocation(help.text, commandArgs);
-  const normalizedName = commandOptionName(flagName);
-  const normalizedArgs = [...commandArgs];
-  for (const { index, name } of invocation.optionEntries) {
-    if (name === normalizedName) {
-      normalizedArgs.splice(index, 1, "--script", scriptPath);
-      return normalizedArgs;
+function replaceRunScript(invocation: CommandInvocation, scriptPath: string) {
+  const normalizedArgs = invocation.args.slice(0, invocation.optionEnd);
+  // One generated file replaces all valid source flags: a later empty file or
+  // an earlier true stdin flag must not override/conflict with the verifier.
+  for (const { name, index } of invocation.optionEntries.toReversed()) {
+    if (name === "script" || name === "script-stdin") {
+      normalizedArgs.splice(
+        index,
+        name === "script" && !invocation.args[index]?.includes("=") ? 2 : 1,
+      );
     }
   }
-  return normalizedArgs;
+  return [
+    ...normalizedArgs,
+    "--script",
+    scriptPath,
+    ...invocation.args.slice(invocation.optionEnd),
+  ];
 }
 
 function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName: string) {
-  if (
-    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    !parseCommandInvocation(help.text, commandArgs).options.has("script-stdin")
-  ) {
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const scriptOption = invocation.script;
+  if (!isAwsMacosRemoteTarget(commandArgs, providerName) || scriptOption?.name !== "script-stdin") {
     return { args: commandArgs, cleanup: () => {}, prepared: false };
   }
 
@@ -3367,7 +3257,7 @@ function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName
   writeFileSync(scriptPath, createAwsMacosScriptStdinWrapper(script), "utf8");
   chmodSync(scriptPath, 0o700);
   return {
-    args: replaceRunFlagWithScript(commandArgs, "--script-stdin", scriptPath),
+    args: replaceRunScript(invocation, scriptPath),
     cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
     prepared: true,
   };
@@ -3728,6 +3618,8 @@ function applyRunTransforms(
     options.childCwd === repoRoot ? markedArgs : absolutizeLocalRunPaths(markedArgs);
   let invocation = parseCommandInvocation(help.text, localArgs);
   const facts = analyzeRemoteCommand(invocation);
+  // Materializing a capsule runs its installer before the caller's command.
+  facts.packageManager ||= Boolean(options.capsule);
 
   const wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
     invocation,
@@ -3740,10 +3632,10 @@ function applyRunTransforms(
   try {
     if (sourceBootstrap && !wsl2ScriptBootstrap.prepared) {
       invocation = parseCommandInvocation(help.text, transformedArgs);
-      if (invocation.options.has("script") || invocation.options.has("script-stdin")) {
-        const scriptOption = invocation.options.get("script");
+      const scriptOption = invocation.script;
+      if (scriptOption) {
         const script = readFileSync(
-          scriptOption ? resolve(repoRoot, scriptOption.value) : 0,
+          scriptOption.name === "script" ? resolve(repoRoot, scriptOption.value) : 0,
           "utf8",
         );
         const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-source-script-"));
@@ -3754,16 +3646,7 @@ function applyRunTransforms(
           wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
         );
         chmodSync(scriptPath, 0o700);
-        const entry = invocation.optionEntries.find(
-          ({ name }) => name === "script" || name === "script-stdin",
-        )!;
-        transformedArgs = [...transformedArgs];
-        transformedArgs.splice(
-          entry.index,
-          entry.name === "script" && !transformedArgs[entry.index]?.includes("=") ? 2 : 1,
-          "--script",
-          scriptPath,
-        );
+        transformedArgs = replaceRunScript(invocation, scriptPath);
       } else if (
         invocation.start >= 0 &&
         !isAwsMacosRemoteTarget(transformedArgs, options.provider)
@@ -3813,23 +3696,17 @@ function applyRunTransforms(
   }
 }
 
-const version = probeCrabboxMetadata(binary, ["--version"]);
 const helpCommand = workloadCommand ? args.slice(0, userArgStart) : ["run"];
-const help = probeCrabboxMetadata(binary, [...helpCommand, "--help"]);
+const help = probeCrabboxHelp(binary, [...helpCommand, "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 
-if (
-  version.status !== 0 ||
-  version.text.length === 0 ||
-  help.status !== 0 ||
-  commandValueOptionsFromHelp.size === 0
-) {
+if (help.status !== 0 || commandValueOptionsFromHelp.size === 0) {
   console.error(
-    `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} providers=${providers.join(",") || "unknown"}`,
+    `[crabbox] bin=${displayBinary} version=${version} providers=${providers.join(",") || "unknown"}`,
   );
-  console.error("[crabbox] selected binary failed basic --version/--help sanity checks");
+  console.error("[crabbox] selected binary failed --help sanity checks");
   process.exit(2);
 }
 
@@ -3862,7 +3739,7 @@ if (args[userArgStart] === "--") {
   args.splice(userArgStart, 1);
 }
 
-const providerSelection = selectedProvider(args, providers, version.text);
+const providerSelection = selectedProvider(args, providers);
 if (providerSelection.error) {
   console.error(`[crabbox] ${providerSelection.error}`);
   if (providerSelection.readiness) {
@@ -3887,7 +3764,7 @@ let normalizedArgs = ensureAwsMacOnDemandMarket(
 );
 
 console.error(
-  `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
+  `[crabbox] bin=${displayBinary} version=${version} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
 );
 if (providerSelection.source === "policy") {
   console.error(
@@ -3903,23 +3780,22 @@ if (provider && !isProviderAdvertised(provider, providers)) {
     process.exit(2);
   }
   console.error(
-    `[crabbox] selected binary does not advertise provider ${provider}; update Crabbox or choose a supported provider`,
+    `[crabbox] selected binary does not advertise provider ${provider}; choose a supported provider`,
   );
-  process.exit(2);
-}
-
-if (
-  needsSourceCapsule(normalizedArgs, provider) &&
-  !satisfiesMinimumCrabboxVersion(version.text, minimumSourceCapsuleCrabboxVersion)
-) {
-  console.error(
-    `[crabbox] source capsule requires Crabbox >= ${formatVersionTuple(minimumSourceCapsuleCrabboxVersion)} for sync-plan --json; update Crabbox and rerun.`,
-  );
-  console.error(`[crabbox] selected binary reported version=${version.text || "unknown"}.`);
   process.exit(2);
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  // The delegated provider rejects uploaded scripts before acquiring a lease.
+  if (
+    normalizedArgs[0] === "run" &&
+    parseCommandInvocation(help.text, normalizedArgs).scriptRequested
+  ) {
+    console.error(
+      "[crabbox] provider=blacksmith-testbox does not support --script or --script-stdin. Run a synced script as trailing argv, use --shell, or choose an SSH provider for uploaded scripts.",
+    );
+    process.exit(2);
+  }
   // Testbox owns sync; reject before lease or checkout side effects.
   if (normalizedArgs[0] === "run" && hasOption(normalizedArgs, "--no-sync")) {
     console.error(
@@ -3937,31 +3813,9 @@ if (canonicalProvider === "blacksmith-testbox") {
     );
     process.exit(2);
   }
-
-  if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
-    console.error(
-      [
-        `[crabbox] provider=blacksmith-testbox requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for current Testbox sync, queue, and cleanup behavior.`,
-        `[crabbox] selected binary reported version=${version.text || "unknown"}.`,
-        "[crabbox] if using ../crabbox, rebuild it: version=$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//') && go build -C ../crabbox -trimpath -ldflags \"-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}\" -o bin/crabbox ./cmd/crabbox",
-      ].join("\n"),
-    );
-    process.exit(2);
-  }
-  const artifactRun =
-    normalizedArgs[0] === "run" &&
-    (hasOption(normalizedArgs, "--artifact-glob") ||
-      hasOption(normalizedArgs, "--require-artifact"));
-  if (artifactRun && !supportsPreparedTestboxArtifacts()) {
-    console.error(
-      "[crabbox] Testbox artifact collection requires Crabbox's prepared-artifact-workspace capability. Update Crabbox and retry; refusing to collect from the disposable sync checkout.",
-    );
-    process.exit(2);
-  }
 }
 
 const explicitProviderRequested = Boolean(commandProviderValue);
-enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text, explicitProviderRequested);
 enforceBrokeredCloud(
   normalizedArgs,
   provider,
@@ -4028,7 +3882,12 @@ try {
       sourceCapsule = prepareCrabboxSourceCapsule({
         repoRoot,
         syncRoot,
-        binary,
+        syncPlan: spawnInvocation(
+          binary,
+          ["sync-plan", "--json", "--limit", "2147483647"],
+          process.env,
+          process.platform,
+        ),
         base: changedGateBase || changedGateBaseForCommand([]).resolvedBase,
       });
     }

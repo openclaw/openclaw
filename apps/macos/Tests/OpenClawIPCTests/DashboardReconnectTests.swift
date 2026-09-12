@@ -98,16 +98,32 @@ struct DashboardReconnectTests {
             let replacement = try #require(window.windowController as? DashboardWindowController)
             let expected = ["new-session", "palette", "palette"]
             var events: [String] = []
+            var samples = 0
+            var observation = "not sampled"
             let deadline = ContinuousClock.now + .seconds(5)
-            repeat {
-                events = await (try? replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]) ?? []
+            while true {
+                samples += 1
+                do {
+                    let received = try await replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]
+                    events = received ?? []
+                    observation = received == nil ? "missing event array" : "event array"
+                } catch {
+                    events = []
+                    observation = "JavaScript error code \((error as NSError).code)"
+                }
                 if !replacement.webView.isLoading, events == expected { break }
+                // A delayed main-actor resumption must check fresh events before expiring.
+                if ContinuousClock.now >= deadline { break }
                 try await Task.sleep(for: .milliseconds(10))
-            } while ContinuousClock.now < deadline
+            }
             #expect(manager._testAuxiliaryWindows().first?.target == target)
             #expect(replacement !== original)
             #expect(replacement.auth.token == "secondary")
-            #expect(events == expected)
+            #expect(events == expected, """
+            samples=\(samples), observation=\(observation), loading=\(replacement.webView.isLoading),
+            failure=\(replacement.isShowingFailurePage), deliverable=\(replacement.canDeliverNativeCommands),
+            pending=\(replacement._testPendingNativeCommands)
+            """)
             result = .success(())
         } catch {
             result = .failure(error)

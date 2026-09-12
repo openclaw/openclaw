@@ -40,13 +40,13 @@ function extractCodexNativeSubagentCompletions(
   if (!item) {
     return [];
   }
-  const text = readTrustedInterAgentCommunicationContent(item);
-  if (!text) {
+  const communication = readTrustedInterAgentCommunication(item);
+  const text = communication?.content;
+  if (typeof text !== "string" || !text) {
     return [];
   }
-  const author = readTrustedInterAgentCommunicationAuthor(item);
   return extractCodexNativeSubagentCompletionsFromText(text).filter(
-    (completion) => completion.agentPath === author,
+    (completion) => completion.agentPath === communication?.author,
   );
 }
 
@@ -224,19 +224,9 @@ function completedWithoutFinalAssistantMessage(): {
   kind: "no_final_assistant_message";
 } {
   return {
-    text: "Codex native subagent completed without a final assistant message.",
+    text: "Subagent completed without a final assistant message.",
     kind: "no_final_assistant_message",
   };
-}
-
-function readTrustedInterAgentCommunicationContent(item: JsonObject): string | undefined {
-  const communication = readTrustedInterAgentCommunication(item);
-  return typeof communication?.content === "string" ? communication.content : undefined;
-}
-
-function readTrustedInterAgentCommunicationAuthor(item: JsonObject): string | undefined {
-  const communication = readTrustedInterAgentCommunication(item);
-  return typeof communication?.author === "string" ? communication.author : undefined;
 }
 
 function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | undefined {

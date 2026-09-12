@@ -7,7 +7,8 @@ import type {
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -19,20 +20,32 @@ import {
   reconcileChatInputCustody,
 } from "./history-merge.ts";
 
+type PendingInputRequest = {
+  before?: number;
+  kind: "navigation" | "refresh";
+  client: NonNullable<ChatState["client"]>;
+  connectionEpoch: number;
+};
+
 type PendingInputView = {
   sessionKey: string;
   sessionId: string | null;
   agentId: string | undefined;
   page: ChatPendingInputsPage;
   before?: number;
-  loading: boolean;
+  readonly loading: boolean;
   error?: string;
+  revision: number;
+  request?: PendingInputRequest;
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
   searchQuery?: string,
+  browserInputs: readonly ChatQueueItem[] = [],
+  workspaceSyncPendingRunIds: readonly string[] = [],
+  workerSetupPending = false,
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
@@ -51,6 +64,18 @@ export function buildPendingInputItems(
       ),
     );
     if (input.state === "queued") {
+      items.push({
+        kind: "notice",
+        key: `pending-input:${input.id}:state`,
+        timestamp: input.acceptedAt,
+        text: t(
+          input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))
+            ? workerSetupPending
+              ? "chat.pendingInputs.waitingForWorkerSetup"
+              : "chat.pendingInputs.waitingForWorkspaceSync"
+            : "chat.pendingInputs.waitingForAgent",
+        ),
+      });
       continue;
     }
     items.push({
@@ -58,9 +83,15 @@ export function buildPendingInputItems(
       key: `pending-input:${input.id}:state`,
       timestamp: input.acceptedAt,
       text: t(
-        input.state === "cancelled"
-          ? "chat.pendingInputs.cancelled"
-          : "chat.pendingInputs.interrupted",
+        input.state === "interrupted" &&
+          input.runId &&
+          browserInputs.some(
+            (item) => item.sendRunId === input.runId && item.sendState !== "failed",
+          )
+          ? "chat.pendingInputs.resuming"
+          : input.state === "cancelled"
+            ? "chat.pendingInputs.cancelled"
+            : "chat.pendingInputs.interrupted",
       ),
     });
   }
@@ -102,76 +133,145 @@ export function readChatInputRunIds(state: ChatState): string[] {
     .slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS);
 }
 
+function reconcilePendingInputPage(
+  state: ChatState,
+  page: ChatPendingInputsPage | undefined,
+  receipts?: ChatInputReceipts,
+): ChatPendingInputsPage {
+  const { page: displayPage } = reconcileChatInputCustody(state, page, receipts);
+  const settled = new Set([
+    ...(receipts ?? [])
+      .filter((receipt) => receipt.state === "consumed")
+      .map((receipt) => receipt.runId),
+    ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
+  ]);
+  // Acceptance keeps the browser's authenticated retry payload. Only consumption
+  // or explicit cancellation retires it; a restart may need a fresh admission.
+  for (const item of state.chatQueue) {
+    const canonical = findChatSubmissionMessage(state.chatMessages, item.sendRunId, true);
+    if (
+      item.sendRunId &&
+      (settled.has(item.sendRunId) ||
+        (canonical && (canonical.id !== null || canonical.sequence !== null))) &&
+      (!item.sessionId || item.sessionId === state.currentSessionId)
+    ) {
+      removeQueuedMessage(state, item.id);
+    }
+  }
+  return displayPage;
+}
+
+function ownsPendingInputRequest(
+  state: ChatState,
+  view: PendingInputView,
+  request: PendingInputRequest,
+): boolean {
+  return (
+    getChatPendingInputs(state) === view &&
+    view.request === request &&
+    state.client === request.client &&
+    state.connected &&
+    state.connectionEpoch === request.connectionEpoch
+  );
+}
+
 export function applyChatPendingInputs(
   state: ChatState,
   page: ChatPendingInputsPage | undefined,
-  options: { before?: number; receipts?: ChatInputReceipts } = {},
+  options: { receipts?: ChatInputReceipts } = {},
 ): void {
-  const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(
-    state,
-    page,
-    options.receipts,
-  );
-  pendingInputViews.set(state, {
-    sessionKey: state.sessionKey,
-    sessionId: state.currentSessionId ?? null,
-    agentId: resolveUiSelectedSessionAgentId(state),
-    page: displayPage,
-    before: options.before,
-    loading: false,
-  });
-  if (acceptedRunIds.size) {
-    // The server owns accepted input even after an interruption. Retiring the
-    // outbox copy prevents reconnect from silently submitting it a second time.
-    for (const item of state.chatQueue) {
-      if (
-        item.sendRunId &&
-        acceptedRunIds.has(item.sendRunId) &&
-        (!item.sessionId || item.sessionId === state.currentSessionId)
-      ) {
-        removeQueuedMessage(state, item.id);
-      }
+  const displayPage = reconcilePendingInputPage(state, page, options.receipts);
+  let view = getChatPendingInputs(state);
+  if (!view) {
+    view = {
+      sessionKey: state.sessionKey,
+      sessionId: state.currentSessionId ?? null,
+      agentId: resolveUiSelectedSessionAgentId(state),
+      page: displayPage,
+      revision: 0,
+      get loading() {
+        return this.request?.kind === "navigation";
+      },
+    };
+    pendingInputViews.set(state, view);
+  } else {
+    view.revision += 1;
+    if (view.request && !ownsPendingInputRequest(state, view, view.request)) {
+      view.request = undefined;
+    }
+    if (view.before === undefined) {
+      view.page = displayPage;
+      view.error = undefined;
+    }
+    // Latest custody updates ownership immediately, but cannot take over browsing.
+    if (view.before !== undefined && !view.request) {
+      void requestPendingInputPage(state, view.before, "refresh");
     }
   }
   state.requestUpdate?.();
 }
 
-export async function loadChatPendingInputs(state: ChatState, before?: number): Promise<void> {
+async function requestPendingInputPage(
+  state: ChatState,
+  before: number | undefined,
+  kind: PendingInputRequest["kind"],
+): Promise<void> {
   const view = getChatPendingInputs(state);
   const client = state.client;
-  if (!view || view.loading || !client || !state.connected) {
+  if (!view || !client || !state.connected) {
     return;
   }
-  const connectionEpoch = state.connectionEpoch;
-  view.loading = true;
+  if (
+    view.request &&
+    ownsPendingInputRequest(state, view, view.request) &&
+    (kind === "refresh" || view.request.kind === "navigation")
+  ) {
+    return;
+  }
+  const request = { before, kind, client, connectionEpoch: state.connectionEpoch };
+  view.request = request;
   view.error = undefined;
-  state.requestUpdate?.();
-  const current = () =>
-    getChatPendingInputs(state) === view &&
-    state.client === client &&
-    state.connected &&
-    state.connectionEpoch === connectionEpoch;
+  if (kind === "navigation") {
+    state.requestUpdate?.();
+  }
+  const current = () => ownsPendingInputRequest(state, view, request);
   try {
-    const result = await client.request<{
-      sessionId?: string;
-      pendingInputs?: ChatPendingInputsPage;
-    }>("chat.history", {
-      sessionKey: state.sessionKey,
-      agentId: view.agentId,
-      limit: 20,
-      ...(before === undefined ? {} : { pendingBefore: before }),
-    });
-    if (current() && result.sessionId === view.sessionId) {
-      applyChatPendingInputs(state, result.pendingInputs, { before });
+    while (current()) {
+      const revision = view.revision;
+      const result = await client.request<{
+        sessionId?: string;
+        pendingInputs?: ChatPendingInputsPage;
+      }>("chat.history", {
+        sessionKey: view.sessionKey,
+        agentId: view.agentId,
+        limit: 20,
+        ...(request.before === undefined ? {} : { pendingBefore: request.before }),
+      });
+      if (!current() || result.sessionId !== view.sessionId) {
+        return;
+      }
+      // Coalesce newer custody publications into a fresh read of the same target.
+      if (view.revision !== revision) {
+        continue;
+      }
+      view.page = reconcilePendingInputPage(state, result.pendingInputs);
+      view.before = request.before;
+      return;
     }
   } catch (error) {
     if (current()) {
       view.error = formatUiError(error);
     }
   } finally {
-    view.loading = false;
-    if (current()) {
-      state.requestUpdate?.();
+    if (view.request === request) {
+      view.request = undefined;
+      if (getChatPendingInputs(state) === view) {
+        state.requestUpdate?.();
+      }
     }
   }
+}
+
+export function loadChatPendingInputs(state: ChatState, before?: number): Promise<void> {
+  return requestPendingInputPage(state, before, "navigation");
 }

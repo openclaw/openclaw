@@ -27,7 +27,7 @@ import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { recordCliGatewayRunFailure } from "../cli/failure-output.js";
+import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import { withProgress } from "../cli/progress.js";
 import {
   readGatewayDispatchConfig,
@@ -147,8 +147,6 @@ type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
 >;
-type AgentSessionModule = typeof import("./agent/session.runtime.js");
-type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
 function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
   return (
@@ -190,9 +188,6 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 };
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
-  import("./agent/session.runtime.js");
-let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
 const embeddedAgentCommandLoader = createLazyPromiseLoader(
   () => import("./agent.js").then((module) => module.agentCommand),
   { cacheRejections: true },
@@ -200,9 +195,10 @@ const embeddedAgentCommandLoader = createLazyPromiseLoader(
 const localAuditModuleLoader = createLazyPromiseLoader(() => import("./agent-local-audit.js"), {
   cacheRejections: true,
 });
-const agentSessionModuleCache = createLazyPromiseLoader(() => agentSessionModuleLoader(), {
-  cacheRejections: true,
-});
+const agentSessionModuleCache = createLazyPromiseLoader(
+  () => import("./agent/session.runtime.js"),
+  { cacheRejections: true },
+);
 const runtimeConfigModuleLoader = createLazyPromiseLoader(() => import("../config/io.js"), {
   cacheRejections: true,
 });
@@ -359,11 +355,6 @@ export const agentViaGatewayTesting = {
     runtimeConfigModuleLoader.clear();
     embeddedStateLockModuleLoader.clear();
     replyPayloadModuleLoader.clear();
-    agentSessionModuleLoader = defaultAgentSessionModuleLoader;
-  },
-  setAgentSessionModuleLoaderForTests(loader: AgentSessionModuleLoader): void {
-    agentSessionModuleCache.clear();
-    agentSessionModuleLoader = loader;
   },
   setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
     gatewayAbortRetryDelaysMsForTests = delays;
@@ -524,6 +515,26 @@ function resolveGatewayAgentFailureHint(
   // callGateway's wrapper timer gives this CLI path typed transport errors.
   // Legacy request-timeout strings belong to lower-level and in-process callers.
   return err.kind === "timeout" ? "timed out" : "connection closed";
+}
+
+function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
+  const failureHint = resolveGatewayAgentFailureHint(err);
+  if (!failureHint) {
+    return undefined;
+  }
+  // Transport loss is ambiguous: the Gateway may have accepted and may still
+  // finish this turn. Recommending a blind retry or --local here could
+  // double-execute the message, so point at verification first.
+  const acceptedRun = readCliGatewayRunFailure(err);
+  const acceptedNote = acceptedRun
+    ? ` (accepted run ${acceptedRun.runId}` +
+      (failureHint === "timed out" ? "; use --timeout <seconds> to extend the CLI wait" : "") +
+      ")"
+    : "";
+  return (
+    `Gateway agent call ${failureHint}; the Gateway may still be running this turn${acceptedNote}. ` +
+    "Check `openclaw gateway status` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice."
+  );
 }
 
 function isTransientGatewayAgentConnectClose(err: unknown): boolean {
@@ -1095,7 +1106,6 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
-            cleanupBundleMcpOnRunEnd: true,
             idempotencyKey,
           },
           expectFinal: true,
@@ -1306,14 +1316,9 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      const failureHint = resolveGatewayAgentFailureHint(err);
+      const failureHint = formatGatewayAgentTransportLossHint(err);
       if (failureHint) {
-        // Transport loss is ambiguous: the Gateway may have accepted and may still
-        // finish this turn. Recommending a blind retry or --local here could
-        // double-execute the message, so point at verification first.
-        runtime.error?.(
-          `Gateway agent call ${failureHint}; the Gateway may still be running this turn. Check \`openclaw gateway status\` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.`,
-        );
+        runtime.error?.(failureHint);
       }
       throw err;
     }

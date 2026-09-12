@@ -142,7 +142,9 @@ runtime accepts steering and otherwise becomes a followup; `followup` and
 before starting the newest message. The explicit `/steer <message>` command is
 not a local-mode command.
 
-## Scope and guarantees
+<a id="scope-and-guarantees" />
+
+## Input durability
 
 Ordinary Control UI input sent to an existing session is stored in the per-agent database
 before the Gateway acknowledges it. In `collect` mode, appending the combined
@@ -153,6 +155,14 @@ This preserves input, not execution permissions. If the Gateway stops before a
 queued input reaches the transcript, it appears as interrupted input after
 restart and requires an explicit resend. The in-memory queue is not replayed.
 Host sleep that preserves the process can continue the existing queue normally.
+
+Channel messages retained by durable ingress remain retryable when a queued
+attempt is abandoned before agent-turn adoption. Abandonment releases that
+attempt's inbound and queue dedupe entries before ingress retries it. Messages
+already adopted or consumed keep duplicate suppression, so transport redelivery
+does not repeat their effects.
+
+## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
@@ -182,6 +192,7 @@ The Control UI **System busyness** overlay and `diagnostics.lanes` report this w
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop)
 - [Session management](/concepts/session)
 - [Steering queue](/concepts/queue-steering)
 - [Steer](/tools/steer)

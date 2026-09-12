@@ -14,6 +14,7 @@ import {
   itemName,
   itemStatus,
   itemTitle,
+  matchesCodexSnapshotTurn,
   shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import {
@@ -143,6 +144,9 @@ export function projectNormalizedToolItem(params: {
 
 export class CodexEventProjection {
   private reviewCount = 0;
+  private cyberNoticeState: "buffering" | "blocked" | "fallback" | undefined;
+  private safetyBufferingEnded = false;
+  private responseModel: string | undefined;
   private pendingGuardianWarning: string | undefined;
   private activeGuardianReview:
     | {
@@ -155,6 +159,7 @@ export class CodexEventProjection {
     | undefined;
 
   constructor(
+    private readonly provider: string,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
@@ -293,12 +298,95 @@ export class CodexEventProjection {
     const fromModel = readString(params, "fromModel");
     const toModel = readString(params, "toModel");
     const reason = readString(params, "reason");
+    this.responseModel = toModel ?? this.responseModel;
     if (fromModel && toModel && fromModel !== toModel) {
       this.emitAgentEvent({
         stream: "fallback",
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });
+      if (reason === "highRiskCyberActivity") {
+        this.cyberNoticeState = "fallback";
+        this.emitCyberNotice("fallback", { model: fromModel, fallbackModel: toModel });
+      }
     }
+  }
+
+  handleSafetyBuffering(params: JsonObject): void {
+    if (params.showBufferingUi === false) {
+      this.clearSafetyBuffering();
+      return;
+    }
+    if (
+      this.safetyBufferingEnded ||
+      this.cyberNoticeState === "blocked" ||
+      this.cyberNoticeState === "fallback" ||
+      params.showBufferingUi !== true ||
+      !Array.isArray(params.useCases) ||
+      !params.useCases.includes("cyber")
+    ) {
+      return;
+    }
+    this.cyberNoticeState = "buffering";
+    const model = readString(params, "model");
+    const fallbackModel = readString(params, "fasterModel");
+    this.emitCyberNotice("buffering", {
+      ...(model ? { model } : {}),
+      ...(fallbackModel ? { fallbackModel } : {}),
+    });
+  }
+
+  handleCyberPolicyError(codexErrorInfo: unknown, model: string): void {
+    if (codexErrorInfo !== "cyberPolicy" || this.cyberNoticeState === "blocked") {
+      return;
+    }
+    this.cyberNoticeState = "blocked";
+    this.emitCyberNotice("blocked", { model: this.responseModel ?? model });
+  }
+
+  endSafetyBuffering(): void {
+    this.safetyBufferingEnded = true;
+    this.clearSafetyBuffering();
+  }
+
+  markSafetyBufferingAssistantStarted(): void {
+    if (this.cyberNoticeState === "buffering") {
+      this.endSafetyBuffering();
+    }
+  }
+
+  private clearSafetyBuffering(): void {
+    if (this.cyberNoticeState !== "buffering") {
+      return;
+    }
+    this.cyberNoticeState = undefined;
+    this.emitCyberNotice("cleared");
+  }
+
+  private emitCyberNotice(
+    state: "buffering" | "blocked" | "fallback" | "cleared",
+    models: { model?: string; fallbackModel?: string } = {},
+  ): void {
+    if (this.provider !== "openai") {
+      return;
+    }
+    this.emitAgentEvent({
+      stream: "notice",
+      data: { phase: "provider_policy", category: "cyber", state, provider: "openai", ...models },
+    });
+  }
+
+  handleRetry(params: JsonObject): void {
+    const rateLimited =
+      isJsonObject(params.error) && params.error.codexErrorInfo === "rateLimitExceeded";
+    this.emitAgentEvent({
+      stream: "run_status",
+      data: {
+        phase: "retrying",
+        message: rateLimited
+          ? "Rate limited. The provider is retrying."
+          : "Connection interrupted. The provider is retrying.",
+      },
+    });
   }
 
   flushPendingGuardianWarning(): void {
@@ -367,29 +455,86 @@ export class CodexEventProjection {
     if (!item) {
       return;
     }
-    const kind = itemKind(item);
+    const activity = item.type === "subAgentActivity";
+    // Activity notifications complete immediately, even when they announce a worker starting.
+    if (activity && params.phase === "start") {
+      return;
+    }
+    const subagent = activity || item.type === "collabAgentToolCall";
+    const kind = subagent ? "tool" : itemKind(item);
     if (!kind) {
       return;
     }
-    const name = itemName(item);
+    const name = subagent ? "subagents" : itemName(item);
     const args = itemToolArgs(item);
     const commandBearing = isCommandBearingToolItem(item, args);
-    const meta = itemMeta(item, this.toolProgress.toolProgressDetailMode());
+    const subagentStatus = readString(item, activity ? "kind" : "status");
+    // Messaging can queue without starting a turn; it does not own the worker's live row.
+    const interaction = activity && subagentStatus === "interacted";
+    const status =
+      subagent && subagentStatus === "interrupted"
+        ? "failed"
+        : activity
+          ? subagentStatus === "completed" || interaction
+            ? "completed"
+            : "running"
+          : params.phase === "start"
+            ? "running"
+            : itemStatus(item);
+    const meta = subagent
+      ? [
+          interaction ? "message sent" : activity ? subagentStatus : status,
+          readString(item, activity ? "agentPath" : "tool"),
+        ]
+          .filter(Boolean)
+          .join(": ")
+      : itemMeta(item, this.toolProgress.toolProgressDetailMode());
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
       data: {
-        itemId: item.id,
+        itemId:
+          activity && !interaction
+            ? `subagent:${readString(item, "agentThreadId") ?? item.id}`
+            : item.id,
         phase: params.phase,
         kind,
         title: itemTitle(item),
-        status: params.phase === "start" ? "running" : itemStatus(item),
+        status,
         ...(name ? { name } : {}),
         ...(meta ? { meta } : {}),
         ...(commandBearing ? { commandBearing: true } : {}),
         ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
       },
     });
+  }
+
+  async emitSnapshotOnlyNativeToolProgress(params: {
+    item: CodexThreadItem;
+    activeItemIds: Set<string>;
+    completedItemIds: Set<string>;
+    isActive: () => boolean;
+  }): Promise<void> {
+    const { item, activeItemIds, completedItemIds, isActive } = params;
+    if (
+      !shouldSynthesizeToolProgressForItem(item) ||
+      !matchesCodexSnapshotTurn(item, this.turnId) ||
+      completedItemIds.has(item.id) ||
+      itemStatus(item) === "running"
+    ) {
+      return;
+    }
+    if (!activeItemIds.has(item.id)) {
+      this.emitStandardItemEvent({ phase: "start", item });
+      await this.emitNormalizedToolItemEvent({ phase: "start", item });
+    }
+    if (!isActive()) {
+      return;
+    }
+    activeItemIds.delete(item.id);
+    this.emitStandardItemEvent({ phase: "end", item });
+    await this.emitNormalizedToolItemEvent({ phase: "result", item });
+    completedItemIds.add(item.id);
   }
 
   async emitNormalizedToolItemEvent(params: {

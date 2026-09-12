@@ -1,5 +1,6 @@
 {
   "id": "openai",
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "sessionRouteStateOwners": [
     {
@@ -212,6 +213,20 @@
     "suppressions": [
       {
         "provider": "openai",
+        "model": "gpt-5.4",
+        "reason": "GPT-5.4 has retired from the ChatGPT-account Codex route.",
+        "retirement": { "replacedBy": "gpt-5.6-terra" },
+        "when": { "baseUrlHosts": ["chatgpt.com"] }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "reason": "GPT-5.4 Mini has retired from the ChatGPT-account Codex route.",
+        "retirement": { "replacedBy": "gpt-5.6-luna" },
+        "when": { "baseUrlHosts": ["chatgpt.com"] }
+      },
+      {
+        "provider": "openai",
         "model": "gpt-5.3-codex-spark",
         "reason": "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
         "when": {
@@ -240,6 +255,7 @@
       "personalAccount": true,
       "choiceId": "openai",
       "appGuidedAuth": "oauth",
+      "credentialOnly": true,
       "choiceLabel": "ChatGPT Login",
       "choiceHint": "Sign in with your ChatGPT or Codex subscription",
       "assistantPriority": -40,
@@ -254,6 +270,10 @@
       "personalAccount": true,
       "choiceId": "openai-device-code",
       "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {
+        "aliases": ["codex"]
+      },
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,
@@ -312,7 +332,7 @@
     "openai": {
       "capabilities": ["image", "audio"],
       "defaultModels": {
-        "image": "gpt-5.6-sol",
+        "image": "gpt-6-astra",
         "audio": "gpt-4o-transcribe"
       },
       "autoPriority": {

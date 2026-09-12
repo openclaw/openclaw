@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage, Context, Model, Tool } from "../types.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "../utils/system-prompt-cache-boundary.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -24,6 +28,8 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
@@ -73,14 +79,7 @@ function makeAnthropicAssistantMessage(
     model: "claude-sonnet-4-6",
     stopReason: "stop",
     timestamp: 0,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     content,
     ...overrides,
   };
@@ -278,6 +277,28 @@ describe("Anthropic provider", () => {
       expect(config.fetch).toBe(hostFetch);
     }
   });
+
+  it.each(["none", "short", "long"] as const)(
+    "sends the OpenCode session header with %s cache retention",
+    async (cacheRetention) => {
+      streamAnthropic(
+        makeAnthropicModel({ baseUrl: "https://opencode.ai/zen/go" }),
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        { apiKey: "sk-ant-provider", sessionId: "session-123", cacheRetention },
+      );
+      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+      const config = anthropicMockState.configs[0] as {
+        defaultHeaders?: Record<string, string | null>;
+      };
+      expect(
+        Object.fromEntries(
+          Object.entries(config.defaultHeaders ?? {}).filter(
+            ([key]) => key.startsWith("x-") || key === "session_id",
+          ),
+        ),
+      ).toEqual({ "x-opencode-session": "session-123" });
+    },
+  );
 
   it("puts Claude subscription billing identity first for OAuth requests", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
@@ -884,14 +905,7 @@ describe("Anthropic provider", () => {
             ],
             { stopReason: "toolUse" },
           ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "42", false, 0),
         ],
       },
     );
@@ -995,14 +1009,7 @@ describe("Anthropic provider", () => {
             ],
             { model: model.id, stopReason: "toolUse" },
           ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "42", false, 0),
         ],
       },
     );
@@ -1917,6 +1924,20 @@ describe("Anthropic provider", () => {
     },
   );
 
+  it.each([undefined, "low", "medium", "high", "xhigh", "max"] as const)(
+    "sends pooled Fable %s effort and preserves its routed model id",
+    async (reasoning) => {
+      const id = "Claude Gateway/claude-fable-5-1";
+      const { payload } = await captureSimpleAnthropicPayload(
+        { id, name: "Pooled Fable", provider: "proxy" },
+        { reasoning },
+      );
+      expect(payload.model).toBe(id);
+      expect(payload.thinking).toMatchObject({ type: "adaptive" });
+      expect(payload.output_config).toEqual({ effort: reasoning ?? "medium" });
+    },
+  );
+
   const adaptiveThinkingCases: AnthropicAdaptiveThinkingTestCase[] = [
     {
       name: "uses the Claude Opus 5 adaptive-thinking request contract",
@@ -1956,7 +1977,7 @@ describe("Anthropic provider", () => {
       options: { temperature: 0.2 },
       expected: {
         thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "high" },
+        output_config: { effort: "medium" },
       },
       absent: ["temperature"],
     },
@@ -2206,20 +2227,24 @@ describe("Anthropic provider", () => {
     }
   });
 
-  it("honors provider effort restrictions for Claude Fable 5", async () => {
+  it.each([
+    { reasoning: "xhigh", thinkingLevelMap: { xhigh: null, max: null }, effort: "high" },
+    { reasoning: undefined, thinkingLevelMap: { medium: null }, effort: "high" },
+    { reasoning: undefined, thinkingLevelMap: { medium: "low" }, effort: "low" },
+  ] as const)("honors provider effort restrictions for Claude Fable 5: %j", async (testCase) => {
     const { payload } = await captureSimpleAnthropicPayload(
       {
         id: "claude-fable-5",
         name: "Claude Fable 5",
         provider: "github-copilot",
         reasoning: false,
-        thinkingLevelMap: { xhigh: null, max: null },
+        thinkingLevelMap: testCase.thinkingLevelMap,
       },
-      { apiKey: "copilot-token", reasoning: "xhigh" },
+      { apiKey: "copilot-token", reasoning: testCase.reasoning },
     );
     expect(payload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "high" },
+      output_config: { effort: testCase.effort },
     });
   });
 
@@ -2272,8 +2297,10 @@ describe("Anthropic provider", () => {
             description: "healthy schema",
             parameters: {
               type: "object",
-              properties: { query: { type: "string" } },
+              properties: { query: { $ref: "#/$defs/Query" } },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           } as Tool,
         ],
@@ -2286,9 +2313,12 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(payload.tools?.map((tool) => tool.name)).toEqual(["healthy_tool"]);
-    expect(payload.tools?.[0]?.input_schema).toMatchObject({
-      properties: { query: { type: "string" } },
+    expect(payload.tools?.[0]?.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
       required: ["query"],
+      additionalProperties: false,
     });
   });
 
@@ -2394,7 +2424,37 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
+  it("keeps the relocatable marker out of native Anthropic system blocks", async () => {
+    // Native Anthropic relocates nothing, so the marker must not survive into
+    // the payload while the cache breakpoint still lands on the stable prefix.
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    const system = (capturedPayload as { system?: unknown }).system;
+    const serialized = JSON.stringify(system);
+    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(system).toEqual([
+      {
+        type: "text",
+        text: "Stable prefix",
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: "Reactions guidance\nRuntime: session=alpha",
+      },
+    ]);
+  });
+
+  it("anchors the message cache breakpoint before transient runtime context", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2404,7 +2464,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "retained current-turn metadata",
+            content: "transient current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2414,14 +2474,14 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    expect(messages[0]?.content).toBe("stable question");
-    expect(messages[1]?.content).toEqual([
+    expect(messages[0]?.content).toEqual([
       {
         type: "text",
-        text: "retained current-turn metadata",
+        text: "stable question",
         cache_control: { type: "ephemeral" },
       },
     ]);
+    expect(messages[1]?.content).toBe("transient current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

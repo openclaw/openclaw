@@ -16,7 +16,6 @@ import {
   updateConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
-import { resolveConfigSnapshotHash } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
@@ -50,7 +49,6 @@ function createObservedFingerprint(snapshot: ConfigFileSnapshot, stat: fs.Stats 
     parsed: snapshot.parsed,
     resolved: snapshot.resolved,
     stat,
-    hash: resolveConfigSnapshotHash(snapshot) ?? undefined,
   });
 }
 

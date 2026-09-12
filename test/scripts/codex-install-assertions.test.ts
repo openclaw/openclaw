@@ -610,7 +610,7 @@ function createCodexInstallFixture(root: string) {
     cpu: [target.cpu],
   });
   writeJson(path.join(stateDir, "openclaw.json"), {
-    agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
   });
   writePluginInstallIndexForE2E(
@@ -997,7 +997,7 @@ describe("Codex install helpers", () => {
     const result = runCodexOnDemandAssertions(root);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unexpected non-whitespace character after JSON");
+    expect(result.stderr).toMatch(/SyntaxError:.*JSON/u);
   });
 
   it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {

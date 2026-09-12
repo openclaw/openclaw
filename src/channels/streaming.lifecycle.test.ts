@@ -147,6 +147,17 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
+  it("keeps complete replies with long blank runs without stalling or reading candidates", async () => {
+    const finalText = `before${"\n".repeat(60_000)}after`;
+    const resolveCandidateText = vi.fn(async () => "unused");
+    const started = performance.now();
+    await expect(
+      resolveTranscriptBackedChannelFinalText({ finalText, resolveCandidateText }),
+    ).resolves.toBe(finalText);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(resolveCandidateText).not.toHaveBeenCalled();
+  });
+
   it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
     const fullAnswer =
       "Here is the complete final answer with enough stable prefix text before the ellipsis and enough continuation text after it.";
@@ -584,8 +595,10 @@ describe("channel-streaming", () => {
     );
 
     expect(updated).toHaveLength(1);
+    // The line keeps the id it was created with; later item families for the
+    // same call replace its content through the correlation key.
     expect(updated[0]).toMatchObject({
-      id: "tool:call-1-output",
+      id: "tool:call-1",
       kind: "command-output",
       detail: "install dependencies",
       status: "completed",
@@ -632,6 +645,71 @@ describe("channel-streaming", () => {
       },
     ]);
     expect(recoveredUpdated[0]).not.toHaveProperty("detail");
+  });
+
+  it("keeps one line id while a tool call's item families replace the line", () => {
+    // The agent keys one exec call's tool item and command item separately
+    // (tool:<call>, command:<call>); the progress line for the call must not
+    // change id when the later families take it over.
+    const options = { commandText: "raw" as const };
+    const toolLine = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test" },
+      },
+      options,
+    );
+    const commandItemLine = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "command:call-1",
+        itemKind: "command",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "start",
+        status: "running",
+        meta: "run tests",
+      },
+      options,
+    );
+    const outputLine = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        itemId: "command:call-1",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "end",
+        title: "command run tests",
+        exitCode: 0,
+      },
+      options,
+    );
+    if (!toolLine || !commandItemLine || !outputLine) {
+      throw new Error("expected exec progress lines");
+    }
+    expect(toolLine.id).toBe("tool:call-1");
+    expect(commandItemLine.id).toBe("command:call-1");
+    expect(outputLine.id).toBe("command:call-1");
+
+    const running = mergeChannelProgressDraftLine([toolLine], commandItemLine, { maxLines: 4 });
+    expect(running).toHaveLength(1);
+    expect(running[0]).toMatchObject({ id: "tool:call-1", kind: "item", status: "running" });
+
+    const finished = mergeChannelProgressDraftLine(running, outputLine, { maxLines: 4 });
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({
+      id: "tool:call-1",
+      kind: "command-output",
+      status: "completed",
+    });
+
+    // A later event for the same call still finds the line.
+    const again = mergeChannelProgressDraftLine(finished, outputLine, { maxLines: 4 });
+    expect(again).toHaveLength(1);
+    expect(again[0]?.id).toBe("tool:call-1");
   });
 
   it("starts progress drafts after the initial delay", async () => {

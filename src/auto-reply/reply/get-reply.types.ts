@@ -10,7 +10,8 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import type { FollowupQueueDisposition, QueuedFollowupReplyBatch } from "./queue/types.js";
+import type { PreparedReplyConversation } from "./prompt-session-context.js";
+import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./queue/types.js";
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -18,6 +19,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 export type ReplySessionBinding = {
   sessionKey?: string;
   sessionId: string;
+  lifecycleRevision?: string;
   storePath?: string;
 };
 
@@ -31,6 +33,11 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Rechecks the live Gateway caller before a chat login has a durable effect. */
+  assertProviderLoginAuthority?: () => void;
+  getProviderLoginConfig?: () => OpenClawConfig;
+  /** Invocation-owned conversation facts; never execution or sender authority. */
+  replyConversation?: PreparedReplyConversation;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   /** Exact authority-bearing settings captured by Gateway chat admission. */
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
@@ -53,7 +60,7 @@ type InternalReplySessionOptions = {
   /** Receives terminal queue-cap outcomes without widening the public reply API. */
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Delivers queued replies only through their originating Gateway admission. */
-  onQueuedFollowupReplyBatch?: (batch: QueuedFollowupReplyBatch) => Promise<void> | void;
+  onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
   /** Overrides persisted queue mode for this reply only. */
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */

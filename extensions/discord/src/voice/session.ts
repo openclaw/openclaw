@@ -3,10 +3,11 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { TranscriptUtterance } from "openclaw/plugin-sdk/transcripts";
 import { ChannelType } from "../internal/discord.js";
 import type { VoiceCaptureState } from "./capture-state.js";
+import type { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
 import type { VoiceReceiveRecoveryState } from "./receive-recovery.js";
+import type { DiscordVoiceAudioReceipt, DiscordVoiceTranscriptCapture } from "./recording-types.js";
 
 export const MIN_SEGMENT_SECONDS = 0.35;
 export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
@@ -27,12 +28,13 @@ export type VoiceOperationResult = {
   channelId?: string;
   channelName?: string;
   guildId?: string;
+  warning?: string;
 };
 
 export type VoiceJoinOptions = {
   preserveFollowState?: boolean;
   autoJoinWhenOccupied?: boolean;
-  transcripts?: VoiceSessionEntry["transcripts"];
+  captureOnly?: boolean;
 };
 
 export type VoiceSessionGeneration = {
@@ -70,16 +72,17 @@ export type VoiceRealtimeAgentTurnParams = {
 };
 
 export type VoiceRealtimeSpeakerTurn = {
-  close: () => void;
-  sendInputAudio: (discordPcm48kStereo: Buffer) => void;
+  close: (reason?: "incomplete-input") => void;
+  sendInputAudio: (discordPcm48kStereo: Buffer, receipt?: DiscordVoiceAudioReceipt) => void;
 };
 
 export type VoiceRealtimeSession = {
   beginSpeakerTurn: (
     context: VoiceRealtimeSpeakerContext,
     userId: string,
+    recordingInput?: DiscordRealtimeRecordingInput,
   ) => VoiceRealtimeSpeakerTurn;
-  close: () => void;
+  close: () => void | Promise<void>;
   connect: () => Promise<void>;
   handleBargeIn: (reason?: string) => void;
   isBargeInEnabled: () => boolean;
@@ -91,8 +94,20 @@ type VoiceRealtimeLifecycle =
   | { status: "active"; generation: number; instance: VoiceRealtimeSession }
   | { status: "stopped"; generation: number; reason: string };
 
+export type VoiceGuildLifecycle =
+  | { status: "inactive"; generation: number }
+  | {
+      status: "starting";
+      generation: number;
+      cancelled: boolean;
+      instance: { guildId: string; channelId: string; captureOnly: boolean };
+    }
+  | { status: "active"; generation: number; instance: VoiceSessionEntry }
+  | { status: "stopped"; generation: number; reason: string };
+
 export type VoiceSessionEntry = {
   generation: number;
+  captureOnly: boolean;
   autoJoinWhenOccupied: boolean;
   sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
   guildId: string;
@@ -105,20 +120,18 @@ export type VoiceSessionEntry = {
   connection: import("@discordjs/voice").VoiceConnection;
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
+  // Conversation-only segments may retain their WAV after this recording frontier settles.
   processingQueue: Promise<void>;
+  conversations: import("./voice-conversation-input.js").DiscordVoiceConversationQueue;
   audioInputBudget: Awaited<
     ReturnType<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>
   >;
   ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
   realtimeLifecycle: VoiceRealtimeLifecycle;
-  transcripts?: {
-    sessionId: string;
-    onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
-    onStop?: () => void | Promise<void>;
-  };
+  transcripts?: DiscordVoiceTranscriptCapture;
   receiveRecovery: VoiceReceiveRecoveryState;
-  stop: (reason?: string) => void;
+  stop: (reason?: string) => void | Promise<void>;
 };
 
 export function logVoiceVerbose(message: string): void {

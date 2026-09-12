@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import { resolveAgentConfigEntryTarget } from "./config-state-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -13,6 +14,31 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config state model", () => {
+  it("protects dirty raw and form drafts from document reload until saved or discarded", async () => {
+    const server = createConfigServerMock();
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      server.request as GatewayBrowserClient["request"],
+    );
+    try {
+      await runtimeConfig.ensureLoaded();
+      expect(canReloadControlUiDocument()).toBe(true);
+      runtimeConfig.setRaw('{"count":2}');
+      expect(canReloadControlUiDocument()).toBe(false);
+      expect(runtimeConfig.state.configRaw).toBe('{"count":2}');
+      await expect(runtimeConfig.save()).resolves.toBe(true);
+      expect(canReloadControlUiDocument()).toBe(true);
+      runtimeConfig.patchForm(["count"], 3);
+      expect(canReloadControlUiDocument()).toBe(false);
+      runtimeConfig.resetDraft();
+      expect(canReloadControlUiDocument()).toBe(true);
+      runtimeConfig.setRaw('{"count":4}');
+      expect(canReloadControlUiDocument()).toBe(false);
+    } finally {
+      runtimeConfig.dispose();
+    }
+    expect(canReloadControlUiDocument()).toBe(true);
+  });
+
   it("preserves a dirty draft and its original base hash across refreshes", async () => {
     let getCount = 0;
     const request = vi.fn(async (method: string) => {
@@ -162,7 +188,7 @@ describe("config state model", () => {
     runtimeConfig.dispose();
   });
 
-  it("preserves process-local needsApply after saving through an older Gateway", async () => {
+  it("config.set retains process-local needsApply without applied revision metadata", async () => {
     vi.useFakeTimers();
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
@@ -174,7 +200,7 @@ describe("config state model", () => {
           issues: [],
         };
       }
-      return method === "config.set" ? { hash: "hash-2" } : {};
+      return method === "config.set" ? { config: { count: 2 }, hash: "hash-2" } : {};
     });
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],

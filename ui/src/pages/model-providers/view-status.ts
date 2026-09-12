@@ -49,6 +49,12 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
+  if (card.checkingModels) {
+    return renderSettingsStatus({
+      kind: "muted",
+      label: t("chat.modelControls.checkingProviderModels", { providers: card.displayName }),
+    });
+  }
   if (
     card.auth?.kind === "expired" ||
     card.auth?.kind === "missing" ||

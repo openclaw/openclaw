@@ -8,17 +8,15 @@ import { installPluginFromGitSpec } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
-  isUnavailableNpmTarget,
   PLUGIN_INSTALL_ERROR_CODE,
   type PluginInstallArtifactConsentHandler,
 } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import {
-  describeBetaNpmFallback,
-  describeNpmChannelFallback,
   formatBetaChannelFallbackOutcomeSuffix,
   resolveExactNpmSpecVersion,
+  resolveNewerExactPinnedClawHubDefaultLine,
   resolveNewerExactPinnedNpmDefaultLine,
   resolveNpmResultVersion,
   shouldFallbackBetaClawHubUpdate,
@@ -39,6 +37,20 @@ export function formatNewerExactPinnedNpmDefaultLineMessage(params: {
     `${params.pluginId} is pinned to ${params.recordedSpec} (installed ${params.currentVersion}); ` +
     `registry ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
     `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to replace this version pin.`
+  );
+}
+
+function formatNewerExactPinnedClawHubDefaultLineMessage(params: {
+  pluginId: string;
+  recordedSpec: string;
+  currentVersion: string;
+  newer: { packageName: string; registryLine: "beta" | "latest"; version: string };
+}): string {
+  const selector = params.newer.registryLine === "beta" ? "@beta" : "";
+  return (
+    `${params.pluginId} is pinned to ${params.recordedSpec} (installed ${params.currentVersion}); ` +
+    `ClawHub ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
+    `Pass \`openclaw plugins install clawhub:${params.newer.packageName}${selector} --force\` to replace this version pin.`
   );
 }
 
@@ -218,9 +230,7 @@ type PluginUpdateSuccess = Extract<PluginUpdateInstallResult, { ok: true }>;
 type PluginUpdateAttemptState = {
   activeClawHubInstallSpec?: string;
   channelFallbackSuffix: string;
-  npmChannelFallback?: PluginUpdateChannelFallback;
   resultSource: UpdatablePluginInstallRecord["source"];
-  usedNpmFallback: boolean;
 };
 
 type PluginUpdateAttemptResult =
@@ -237,7 +247,7 @@ function isPluginUpdateUnchanged(
     : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
 }
 
-export function buildPluginUpdateVersionOutcome(params: {
+export async function buildPluginUpdateVersionOutcome(params: {
   pluginId: string;
   record: UpdatablePluginInstallRecord;
   result: PluginUpdateSuccess;
@@ -245,9 +255,25 @@ export function buildPluginUpdateVersionOutcome(params: {
   nextVersion?: string;
   channelFallbackSuffix: string;
   channelFallback?: PluginUpdateChannelFallback;
-}): PluginUpdateOutcome {
+  checkNewerExactPinnedClawHubDefaultLine?: boolean;
+  updateChannel?: UpdateChannel;
+  timeoutMs?: number;
+}): Promise<PluginUpdateOutcome> {
   const currentLabel = params.currentVersion ?? "unknown";
   const unchanged = isPluginUpdateUnchanged(params);
+  const newerExactPinnedClawHubDefaultLine =
+    unchanged &&
+    params.record.source === "clawhub" &&
+    params.checkNewerExactPinnedClawHubDefaultLine
+      ? await resolveNewerExactPinnedClawHubDefaultLine({
+          currentVersion: params.currentVersion,
+          recordedSpec: params.record.spec,
+          probeClawHubVersion: params.nextVersion,
+          baseUrl: params.record.clawhubUrl,
+          updateChannel: params.updateChannel,
+          timeoutMs: params.timeoutMs,
+        })
+      : undefined;
   const verb = isPackageVersionDowngrade(params.currentVersion, params.nextVersion)
     ? "Downgraded"
     : "Updated";
@@ -255,9 +281,16 @@ export function buildPluginUpdateVersionOutcome(params: {
     pluginId: params.pluginId,
     status: unchanged ? "unchanged" : "updated",
     currentVersion: params.currentVersion,
-    nextVersion: params.nextVersion,
+    nextVersion: newerExactPinnedClawHubDefaultLine?.version ?? params.nextVersion,
     message: unchanged
-      ? `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
+      ? newerExactPinnedClawHubDefaultLine && params.record.spec
+        ? formatNewerExactPinnedClawHubDefaultLineMessage({
+            pluginId: params.pluginId,
+            recordedSpec: params.record.spec,
+            currentVersion: currentLabel,
+            newer: newerExactPinnedClawHubDefaultLine,
+          }) + params.channelFallbackSuffix
+        : `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
       : `${verb} ${params.pluginId}: ${currentLabel} -> ${params.nextVersion ?? "unknown"}.${params.channelFallbackSuffix}`,
     ...(params.channelFallback ? { channelFallback: params.channelFallback } : {}),
   };
@@ -269,21 +302,18 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   result: PluginUpdateSuccess;
   currentVersion?: string;
   effectiveSpec?: string;
-  fallbackSpec?: string;
-  usedNpmFallback: boolean;
   hasSpecOverride: boolean;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
   channelFallbackSuffix: string;
-  npmChannelFallback?: PluginUpdateChannelFallback;
+  checkNewerExactPinnedClawHubDefaultLine?: boolean;
 }): Promise<PluginUpdateOutcome> {
-  const probeSpec = params.usedNpmFallback ? params.fallbackSpec : params.effectiveSpec;
   const npmProbeVersion =
     params.record.source === "npm" ? resolveNpmResultVersion(params.result) : undefined;
   const resolvedProbeVersion =
     params.result.version ??
     npmProbeVersion ??
-    (params.record.source === "npm" ? resolveExactNpmSpecVersion(probeSpec) : undefined);
+    (params.record.source === "npm" ? resolveExactNpmSpecVersion(params.effectiveSpec) : undefined);
   const nextVersion = resolvedProbeVersion ?? "unknown";
   const currentLabel = params.currentVersion ?? "unknown";
   const unchanged = isPluginUpdateUnchanged({ ...params, nextVersion: resolvedProbeVersion });
@@ -293,6 +323,19 @@ export async function buildDryRunPluginUpdateOutcome(params: {
           currentVersion: params.currentVersion,
           recordedSpec: params.record.spec,
           probeNpmVersion: npmProbeVersion,
+          updateChannel: params.updateChannel,
+          timeoutMs: params.timeoutMs,
+        })
+      : undefined;
+  const newerExactPinnedClawHubDefaultLine =
+    unchanged &&
+    params.record.source === "clawhub" &&
+    params.checkNewerExactPinnedClawHubDefaultLine
+      ? await resolveNewerExactPinnedClawHubDefaultLine({
+          currentVersion: params.currentVersion,
+          recordedSpec: params.record.spec,
+          probeClawHubVersion: resolvedProbeVersion,
+          baseUrl: params.record.clawhubUrl,
           updateChannel: params.updateChannel,
           timeoutMs: params.timeoutMs,
         })
@@ -307,14 +350,23 @@ export async function buildDryRunPluginUpdateOutcome(params: {
             currentVersion: currentLabel,
             newer: newerExactPinnedDefaultLine,
           }) + params.channelFallbackSuffix
-        : `${params.pluginId} is up to date (${currentLabel}).${params.channelFallbackSuffix}`;
+        : newerExactPinnedClawHubDefaultLine && params.record.spec
+          ? formatNewerExactPinnedClawHubDefaultLineMessage({
+              pluginId: params.pluginId,
+              recordedSpec: params.record.spec,
+              currentVersion: currentLabel,
+              newer: newerExactPinnedClawHubDefaultLine,
+            }) + params.channelFallbackSuffix
+          : `${params.pluginId} is up to date (${currentLabel}).${params.channelFallbackSuffix}`;
     return {
       pluginId: params.pluginId,
       status: "unchanged",
       currentVersion: params.currentVersion,
-      nextVersion: newerExactPinnedDefaultLine?.version ?? resolvedProbeVersion,
+      nextVersion:
+        newerExactPinnedDefaultLine?.version ??
+        newerExactPinnedClawHubDefaultLine?.version ??
+        resolvedProbeVersion,
       message,
-      ...(params.npmChannelFallback ? { channelFallback: params.npmChannelFallback } : {}),
     };
   }
 
@@ -327,7 +379,6 @@ export async function buildDryRunPluginUpdateOutcome(params: {
     currentVersion: params.currentVersion,
     nextVersion: resolvedProbeVersion,
     message: `${verb} ${params.pluginId}: ${currentLabel} -> ${nextVersion}.${params.channelFallbackSuffix}`,
-    ...(params.npmChannelFallback ? { channelFallback: params.npmChannelFallback } : {}),
   };
 }
 
@@ -339,15 +390,12 @@ export async function runPluginUpdateAttempt(params: {
   effectiveSpec?: string;
   extensionsDir?: string;
   timeoutMs?: number;
-  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
-  npmSpecs?: PluginUpdateSpecPlan;
   clawhubSpecs?: PluginUpdateSpecPlan;
   trustedSourceLinkedOfficialInstall: boolean;
   expectedReplacementPluginId?: string;
-  getFallbackExpectedIntegrity: () => Promise<string | undefined>;
   installNpmSpecForUpdate: typeof installPluginFromNpmSpec;
   logger: PluginUpdateLogger;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
@@ -369,7 +417,6 @@ export async function runPluginUpdateAttempt(params: {
               extensionsDir: params.extensionsDir,
               timeoutMs: params.timeoutMs,
               ...dryRunOption,
-              dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
               onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
               trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
@@ -395,7 +442,6 @@ export async function runPluginUpdateAttempt(params: {
                 extensionsDir: params.extensionsDir,
                 timeoutMs: params.timeoutMs,
                 ...dryRunOption,
-                dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 onInstallPolicyWarning: params.onInstallPolicyWarning,
                 onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                 expectedPluginId: params.pluginId,
@@ -411,7 +457,6 @@ export async function runPluginUpdateAttempt(params: {
                   extensionsDir: params.extensionsDir,
                   timeoutMs: params.timeoutMs,
                   ...dryRunOption,
-                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
@@ -427,7 +472,6 @@ export async function runPluginUpdateAttempt(params: {
                   extensionsDir: params.extensionsDir,
                   timeoutMs: params.timeoutMs,
                   ...dryRunOption,
-                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
@@ -443,63 +487,8 @@ export async function runPluginUpdateAttempt(params: {
   }
 
   let activeClawHubInstallSpec = params.effectiveSpec;
-  let usedNpmFallback = false;
   let channelFallbackSuffix = "";
-  let npmChannelFallback: PluginUpdateChannelFallback | undefined;
   const resultSource = params.record.source;
-
-  if (
-    !result.ok &&
-    params.record.source === "npm" &&
-    params.npmSpecs?.fallbackSpec &&
-    isUnavailableNpmTarget(result)
-  ) {
-    params.logger.warn?.(
-      describeBetaNpmFallback({
-        pluginId: params.pluginId,
-        betaSpec: params.npmSpecs.fallbackLabel ?? params.effectiveSpec,
-        fallbackSpec: params.npmSpecs.fallbackSpec,
-        result,
-      }),
-    );
-    usedNpmFallback = true;
-    npmChannelFallback = describeNpmChannelFallback({
-      pluginId: params.pluginId,
-      requestedSpec: params.npmSpecs.fallbackLabel ?? params.effectiveSpec,
-      usedSpec: params.npmSpecs.fallbackSpec,
-      result,
-      verb: params.dryRun ? "would use" : "used",
-    });
-    channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
-      fallbackLabel: params.npmSpecs.fallbackLabel ?? params.effectiveSpec,
-      fallbackSpec: params.npmSpecs.fallbackSpec,
-      verb: params.dryRun ? "would use" : "used",
-    });
-    result = await installNpmSpec(
-      installParams({
-        spec: params.npmSpecs.fallbackSpec,
-        config: params.config,
-        mode: "update",
-        extensionsDir: params.extensionsDir,
-        timeoutMs: params.timeoutMs,
-        ...dryRunOption,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-        expectedPluginId: params.pluginId,
-        expectedReplacementPluginId: params.expectedReplacementPluginId,
-        expectedIntegrity: await params.getFallbackExpectedIntegrity(),
-        onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
-          pluginId: params.pluginId,
-          dryRun: params.dryRun,
-          logger: params.logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
-        logger: params.logger,
-      }),
-    );
-  }
 
   if (
     !result.ok &&
@@ -512,7 +501,7 @@ export async function runPluginUpdateAttempt(params: {
       fallbackSpec: params.clawhubSpecs.fallbackSpec,
       verb: params.dryRun ? "would use" : "used",
     });
-    params.logger.warn?.(
+    params.logger.info?.(
       `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
     );
     result = await installPluginFromClawHub(
@@ -524,7 +513,6 @@ export async function runPluginUpdateAttempt(params: {
         extensionsDir: params.extensionsDir,
         timeoutMs: params.timeoutMs,
         ...dryRunOption,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         expectedPluginId: params.pluginId,
@@ -539,8 +527,6 @@ export async function runPluginUpdateAttempt(params: {
     result,
     activeClawHubInstallSpec,
     channelFallbackSuffix,
-    npmChannelFallback,
     resultSource,
-    usedNpmFallback,
   };
 }

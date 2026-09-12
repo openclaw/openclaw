@@ -5,6 +5,10 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  hostGroupedNativeCatalogs,
+  resumableClaudeCatalog,
+} from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureTopVisibleVirtualRow,
@@ -20,80 +24,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-function resumableClaudeCatalog() {
-  return {
-    catalogs: [
-      {
-        id: "claude",
-        label: "Claude Code",
-        capabilities: { continueSession: true, archive: false },
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: "Local Mac",
-            kind: "local",
-            connected: true,
-            sessions: [
-              {
-                threadId: "claude-terminal-session",
-                name: "Native Claude terminal",
-                status: "stored",
-                source: "claude-cli",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-                canOpenTerminal: true,
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function hostGroupedNativeCatalogs() {
-  const catalog = (id: "claude" | "codex", label: string) => ({
-    id,
-    label,
-    capabilities: { continueSession: true, archive: false },
-    hosts: [
-      {
-        hostId: "gateway:local",
-        label: "Gateway Mac",
-        kind: "gateway",
-        connected: true,
-        sessions: [
-          {
-            threadId: `${id}-local`,
-            name: `${label} local plan`,
-            status: "stored",
-            canContinue: true,
-            canArchive: false,
-          },
-        ],
-      },
-      {
-        hostId: "node:build",
-        label: "Build Node",
-        kind: "node",
-        connected: true,
-        nodeId: "build",
-        sessions: [
-          {
-            threadId: `${id}-remote`,
-            name: `${label} remote review`,
-            status: "stored",
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      },
-    ],
-  });
-  return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
-}
 
 async function catalogHeaderAffordances(header: Locator) {
   return header.evaluate((element) => {
@@ -495,6 +425,10 @@ suite.define(() => {
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
     await page.clock.install();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -525,6 +459,22 @@ suite.define(() => {
         },
       ],
     });
+    const firstCatalogPage = catalogResponse(
+      "remote-thread",
+      "Remote architecture review",
+      "catalog-page-2",
+    );
+    const firstHost = firstCatalogPage.catalogs[0]!.hosts[0]!;
+    firstCatalogPage.catalogs[0]!.hosts.push({
+      ...firstHost,
+      hostId: "node:exhausted",
+      nodeId: "exhausted",
+      label: "Exhausted host",
+      nextCursor: undefined,
+      sessions: [
+        { ...firstHost.sessions[0]!, threadId: "retained-thread", name: "Retained remote session" },
+      ],
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
@@ -540,11 +490,7 @@ suite.define(() => {
             },
             {
               match: {},
-              response: catalogResponse(
-                "remote-thread",
-                "Remote architecture review",
-                "catalog-page-2",
-              ),
+              response: firstCatalogPage,
             },
           ],
         },
@@ -581,11 +527,27 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
     const catalog = page.locator('[data-session-section="catalog:claude"]');
+    await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
+    const initialCatalogRequest = (await gateway.getRequests("sessions.catalog.list"))[0]?.params;
+    expect(initialCatalogRequest).toMatchObject({ agentId: "main", limitPerHost: 40 });
+    expect(initialCatalogRequest).not.toHaveProperty("hostIds");
+    if (artifactDir) {
+      await page.screenshot({ path: path.join(artifactDir, "catalog-initial-discovery.png") });
+    }
     await page.locator('[data-session-catalog-load-more="claude"]').click();
     await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+    await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
+    if (artifactDir) {
+      await page.screenshot({ path: path.join(artifactDir, "catalog-after-pagination.png") });
+      await writeFile(
+        path.join(artifactDir, "catalog-pagination-requests.json"),
+        JSON.stringify(await gateway.getRequests("sessions.catalog.list"), null, 2),
+      );
+    }
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
       catalogId: "claude",
+      hostIds: ["node:devbox"],
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
@@ -597,6 +559,24 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    const catalogPageMatch = {
+      catalogId: "claude",
+      cursors: { "node:devbox": "catalog-page-2" },
+    };
+    await expect
+      .poll(
+        async () => (await gateway.getRequests("sessions.catalog.list", catalogPageMatch)).length,
+      )
+      .toBeGreaterThanOrEqual(2);
+    for (const request of await gateway.getRequests("sessions.catalog.list", catalogPageMatch)) {
+      expect(request.params).toEqual({
+        agentId: "main",
+        catalogId: "claude",
+        hostIds: ["node:devbox"],
+        cursors: { "node:devbox": "catalog-page-2" },
+      });
+    }
+    await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
     await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     const remote = catalog.getByRole("link", { name: /^Remote architecture review$/ });
     await remote.hover();
@@ -652,10 +632,6 @@ suite.define(() => {
     await expect
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-      : undefined;
     const expectCenteredLayout = async (screenshotName: string) => {
       const [workbenchBox, threadBox, composerBox] = await Promise.all([
         catalogPane.locator(".chat-workbench").boundingBox(),
@@ -857,7 +833,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the earlier-history action fixed while loading and reveals the fetched page", async () => {
+  it("keeps the earlier-history action fixed while loading and preserves the reader after retry", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
@@ -979,6 +955,8 @@ suite.define(() => {
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
+    const readerAnchor = await captureTopVisibleVirtualRow(thread);
+    await startVirtualRowPaintProbe(thread, readerAnchor);
     await gateway.resolveDeferred("chat.history", {
       messages: older,
       hasMore: true,
@@ -998,9 +976,8 @@ suite.define(() => {
           ),
       )
       .toBe(1100);
-    const firstOlderMessage = page.getByText(/^older native message 1\n/);
-    await firstOlderMessage.waitFor();
-    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+    await waitForPaintedVirtualRowAnchor(thread, readerAnchor);
+    expectPaintedVirtualRowAnchor(readerAnchor, await stopVirtualRowPaintProbe(thread));
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "02-native-history-prepended-visible.png"),
@@ -1024,8 +1001,11 @@ suite.define(() => {
     // Single staging slot: the parked page must not chain further prefetches.
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     // Consuming the staged page needs no round trip: the exhausted empty page
-    // applies instantly and removes the boundary and its sentinel.
-    await showEarlier.click();
+    // applies instantly and removes the boundary and its sentinel. Invoke the
+    // action without scrolling: renewed upward intent can itself consume it.
+    await thread.evaluate((element) => {
+      element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
+    });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);

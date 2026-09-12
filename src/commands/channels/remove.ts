@@ -1,9 +1,8 @@
 // Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  applyPreparedChannelAccountRemoval,
+  applyChannelAccountRemoval,
   type ChannelAccountMutationPlugin,
-  prepareChannelAccountRemoval,
 } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
@@ -19,10 +18,11 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { assertAccountSelectorForMutation } from "./account-selector.js";
+import { withCommandPluginMetadata, type ConfigWriteSnapshot } from "../config-validation.js";
+import { parseAccountSelector } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
-import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
+import { type ChatChannel, requireValidConfigForWrite, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
   agent?: string;
@@ -42,6 +42,25 @@ function listAccountIds(
     return [];
   }
   return plugin.config.listAccountIds(cfg);
+}
+
+function formatAccountRemovalErrorMessage(params: {
+  channel: ChatChannel;
+  kind: "unknown-account" | "nothing-to-remove";
+  accountId: string;
+  requestedAccount: string | undefined;
+  accountIds: readonly string[];
+}): string {
+  const label = channelLabel(params.channel);
+  const inspect = `Run ${formatCliCommand(`openclaw channels status --channel ${params.channel}`)} to inspect configured accounts.`;
+  const known = params.accountIds.length ? ` Known accounts: ${params.accountIds.join(", ")}.` : "";
+  if (params.kind === "nothing-to-remove") {
+    return `${label} account "${params.accountId}" has no configuration to delete.${known} ${inspect}`;
+  }
+  if (!params.requestedAccount) {
+    return `${label} has no ${DEFAULT_ACCOUNT_ID} account to remove.${known} Name an account with ${formatCliCommand("--account <id>")}. ${inspect}`;
+  }
+  return `${label} has no account "${params.requestedAccount}" to remove.${known} ${inspect}`;
 }
 
 async function stopGatewayRuntimeBeforeRemove(params: {
@@ -79,13 +98,27 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  assertAccountSelectorForMutation(opts.account);
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  parseAccountSelector(opts.account);
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const baseHash = configSnapshot.hash;
-  const cfg: OpenClawConfig = configSnapshot.sourceConfig;
+  return withCommandPluginMetadata(
+    {
+      config: writeSnapshot.snapshot.sourceConfig,
+      snapshot: writeSnapshot.writeOptions.basePluginMetadataSnapshot,
+    },
+    () => removeChannelAccount(writeSnapshot, opts, runtime, params),
+  );
+}
+
+async function removeChannelAccount(
+  writeSnapshot: ConfigWriteSnapshot,
+  opts: ChannelsRemoveOptions,
+  runtime: RuntimeEnv,
+  params?: { hasFlags?: boolean },
+) {
+  const cfg: OpenClawConfig = writeSnapshot.snapshot.sourceConfig;
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
@@ -188,26 +221,35 @@ export async function channelsRemoveCommand(
     return;
   }
   const resolvedChannelId: ChatChannel = resolvedChannel;
-  const preparedRemoval = prepareChannelAccountRemoval({
+  const removal = await applyChannelAccountRemoval({
+    cfg,
     plugin,
     accountId,
     action: deleteConfig ? "delete" : "disable",
-  });
-
-  await stopGatewayRuntimeBeforeRemove({
-    cfg,
-    channel: resolvedChannelId,
-    accountId: preparedRemoval.accountKey,
-    shouldStopRuntime: preparedRemoval.shouldStopRuntime,
     runtime,
-  });
-
-  const removal = await applyPreparedChannelAccountRemoval({
-    cfg,
-    prepared: preparedRemoval,
-    runtime,
+    beforeRemoval: () =>
+      stopGatewayRuntimeBeforeRemove({
+        cfg,
+        channel: resolvedChannelId,
+        accountId,
+        shouldStopRuntime: Boolean(plugin.gateway?.startAccount || plugin.gateway?.logoutAccount),
+        runtime,
+      }),
   });
   if (!removal.ok) {
+    if (removal.error.kind !== "unsupported-action") {
+      runtime.error(
+        formatAccountRemovalErrorMessage({
+          channel: resolvedChannelId,
+          kind: removal.error.kind,
+          accountId,
+          requestedAccount: useWizard ? accountId : normalizeOptionalString(opts.account),
+          accountIds: removal.error.accountIds,
+        }),
+      );
+      runtime.exit(1);
+      return;
+    }
     runtime.error(
       removal.error.action === "delete"
         ? `${formatUnsupportedChannelActionMessage({ channel, action: "delete" })} Use ${formatCliCommand("openclaw channels remove --channel " + channel)} to disable it without deleting config.`
@@ -219,20 +261,21 @@ export async function channelsRemoveCommand(
   await persistChannelPluginConfig({
     cfg: removal.value.nextConfig,
     pluginInstalled: false,
-    ...(baseHash !== undefined ? { baseHash } : {}),
+    writeOptions: writeSnapshot.writeOptions,
+    baseHash: writeSnapshot.snapshot.hash,
     runtime,
   });
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
+        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`,
     );
   } else {
     runtime.log(
       deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
+        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`,
     );
   }
 }

@@ -4,13 +4,19 @@ import type { RuntimeEnv } from "../runtime.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 
-export async function prepareDoctorContext(configPath: string): Promise<DoctorHealthFlowContext> {
+export async function prepareDoctorContext(
+  configPath: string,
+  params: {
+    options?: DoctorOptions;
+    confirm?: Parameters<typeof loadAndMaybeMigrateDoctorConfig>[0]["confirm"];
+  } = {},
+): Promise<DoctorHealthFlowContext> {
   const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-  const options: DoctorOptions = { nonInteractive: true, repair: true };
+  const options: DoctorOptions = params.options ?? { nonInteractive: true, repair: true };
   const prompter = createDoctorPrompter({ runtime, options });
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
-    confirm: (params) => prompter.confirm(params),
+    confirm: params.confirm ?? ((confirmation) => prompter.confirm(confirmation)),
     runtime,
     prompter,
   });

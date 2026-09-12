@@ -159,16 +159,7 @@ export function resolveBundledCompatActivationInputs(
   params: BundledCompatActivationParams,
 ): PluginActivationInputs {
   const env = params.env ?? process.env;
-  const snapshot = resolvePluginActivationInputs({
-    rawConfig: params.rawConfig,
-    resolvedConfig: params.resolvedConfig,
-    autoEnabledReasons: params.autoEnabledReasons,
-    env,
-    workspaceDir: params.workspaceDir,
-    applyAutoEnable: params.applyAutoEnable,
-    discovery: params.discovery,
-    manifestRegistry: params.manifestRegistry,
-  });
+  const snapshot = resolvePluginActivationInputs({ ...params, env });
   const bundledPluginIds = params.resolveBundledPluginIds({
     config: snapshot.config,
     workspaceDir: params.workspaceDir,

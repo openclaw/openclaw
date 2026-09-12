@@ -1,6 +1,5 @@
 // @vitest-environment node
 // Control UI tests cover build chat items behavior.
-import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -10,6 +9,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import * as threadItems from "./chat-thread-items.ts";
 import {
@@ -158,6 +158,31 @@ function toolMessage(
 ): Record<string, unknown> {
   return chatMessage("tool", content, timestamp, { toolCallId, toolName, ...overrides });
 }
+
+it("invalidates cached custody notices when workspace sync ownership changes", () => {
+  const pendingInputs = [
+    {
+      acceptedAt: 1,
+      id: "pending-follow-up",
+      message: userMessage("continue", 1),
+      runId: "follow-up-run",
+      state: "queued" as const,
+    },
+  ];
+  const input = createProps({ pendingInputs });
+  const waiting = buildCachedChatItems({
+    ...input,
+    workspaceSyncPendingRunIds: ["follow-up-run"],
+  });
+  const active = buildCachedChatItems(input);
+
+  expect(waiting.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+    "Received · waiting for workspace sync",
+  ]);
+  expect(active.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+    "Queued · waiting for the agent",
+  ]);
+});
 
 function queuedSend(
   id: string,
@@ -1009,9 +1034,9 @@ describe("collapseCompletedTurnWork", () => {
         ],
       });
 
-      expect(items.map((item) => item.kind)).toEqual(["group", "group", "work-group", "group"]);
-      expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
-      expect(requireWorkGroup(items[2]).groups.map((group) => group.role)).toEqual(workRoles);
+      expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+      expect(canvasBlocksIn(requireGroup(items[2]))).toHaveLength(1);
+      expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual(workRoles);
       expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
     },
   );
@@ -1128,18 +1153,85 @@ describe("collapseCompletedTurnWork", () => {
     expect(requireWorkGroup(items[1]).groups).toHaveLength(1);
   });
 
-  it("keeps work after the final reply visible", () => {
+  it.each([
+    { name: "success", isError: false, result: { isError: false } },
+    { name: "message error", isError: true, result: { isError: true } },
+    { name: "snake-case error", isError: true, result: { is_error: true } },
+    {
+      name: "structured error",
+      isError: true,
+      result: { content: [{ type: "tool_result", isError: true, text: "boom" }] },
+    },
+    {
+      name: "inferred error",
+      isError: true,
+      result: { content: '{"status":"error","error":"boom"}' },
+    },
+    {
+      name: "explicit success overrides error-shaped output",
+      isError: false,
+      result: { isError: false, content: '{"error":"example"}' },
+    },
+  ])("keeps trailing work in the disclosure unless it failed ($name)", ({ isError, result }) => {
+    const trailing = { ...toolResult("call-2", 4_000), isError: undefined, ...result };
     const items = collapsedItems({
       messages: [
         userMessage("go", 1_000),
         toolResult("call-1", 2_000),
         assistantMessage("Done.", 3_000),
-        toolResult("call-2", 4_000),
+        trailing,
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
-    expect(requireGroup(items[3]).role).toBe("tool");
+    expect(items.map((item) => item.kind)).toEqual(
+      isError ? ["group", "work-group", "group", "group"] : ["group", "work-group", "group"],
+    );
+    const work = requireWorkGroup(items[1]);
+    expect(work.groups).toHaveLength(isError ? 1 : 2);
+    if (isError) {
+      expect(requireGroup(items[3]).messages.map(({ message }) => message)).toContain(trailing);
+    } else {
+      expect(work.durationMs).toBe(3_000);
+    }
+  });
+
+  it("collapses a trailing failure only after a subsequent answer", () => {
+    const failed = toolResult("failed", 4_000, true);
+    const messages = [
+      userMessage("go", 1_000),
+      assistantMessage("First result.", 2_000),
+      failed,
+      {
+        ...assistantMessage("Checking the failure.", 5_000),
+        content: [
+          {
+            type: "text",
+            text: "Checking the failure.",
+            textSignature: JSON.stringify({ v: 1, id: "checking", phase: "commentary" }),
+          },
+        ],
+      },
+      toolResult("supplementary", 6_000),
+    ];
+    const idle = collapsedItems({ messages });
+    expect(
+      idle
+        .filter((item) => item.kind === "group")
+        .flatMap((group) => group.messages.map(({ message }) => message)),
+    ).toContain(failed);
+    const recovered = collapsedItems({
+      messages: [...messages, assistantMessage("Recovered via another route.", 7_000)],
+    });
+    expect(
+      recovered
+        .filter((item) => item.kind === "group")
+        .flatMap((group) => group.messages.map(({ message }) => message)),
+    ).not.toContain(failed);
+    expect(
+      requireWorkGroup(recovered[1]).groups.flatMap((group) =>
+        group.messages.map(({ message }) => message),
+      ),
+    ).toContain(failed);
   });
 
   it("does not collapse across dividers", () => {
@@ -1787,6 +1879,55 @@ describe("buildCachedChatItems working spark", () => {
     ).find((item) => item.kind === "reading-indicator");
 
     expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: submittedAt });
+  });
+
+  it("keeps older failed sends out of successive turns' elapsed time", () => {
+    const sessionKey = "agent:main:elapsed-failed-send";
+    const failed: ChatQueueItem = {
+      id: "failed-send",
+      text: "An earlier failed message",
+      createdAt: 1_000,
+      sendRunId: "failed-run",
+      sendState: "failed",
+      sendAttempts: 1,
+      sendError: "Message was rejected",
+    };
+    for (const startedAt of [60_000, 120_000]) {
+      const runId = `run-${startedAt}`;
+      const sending = readingIndicator({
+        sessionKey,
+        runWorking: true,
+        queue: [
+          failed,
+          {
+            id: runId,
+            text: "A new message",
+            createdAt: startedAt,
+            sendRunId: runId,
+            sendState: "sending",
+            sendAttempts: 1,
+          },
+        ],
+      });
+      expect(sending).toMatchObject({ runId, startedAt });
+      const acknowledged = readingIndicator({
+        sessionKey,
+        runId,
+        runWorking: true,
+        streamStartedAt: startedAt + 1_000,
+        queue: [failed],
+      });
+      expect(acknowledged).toMatchObject({ key: sending?.key, runId, startedAt });
+      const reconnected = readingIndicator({
+        sessionKey,
+        runId,
+        runWorking: true,
+        streamSegments: [{ text: "Working", ts: startedAt + 2_000, runId }],
+        queue: [failed],
+      });
+      expect(reconnected).toMatchObject({ key: sending?.key, runId, startedAt });
+      expect(readingIndicator({ sessionKey, queue: [failed] })).toBeUndefined();
+    }
   });
 
   it("keeps the elapsed start and trailing position after a tool flush", () => {
@@ -3310,25 +3451,34 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("keeps identical assistant text separate when source message ids differ", () => {
-    const groups = messageGroups({
-      messages: [
-        assistantMessage([{ type: "text", text: "Same update" }], 1, {
-          id: "reply-7",
-          senderLabel: "Parzival",
-        }),
-        assistantMessage([{ type: "text", text: "Same update" }], 2, {
-          id: "reply-8",
-          senderLabel: "Parzival",
-        }),
-      ],
-    });
+  it.each([
+    { role: "assistant", firstId: "reply-7", secondId: "reply-8" },
+    { role: "assistant", firstId: "reply-7", secondId: undefined },
+    { role: "assistant", firstId: undefined, secondId: "reply-8" },
+    { role: "user", firstId: "prompt-7", secondId: undefined },
+    { role: "user", firstId: undefined, secondId: "prompt-8" },
+  ])(
+    "keeps identical $role text separate with source identities $firstId and $secondId",
+    ({ role, firstId, secondId }) => {
+      const groups = messageGroups({
+        messages: [
+          chatMessage(role, [{ type: "text", text: "Same update" }], 1, {
+            id: firstId,
+            senderLabel: "Parzival",
+          }),
+          chatMessage(role, [{ type: "text", text: "Same update" }], 2, {
+            id: secondId,
+            senderLabel: "Parzival",
+          }),
+        ],
+      });
 
-    expect(groups).toHaveLength(1);
-    expect(groupAt(groups, 0).messages).toHaveLength(2);
-    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
-    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
-  });
+      expect(groups).toHaveLength(1);
+      expect(groupAt(groups, 0).messages).toHaveLength(2);
+      expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+      expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+    },
+  );
 
   it("keeps identical user prompts separate when canonical transcript identities differ", () => {
     const groups = messageGroups({
@@ -4618,7 +4768,7 @@ describe("buildCachedChatItems", () => {
       groups.flatMap((group) =>
         group.messages.flatMap(({ message }) => normalizeMessage(message).content),
       ),
-    ).toContainEqual({ type: "text", text: "Ready." });
+    ).toContainEqual({ type: "text", text: "\n\nReady." });
     expect(assistant).toEqual(original);
   });
 
@@ -4856,19 +5006,27 @@ describe("tool expansion state", () => {
     const paneId = "released-pane";
     const sessionKey = "released-session";
     const populatePane = () => {
-      const items = buildCachedChatItems(
-        createProps({ paneId, sessionKey, messages: [new TranscriptMessage()] }),
-      );
+      const message = new TranscriptMessage();
+      const items = buildCachedChatItems(createProps({ paneId, sessionKey, messages: [message] }));
       syncToolCardExpansionState(sessionKey, items, true);
+      return {
+        messageReference: new WeakRef(message),
+        collectionControl: new WeakRef({ unowned: true }),
+      };
     };
     try {
-      populatePane();
-      expect(queryObjects(TranscriptMessage)).toBe(1);
+      const { messageReference, collectionControl } = populatePane();
+      await collectGarbageForTest(() => {
+        expect(queryObjects(TranscriptMessage)).toBe(1);
+      });
+      expect(collectionControl.deref()).toBeUndefined();
+      expect(messageReference.deref() !== undefined).toBe(true);
 
       resetChatThreadState(paneId);
-      await setImmediate();
-
-      expect(queryObjects(TranscriptMessage)).toBe(0);
+      await collectGarbageForTest(() => {
+        expect(queryObjects(TranscriptMessage)).toBe(0);
+      });
+      expect(messageReference.deref()).toBeUndefined();
       expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
     } finally {
       resetChatThreadState();
@@ -5223,6 +5381,26 @@ describe("user message expansion state", () => {
 });
 
 describe("thread item cache", () => {
+  it("repositions an initial placement prompt when recovery identifies its existing queue row", () => {
+    const queued = queuedSend("initial", "Original request", 10_000, "failed", {
+      sendRunId: "initial",
+      sendAttempts: 1,
+    });
+    const input = createProps({
+      messages: [assistantMessage("Gateway recovery", 2)],
+      queue: [queued],
+    });
+    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.filter((item) => item.kind === "group").map((item) => item.role);
+
+    expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
+    expect(roles(buildCachedChatItems({ ...input, initialTurnId: queued.id }))).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
+  });
+
   it("sender provenance refreshes reply display without changing the person", () => {
     resetChatThreadState();
     const alice = userMessage("first", 1, {

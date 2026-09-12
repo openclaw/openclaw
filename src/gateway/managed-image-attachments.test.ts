@@ -6,7 +6,17 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
   createSolidPngBuffer,
@@ -16,14 +26,17 @@ import { extractToolResultMediaArtifact } from "../agents/embedded-agent-tool-me
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
-import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   completeSessionDelivery,
   enqueueSessionDelivery,
 } from "../infra/session-delivery-queue-storage.js";
 import { readImageProbeFromHeader, resizeToJpeg } from "../media/image-ops.js";
-import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
+import {
+  disposeStoreRemoteFixtures,
+  withStoreRemoteFixture,
+  wrapStoreSaveRemoteMedia,
+} from "../media/store-network.test-support.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -61,6 +74,25 @@ const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeRe
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+let storeSaveSpy: MockInstance<typeof import("../media/fetch.js").saveRemoteMedia> | undefined;
+
+beforeAll(async () => {
+  // Spy after graph evaluation: importOriginal(fetch) can pull store into its mock cycle.
+  const mediaFetch = await import("../media/fetch.js");
+  const saveRemoteMedia = mediaFetch.saveRemoteMedia;
+  storeSaveSpy = vi
+    .spyOn(mediaFetch, "saveRemoteMedia")
+    .mockImplementation(wrapStoreSaveRemoteMedia(saveRemoteMedia));
+});
+
+afterAll(() => {
+  try {
+    disposeStoreRemoteFixtures();
+  } finally {
+    storeSaveSpy?.mockRestore();
+  }
+});
+
 beforeEach(() => {
   resolvePlaybackModeForSourceMock.mockReset();
   resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
@@ -85,6 +117,10 @@ vi.mock("./session-utils.js", () => ({
 
 vi.mock("./session-transcript-readers.js", () => ({
   readSessionMessagesAsync: readSessionMessagesMock,
+  readSessionMessagesMatchingIdAsync: async (scope: unknown, messageId: string) =>
+    (await readSessionMessagesMock(scope)).filter(
+      (message: { __openclaw?: { id?: string } }) => message["__openclaw"]?.id === messageId,
+    ),
   readSessionMessagesWithSourceAsync: async (...args: unknown[]) => ({
     messages: await readSessionMessagesMock(...args),
   }),
@@ -420,7 +456,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
-    setMediaStoreNetworkDepsForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -448,31 +483,89 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf-8")).toBe("original-image");
   });
 
-  it("serves Unicode media filenames with an encoded content disposition", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir, {
-      filename: "音声.mp3",
+  it.each([
+    {
+      kind: "audio",
       contentType: "audio/mpeg",
-      body: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
-    });
-    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      filename: "音声.mp3",
+      variant: "full",
+      encodedFilename: "%E9%9F%B3%E5%A3%B0.mp3",
+    },
+    {
+      kind: "audio",
+      contentType: "audio/wav",
+      filename: "recording%20take.wav",
+      variant: "full",
+      encodedFilename: "recording%2520take.wav",
+    },
+    {
+      kind: "video",
+      contentType: "video/mp4",
+      filename: "recording%20take.mp4",
+      variant: "full",
+      encodedFilename: "recording%2520take.mp4",
+    },
+    {
+      kind: "image",
+      contentType: "image/png",
+      filename: "progress%20chart.png",
+      variant: "full",
+      encodedFilename: "progress%2520chart.png",
+    },
+    {
+      kind: "image",
+      contentType: "image/png",
+      filename: "progress%20chart.png",
+      variant: "thumbnail",
+      encodedFilename: "progress%2520chart-thumbnail.png",
+    },
+    {
+      kind: "document",
+      contentType: "text/plain",
+      filename: "progress%20report.txt",
+      variant: "full",
+      encodedFilename: "progress%2520report.txt",
+    },
+  ])(
+    "preserves $filename in $variant download metadata",
+    async ({ kind, contentType, filename, variant, encodedFilename }) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir, {
+        filename,
+        contentType,
+        body:
+          kind === "image"
+            ? createSolidPngBuffer(16, 8, { r: 24, g: 64, b: 128 })
+            : Buffer.from("media"),
+      });
+      const route = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}`;
+      const fullUrl = `${route}/full`;
+      const block =
+        kind === "document"
+          ? { type: "attachment", attachment: { url: fullUrl } }
+          : { type: kind, url: fullUrl, openUrl: fullUrl };
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `${route}/${variant}`,
+        authResponse: { authMethod: "token" },
+        transcriptMessages: [
+          {
+            role: "assistant",
+            content: [block],
+            __openclaw: { id: "msg-1" },
+          },
+        ],
+      });
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName,
-      authResponse: { authMethod: "token" },
-      transcriptMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "audio", url: pathName, openUrl: pathName }],
-          __openclaw: { id: "msg-1" },
-        },
-      ],
-    });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["content-disposition"]).toContain("filename*=UTF-8''");
-    expect(result.headers["content-disposition"]).toContain("%E9%9F%B3%E5%A3%B0.mp3");
-  });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-type"]).toBe(contentType);
+      expect(result.headers["content-disposition"]).toContain(
+        `filename*=UTF-8''${encodedFilename}`,
+      );
+      expect(result.headers["content-disposition"]).toMatch(
+        kind === "document" ? /^attachment;/ : /^inline;/,
+      );
+    },
+  );
 
   it("serves a byte range from the validated managed image", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
@@ -575,36 +668,139 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     }
   });
 
-  it.each(["GET", "HEAD"])(
-    "revalidates managed media ETags before ranges for %s",
-    async (method) => {
-      const { attachmentId, sessionKey } = await createFixture(stateDir);
+  it.each<{
+    name: string;
+    method?: string;
+    range?: string;
+    ifRange?: string;
+    validator: string | string[] | ((etag: string) => string);
+    expectedStatus: number;
+  }>([
+    {
+      name: "quoted comma/star GET",
+      validator: '"client,*,tag"',
+      expectedStatus: 200,
+    },
+    {
+      name: "quoted comma/star HEAD",
+      method: "HEAD",
+      validator: '"client,*,tag"',
+      expectedStatus: 200,
+    },
+    {
+      name: "quoted comma/star range",
+      range: "bytes=2-5",
+      validator: '"client,*,tag"',
+      expectedStatus: 206,
+    },
+    {
+      name: "weak quoted comma/star range",
+      range: "bytes=2-5",
+      validator: 'W/"client,*,tag"',
+      expectedStatus: 206,
+    },
+    {
+      name: "multiple nonmatching fields",
+      validator: ['"client,*,tag"', '"other"'],
+      expectedStatus: 200,
+    },
+    {
+      name: "quoted literal asterisk",
+      validator: '"*"',
+      expectedStatus: 200,
+    },
+    {
+      name: "ordinary stale range",
+      range: "bytes=2-5",
+      validator: '"stale"',
+      expectedStatus: 206,
+    },
+    {
+      name: "strong match",
+      validator: (etag: string) => etag,
+      expectedStatus: 304,
+    },
+    {
+      name: "weak HEAD match before If-Range",
+      method: "HEAD",
+      range: "bytes=2-5",
+      ifRange: '"stale"',
+      validator: (etag: string) => `W/${etag}`,
+      expectedStatus: 304,
+    },
+    {
+      name: "matching list before If-Range",
+      range: "bytes=2-5",
+      ifRange: '"stale"',
+      validator: (etag: string) => `"other", W/${etag}`,
+      expectedStatus: 304,
+    },
+    {
+      name: "standalone wildcard",
+      validator: "*",
+      expectedStatus: 304,
+    },
+    {
+      name: "literal backslash before a matching tag",
+      validator: (etag: string) => String.raw`"trailing\", ` + etag,
+      expectedStatus: 304,
+    },
+  ])(
+    "honors $name for managed media",
+    async ({ method = "GET", range, ifRange, validator, expectedStatus }) => {
+      const body = Buffer.from("0123456789");
+      const { attachmentId, sessionKey } = await createFixture(stateDir, {
+        filename: "report.txt",
+        contentType: "text/plain",
+        body,
+      });
       const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-      const initial = await requestManagedImage({
+      const request = {
         stateDir,
         pathName,
         authResponse: { authMethod: "token" },
-      });
-      const etag = initial.result.headers.etag;
+        transcriptMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "attachment", attachment: { url: pathName } }],
+            __openclaw: { id: "msg-1" },
+          },
+        ],
+      };
+      const initial = await requestManagedImage(request);
+      const etag = String(initial.result.headers.etag);
       expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
 
+      const ifNoneMatch = typeof validator === "function" ? validator(etag) : validator;
       const { result } = await requestManagedImage({
-        stateDir,
-        pathName,
+        ...request,
         method,
-        authResponse: { authMethod: "token" },
-        headers: {
-          "if-none-match": `W/${String(etag)}`,
-          range: "bytes=0-3",
-          "if-range": '"stale"',
-        },
+        headers: [
+          "Host",
+          "127.0.0.1",
+          ...[ifNoneMatch].flat().flatMap((value) => ["if-none-match", value]),
+          ...(range ? ["range", range] : []),
+          ...(ifRange ? ["if-range", ifRange] : []),
+        ],
       });
 
-      expect(result.statusCode).toBe(304);
+      expect(result.statusCode).toBe(expectedStatus);
       expect(result.headers.etag).toBe(etag);
-      expect(result.headers["content-length"]).toBeUndefined();
-      expect(result.headers["content-range"]).toBeUndefined();
-      expect(result.body).toHaveLength(0);
+      expect(result.headers["content-type"]).toBe("text/plain");
+      expect(result.headers["content-disposition"]).toContain('filename="report.txt"');
+      expect(result.headers["content-length"]).toBe(
+        expectedStatus === 304 ? undefined : expectedStatus === 206 ? "4" : "10",
+      );
+      expect(result.headers["content-range"]).toBe(
+        expectedStatus === 206 ? "bytes 2-5/10" : undefined,
+      );
+      expect(result.body.toString("utf8")).toBe(
+        method === "HEAD" || expectedStatus === 304
+          ? ""
+          : expectedStatus === 206
+            ? "2345"
+            : "0123456789",
+      );
     },
   );
 
@@ -1243,7 +1439,6 @@ describe("createManagedOutgoingImageBlocks", () => {
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
-    setMediaStoreNetworkDepsForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -1674,22 +1869,21 @@ describe("createManagedOutgoingImageBlocks", () => {
       upstream.listen(0, "127.0.0.1", resolve);
     });
     const address = upstream.address() as AddressInfo;
-    setMediaStoreNetworkDepsForTest({
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-    });
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         const sourceUrl = `http://127.0.0.1:${address.port}/remote-cat.png?sig=secret`;
-        const blocks = await createManagedOutgoingImageBlocks({
-          stateDir,
-          sessionKey: "agent:main:main",
-          mediaUrls: [sourceUrl],
-        });
+        const matchedUrls: string[] = [];
+        const blocks = await withStoreRemoteFixture(
+          { url: sourceUrl, onMatch: (url) => matchedUrls.push(url) },
+          () =>
+            createManagedOutgoingImageBlocks({
+              stateDir,
+              sessionKey: "agent:main:main",
+              mediaUrls: [sourceUrl],
+            }),
+        );
+        expect(matchedUrls).toEqual([sourceUrl]);
 
         expect(blocks).toHaveLength(1);
         const block = requireBlock(blocks);
@@ -1710,7 +1904,6 @@ describe("createManagedOutgoingImageBlocks", () => {
         expect(await fs.readFile(originalPath)).toEqual(imageBuffer);
       });
     } finally {
-      setMediaStoreNetworkDepsForTest();
       await new Promise<void>((resolve, reject) => {
         upstream.close((error) => (error ? reject(error) : resolve()));
       });
@@ -2078,27 +2271,26 @@ describe("createManagedOutgoingImageBlocks", () => {
       server.listen(0, "127.0.0.1", resolve);
     });
     const address = server.address() as AddressInfo;
-    setMediaStoreNetworkDepsForTest({
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-    });
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const blocks = await createManagedOutgoingImageBlocks({
-          sessionKey: "agent:main:main",
-          mediaUrls: [`http://127.0.0.1:${address.port}/large-image.png`],
-          stateDir,
-        });
+        const sourceUrl = `http://127.0.0.1:${address.port}/large-image.png`;
+        const matchedUrls: string[] = [];
+        const blocks = await withStoreRemoteFixture(
+          { url: sourceUrl, onMatch: (url) => matchedUrls.push(url) },
+          () =>
+            createManagedOutgoingImageBlocks({
+              sessionKey: "agent:main:main",
+              mediaUrls: [sourceUrl],
+              stateDir,
+            }),
+        );
+        expect(matchedUrls).toEqual([sourceUrl]);
 
         expect(blocks).toHaveLength(1);
         expect(requireBlock(blocks).type).toBe("image");
       });
     } finally {
-      setMediaStoreNetworkDepsForTest();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

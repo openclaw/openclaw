@@ -19,6 +19,7 @@ import {
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
+  renderChatAbortAction,
   renderChatPrimaryActions,
   renderComposerDictationStatus,
 } from "./chat-composer-controls.ts";
@@ -197,7 +198,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           </button>
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
-              ? renderChatPrimaryActions(runControlsProps)
+              ? renderChatAbortAction(runControlsProps)
               : nothing
           }
         </div>
@@ -212,6 +213,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? renderChatVoiceStatus({
         status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
         detail: props.realtimeTalkDetail,
+        onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
         onDismissError: props.realtimeTalkCameraError
           ? undefined
           : props.onDismissRealtimeTalkError,
@@ -293,8 +295,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     queue: props.queue,
     offline: props.offline,
     canAbort: showAbortableUi,
-    onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
-    onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+    onQueueRetry:
+      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueRetry : undefined,
+    onQueueSteer:
+      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueSteer : undefined,
     // Reordering is local bookkeeping, so it stays available while offline —
     // exactly when a queue is long enough to need it.
     onQueueMove: props.onQueueMove,
@@ -344,7 +348,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             `
           : nothing
       }
-      ${disabledBanner} ${progressCard} ${queue} ${goalCard}
+      ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing} ${progressCard}
+      ${queue} ${goalCard}
       ${
         showComposerInput
           ? html`<div
@@ -491,6 +496,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     @pointerup=${handleSelect}
                     @compositionstart=${(event: CompositionEvent) => {
                       state.mentionMenu.close();
+                      state.editRevision += 1;
                       state.composerComposing = true;
                       state.composingDraft = {
                         key: draftKey,
@@ -564,7 +570,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
               </div>
             </div> `
-          : nothing
+          : props.disabledBanner?.kind === "composer-replacement"
+            ? disabledBanner
+            : nothing
       }
       ${composerUnderlaps}
     </div>

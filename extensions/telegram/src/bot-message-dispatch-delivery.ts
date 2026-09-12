@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { getGroupThreadDeliverySession } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
   deriveDurableFinalDeliveryRequirements,
@@ -6,6 +7,7 @@ import {
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -36,13 +38,13 @@ import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
+import { createLaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import {
-  createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
-} from "./lane-delivery.js";
+} from "./lane-delivery-text-deliverer.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramPromptContextProjectionSequence,
@@ -146,11 +148,11 @@ const createPromptContextSequence = (
     record: async (record) => await recordPromptContextMessage(turn, record),
   });
 
-function createTranscriptMirror(turn: Turn) {
+function createTranscriptMirror(turn: Turn, sequenceOwner: Turn = turn) {
   const sessionKey = turn.context.ctxPayload.SessionKey;
   return sessionKey
     ? async (payload: TelegramTranscriptMirrorPayload) => {
-        const idempotencyKey = `telegram-final:${sessionKey}:${turn.transcriptMirrorTurnId}:${turn.transcriptMirrorSequence++}`;
+        const idempotencyKey = `telegram-final:${sessionKey}:${turn.transcriptMirrorTurnId}:${sequenceOwner.transcriptMirrorSequence++}`;
         await mirrorTelegramAssistantReplyToTranscript({
           cfg: turn.cfg,
           idempotencyKey,
@@ -215,14 +217,32 @@ const usesNativeTelegramQuote = (turn: Turn, payload: ReplyPayload): boolean =>
   (payload.replyToId != null && turn.replyQuoteByMessageId[payload.replyToId] != null);
 
 export async function sendPayload(
-  turn: Turn,
+  sourceTurn: Turn,
   payload: ReplyPayload,
   options?: TelegramSendPayloadOptions,
 ): Promise<boolean> {
-  if (turn.isSuperseded()) {
+  if (sourceTurn.isSuperseded()) {
     await options?.promptContextSequence?.fail();
     return false;
   }
+  const deliverySession = getGroupThreadDeliverySession();
+  // Keep parallel participants' media policy and transcript identity off the shared turn.
+  const turn = deliverySession
+    ? {
+        ...sourceTurn,
+        context: {
+          ...sourceTurn.context,
+          route: { ...sourceTurn.context.route, ...deliverySession },
+          ctxPayload: {
+            ...sourceTurn.context.ctxPayload,
+            AgentId: deliverySession.agentId,
+            SessionKey: deliverySession.sessionKey,
+            RuntimePolicySessionKey: deliverySession.sessionKey,
+          },
+        },
+        mediaLocalRoots: getAgentScopedMediaLocalRoots(sourceTurn.cfg, deliverySession.agentId),
+      }
+    : sourceTurn;
   const targetedPayload = applyQuoteReplyTarget(turn, payload);
   const finalReplyTargetId = resolveTelegramReplyId(targetedPayload.replyToId);
   const targetsDifferentMessage =
@@ -306,7 +326,7 @@ export async function sendPayload(
     }
   }
   try {
-    const transcriptMirror = createTranscriptMirror(turn);
+    const transcriptMirror = createTranscriptMirror(turn, sourceTurn);
     const result = await (turn.telegramDeps.deliverReplies ?? deliverReplies)({
       ...createDeliveryBaseOptions(turn),
       replyToMode: effectiveReplyToMode,
@@ -463,11 +483,11 @@ async function deliverTelegramProgressModeFinalAnswer(
   assertPlatformSendAuthorized?: () => void,
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
 ): Promise<LaneDeliveryResult> {
-  const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget?.() === true;
+  const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget() === true;
   // Seal pending preview updates before the durable final send. This bounds
   // final latency to one in-flight edit and prevents stale progress overtaking it.
   await cleanupProgressWithoutBlockingFinal("discard", async () => {
-    await turn.answerLane.stream?.discard?.();
+    await turn.answerLane.stream?.discard();
   });
   if (payload.isError === true) {
     await cleanupProgressWithoutBlockingFinal("teardown", async () => {
@@ -685,12 +705,14 @@ export function createDeliveryState(
     // from draft.ts would recreate the draft<->delivery runtime import cycle.
     materializeAnswerLaneBeforeRotation: async () =>
       await materializeAnswerLaneBeforeRotation(getTurn()),
-    resolveCurrentTurnTranscriptFinal: createCurrentTurnTranscriptFinalResolver({
-      agentId: context.route.agentId,
-      dispatchStartedAt: config.dispatchStartedAt,
-      loadFreshSessionEntry: config.loadFreshSessionEntry,
-      sessionKey,
-    }),
+    resolveCurrentTurnTranscriptFinal: context.ctxPayload.GroupThread
+      ? async () => undefined
+      : createCurrentTurnTranscriptFinalResolver({
+          agentId: context.route.agentId,
+          dispatchStartedAt: config.dispatchStartedAt,
+          loadFreshSessionEntry: config.loadFreshSessionEntry,
+          sessionKey,
+        }),
     transcriptMirrorSequence: 0,
     transcriptMirrorTurnId: `${context.chatId}:${context.ctxPayload.MessageSid ?? context.msg.message_id ?? config.dispatchStartedAt}`,
     implicitQuoteReplyTargetId,

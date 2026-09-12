@@ -1,5 +1,5 @@
 // Openclaw Performance Workflow tests cover openclaw performance workflow script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -42,6 +42,7 @@ type WorkflowJob = {
   outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
+  "timeout-minutes"?: number;
   steps?: WorkflowStep[];
   strategy?: {
     matrix?: {
@@ -53,6 +54,19 @@ type WorkflowJob = {
 type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    workflow_dispatch?: {
+      inputs?: Record<
+        string,
+        {
+          default?: boolean | string;
+          options?: string[];
+          required?: boolean;
+          type?: string;
+        }
+      >;
+    };
+  };
 };
 
 function readWorkflow(): Workflow {
@@ -68,6 +82,90 @@ function findStep(name: string, job = "kova"): WorkflowStep {
 
 function kovaMatrixEntries(): Array<Record<string, string>> {
   return readWorkflow().jobs?.kova?.strategy?.matrix?.include ?? [];
+}
+
+function runTargetMetadataResolution({
+  schema,
+  baseSchema,
+  version = "2026.9.4",
+  kovaRef = "",
+  contract = "",
+}: {
+  schema?: string;
+  baseSchema?: string;
+  version?: string;
+  kovaRef?: string;
+  contract?: string;
+}) {
+  const root = tempDirs.make("openclaw-kova-target-metadata-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+  mkdirSync(join(root, "src/config"), { recursive: true });
+  writeFileSync(join(root, "package.json"), JSON.stringify({ version }));
+  writeFileSync(join(root, "unselected.ts"), 'throw new Error("unselected source executed");\n');
+  for (const [name, content] of [
+    ["agent-defaults", schema],
+    ["agent-defaults-base", baseSchema],
+  ] as const) {
+    if (content !== undefined) {
+      writeFileSync(
+        join(root, `src/config/zod-schema.${name}.ts`),
+        `throw new Error("target metadata executed");\n${content}`,
+      );
+    }
+  }
+  git("init", "-q");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "target metadata",
+  );
+  const sha = git("rev-parse", "HEAD");
+  const checkout = findStep("Checkout target metadata", "resolve_target");
+  execFileSync("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], {
+    cwd: root,
+    encoding: "utf8",
+    input: checkout.with?.["sparse-checkout"],
+  });
+  expect(existsSync(join(root, "unselected.ts"))).toBe(false);
+  expect(existsSync(join(root, "node_modules"))).toBe(false);
+  const output = join(root, "output");
+  const step = findStep("Resolve OpenClaw target ref", "resolve_target");
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...readWorkflow().env,
+      CI_GIT_OWNER: resolvePath(".github/actions/git-owner/owner.py"),
+      GITHUB_OUTPUT: output,
+      GITHUB_REF_NAME: "main",
+      KOVA_REF_INPUT: kovaRef,
+      KOVA_CONFIG_CONTRACT_INPUT: contract,
+      TARGET_CHECKOUT_DIR: root,
+      TARGET_REF_INPUT: "fixture-target",
+    },
+  });
+  const outputs = Object.fromEntries(
+    existsSync(output)
+      ? readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=", 2))
+      : [],
+  );
+  return { outputs, result, sha };
 }
 
 function runCandidateTrustClassification({
@@ -111,6 +209,109 @@ function runCandidateTrustClassification({
 }
 
 describe("OpenClaw performance workflow", () => {
+  it("keeps Vitest pair benchmarking opt-in and exact-head bound", () => {
+    const workflow = readWorkflow();
+    const inputs = workflow.on?.workflow_dispatch?.inputs;
+    const benchmark = workflow.jobs?.vitest_pair;
+    const validation = findStep("Validate Vitest pair request", "vitest_pair");
+    const helper = findStep("Checkout Vitest pair helper", "vitest_pair");
+    const candidate = findStep("Checkout Vitest pair candidate", "vitest_pair");
+    const baseline = findStep("Checkout Vitest pair baseline", "vitest_pair");
+    const run = findStep("Run Vitest pair benchmark", "vitest_pair");
+    const finalize = findStep("Finalize Vitest pair artifact", "vitest_pair");
+    const upload = findStep("Upload Vitest pair artifact", "vitest_pair");
+
+    expect(inputs?.mode).toMatchObject({
+      default: "kova",
+      required: false,
+      type: "choice",
+      options: ["kova", "vitest-pair"],
+    });
+    expect(inputs?.baseline_ref).toMatchObject({
+      default: "",
+      required: false,
+      type: "string",
+    });
+    expect(benchmark?.if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}",
+    );
+    expect(benchmark?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(benchmark?.["timeout-minutes"]).toBe(180);
+    expect(benchmark?.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(benchmark)).not.toContain("secrets.");
+    expect(JSON.stringify(benchmark)).not.toContain("cache-mode");
+    expect(validation.run).toContain('[[ "$RUN_ATTEMPT" == "1" ]]');
+    expect(validation.run).toContain('[[ "$BASELINE_REF" =~ ^[0-9a-f]{40}$ ]]');
+    expect(validation.run).toContain('[[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]');
+    expect(validation.run).toContain('[[ "$TARGET_REF" == "$WORKFLOW_SHA" ]]');
+    for (const checkout of [helper, candidate, baseline]) {
+      expect(checkout.with?.["persist-credentials"]).toBe(false);
+      expect(checkout.with?.["fetch-depth"]).toBe(1);
+    }
+    expect(helper.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(candidate.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(baseline.with?.ref).toBe("${{ inputs.baseline_ref }}");
+    expect(run.run).toContain("scripts/vitest-pair-benchmark.mts");
+    expect(run.run).toContain("--baseline-sha");
+    expect(run.run).toContain("--candidate-sha");
+    expect(run.run).toContain('--scratch "$VITEST_PAIR_ROOT/scratch"');
+    expect(finalize.if).toBe("${{ always() }}");
+    expect(upload.if).toBe("${{ always() }}");
+    expect(upload.with?.name).toBe("vitest-pair-${{ github.run_id }}-${{ github.run_attempt }}");
+    expect(upload.with?.name).not.toContain("inputs.");
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(upload.with?.["retention-days"]).toBe(30);
+  });
+
+  posixIt("retains a terminal manifest when slash-containing refs fail validation", () => {
+    const validation = findStep("Validate Vitest pair request", "vitest_pair");
+    const root = tempDirs.make("vitest-pair-invalid-ref-");
+    const output = join(root, "results");
+    mkdirSync(output);
+    const target = "a".repeat(40);
+    const result = spawnSync("bash", ["-c", validation.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BASELINE_REF: "refs/heads/main",
+        RUN_ATTEMPT: "1",
+        TARGET_REF: target,
+        VITEST_PAIR_OUTPUT: output,
+        WORKFLOW_SHA: target,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(readFileSync(join(output, "terminal-manifest.json"), "utf8"))).toMatchObject({
+      status: "failure",
+      phase: "input-validation",
+      error: "baseline_ref must be an exact lowercase 40-character SHA",
+    });
+  });
+
+  it("fully isolates Vitest pair mode from Kova and publication", () => {
+    const jobs = readWorkflow().jobs;
+    const guard = jobs?.vitest_pair_guard;
+    const verify = findStep("Verify isolated Vitest pair result", "vitest_pair_guard");
+
+    for (const name of ["resolve_target", "kova", "source_performance"] as const) {
+      expect(jobs?.[name]?.if).toContain("inputs.mode != 'vitest-pair'");
+    }
+    expect(jobs?.publish?.if).toContain("inputs.mode != 'vitest-pair'");
+    expect(jobs?.artifact_only_guard?.if).toContain("inputs.mode != 'vitest-pair'");
+    expect(guard?.needs).toEqual([
+      "resolve_target",
+      "kova",
+      "source_performance",
+      "publish",
+      "artifact_only_guard",
+      "vitest_pair",
+    ]);
+    expect(guard?.permissions).toEqual({ contents: "read" });
+    expect(verify.run).toContain('"$result" != "skipped"');
+    expect(verify.run).toContain('"$VITEST_PAIR_RESULT" != "success"');
+  });
+
   it("uses an optional dispatch identifier to name parent-owned runs", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
 
@@ -123,9 +324,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "81919463ef9620722373c813192c688573f2b533";
-    const legacyKovaRef = "81919463ef9620722373c813192c688573f2b533";
-    const trustedLiveKovaRef = "81919463ef9620722373c813192c688573f2b533";
+    const canonicalKovaRef = "c2de7c24ea835ea054c416f8bf19d3cb22f104e9";
+    const legacyKovaRef = "c2de7c24ea835ea054c416f8bf19d3cb22f104e9";
+    const trustedLiveKovaRef = "c2de7c24ea835ea054c416f8bf19d3cb22f104e9";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -150,7 +351,7 @@ describe("OpenClaw performance workflow", () => {
       "${{ inputs.kova_config_contract }}",
     );
     expect(targetCheckout.with?.["sparse-checkout"]).toBe(
-      "src/config/zod-schema.agent-defaults.ts",
+      "package.json\nsrc/config/zod-schema.agent-defaults.ts\nsrc/config/zod-schema.agent-defaults-base.ts\n",
     );
     expect(resolveTarget.run).toContain(
       'schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"',
@@ -160,6 +361,7 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
     expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
+    expect(resolveTarget.run).toContain('kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"');
     expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
     expect(resolveTarget.run).toContain(
       'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
@@ -208,6 +410,129 @@ describe("OpenClaw performance workflow", () => {
       "KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}",
     );
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
+  });
+
+  describe("target metadata layouts", () => {
+    const canonical = "    mediaModels: z\n";
+    const legacy = "    imageGenerationModel: AgentToolModelSchema.optional(),\n";
+    const linked = [
+      'import { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";',
+      "export const AgentDefaultsSchema = AgentDefaultsBaseSchema.safeExtend({",
+      "});",
+      "",
+    ].join("\n");
+    const unknown = "export const AgentDefaultsSchema = z.object({});\n";
+    const cases = [
+      { name: "inline canonical", schema: canonical, expectedContract: "canonical" },
+      { name: "inline legacy", schema: legacy, expectedContract: "legacy-list" },
+      {
+        name: "linked split canonical",
+        schema: linked,
+        baseSchema: canonical,
+        expectedContract: "canonical",
+      },
+      {
+        name: "legacy wrapper before conflicting canonical base",
+        schema: linked + legacy,
+        baseSchema: canonical,
+        expectedContract: "legacy-list",
+      },
+      {
+        name: "canonical wrapper before conflicting legacy base",
+        schema: linked + canonical,
+        baseSchema: legacy,
+        expectedContract: "canonical",
+      },
+      { name: "missing wrapper", baseSchema: canonical, error: "Unable to inspect" },
+      { name: "missing linked base", schema: linked, error: "Unable to inspect" },
+      {
+        name: "unrecognized linked base",
+        schema: linked,
+        baseSchema: unknown,
+        error: "no recognized",
+      },
+      {
+        name: "dormant base beside unknown wrapper",
+        schema: unknown,
+        baseSchema: canonical,
+        error: "no recognized",
+      },
+      {
+        name: "imported but unused base",
+        schema: linked.split("\n")[0] + "\n" + unknown,
+        baseSchema: canonical,
+        error: "no recognized",
+      },
+      {
+        name: "different imported base",
+        schema: linked.replace("./zod-schema.agent-defaults-base.js", "./other.js"),
+        baseSchema: canonical,
+        error: "no recognized",
+      },
+      {
+        name: "custom ref with missing linked base",
+        schema: linked,
+        kovaRef: "custom-producer",
+        expectedContract: "",
+      },
+      {
+        name: "custom ref and contract without metadata",
+        kovaRef: "custom-producer",
+        contract: "custom-contract",
+        expectedContract: "custom-contract",
+      },
+      {
+        name: "explicit contract with default ref",
+        schema: linked,
+        baseSchema: canonical,
+        contract: "custom-contract",
+        expectedContract: "custom-contract",
+      },
+      {
+        name: "historical release pin",
+        schema: legacy,
+        version: "2026.7.33",
+        expectedContract: "legacy-list",
+        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
+      },
+    ];
+    posixIt.each(cases)("resolves $name without executing target metadata", (fixture) => {
+      const { outputs, result, sha } = runTargetMetadataResolution(fixture);
+      if (fixture.error) {
+        expect(result.status, result.stderr + result.stdout).toBe(1);
+        expect(result.stdout).toContain(fixture.error);
+        expect(result.stdout).toContain("Kova config-fixture contract");
+        expect(outputs).toEqual({});
+        return;
+      }
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      const expectedRef =
+        fixture.expectedRef ?? fixture.kovaRef ?? readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
+      expect(outputs).toEqual({
+        checkout_ref: sha,
+        tested_ref: "fixture-target",
+        tested_sha: sha,
+        kova_ref: expectedRef,
+        kova_config_contract: fixture.expectedContract,
+        kova_ref_trusted_for_live: String(
+          expectedRef === readWorkflow().env?.KOVA_TRUSTED_LIVE_REF,
+        ),
+      });
+    });
+
+    posixIt("resolves the checked-in schema from sparse committed metadata", () => {
+      const { outputs, result, sha } = runTargetMetadataResolution({
+        schema: readFileSync("src/config/zod-schema.agent-defaults.ts", "utf8"),
+        baseSchema: readFileSync("src/config/zod-schema.agent-defaults-base.ts", "utf8"),
+      });
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      expect(outputs).toMatchObject({
+        checkout_ref: sha,
+        tested_sha: sha,
+        kova_ref: "c2de7c24ea835ea054c416f8bf19d3cb22f104e9",
+        kova_config_contract: "canonical",
+      });
+    });
   });
 
   it("keeps live credentials away from custom Kova refs", () => {
@@ -649,7 +974,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova", "source_performance"]);
     expect(publisher?.if).toBe(
-      "${{ always() && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
+      "${{ always() && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
     );
     expect(publisher?.["runs-on"]).toBe("ubuntu-24.04");
     expect(publisher?.permissions?.actions).toBe("read");
@@ -691,7 +1016,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(guard?.needs).toEqual(["resolve_target", "kova", "publish"]);
     expect(guard?.if).toBe(
-      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}",
+      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.publish_reports != true }}",
     );
     expect(guard?.permissions?.contents).toBe("read");
     expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");
@@ -1247,6 +1572,12 @@ printf '%s\\n' \
   it("requires Kova evidence before uploading selected lane artifacts", () => {
     const validateEvidence = findStep("Validate Kova evidence");
     const upload = findStep("Upload Kova artifacts");
+    const retryUpload = findStep("Retry Kova artifact upload");
+    const sourceUpload = findStep("Upload source performance artifacts", "source_performance");
+    const retrySourceUpload = findStep(
+      "Retry source performance artifact upload",
+      "source_performance",
+    );
 
     expect(validateEvidence.if).toContain("always()");
     expect(validateEvidence.if).toContain("steps.lane.outputs.run == 'true'");
@@ -1255,5 +1586,15 @@ printf '%s\\n' \
     expect(validateEvidence.run).toContain('"$SUMMARY_DIR/${LANE_ID}.md"');
     expect(validateEvidence.run).toContain("exit 1");
     expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(upload.id).toBe("upload_kova_artifacts");
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(retryUpload.if).toContain("steps.upload_kova_artifacts.outcome == 'failure'");
+    expect(retryUpload.with?.overwrite).toBe(true);
+    expect(sourceUpload.id).toBe("upload_source_performance_artifacts");
+    expect(sourceUpload["continue-on-error"]).toBe(true);
+    expect(retrySourceUpload.if).toContain(
+      "steps.upload_source_performance_artifacts.outcome == 'failure'",
+    );
+    expect(retrySourceUpload.with?.overwrite).toBe(true);
   });
 });

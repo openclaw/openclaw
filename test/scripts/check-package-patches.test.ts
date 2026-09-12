@@ -5,30 +5,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectPackagePatchViolations } from "../../scripts/check-package-patches.mts";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
-import { writeJsonFile } from "../helpers/temp-repo.js";
+import { createNestedGitEnv, writeJsonFile } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
-
-const nestedGitEnvKeys = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_QUARANTINE_PATH",
-  "GIT_WORK_TREE",
-] as const;
-
-function createNestedGitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  for (const key of nestedGitEnvKeys) {
-    delete env[key];
-  }
-  return env;
-}
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, {
@@ -58,8 +37,7 @@ describe("check-package-patches", () => {
       ["@awesome.me/webawesome@3.12.0", "patches/@awesome.me__webawesome@3.12.0.patch"],
       ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
       ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
-      ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
-      ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
+      ["vitest@5.0.0", "patches/vitest@5.0.0.patch"],
       ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
     ] as const;
     const dir = makeRepo();

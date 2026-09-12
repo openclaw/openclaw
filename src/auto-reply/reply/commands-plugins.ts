@@ -1,22 +1,24 @@
 // Implements plugin command listing and configuration helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../../cli/plugin-capability-consent.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
-import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
-} from "../../plugins/install-persistence.js";
+} from "../../plugins/install-config-mutation.js";
 import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { PluginRecord } from "../../plugins/registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   buildAllPluginInspectReports,
-  buildPluginDiagnosticsReport,
+  withPluginDiagnosticsReportForInspection,
   buildPluginInspectReport,
   buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
@@ -191,7 +193,19 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     if (pluginsCommand.action === "install") {
-      return await withPluginLifecycleLease({}, async () => {
+      const resolveContext =
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx) ??
+        getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+      const context = resolveContext?.();
+      const assertInvokerOwned = () => {
+        params.commandInvocationSignal?.throwIfAborted();
+        params.opts?.abortSignal?.throwIfAborted();
+        if (resolveContext && (!context || resolveContext() !== context)) {
+          throw new Error("The Gateway that admitted this command is no longer available.");
+        }
+      };
+      assertInvokerOwned();
+      return await withPluginLifecycleLease({ signal: params.opts?.abortSignal }, async () => {
         const loadedConfig = await loadPluginCommandConfig();
         if (!loadedConfig.ok) {
           return commandReply(`⚠️ ${loadedConfig.error}`);
@@ -201,13 +215,16 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
           snapshot: loadedConfig.snapshot,
+          applyRuntime: context?.applyPluginLifecycleChange,
+          beforePersistentApply: assertInvokerOwned,
+          signal: params.opts?.abortSignal,
         });
         if (!installed.ok) {
           return commandReply(`⚠️ ${installed.error}`);
         }
         return commandReply(
           [
-            `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+            `🔌 Installed plugin "${installed.pluginId}". ${installed.application ? `Applied in Gateway generation ${installed.application.generation}.` : "Saved for the next Gateway start."}`,
             ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
           ].join("\n"),
         );
@@ -224,36 +241,41 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       if (pluginsCommand.action === "inspect") {
         const metadataSnapshot = loadPluginMetadataSnapshot(reportParams);
-        const report = buildPluginDiagnosticsReport({ ...reportParams, metadataSnapshot });
-        if (!pluginsCommand.name) {
-          return commandReply(formatPluginsList(report));
-        }
-        if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
-          const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
-          const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
-            buildPluginInspectJson(inspect, ownershipResolver),
-          );
-          return commandReply(renderJsonBlock("🔌 Plugins", reports));
-        }
-        const inspect = buildPluginInspectReport({
-          id: pluginsCommand.name,
-          config,
-          report,
-        });
-        if (!inspect) {
-          return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
-        }
-        const payload = buildPluginInspectJson(
-          inspect,
-          createInstalledPluginOwnershipResolver(metadataSnapshot.index),
+        const text = await withPluginDiagnosticsReportForInspection(
+          { ...reportParams, metadataSnapshot },
+          (report) => {
+            if (!pluginsCommand.name) {
+              return formatPluginsList(report);
+            }
+            if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+              const ownershipResolver = createInstalledPluginOwnershipResolver(
+                metadataSnapshot.index,
+              );
+              const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
+                buildPluginInspectJson(inspect, ownershipResolver),
+              );
+              return renderJsonBlock("🔌 Plugins", reports);
+            }
+            const inspect = buildPluginInspectReport({
+              id: pluginsCommand.name,
+              config,
+              report,
+            });
+            if (!inspect) {
+              return `🔌 No plugin named "${pluginsCommand.name}" found.`;
+            }
+            const payload = buildPluginInspectJson(
+              inspect,
+              createInstalledPluginOwnershipResolver(metadataSnapshot.index),
+            );
+            return renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
+              ...inspect,
+              compatibilityWarnings: payload.compatibilityWarnings,
+              install: payload.install,
+            });
+          },
         );
-        return commandReply(
-          renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
-            ...inspect,
-            compatibilityWarnings: payload.compatibilityWarnings,
-            install: payload.install,
-          }),
-        );
+        return commandReply(text);
       }
 
       const report = buildPluginRegistrySnapshotReport(reportParams);
@@ -267,7 +289,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       let registryWarning: string | undefined;
       try {
-        const committedConfig = await setPluginEnabledFromCommand({
+        await setPluginEnabledFromCommand({
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
@@ -279,7 +301,6 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           }),
         });
         await refreshPluginRegistryAfterConfigMutation({
-          config: committedConfig,
           reason: "policy-changed",
           logger: {
             warn: (message) => {

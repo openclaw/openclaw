@@ -64,8 +64,6 @@ export type {
 } from "./provider-config-context.types.js";
 export type {
   ProviderAuthOptionBag,
-  ProviderExternalAuthProfile,
-  ProviderResolveExternalAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
 } from "./provider-external-auth.types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -129,6 +127,7 @@ export type {
   WorkerLease,
   WorkerLeaseStatus,
   WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
@@ -236,11 +235,8 @@ export type {
   OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
   OpenClawPluginCliRootCommandDescriptor,
-  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHostedMediaResolver,
-  OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteMatch,
-  OpenClawPluginHttpRouteUpgradeHandler,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
 } from "./plugin-registration.types.js";

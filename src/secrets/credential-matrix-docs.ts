@@ -48,12 +48,23 @@ function uniqueSorted(values: Iterable<string>): string[] {
   return [...new Set(values)].toSorted((a, b) => a.localeCompare(b));
 }
 
+function unique(values: Iterable<string>): string[] {
+  return [...new Set(values)];
+}
+
 function formatSupportedLines(matrix: SecretRefCredentialMatrixDocument): string[] {
   const openclawPaths = uniqueSorted(
     matrix.entries
       .filter((entry) => entry.configFile === "openclaw.json")
       .map((entry) => entry.path),
   );
+  const openclawPathGroups = new Map<string, string[]>();
+  for (const path of openclawPaths) {
+    const group = path.split(".", 1)[0] ?? path;
+    const groupPaths = openclawPathGroups.get(group) ?? [];
+    groupPaths.push(path);
+    openclawPathGroups.set(group, groupPaths);
+  }
   const authProfileLines = matrix.entries
     .filter((entry) => entry.configFile === "auth-profile-store")
     .toSorted((a, b) => (a.refPath ?? a.path).localeCompare(b.refPath ?? b.path))
@@ -65,7 +76,13 @@ function formatSupportedLines(matrix: SecretRefCredentialMatrixDocument): string
       return `- \`${path}\`${condition}`;
     });
 
-  const lines = openclawPaths.map((path) => `- \`${path}\``);
+  const lines: string[] = [];
+  for (const [group, paths] of openclawPathGroups) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(`#### \`${group}\``, "", ...paths.map((path) => `- \`${path}\``));
+  }
   if (authProfileLines.length > 0) {
     lines.push(
       "",
@@ -98,6 +115,6 @@ export function renderSecretRefCredentialSurface(
     source: withSupported,
     startMarker: UNSUPPORTED_START,
     endMarker: UNSUPPORTED_END,
-    lines: uniqueSorted(matrix.excludedMutableOrRuntimeManaged).map((path) => `- \`${path}\``),
+    lines: unique(matrix.excludedMutableOrRuntimeManaged).map((path) => `- \`${path}\``),
   });
 }

@@ -8,11 +8,16 @@ import {
   registerAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolvePluginInstallRoots,
+  withPluginInstallRoots,
+} from "../../plugins/install-root-context.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 const hoisted = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -483,6 +488,36 @@ describe("resolvePluginSkillRoots", () => {
       expect(first.map((root) => root.dir)).toEqual(dirsForState(firstIncludesAcpx));
       expect(second.map((root) => root.dir)).toEqual(dirsForState(secondIncludesAcpx));
       expect(resolvePluginSkillRoots({ workspaceDir, config })).toEqual(second);
+    },
+  );
+
+  it.each(["publisher", "workspace loader"])(
+    "publishes generated links in each active private state scope through the %s",
+    async (entrypoint) => {
+      const workspaceDir = await tempDirs.make("openclaw-private-skills-");
+      const pluginRoot = await tempDirs.make("openclaw-plugin-");
+      const skillDir = path.join(pluginRoot, "skills", "helper");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: helper\ndescription: Helper\n---\n",
+      );
+      hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+        createSinglePluginRegistry({ pluginRoot, skills: ["./skills"] }),
+      );
+      const roots = resolvePluginInstallRoots();
+      for (const name of ["first", "second"]) {
+        const stateDir = path.join(workspaceDir, name);
+        const config = { plugins: { entries: { helper: { enabled: true } } } };
+        withPluginInstallRoots({ ...roots, stateDir }, () => {
+          if (entrypoint === "publisher") {
+            resolvePluginSkillRoots({ workspaceDir, config });
+          } else {
+            loadWorkspaceSkills(workspaceDir, { config });
+          }
+        });
+        expect(await fs.readlink(path.join(stateDir, "plugin-skills", "helper"))).toBe(skillDir);
+      }
     },
   );
 

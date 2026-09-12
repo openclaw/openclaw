@@ -17,23 +17,33 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
-import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
+import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  getPreparedModelRuntimeAuthLabels,
+  getPreparedModelRuntimeAuthStore,
+} from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.types.js";
 import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
 export const HARNESS_ID = "worker-catalog-fixture-harness";
 export const DISCOVERED_HARNESS_ID = `${PROVIDER_ID}-discovered-harness`;
 export const MISSING_AUTH_HARNESS_ID = `${PROVIDER_ID}-missing-auth-harness`;
-const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
+export const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
 export const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 export const PLUGIN_ID = "worker-catalog-fixture";
 export const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
@@ -76,7 +86,7 @@ module.exports = { id: ${JSON.stringify(UNRELATED_PLUGIN_ID)}, register() {} };
   return pluginFile;
 }
 
-export function createJwtWithExp(exp: number, marker?: string): string {
+function createJwtWithExp(exp: number, marker?: string): string {
   const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
     "base64url",
   );
@@ -107,6 +117,7 @@ export function writeFixturePlugin(params: {
   builtPluginVersion?: string;
   nativeCatalog?: boolean;
   asyncSyntheticAuth?: boolean;
+  syntheticAuthAvailable?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -125,6 +136,7 @@ export function writeFixturePlugin(params: {
     unrelatedId: UNRELATED_SYNTHETIC_AUTH_ID,
     pluginVersion: params.pluginVersion ?? "v1",
     asyncSyntheticAuth: params.asyncSyntheticAuth,
+    syntheticAuthAvailable: params.syntheticAuthAvailable,
   });
   fs.writeFileSync(
     pluginFile,
@@ -276,6 +288,7 @@ module.exports = {
       spinMs: params.spinMs,
       pluginVersion: params.builtPluginVersion,
       asyncSyntheticAuth: params.asyncSyntheticAuth,
+      syntheticAuthAvailable: params.syntheticAuthAvailable,
     });
     const distDir = path.join(pluginDir, "dist");
     fs.mkdirSync(distDir);
@@ -321,6 +334,7 @@ export function createCatalogFixture(
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
+    codexNativeOwner?: boolean;
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
   },
@@ -337,7 +351,7 @@ export function createCatalogFixture(
   fs.writeFileSync(externalAuthPath, "A", "utf8");
   const env = {
     ...process.env,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: options?.codexNativeOwner ? undefined : "1",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_WORKER_CATALOG_MARKER: marker,
     [EXTERNAL_AUTH_PATH_ENV]: externalAuthPath,
@@ -351,13 +365,24 @@ export function createCatalogFixture(
         model: `${PROVIDER_ID}/sqlite-model`,
         models: {
           [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+          ...(options?.codexNativeOwner
+            ? { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } }
+            : {}),
         },
       },
     },
     plugins: {
-      allow: [PLUGIN_ID],
+      allow: options?.codexNativeOwner ? [PLUGIN_ID, "openai", "codex"] : [PLUGIN_ID],
       load: { paths: [pluginFile] },
-      entries: { [PLUGIN_ID]: { enabled: true } },
+      entries: {
+        [PLUGIN_ID]: { enabled: true },
+        ...(options?.codexNativeOwner
+          ? {
+              openai: { enabled: true },
+              codex: { enabled: true, config: { discovery: { enabled: false } } },
+            }
+          : {}),
+      },
     },
   } satisfies OpenClawConfig;
   replaceRuntimeAuthProfileStoreSnapshots([
@@ -463,7 +488,7 @@ async function expectNativeHarnessModelsPublished(params: {
       availability: true,
     });
     const preparedModels = await buildModelsListResult({
-      context,
+      source: { kind: "gateway", context },
       agentId: "main",
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config: params.config, snapshot: catalog },
@@ -520,6 +545,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   makeTempDir: (prefix: string) => string;
   retireAfterTest: (retire: () => void) => void;
 }): Promise<void> {
+  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory"> = {};
   const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -606,6 +632,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
         {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+          inventoryOwner,
           isGenerationCurrent: () => current,
           isBuildCurrent: () => current,
         },
@@ -615,9 +642,42 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       "static",
     ).pending
   )[0]!;
+  // Direct builds need the same retained generation that publication gives real callers.
+  await using _ = {
+    [Symbol.asyncDispose]: retainPreparedPluginGeneration(build.pluginGeneration),
+  };
   await expectNativeHarnessModelsPublished({
     config,
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
   });
+  expect(
+    inventoryOwner.catalogInventory?.catalog.entries.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
+  expect(
+    inventoryOwner.catalogInventory?.catalog.routeVariants.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
+  expect(
+    inventoryOwner.catalogInventory?.catalog.staticEntries?.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
+}
+
+export function expectCatalogAuth(snapshot: PreparedModelRuntimeSnapshot, provider: string) {
+  const owner = materializePreparedModelCatalogOwner(snapshot);
+  return expect(
+    formatModelCatalogAuthLabel(
+      getPreparedModelRuntimeAuthLabels(owner).get(provider)?.all ?? "missing",
+      {
+        cfg: owner.config,
+        store: getPreparedModelRuntimeAuthStore(owner)!,
+        metadataSnapshot: owner.metadataSnapshot,
+      },
+    ),
+  );
 }

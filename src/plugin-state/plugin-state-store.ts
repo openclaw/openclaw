@@ -1,4 +1,5 @@
 // Plugin state store exposes persisted per-plugin state operations.
+import type { Result } from "@openclaw/normalization-core/result";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   clearPluginStateDatabaseForTests,
@@ -12,6 +13,7 @@ import {
   pluginStateDeleteIf,
   pluginStateEntries,
   pluginStateLookup,
+  pluginStateLookupMany,
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
   pluginStateRegisterSequencedJournalEntry,
@@ -46,10 +48,9 @@ export type {
 export type { PluginDoctorRawStateEntry } from "./plugin-state-store.sqlite.js";
 
 export {
-  closePluginStateDatabase,
+  closePluginStateDatabaseAsync,
   countPluginStateLiveEntries,
   getPluginStateCapacity,
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
   pluginStateDeleteEntriesIfUnchanged,
   pluginStateDoctorEntriesInKeyRange,
@@ -175,6 +176,7 @@ function createKeyedStoreForPluginId<T>(
     update: async (...args) => store.update(...args),
     deleteIf: async (...args) => store.deleteIf(...args),
     lookup: async (...args) => store.lookup(...args),
+    lookupMany: async (...args) => store.lookupMany(...args),
     consume: async (...args) => store.consume(...args),
     delete: async (...args) => store.delete(...args),
     entries: async () => store.entries(),
@@ -265,6 +267,20 @@ function createSyncKeyedStoreForPluginId<T>(
         ...(env ? { env } : {}),
       }) as T | undefined;
     },
+    lookupMany(keys) {
+      if (keys.length > 10_000) {
+        throw invalidInput("plugin state lookupMany accepts at most 10000 keys", "lookup");
+      }
+      const normalizedKeys = Array.from(keys, (key) => validateKey(key, "lookup"));
+      const values = pluginStateLookupMany({
+        pluginId,
+        namespace,
+        keys: normalizedKeys,
+        ...(env ? { env } : {}),
+      });
+      // SAFETY: This namespace uses the caller's JSON value type, as with lookup.
+      return values as Array<Result<T | undefined, PluginStateStoreError>>;
+    },
     consume(key) {
       const normalizedKey = validateKey(key, "consume");
       return pluginStateConsume({
@@ -352,7 +368,11 @@ export function createPluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(pluginId, options);
 }
 
-/** Opens a sync plugin-state namespace for a non-core plugin id. */
+/**
+ * Named adapter for the plugin-state-sync-keyed-store compatibility contract.
+ * @deprecated Plugin runtimes should use api.runtime.state.openKeyedStore and
+ * await its operations. This sync adapter remains through the next Plugin SDK major.
+ */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -364,20 +384,26 @@ export function createPluginStateSyncKeyedStore<T>(
 }
 
 /** Atomically allocates a workspace sequence and appends one journal entry. */
-export function registerPluginStateSyncSequencedJournalEntry(params: {
+export async function registerPluginStateSequencedJournalEntry(params: {
   pluginId: string;
   cursorOptions: OpenKeyedStoreOptions;
   cursorKey: string;
   journalOptions: OpenKeyedStoreOptions;
-  initialSequence: number;
-  journalKey: (sequence: number) => string;
+  /** This owner adds a fixed-width sequence suffix so key order matches append order. */
+  journalKeyPrefix: string;
+  journalKeyRange: {
+    keyStartInclusive: string;
+    keyEndExclusive: string;
+    valueKind?: string;
+  };
   journalValue: (sequence: number) => unknown;
-}): number {
+}): Promise<number> {
   if (params.pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
-  if (!Number.isSafeInteger(params.initialSequence) || params.initialSequence < 0) {
-    throw invalidInput("plugin state initial journal sequence must be a safe non-negative integer");
+  const journalKeyPrefix = validateKey(params.journalKeyPrefix);
+  if (params.journalKeyRange.keyStartInclusive >= params.journalKeyRange.keyEndExclusive) {
+    throw invalidInput("Plugin state key range must have an increasing exclusive upper bound.");
   }
   const cursorNamespace = validateNamespace(params.cursorOptions.namespace);
   const cursorMaxEntries = validateMaxEntries(params.cursorOptions.maxEntries);
@@ -420,7 +446,7 @@ export function registerPluginStateSyncSequencedJournalEntry(params: {
     cursorMaxEntries,
     journalNamespace,
     journalMaxEntries,
-    initialSequence: params.initialSequence,
+    journalKeyRange: params.journalKeyRange,
     readCursorSequence(valueJson) {
       try {
         const value = JSON.parse(valueJson) as { kind?: unknown; lastSequence?: unknown };
@@ -434,7 +460,7 @@ export function registerPluginStateSyncSequencedJournalEntry(params: {
     prepareEntry(sequence) {
       const cursor = prepareRegisterParams(cursorKey, { kind: "cursor", lastSequence: sequence });
       const journal = prepareRegisterParams(
-        params.journalKey(sequence),
+        `${journalKeyPrefix}${sequence.toString().padStart(16, "0")}`,
         params.journalValue(sequence),
       );
       return {
@@ -494,6 +520,13 @@ export function importPluginStateEntriesForDoctor(
     }
   }
   flush();
+}
+
+/** Opens an async plugin-state namespace for a trusted core owner id. */
+export function createCorePluginStateKeyedStore<T>(
+  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+): Required<PluginStateKeyedStore<T>> {
+  return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

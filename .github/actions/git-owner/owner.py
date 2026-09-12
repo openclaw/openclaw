@@ -391,9 +391,18 @@ def checkout_selected_ref():
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
+    # This owner creates the harness, not candidate source. Keep strict source-status
+    # checks useful without hiding tracked edits or similarly named nested paths.
+    exclude = os.path.join(workspace, git_output(workspace, "rev-parse", "--git-path", "info/exclude").strip())
+    os.makedirs(os.path.dirname(exclude), exist_ok=True)
+    with open(exclude, "a+b") as output:
+        output.seek(0)
+        if output.read().splitlines()[-1:] != [b"/.ci-harness/"]:
+            output.write(b"\n/.ci-harness/\n")
     os.makedirs(harness, exist_ok=True)
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
@@ -403,6 +412,8 @@ def checkout_harness(sha):
             pathspecs += evidence_scripts
         elif kind == "preflight":
             pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        if kind == "linux-node":
+            pathspecs += upgrade_scripts
         paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
         run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
     else:
@@ -411,6 +422,8 @@ def checkout_harness(sha):
         sparse_paths = ["/.github/actions/"]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
+        if kind == "linux-node":
+            sparse_paths += [f"/{path}" for path in upgrade_scripts]
         # Rooted non-cone patterns keep the kind-owned workflow files exact.
         # Sparse first, then blob-less avoids downloading a second repository snapshot.
         run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)

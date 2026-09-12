@@ -1,6 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
-import { isLinkLocalIpAddress } from "@openclaw/net-policy/ip";
+import { isLinkLocalIpAddress, isUnspecifiedIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
@@ -57,6 +57,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const config = options.getConfig();
     const url = await resolvePairingGatewayUrl(config, {
       env: process.env,
+      useLocalGateway: config.gateway?.mode === "remote",
       publicUrl: resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
       networkInterfaces: os.networkInterfaces,
       runCommandWithTimeout: commandRunner,
@@ -67,12 +68,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     // Cloud workers call back over the public network; a loopback URL can still be
     // valid for same-host device pairing, so refuse it at this cloud-only boundary.
     const host = new URL(url.url).hostname;
-    if (
-      isLoopbackHost(host) ||
-      isLinkLocalIpAddress(host) ||
-      host === "0.0.0.0" ||
-      host === "[::]"
-    ) {
+    if (isLoopbackHost(host) || isLinkLocalIpAddress(host) || isUnspecifiedIpAddress(host)) {
       throw new Error(
         `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (${url.url}, from ${url.source ?? "unknown"}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
       );
@@ -246,6 +242,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const config = options.getConfig();
           const resolved = await resolvePairingSetupFromConfig(config, {
             env: process.env,
+            useLocalGateway: config.gateway?.mode === "remote",
             publicUrl:
               resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
             bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -365,7 +362,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
       const preflight = new AbortController();
       try {
-        await prepare(
+        const prepared = await prepare(
           record,
           AbortSignal.any([
             signal,
@@ -373,6 +370,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             ...(operationSignal ? [operationSignal] : []),
           ]),
         );
+        return prepared.artifact.tarballSha256;
       } finally {
         // Preflight creates no transfer grant; release its artifact pin even on success.
         preflight.abort();

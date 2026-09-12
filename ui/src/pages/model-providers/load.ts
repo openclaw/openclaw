@@ -9,6 +9,8 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -16,12 +18,14 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/usage.ts";
+
+registerSettingsEnglish();
 
 /** Local session-spend window shown on each card. */
 export const MODEL_PROVIDERS_COST_DAYS = 30;
@@ -29,7 +33,9 @@ export const MODEL_PROVIDERS_COST_DAYS = 30;
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
+  automaticUtilityModel: string | null | undefined;
   providerOutcomes: ModelCatalogProviderOutcome[];
+  pendingProviders?: readonly string[];
   catalogError: string | null;
   config: Record<string, unknown> | null;
   providerUsage: ProviderUsageRequestResult | null;
@@ -43,6 +49,7 @@ type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
+  automaticUtilityModel: undefined,
   providerOutcomes: [],
   catalogError: null,
   config: null,
@@ -76,22 +83,27 @@ export async function loadModelProvidersData(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
-  const loadConfiguredCatalog = (loadOpts: { preparedOnly?: true; refresh?: true }) =>
+  const loadConfiguredCatalog = (refresh = false) =>
     settleRequest(
       loadModelCatalog(client, {
         agentId: opts.agentId,
-        ...loadOpts,
+        includeDefaultModels: true,
+        ...(refresh ? { refresh: true } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     );
-  const catalogRefresh = opts.refresh ? loadConfiguredCatalog({ refresh: true }) : undefined;
+  const authStatusLoad = settleRequest(loadModelAuthStatus(client, opts));
+  // Auth refresh publishes the runtime owner that the catalog must read.
+  const catalogRefresh = opts.refresh
+    ? authStatusLoad.then(() => loadConfiguredCatalog(true))
+    : undefined;
   const catalogLoad = catalogRefresh
     ? catalogRefresh.then((refreshResult) =>
-        refreshResult.ok ? refreshResult : loadConfiguredCatalog({ preparedOnly: true }),
+        refreshResult.ok ? refreshResult : loadConfiguredCatalog(),
       )
-    : loadConfiguredCatalog({ preparedOnly: true });
+    : loadConfiguredCatalog();
   const [authStatus, catalog, refreshResult, config] = await Promise.all([
-    settleRequest(loadModelAuthStatus(client, opts)),
+    authStatusLoad,
     catalogLoad,
     catalogRefresh ?? Promise.resolve(undefined),
     client
@@ -103,12 +115,16 @@ export async function loadModelProvidersData(
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models: catalog.ok ? catalog.result.models : null,
+    automaticUtilityModel: catalog.ok
+      ? catalog.result.defaultModels?.automaticUtilityModel
+      : undefined,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
+    pendingProviders: catalog.ok ? catalog.result.pendingProviders : undefined,
     catalogError:
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)
         : catalog.ok
-          ? null
+          ? modelCatalogRefreshError(catalog.result, t("modelProviders.defaults.discoverFailed"))
           : errorMessage(catalog.error),
     config,
     providerUsage: null,

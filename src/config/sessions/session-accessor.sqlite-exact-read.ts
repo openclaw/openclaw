@@ -8,9 +8,21 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+  type SessionSqliteTargetResolutionCache,
+} from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+
+/** Address of the physical store admitted by an entry read; never retains its handle. */
+export type SessionEntryReadSource = Readonly<{ agentId: string; path: string }>;
+
+type PhysicalSessionEntryReadScope = {
+  readSource: SessionEntryReadSource;
+  projection?: SessionEntryReadScope["projection"];
+};
 
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
 export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessionEntry | undefined {
@@ -23,9 +35,12 @@ export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessio
 
 /** Reads exact candidates for one logical session through a single store admission. */
 export function loadExactSessionEntryCandidates(
-  scope: Omit<SessionEntryReadScope, "sessionKey"> & {
+  scope: (
+    | (Omit<SessionEntryReadScope, "sessionKey"> & { readOnly: boolean })
+    | (PhysicalSessionEntryReadScope & { readOnly: true })
+  ) & {
     sessionKeys: readonly string[];
-    readOnly: boolean;
+    onReadSource?: (source: SessionEntryReadSource) => void;
   },
 ): ExactSessionEntry[] {
   const sessionKeys = scope.sessionKeys.map((key) => key.trim()).filter(Boolean);
@@ -33,17 +48,23 @@ export function loadExactSessionEntryCandidates(
   if (!sessionKey) {
     return [];
   }
-  const resolved = resolveSqliteScope({ ...scope, sessionKey });
+  const options =
+    "readSource" in scope
+      ? scope.readSource
+      : toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
   // Alias candidates share a store; fresh handles must not rescan canonical state per key.
-  const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "db">) =>
-    sessionKeys.flatMap((key) => {
+  const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">) => {
+    const entries = sessionKeys.flatMap((key) => {
       const entry = readExactSessionEntryRowValidated(database, key, scope.projection)?.entry;
       return entry ? [{ sessionKey: key, entry }] : [];
     });
+    scope.onReadSource?.({ agentId: database.agentId, path: database.path });
+    return entries;
+  };
   if (!scope.readOnly) {
-    return read(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
+    return read(openOpenClawAgentDatabase(options));
   }
-  const result = withOpenClawAgentDatabaseReadOnly(read, toDatabaseOptions(resolved));
+  const result = withOpenClawAgentDatabaseReadOnly(read, options);
   return result.found ? result.value : [];
 }
 
@@ -62,9 +83,11 @@ export function loadExactSessionEntryReadOnly(
 export function loadExactSessionEntryCandidatesReadOnlyBatch(
   scopes: readonly (Omit<SessionEntryReadScope, "sessionKey"> & {
     sessionKeys: readonly string[];
+    onReadSource?: (source: SessionEntryReadSource) => void;
   })[],
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const results: Array<Result<ExactSessionEntry[], unknown>> = scopes.map(() => ok([]));
+  const targetCache: SessionSqliteTargetResolutionCache = new Map();
   const groups = new Map<
     string,
     {
@@ -80,7 +103,7 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
       continue;
     }
     try {
-      const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
+      const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }, targetCache));
       const groupKey = [
         options.agentId,
         resolveOpenClawAgentSqlitePath(options),
@@ -99,6 +122,7 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
         // Admission failures affect this store; an invalid requested row must not
         // suppress healthy logical targets after a warm handle was validated.
         assertCanonicalSqliteSessionKeysCurrent(database);
+        const source = { agentId: database.agentId, path: database.path };
         const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
         const readEntry = (sessionKey: string): Result<ExactSessionEntry | undefined, unknown> => {
           const cached = entries.get(sessionKey);
@@ -131,6 +155,9 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
             if (entry.value) {
               matches.push(entry.value);
             }
+          }
+          if (results[index]!.ok) {
+            scopes[index]!.onReadSource?.(source);
           }
         }
       }, group.options);

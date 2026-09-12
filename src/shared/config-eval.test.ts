@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDirSync } from "../test-helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   evaluateRuntimeEligibility,
@@ -9,14 +9,12 @@ import {
   isConfigPathTruthyWithDefaults,
 } from "./config-eval.js";
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("config-eval helpers", () => {
   it("normalizes truthy values across primitive types", () => {
@@ -87,7 +85,7 @@ describe("config-eval helpers", () => {
   });
 
   it("returns the active runtime platform", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     expect(
       evaluateRuntimeEligibility({
         os: ["darwin"],
@@ -98,51 +96,33 @@ describe("config-eval helpers", () => {
     ).toBe(true);
   });
 
-  it("caches binary lookups until PATH changes", () => {
-    setPlatform("linux");
-    vi.stubEnv("PATH", ["/missing/bin", "/found/bin"].join(path.delimiter));
-    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
-      if (String(candidate) === path.join("/found/bin", "tool")) {
-        return undefined;
-      }
-      throw new Error("missing");
-    });
+  it("caches successful binary lookups until PATH changes", () => {
+    mockProcessPlatform("linux");
+    const binDir = tempDirs.make("openclaw-binary-cache-");
+    const missingDir = path.join(binDir, "missing");
+    const executable = path.join(binDir, "tool");
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(executable, 0o755);
+    vi.stubEnv("PATH", [missingDir, binDir].join(path.delimiter));
 
     expect(hasBinary("tool")).toBe(true);
+    fs.unlinkSync(executable);
     expect(hasBinary("tool")).toBe(true);
-    expect(accessSpy).toHaveBeenCalledTimes(2);
 
-    vi.stubEnv("PATH", "/other/bin");
-    accessSpy.mockClear();
-    accessSpy.mockImplementation(() => {
-      throw new Error("missing");
-    });
-
+    vi.stubEnv("PATH", missingDir);
     expect(hasBinary("tool")).toBe(false);
-    expect(accessSpy).toHaveBeenCalledTimes(1);
   });
 
   it("checks PATHEXT candidates and invalidates cached hits when PATHEXT changes", () => {
-    setPlatform("win32");
-    const toolsDir = path.join(path.sep, "tools");
+    mockProcessPlatform("win32");
+    const toolsDir = tempDirs.make("openclaw-binary-pathext-");
     vi.stubEnv("PATH", toolsDir);
     vi.stubEnv("PATHEXT", ".EXE;.CMD");
-    const plainCandidate = path.join(toolsDir, "tool");
-    const exeCandidate = path.join(toolsDir, "tool.EXE");
     const cmdCandidate = path.join(toolsDir, "tool.CMD");
-    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
-      if (String(candidate) === cmdCandidate) {
-        return undefined;
-      }
-      throw new Error("missing");
-    });
+    fs.writeFileSync(cmdCandidate, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(cmdCandidate, 0o755);
 
     expect(hasBinary("tool")).toBe(true);
-    expect(accessSpy.mock.calls.map(([candidate]) => String(candidate))).toEqual([
-      plainCandidate,
-      exeCandidate,
-      cmdCandidate,
-    ]);
 
     vi.stubEnv("PATHEXT", ".EXE");
     expect(hasBinary("tool")).toBe(false);
@@ -157,20 +137,19 @@ describe("config-eval helpers", () => {
   ] as const)(
     "finds a newly installed binary on unchanged $platform PATH",
     ({ platform, suffix }) => {
-      withTempDirSync({ prefix: "openclaw-binary-probe-" }, (binDir) => {
-        setPlatform(platform);
-        vi.stubEnv("PATH", binDir);
-        vi.stubEnv("PATHEXT", ".EXE;.CMD");
-        expect(hasBinary("fixture-tool")).toBe(false);
+      const binDir = tempDirs.make("openclaw-binary-probe-");
+      mockProcessPlatform(platform);
+      vi.stubEnv("PATH", binDir);
+      vi.stubEnv("PATHEXT", ".EXE;.CMD");
+      expect(hasBinary("fixture-tool")).toBe(false);
 
-        const executable = path.join(binDir, `fixture-tool${suffix}`);
-        fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-        fs.chmodSync(executable, 0o755);
+      const executable = path.join(binDir, `fixture-tool${suffix}`);
+      fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+      fs.chmodSync(executable, 0o755);
 
-        expect(process.env.PATH).toBe(binDir);
-        expect(process.env.PATHEXT).toBe(".EXE;.CMD");
-        expect(hasBinary("fixture-tool")).toBe(true);
-      });
+      expect(process.env.PATH).toBe(binDir);
+      expect(process.env.PATHEXT).toBe(".EXE;.CMD");
+      expect(hasBinary("fixture-tool")).toBe(true);
     },
   );
 });
@@ -229,7 +208,7 @@ describe("evaluateRuntimeEligibility", () => {
   });
 
   it("accepts entries when remote platform satisfies OS requirements", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     const result = evaluateRuntimeEligibility({
       os: ["linux"],
       remotePlatforms: ["linux"],

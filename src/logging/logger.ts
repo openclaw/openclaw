@@ -55,7 +55,6 @@ type ResolvedSettings = {
 type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
-type LoggerConfigLoader = () => OpenClawConfig["logging"] | undefined;
 
 type DiagnosticLogCode = {
   line?: number;
@@ -64,9 +63,6 @@ type DiagnosticLogCode = {
 
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
 const MAX_DIAGNOSTIC_LOG_MESSAGE_CHARS = 4 * 1024;
-
-const loadLoggerConfigDefault: LoggerConfigLoader = () => readLoggingConfig();
-let loadLoggerConfig: LoggerConfigLoader = loadLoggerConfigDefault;
 
 function invalidateLoggerSettings(): void {
   loggingState.cachedLogger = null;
@@ -81,14 +77,6 @@ export function applyLoggingConfig(config: OpenClawConfig["logging"] | undefined
   invalidateLoggerSettings();
 }
 
-export function setLoggerConfigLoaderForTests(loader?: LoggerConfigLoader): void {
-  loadLoggerConfig = loader ?? loadLoggerConfigDefault;
-  invalidateLoggerSettings();
-}
-
-export function readLoggerConfig(): OpenClawConfig["logging"] | undefined {
-  return loadLoggerConfig();
-}
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT = 32;
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS = 2 * 1024;
 const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
@@ -533,7 +521,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
   }
 
   const cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? loadLoggerConfig();
+    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
@@ -734,7 +722,6 @@ export function resetLogger() {
   loggingState.appliedConfig = APPLIED_LOGGING_CONFIG_UNOWNED;
   loggingState.overrideSettings = null;
   invalidateLoggingConfigCache();
-  loadLoggerConfig = loadLoggerConfigDefault;
   loggerHostnameState.resolver = defaultLoggerHostnameResolver;
   loggerHostnameState.cached = null;
   invalidateLoggerSettings();

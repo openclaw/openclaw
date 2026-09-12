@@ -37,9 +37,9 @@ bundled, official external, and source-only plugins, see
     openclaw plugins search "calendar"
     ```
 
-    ClawHub is the primary discovery surface for community plugins. During the
-    launch cutover, ordinary bare package specs still install from npm unless
-    they match an official plugin id. Raw `@openclaw/*` specs that match a
+    ClawHub is the primary discovery surface for community plugins. Ordinary
+    bare package specs install from npm unless they match a bundled or official
+    plugin id. Raw `@openclaw/*` specs that match a
     bundled plugin resolve to that bundled copy. Use an explicit source prefix
     when you need one source specifically.
 
@@ -131,7 +131,7 @@ bundled, official external, and source-only plugins, see
 Bare package specs have special compatibility behavior: a bare name that
 matches a bundled plugin id uses that bundled source; a bare name that matches
 an official external plugin id uses the official package catalog; any other
-bare spec installs through npm during the launch cutover. Raw `@openclaw/*`
+bare spec installs through npm. Raw `@openclaw/*`
 specs that match bundled plugins also resolve to the bundled copy before npm
 fallback. Use `npm:@openclaw/<plugin>@<version>` to deliberately install the
 external npm package instead of the bundled copy. Use `clawhub:`, `npm:`,
@@ -187,7 +187,7 @@ The common plugin config shape is:
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
+    load: { paths: ["~/path/to/oss/voice-call-plugin"] },
     slots: { memory: "memory-core" },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
@@ -462,3 +462,6 @@ reload behavior, and legacy cleanup, see
 - [Building plugins](/plugins/building-plugins) - native plugin authoring guide
 - [Plugin SDK overview](/plugins/sdk-overview) - runtime registration, hooks, and API fields
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata
+- [Context engines](/concepts/context-engine) - pluggable context assembly plugins
+- [Diffs](/tools/diffs) - read-only diff viewer and file renderer (optional plugin tool)
+- [ACP agents — setup](/tools/acp-agents-setup) - configuring a plugin-provided ACP agent

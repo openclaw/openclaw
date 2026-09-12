@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 usage() {
@@ -501,7 +505,7 @@ boot_emulator() {
   emulator_args=(-avd "$avd" -no-window -no-audio -no-boot-anim)
   if [[ -n "${ANDROID_SCREENSHOT_EMULATOR_ARGS:-}" ]]; then
     read -r -a extra_args <<<"$ANDROID_SCREENSHOT_EMULATOR_ARGS"
-    emulator_args+=("${extra_args[@]}")
+    emulator_args+=(${extra_args[@]+"${extra_args[@]}"})
   fi
   "$emulator" "${emulator_args[@]}" >"$EMULATOR_LOG" 2>&1 &
   EMULATOR_PID="$!"
@@ -577,9 +581,9 @@ scene_ready_text() {
   fi
   case "$1" in
     home) printf '%s\n' "Overview" ;;
-    # The screenshot fixture seeds chat history and restores at the latest user
-    # turn, so wait for that visible anchor instead of empty-chat copy.
-    chat) printf '%s\n' "Draft a short status update for the team." ;;
+    # The screenshot fixture seeds chat history and restores at the live edge,
+    # so wait for the latest reply instead of empty-chat copy.
+    chat) printf '%s\n' "The Android release is close." ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
     voice-wake) printf '%s\n' "Wake listener" ;;
     # Connected fixtures can push Add Gateway below the composed viewport, so

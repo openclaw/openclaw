@@ -101,6 +101,12 @@ function createDb(): DatabaseSync {
 }
 
 class SessionSyncYieldHarness extends MemoryManagerSyncOps {
+  protected readonly createProvider = (): never => {
+    throw new Error("Sync yield harness does not acquire embedding providers");
+  };
+  protected releaseProvider(): never {
+    throw new Error("Sync yield harness does not own embedding providers");
+  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
@@ -175,7 +181,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
   protected resetProviderInitializationForRetry(): void {}
 
@@ -187,18 +193,6 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   ): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
-  }
-}
-
-class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
-  protected override readonly cache = { enabled: true };
-
-  constructor(db: DatabaseSync) {
-    super(db, () => {});
-  }
-
-  async seedCache(sourceDb: DatabaseSync): Promise<void> {
-    await this.seedEmbeddingCache(sourceDb);
   }
 }
 
@@ -250,84 +244,6 @@ describe("session sync responsiveness", () => {
       await immediate;
     } finally {
       db.close();
-    }
-  });
-});
-
-describe("embedding cache seed responsiveness", () => {
-  function countCacheRows(db: DatabaseSync): number {
-    const row = db.prepare("SELECT count(*) AS count FROM memory_embedding_cache").get() as {
-      count: number;
-    };
-    return row.count;
-  }
-
-  it("commits each materialized page before yielding", async () => {
-    const sourceDb = createDb();
-    const targetDb = createDb();
-    const { StatementSync } = requireNodeSqlite();
-    const prepare = vi.spyOn(targetDb, "prepare");
-    const columns = vi.spyOn(StatementSync.prototype, "columns");
-    try {
-      const insert = sourceDb.prepare(
-        `INSERT INTO memory_embedding_cache
-           (provider, model, provider_key, hash, embedding, dims, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      );
-      const rawLargeEmbedding = ` ${JSON.stringify(Array.from({ length: 4096 }, () => 0.1234567890123456))}\n`;
-      sourceDb.exec("BEGIN");
-      for (let index = 0; index < 101; index += 1) {
-        insert.run(
-          "test",
-          "model",
-          "key",
-          `hash-${index}`,
-          index === 0 ? " malformed JSON \n" : index === 1 ? rawLargeEmbedding : "[ 0.5 ]",
-          index === 0 ? null : index === 1 ? 4096 : 1,
-          index - 1,
-        );
-      }
-      sourceDb.exec("COMMIT");
-
-      let duringYield: {
-        sourceInTransaction: boolean;
-        targetInTransaction: boolean;
-        rows: number;
-      } | null = null;
-      const observedYield = new Promise<void>((resolve, reject) => {
-        setImmediate(() => {
-          try {
-            duringYield = {
-              sourceInTransaction: sourceDb.isTransaction,
-              targetInTransaction: targetDb.isTransaction,
-              rows: countCacheRows(targetDb),
-            };
-            resolve();
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-        });
-      });
-
-      await new EmbeddingCacheSeedHarness(targetDb).seedCache(sourceDb);
-      await observedYield;
-
-      expect(duringYield).toEqual({
-        sourceInTransaction: false,
-        targetInTransaction: false,
-        rows: 100,
-      });
-      expect(countCacheRows(targetDb)).toBe(101);
-      expect(prepare.mock.calls.filter(([sql]) => /^insert/i.test(sql))).toHaveLength(1);
-      expect(columns).not.toHaveBeenCalled();
-      const readCache = (db: DatabaseSync) =>
-        db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
-      expect(readCache(targetDb)).toEqual(readCache(sourceDb));
-    } finally {
-      prepare.mockRestore();
-      columns.mockRestore();
-      sourceDb.close();
-      targetDb.close();
     }
   });
 });

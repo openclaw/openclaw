@@ -29,7 +29,7 @@ import {
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
 import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
-import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
   hasCompletedModelProgressForIdleBreaker,
   normalizeEmbeddedRunAttemptResult,
@@ -51,7 +51,9 @@ type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 export async function normalizeEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: PreparedRuntime;
-  dispatchedAttempt: Awaited<ReturnType<typeof dispatchEmbeddedRunAttempt>>;
+  dispatchedAttempt: Awaited<
+    ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>
+  >["dispatchedAttempt"];
   sessionPromptState: SessionPromptState;
   provider: string;
   modelId: string;
@@ -188,7 +190,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
-  const lastRunPromptUsage = callUsage.latest;
+  // A real mid-turn truncation rewrites the context after earlier usage observations.
+  // Keep billing accumulated, but do not carry that pre-mutation context into the retry.
+  const contextMutatedByMidTurnTruncation =
+    preflightRecovery?.handled === true &&
+    preflightRecovery.source === "mid-turn" &&
+    (preflightRecovery.truncatedCount ?? 0) > 0;
+  const lastRunPromptUsage = contextMutatedByMidTurnTruncation
+    ? { contextUsage: { state: "unavailable" as const } }
+    : callUsage.latest;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
@@ -204,33 +214,33 @@ export async function normalizeEmbeddedRunAttempt(input: {
         `provider=${provider}/${modelId} consecutive=${breakerStep.consecutive} ` +
         `cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}`,
     );
-    return {
-      action: "complete",
-      result: handleRetryLimitExhaustion({
-        message,
-        decision: resolveRunFailoverDecision({
-          stage: "retry_limit",
-          fallbackConfigured: runInput.fallbackConfigured,
-          failoverReason: input.lastRetryFailoverReason,
-        }),
-        provider,
-        model: modelId,
-        profileId: runtime.lastProfileId,
-        durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionPromptState.sessionId,
-          sessionFile: sessionPromptState.sessionFile,
-          provider,
-          model: preparedRuntime.model.id,
-          credentialSource: attempt.modelAttempt?.credentialSource,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage,
-        }),
-        replayInvalid: input.replayState.replayInvalid ? true : undefined,
-        livenessState: "blocked",
+    const result = handleRetryLimitExhaustion({
+      message,
+      decision: resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: runInput.fallbackConfigured,
+        failoverReason: input.lastRetryFailoverReason,
       }),
-    };
+      provider,
+      model: modelId,
+      profileId: runtime.lastProfileId,
+      durationMs: Date.now() - runInput.startedAtMs,
+      agentMeta: buildErrorAgentMeta({
+        sessionId: sessionPromptState.sessionId,
+        sessionFile: sessionPromptState.sessionFile,
+        provider,
+        model: preparedRuntime.model.id,
+        credentialSource: attempt.modelAttempt?.credentialSource,
+        ...runtime.outerContextTokenMeta,
+        usageAccumulator: input.usageAccumulator,
+        lastRunPromptUsage,
+      }),
+      replayInvalid: input.replayState.replayInvalid ? true : undefined,
+      livenessState: "blocked",
+    });
+    // Escalating provider failures throw above; only returned results carry a terminal stop.
+    result.meta.modelFallbackStopReason = "idle_timeout_circuit_breaker";
+    return { action: "complete", result };
   }
   if (attempt.contextBudgetStatus) {
     input.contextRecoveryState.lastContextBudgetStatus = attempt.contextBudgetStatus;

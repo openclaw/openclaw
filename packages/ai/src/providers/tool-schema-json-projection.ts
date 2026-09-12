@@ -1,4 +1,5 @@
 import { types as utilTypes } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */
@@ -30,25 +31,35 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
   const nonFiniteNumber = {
     path: null as string | null,
   };
-  const paths = new WeakMap<object, string>();
+  const ancestors: object[] = [];
+  const pathLengths: number[] = [];
+  const segments = [path];
   let isRoot = true;
   let text: string | undefined;
   try {
     text = JSON.stringify(value, function (this: object, key, entry) {
       const invalidNumber = nonFiniteNumber.path === null && isNonFiniteNumberValue(entry);
       if (invalidNumber || (entry && typeof entry === "object")) {
-        const holderPath = paths.get(this);
-        const entryPath = isRoot
-          ? path
-          : holderPath === undefined
-            ? `${path}.${key}`
-            : Array.isArray(this)
-              ? `${holderPath}[${key}]`
-              : `${holderPath}.${key}`;
+        // The replacer's holder identifies when native JSON traversal returns to a parent.
+        // Keep only that ancestor path, including objects returned by toJSON.
+        while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
+          ancestors.pop();
+          segments.length = expectDefined(pathLengths.pop(), "schema ancestor path length");
+        }
+        const prefixLength = segments.length;
+        if (!isRoot) {
+          if (Array.isArray(this)) {
+            segments.push("[", key, "]");
+          } else {
+            segments.push(".", key);
+          }
+        }
         if (invalidNumber) {
-          nonFiniteNumber.path = entryPath;
+          nonFiniteNumber.path = segments.join("");
+          segments.length = prefixLength;
         } else {
-          paths.set(entry, entryPath);
+          ancestors.push(entry);
+          pathLengths.push(prefixLength);
         }
       }
       isRoot = false;
@@ -90,13 +101,20 @@ const schemaMapKeywords = new Set([
 
 function inspectJsonSchema(
   schema: RuntimeToolInputSchemaJson,
-  path: string,
+  path: (string | number)[],
   violations: string[],
 ): boolean {
   if (Array.isArray(schema)) {
-    return schema.every((entry, index) =>
-      inspectJsonSchema(entry, `${path}[${index}]`, violations),
-    );
+    let index = 0;
+    for (const entry of schema) {
+      path.push("[", index++, "]");
+      const valid = inspectJsonSchema(entry, path, violations);
+      path.length -= 3;
+      if (!valid) {
+        return false;
+      }
+    }
+    return true;
   }
   if (!isJsonObject(schema)) {
     // Raw JSON numeric literals can overflow during parsing without passing
@@ -105,25 +123,35 @@ function inspectJsonSchema(
   }
   for (const key of ["$dynamicRef", "$dynamicAnchor"] as const) {
     if (key in schema) {
-      violations.push(`${path}.${key}`);
+      violations.push(`${path.join("")}.${key}`);
     }
   }
-  for (const [key, value] of Object.entries(schema)) {
+  for (const key of Object.keys(schema)) {
+    const value = schema[key];
     if (typeof value === "number" && !Number.isFinite(value)) {
       return false;
     }
     if (!value || typeof value !== "object") {
       continue;
     }
+    path.push(".", key);
     if (schemaMapKeywords.has(key) && isJsonObject(value)) {
-      for (const [schemaName, childSchema] of Object.entries(value)) {
-        if (!inspectJsonSchema(childSchema, `${path}.${key}.${schemaName}`, violations)) {
+      for (const schemaName of Object.keys(value)) {
+        const childSchema = value[schemaName];
+        if (childSchema === undefined) {
+          return false;
+        }
+        path.push(".", schemaName);
+        const valid = inspectJsonSchema(childSchema, path, violations);
+        path.length -= 2;
+        if (!valid) {
           return false;
         }
       }
-    } else if (!inspectJsonSchema(value, `${path}.${key}`, violations)) {
+    } else if (!inspectJsonSchema(value, path, violations)) {
       return false;
     }
+    path.length -= 2;
   }
   return true;
 }
@@ -140,7 +168,8 @@ export function projectRuntimeToolInputSchema(
   } else if (projection.schema.type !== undefined && projection.schema.type !== "object") {
     violations.push(`${path}.type must be "object"`);
   }
-  if (!inspectJsonSchema(projection.schema, path, violations)) {
+  // Valid schemas need no diagnostic strings; reuse this call's path while walking the JSON copy.
+  if (!inspectJsonSchema(projection.schema, [path], violations)) {
     return { schema: {}, violations: [`${path} is not a JSON value`] };
   }
   return {

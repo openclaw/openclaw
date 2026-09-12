@@ -3,7 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
-import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
+import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   worktreeRoot: "Worktree Root",
@@ -32,7 +32,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "wizard.lastRunCommit": "Wizard Last Run Commit",
   "wizard.lastRunCommand": "Wizard Last Run Command",
   "wizard.lastRunMode": "Wizard Last Run Mode",
-  "wizard.localModelLeanAutoModel": "Wizard Auto-Set Lean Model",
   "wizard.securityAcknowledgedAt": "Wizard Security Acknowledgement Timestamp",
   "logging.audit": "Audit Ledger",
   "logging.audit.enabled": "Audit Ledger Enabled",
@@ -52,7 +51,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.checkOnStart": "Update Check on Start",
   "update.auto.enabled": "Auto Update Enabled",
   telemetry: "Telemetry",
-  ...projectTelemetryFieldMetadata("label"),
+  ...TELEMETRY_FIELD_LABELS,
   surfaces: "Surface Policies",
   "surfaces.*.silentReply": "Surface Silent Reply Policy",
   "diagnostics.enabled": "Diagnostics Enabled",
@@ -461,14 +460,17 @@ export const FIELD_LABELS: Record<string, string> = {
   "bindings[].acp.label": "ACP Binding Label",
   "bindings[].acp.cwd": "ACP Binding Working Directory",
   "bindings[].acp.backend": "ACP Binding Backend",
-  broadcast: "Broadcast",
-  "broadcast.strategy": "Broadcast Strategy",
-  "broadcast.*": "Broadcast Destination List",
+  broadcast: "Agent Group Threads",
+  "broadcast.strategy": "Agent Group Strategy",
+  "broadcast.*": "Agent Group Participants and Options",
+  "broadcast.*.agents": "Agent Group Participants",
+  "broadcast.*.mentionGating": "Agent Group Mention Selection",
+  "broadcast.*.maxRounds": "Agent Group Maximum Rounds",
+  "broadcast.*.maxTurns": "Agent Group Maximum Turns",
   "skills.load.extraDirs": "Extra Skill Directories",
   "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
   "skills.load.watch": "Watch Skills",
   "skills.workshop.autonomous.mode": "Skill Workshop Autonomous Mode",
-  "skills.workshop.allowSymlinkTargetWrites": "Allow Skill Workshop Symlink Writes",
   "agents.defaults.skills": "Skills",
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",
@@ -708,6 +710,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.ownerAllowFrom": "Command Owners",
   "commands.allowFrom": "Command Elevated Access Rules",
   mcp: "MCP",
+  "mcp.sessionIdleTtlMs": "MCP Session Idle TTL (ms)",
   "mcp.servers": "MCP Servers",
   "mcp.servers.*.enabled": "MCP Server Enabled",
   "mcp.servers.*.auth": "MCP Server Auth",
@@ -789,6 +792,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.sharing.suggest": "Allow Suggest Sessions",
   "session.sharing.drafts": "Allow Draft Sessions",
   "session.maintenance": "Session Maintenance",
+  "session.maintenance.coldStorage": "Transcript Cold Storage",
+  "session.maintenance.coldStorage.enabled": "Automatically Archive Old Transcripts",
+  "session.maintenance.coldStorage.afterDays": "Archive After Inactive Days",
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",
   "session.maintenance.archiveDashboardAfter": "Archive Inactive Dashboard Sessions After",

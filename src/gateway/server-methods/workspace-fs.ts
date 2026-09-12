@@ -132,7 +132,7 @@ export type WorkspaceFileUpdateResult =
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
 
-function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
+export function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
   const result = workspaceFileUpdateQueue.then(update, update);
   workspaceFileUpdateQueue = result.then(
     () => undefined,
@@ -146,6 +146,7 @@ export async function updateWorkspaceFile(
   browserPath: string,
   content: string,
   expectedHash: string,
+  assertCurrent?: () => void,
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -173,6 +174,7 @@ export async function updateWorkspaceFile(
     if (currentHash !== expectedHash) {
       return { status: "conflict", currentHash };
     }
+    assertCurrent?.();
     await workspaceRoot.write(browserPath, content, {
       encoding: "utf8",
       renameIdentity: "strict",

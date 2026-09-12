@@ -26,6 +26,7 @@ export function packageNameFromSpecifier(specifier: string) {
     typeof specifier !== "string" ||
     specifier.startsWith(".") ||
     specifier.startsWith("/") ||
+    specifier.startsWith("bun:") ||
     specifier.startsWith("node:") ||
     specifier.startsWith("#")
   ) {

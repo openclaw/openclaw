@@ -1,6 +1,12 @@
 import { ContextProvider } from "@lit/context";
+import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGateway,
+  type ApplicationGatewaySnapshot,
+} from "../app/context.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 
 export const hiddenScopeUpgradeCapability = {
@@ -47,3 +53,39 @@ export function createApplicationContextProvider(context: ApplicationContext<Rou
 }
 
 export type ApplicationContextProvider = ReturnType<typeof createApplicationContextProvider>;
+
+export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
+  let snapshot = initial;
+  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<GatewayEventListener>();
+  const gateway = {
+    connectionRevision: 0,
+    connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
+    get snapshot() {
+      return snapshot;
+    },
+    connect: () => undefined,
+    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeEvents(listener: GatewayEventListener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+  } as unknown as ApplicationGateway;
+  return {
+    gateway,
+    publishEvent: (event: GatewayEventFrame) => {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
+    publish(next: ApplicationGatewaySnapshot) {
+      snapshot = next;
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}

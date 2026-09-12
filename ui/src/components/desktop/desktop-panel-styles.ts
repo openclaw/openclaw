@@ -56,6 +56,21 @@ const desktopPanelStyles = css`
   .desktop-toolbar__spacer {
     flex: 1;
   }
+  .desktop-sizing {
+    width: 88px;
+    height: 32px;
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 6px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+  .desktop-touch-toolbar .desktop-sizing {
+    height: 44px;
+  }
   .desktop-button {
     border: 1px solid var(--border, #262b34);
     border-radius: 6px;
@@ -72,7 +87,8 @@ const desktopPanelStyles = css`
     border-color: var(--accent, #ff5c5c);
     color: var(--accent, #ff5c5c);
   }
-  .desktop-button:disabled {
+  .desktop-button:disabled,
+  .desktop-touch-action:disabled {
     opacity: 0.5;
   }
   .desktop-session {

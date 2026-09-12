@@ -1,13 +1,18 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
-import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
+import {
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+  isUiTestTarget,
+} from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
+  hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isTestSupportFileTarget,
@@ -17,9 +22,11 @@ import {
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
   createNodeTestShards,
+  createToolingNodeTestShardBundles,
   isPolicyTestOwnedPath,
   packNodeTestGroups,
   resolvePolicyTestTargets,
+  TOOLING_CONFIG,
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import {
@@ -53,6 +60,30 @@ type ChangedNodeTestShard = {
 type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
 
+/** Ordinary UI unit entries retain their unit owner; fixtures and their consumers retain E2E. */
+export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  if (
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some(
+      (file) =>
+        !file.startsWith("ui/src/") ||
+        !isUiTestTarget(file) ||
+        /\.(?:browser|node)\.test\.ts$/u.test(file) ||
+        /(?:^|\/)(?:e2e|test-helpers|test-fixtures|fixtures|__fixtures__)(?:\/|$)/u.test(file) ||
+        path.posix.normalize(file) !== file ||
+        !existsSync(path.join(cwd, file)) ||
+        !lstatSync(path.join(cwd, file)).isFile(),
+    )
+  ) {
+    return true;
+  }
+  // Test entry names are not enough: a fixture or application may import one.
+  // Reuse the canonical import graph rather than orphaning that consumer's proof.
+  return hasImportGraphConsumers(changedPaths, cwd, { tooling: true });
+}
+
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
@@ -70,20 +101,33 @@ const MCP_DOCKER_SEED_LANES = [
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
 ] as const;
-const DOCKER_SEED_LANE_ORDER = [...MCP_DOCKER_SEED_LANES, "update-channel-switch"] as const;
+const DOCKER_SEED_LANE_ORDER = [
+  ...MCP_DOCKER_SEED_LANES,
+  "update-channel-switch",
+  "fleet-cache",
+  "published-upgrade-survivor",
+] as const;
 type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
 const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
-  ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
+  ".github/workflows/ci.yml": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
   "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
+  "scripts/e2e/fleet-cache-docker.sh": ["fleet-cache"],
   "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
   "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],
   "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
   "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
   "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
   "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
-  "scripts/lib/ci-changed-node-test-plan.mts": MCP_DOCKER_SEED_LANES,
+  "scripts/lib/ci-changed-node-test-plan.mts": [
+    ...MCP_DOCKER_SEED_LANES,
+    "published-upgrade-survivor",
+  ],
 };
+// Keep the whole state owner: both schema-version constants and future migrations
+// must exercise an installed release's updater before they reach main.
+const PUBLISHED_UPGRADE_OWNER_RE =
+  /^src\/(?:cli\/update-cli\/|infra\/(?:update-|package-update-)|plugins\/update(?:-|\.ts$)|commands\/doctor|state\/)|^scripts\/e2e\/(?:upgrade-survivor|lib\/upgrade-survivor\/)|^scripts\/(?:resolve-upgrade-survivor-baselines\.mts|lib\/(?:docker-e2e-(?:plan|scenarios)|upgrade-survivor-[^/]+)\.(?:mjs|mts))$|^package\.json$/u;
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
 );
@@ -104,6 +148,15 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
   const selected = new Set<DockerSeedLane>();
   for (const changedPath of changedPaths) {
     const normalizedPath = changedPath.replaceAll("\\", "/");
+    if (normalizedPath.startsWith("scripts/e2e/lib/fleet-cache/")) {
+      selected.add("fleet-cache");
+    }
+    if (
+      PUBLISHED_UPGRADE_OWNER_RE.test(normalizedPath) &&
+      (!normalizedPath.startsWith("src/") || !isTestOnlyPath(normalizedPath))
+    ) {
+      selected.add("published-upgrade-survivor");
+    }
     for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
       selected.add(lane);
     }
@@ -320,11 +373,13 @@ function resolvePreciseChangedTargets(
   ) {
     return null;
   }
-  // Preserve special shard setup (for example Go and TUI PTY coverage) by using
-  // the compact plan until targeted jobs can carry per-config prerequisites.
+  // Tooling targets retain canonical compact descriptors below. Other special
+  // owners still require the complete plan rather than generic target jobs.
   if (
     targetPlans.some(({ plans }) =>
-      plans.some(({ config }) => configsRequiringFullSuiteMetadata.has(config)),
+      plans.some(
+        ({ config }) => configsRequiringFullSuiteMetadata.has(config) && config !== TOOLING_CONFIG,
+      ),
     )
   ) {
     return null;
@@ -555,8 +610,10 @@ function packChangedExtensionConfigShards(
 export function createChangedNodeTestShards(
   changedPaths: string[],
   options: CwdOptions & {
+    runnerBackend?: string;
     dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
     dedicatedUiE2e?: boolean;
+    dedicatedMaxLinesRatchet?: boolean;
   } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
@@ -577,17 +634,26 @@ export function createChangedNodeTestShards(
     return null;
   }
 
+  // Policy watches can name extension-owned files (such as a bundled manifest)
+  // that host suites scan without importing, so an extension path a watch names
+  // stays eligible alongside the plugin control-UI paths.
   const policyTargetsByPath = new Map(
     livePaths
+      .map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])] as const)
       .filter(
-        (changedPath) =>
-          !changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath),
-      )
-      .map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])]),
+        ([changedPath, policyTargets]) =>
+          !changedPath.startsWith("extensions/") ||
+          isPluginControlUiPath(changedPath) ||
+          policyTargets.length > 0,
+      ),
   );
   const regularLivePaths = livePaths.filter(
     (changedPath) =>
       (!changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath)) &&
+      // The emitted ratchet checks this data against the exact tested merge tree.
+      !(
+        options.dedicatedMaxLinesRatchet === true && changedPath === "config/max-lines-baseline.txt"
+      ) &&
       !isPolicyTestOwnedPath(changedPath),
   );
 
@@ -614,9 +680,23 @@ export function createChangedNodeTestShards(
   if (targetPlans === null) {
     return null;
   }
+  const toolingTargets = targetPlans
+    .filter(({ plans }) => plans.some(({ config }) => config === TOOLING_CONFIG))
+    .map(({ target }) => target);
+  // Canonical shard inventories describe this checkout, never a caller's
+  // synthetic or alternate source root with coincidentally matching paths.
+  const toolingShards = toolingTargets.length
+    ? path.resolve(cwd) === process.cwd()
+      ? createToolingNodeTestShardBundles(toolingTargets, { runnerBackend: options.runnerBackend })
+      : null
+    : [];
+  if (toolingShards === null) {
+    return null;
+  }
   // CI supplies the suite owners it emits. Validate every changed path first,
   // then subtract covered plans; local runs and unselected owners keep their targets.
   const targets = targetPlans
+    .filter(({ target }) => !toolingTargets.includes(target))
     .filter(
       ({ plans }) =>
         !options.dedicatedUiE2e || !plans.every(({ config }) => config === UI_E2E_VITEST_CONFIG),
@@ -646,6 +726,7 @@ export function createChangedNodeTestShards(
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
+    ...toolingShards.map((shard) => ({ ...shard, configs: [] })),
     ...packChangedExtensionConfigShards(createChangedExtensionConfigShardsForPaths(livePaths, cwd)),
     // Native browser files run in checks-ui, including precise changed-file plans.
     ...createChangedTargetShards(
@@ -655,7 +736,10 @@ export function createChangedNodeTestShards(
         shardName: "changed",
       },
     ),
-    ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
+    ...(hasBuildArtifactAffectingChange(changedPaths) ||
+    toolingShards.some((shard) => shard.requiresDist)
+      ? []
+      : [createBoundaryShard()]),
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
   return shards.length > 0 || targets.length < targetPlans.length ? shards : null;

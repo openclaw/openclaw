@@ -93,7 +93,10 @@ export type BuildChatItemsProps = {
   stream: string | null;
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
+  initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
+  workspaceSyncPendingRunIds?: readonly string[];
+  workerSetupPending?: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
@@ -318,6 +321,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const projections: ChatProjection[] = buildPendingInputItems(
     pendingInputs,
     props.searchOpen ? props.searchQuery : undefined,
+    props.queue,
+    props.workspaceSyncPendingRunIds,
+    props.workerSetupPending,
   ).map((item) => ({ item }));
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
@@ -363,7 +369,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         (identity?.role === "assistant" && !identity.isImported && identity.runId === runId)
       );
     });
-    items.splice(insertionIndex < 0 ? items.length : insertionIndex, 0, {
+    // The retained New Session prompt predates all recovery output, including
+    // after a reload when its original browser timestamp is unavailable.
+    const position = queued.id === props.initialTurnId ? 0 : insertionIndex;
+    items.splice(position < 0 ? items.length : position, 0, {
       kind: "message",
       key: queued.sendRunId ? buildMessageItems([message])[0]!.key : `pending-send:${queued.id}`,
       message,

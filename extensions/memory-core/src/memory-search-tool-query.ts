@@ -3,10 +3,13 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   formatMemoryIndexRebuildGuidance,
   resolveMemoryIndexIdentityDiagnostic,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryIndexIdentityDiagnostic,
   type MemoryProviderStatus,
+  type MemorySearchDeadlineControl,
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
+  type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -62,7 +65,7 @@ function isClosedMemoryStoreError(error: unknown): boolean {
     message.includes("database is not open") ||
     message.includes("database connection is not open") ||
     message.includes("database handle is closed") ||
-    message.includes("memory search manager is closed")
+    message.includes("memory index manager is closed")
   );
 }
 
@@ -72,10 +75,15 @@ export async function executeMemorySearchToolQuery(params: {
   query: MemorySearchToolQuery;
   visibility: MemorySearchToolVisibility;
   signal: AbortSignal;
+  deadlineControl?: MemorySearchDeadlineControl;
+  onPartialResults?: (
+    result: Awaited<ReturnType<typeof finalizeMemorySearchToolQuery>> | null,
+  ) => void;
 }) {
   const startedAt = Date.now();
   const runtimeDebug: MemorySearchRuntimeDebug[] = [];
   let active = params.initialManager;
+  let partialGeneration = 0;
   const { query, signal, visibility } = params;
   // Product recall may index transcripts without adding them to ordinary model search.
   // Explicit corpus selection is authorized by the tool owner before this point.
@@ -88,6 +96,7 @@ export async function executeMemorySearchToolQuery(params: {
           ? query.indexedSources
           : query.defaultSources
         : undefined);
+  const queryContext = { query, visibility, searchSources, startedAt };
 
   const searchOnce = async () => {
     const allowedSources = searchSources ? new Set(searchSources) : undefined;
@@ -110,10 +119,42 @@ export async function executeMemorySearchToolQuery(params: {
       sessionKey: query.sessionKey,
       activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
       signal,
+      ...(params.deadlineControl
+        ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: params.deadlineControl }
+        : {}),
       onDebug: (debug) => runtimeDebug.push(debug),
+      onPartialResults: params.onPartialResults
+        ? (partialCandidates) => {
+            const generation = ++partialGeneration;
+            params.onPartialResults?.(null);
+            // Session visibility can change while semantic retrieval waits. A deadline
+            // cannot reuse earlier session authority, so retain only durable memory files.
+            const memoryCandidates = partialCandidates?.filter(
+              (entry) => entry.source === "memory",
+            );
+            if (!memoryCandidates?.length || signal.aborted) {
+              return;
+            }
+            // Finalization yields; only the latest permitted snapshot survives fallback.
+            void finalizeMemorySearchToolQuery({
+              active,
+              searched: { candidates: memoryCandidates, searchWindow },
+              ...queryContext,
+              runtimeDebug: [...runtimeDebug],
+              effectiveMode: "keyword-only",
+            }).then(
+              (result) => {
+                if (generation === partialGeneration && !signal.aborted) {
+                  params.onPartialResults?.(result.pausedIndexIdentity ? null : result);
+                }
+              },
+              () => {},
+            );
+          }
+        : undefined,
       ...(searchSources ? { sources: searchSources } : {}),
     });
-    return { candidates, searchWindow };
+    return { searched: { candidates, searchWindow }, status: active.manager.status() };
   };
 
   let searched: Awaited<ReturnType<typeof searchOnce>>;
@@ -123,18 +164,43 @@ export async function executeMemorySearchToolQuery(params: {
     if (!isClosedMemoryStoreError(error)) {
       throw error;
     }
+    partialGeneration += 1;
+    params.onPartialResults?.(null);
     const refreshed = await params.refreshManager();
     if (!refreshed) {
       throw error;
     }
     active = refreshed;
     searched = await searchOnce();
+  } finally {
+    partialGeneration += 1;
   }
 
-  const status = active.manager.status();
+  return await finalizeMemorySearchToolQuery({
+    active,
+    ...searched,
+    ...queryContext,
+    runtimeDebug,
+  });
+}
+
+async function finalizeMemorySearchToolQuery(params: {
+  active: ManagerState;
+  status?: MemoryProviderStatus;
+  searched: { candidates: MemorySearchResult[]; searchWindow: number };
+  query: MemorySearchToolQuery;
+  visibility: MemorySearchToolVisibility;
+  searchSources: MemorySource[] | undefined;
+  runtimeDebug: MemorySearchRuntimeDebug[];
+  startedAt: number;
+  effectiveMode?: string;
+}) {
+  const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
+  const status = params.status ?? active.manager.status();
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
   if (pausedIndexIdentity) {
     return {
+      searchStartedAt: startedAt,
       status,
       rawResults: [],
       pausedIndexIdentity,
@@ -161,18 +227,18 @@ export async function executeMemorySearchToolQuery(params: {
     filtered = filtered.filter((hit) => hit.source === "memory");
   }
 
-  const postFilterHits = filtered.length;
   const rawResults = filtered.slice(0, query.resultLimit);
   const latestDebug = runtimeDebug.at(-1);
   return {
+    searchStartedAt: startedAt,
     status,
     rawResults,
     pausedIndexIdentity: undefined,
-    searchMode: latestDebug?.effectiveMode,
+    searchMode: params.effectiveMode ?? latestDebug?.effectiveMode,
     debug: {
       backend: status.backend,
       configuredMode: latestDebug?.configuredMode,
-      effectiveMode: "n/a",
+      effectiveMode: params.effectiveMode ?? "n/a",
       fallback: latestDebug?.fallback,
       managerMs: active.managerMs,
       searchMs: Math.max(0, Date.now() - startedAt),
@@ -180,7 +246,7 @@ export async function executeMemorySearchToolQuery(params: {
         ?.embeddingBootstrap,
       hits: rawResults.length,
       candidateHits: searched.candidates.length,
-      withheldHits: Math.max(0, searched.candidates.length - postFilterHits),
+      withheldHits: Math.max(0, searched.candidates.length - filtered.length),
       searchWindow: searched.searchWindow,
     },
   };

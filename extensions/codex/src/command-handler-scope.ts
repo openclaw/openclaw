@@ -3,7 +3,7 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import {
   resolveCodexSessionBinding,
@@ -129,11 +129,11 @@ export async function resolvePreparedCodexCommandAuthority(
   };
 }
 
-export async function resolveCommandAppServerScope(
+export async function resolveCommandAppServerContext(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-): Promise<CommandAppServerScope> {
+) {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
   const fallback = resolveCodexConversationControlScope(ctx);
@@ -151,7 +151,7 @@ export async function resolveCommandAppServerScope(
     authProfileId,
     pluginConfig,
   });
-  return {
+  const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,
     agentDir,
     ...(connection.clientAuthProfileId !== undefined
@@ -163,6 +163,15 @@ export async function resolveCommandAppServerScope(
     ...(authority.storePath ? { storePath: authority.storePath } : {}),
     assertCurrent: authority.assertCurrent,
   };
+  return { scope, target, binding };
+}
+
+export async function resolveCommandAppServerScope(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+): Promise<CommandAppServerScope> {
+  return (await resolveCommandAppServerContext(deps, ctx, pluginConfig)).scope;
 }
 
 export function conversationBindingIdentity(

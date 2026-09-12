@@ -70,9 +70,6 @@ function readConfiguredFeatureEnabled(
     : Object.keys(raw).some((key) => key !== "enabled");
 }
 
-const LOCAL_MODEL_LEAN_FEATURE_ID = "localModelLean";
-const LOCAL_MODEL_LEAN_AUTO_MODEL_PATH = ["wizard", "localModelLeanAutoModel"] as const;
-
 export const LAB_FEATURES = [
   {
     id: "codeMode",
@@ -86,22 +83,6 @@ export const LAB_FEATURES = [
     offValue: false,
     activeValues: [true, "auto"],
     readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
-    restartHint: null,
-  },
-  {
-    id: "swarm",
-    title: () => t("labsPage.swarm.title"),
-    description: () => t("labsPage.swarm.description"),
-    docsUrl: "https://docs.openclaw.ai/tools/swarm",
-    configPath: ["tools", "swarm", "enabled"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    // Mirrors resolveSwarmConfig: only an explicit false opts out; limits-only
-    // objects inherit the enabled default without owning the gate.
-    readEnabled: (raw) => raw !== false && (!isRecord(raw) || raw.enabled !== false),
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,
@@ -128,50 +109,6 @@ export const LAB_FEATURES = [
     restartHint: null,
   },
   {
-    id: "loopDetection",
-    title: () => t("labsPage.loopDetection.title"),
-    description: () => t("labsPage.loopDetection.description"),
-    docsUrl: "https://docs.openclaw.ai/tools/loop-detection",
-    configPath: ["tools", "loopDetection", "enabled"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    // ToolLoopDetectionSchema accepts object form only, and
-    // resolveToolLoopDetectionConfig reads this enabled leaf directly.
-    readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
-    restartHint: null,
-  },
-  {
-    id: "localModelLean",
-    title: () => t("labsPage.localModelLean.title"),
-    description: () => t("labsPage.localModelLean.description"),
-    docsUrl: "https://docs.openclaw.ai/gateway/local-models",
-    configPath: ["agents", "defaults", "experimental", "localModelLean"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
-    restartHint: null,
-  },
-  {
-    id: "cliAgents",
-    title: () => t("labsPage.cliAgents.title"),
-    description: () => t("labsPage.cliAgents.description"),
-    docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#gateway",
-    configPath: ["gateway", "cliAgents", "enabled"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
-    restartHint: null,
-  },
-  {
     id: "customPluginUi",
     title: () => t("labsPage.customPluginUi.title"),
     description: () => t("labsPage.customPluginUi.description"),
@@ -184,25 +121,6 @@ export const LAB_FEATURES = [
     enableAlso: null,
     resetScope: "gate",
     restartHint: () => t("labsPage.customPluginUi.restartRequired"),
-  },
-  {
-    id: "auditMessages",
-    title: () => t("labsPage.auditMessages.title"),
-    description: () => t("labsPage.auditMessages.description"),
-    docsUrl: "https://docs.openclaw.ai/gateway/audit",
-    // Not a boolean: `off` | `direct` | `all`. Labs offers the conservative
-    // `direct`, so turning it on cannot start recording group or unknown
-    // conversations that the operator never opted into.
-    configPath: ["logging", "audit", "messages"],
-    onValue: "direct",
-    offValue: "off",
-    activeValues: ["direct", "all"],
-    readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
-    // startGatewayEventSubscriptions resolves the mode once and bakes it into
-    // the recorder, so this outlives the reload plan's `logging: none` rule.
-    restartHint: () => t("labsPage.restartRequired"),
   },
   {
     id: "hostDesktop",
@@ -245,33 +163,6 @@ function recordAtPath(config: Record<string, unknown>, path: readonly string[]):
     current = current[segment];
   }
   return current;
-}
-
-function defaultModelRef(config: Record<string, unknown>): string | undefined {
-  const model = recordAtPath(config, ["agents", "defaults", "model"]);
-  if (typeof model === "string") {
-    return model;
-  }
-  if (!isRecord(model)) {
-    return undefined;
-  }
-  const primary = model.primary;
-  return typeof primary === "string" ? primary : undefined;
-}
-
-function onboardingOwnsLocalModelLean(
-  config: Record<string, unknown>,
-  feature: LabFeature,
-): boolean {
-  if (feature.id !== LOCAL_MODEL_LEAN_FEATURE_ID) {
-    return false;
-  }
-  const autoModel = recordAtPath(config, LOCAL_MODEL_LEAN_AUTO_MODEL_PATH);
-  return (
-    typeof autoModel === "string" &&
-    defaultModelRef(config) === autoModel &&
-    recordAtPath(config, feature.configPath) === true
-  );
 }
 
 function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
@@ -323,11 +214,6 @@ export function resolveLabFeatureState(
   feature: LabFeature,
 ): LabFeatureState {
   const source = config ?? {};
-  // Onboarding records this generated value beside the model it belongs to.
-  // Treat the pair as one inherited default so Labs never mislabels or detaches it.
-  if (onboardingOwnsLocalModelLean(source, feature)) {
-    return { enabled: true, defaultEnabled: true, overridden: false };
-  }
   const parentPath = feature.configPath.slice(0, -1);
   const key = feature.configPath.at(-1);
   const parent = recordAtPath(source, parentPath);
@@ -347,7 +233,6 @@ export function resolveLabFeatureState(
 }
 
 export function labFeatureMergePatch(
-  config: Record<string, unknown> | null,
   feature: LabFeature,
   enabled: boolean,
 ): Record<string, unknown> {
@@ -361,24 +246,7 @@ export function labFeatureMergePatch(
   for (const segment of feature.configPath.slice(0, -1).toReversed()) {
     patch = { [segment]: patch };
   }
-  return releaseLabFeatureOwnership(config, feature, patch as Record<string, unknown>);
-}
-
-function releaseLabFeatureOwnership(
-  config: Record<string, unknown> | null,
-  feature: LabFeature,
-  patch: Record<string, unknown>,
-): Record<string, unknown> {
-  if (
-    feature.id !== LOCAL_MODEL_LEAN_FEATURE_ID ||
-    recordAtPath(config ?? {}, LOCAL_MODEL_LEAN_AUTO_MODEL_PATH) === undefined
-  ) {
-    return patch;
-  }
-  return {
-    ...patch,
-    wizard: { localModelLeanAutoModel: null },
-  };
+  return patch as Record<string, unknown>;
 }
 
 export function labFeatureResetPatch(
@@ -393,5 +261,5 @@ export function labFeatureResetPatch(
   for (const segment of path.toReversed()) {
     patch = { [segment]: patch };
   }
-  return releaseLabFeatureOwnership(config, feature, patch as Record<string, unknown>);
+  return patch as Record<string, unknown>;
 }

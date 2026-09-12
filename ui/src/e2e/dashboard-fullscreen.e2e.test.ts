@@ -163,11 +163,14 @@ suite.define(() => {
       await document.locator("openclaw-board-view").waitFor();
 
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
-      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.list")).toHaveLength(initialSessionListCount);
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       expect(await page.locator(".agent-chat").count()).toBe(0);
-      expect((await gateway.getRequests("board.get"))[0]?.params).toEqual({ sessionKey });
+      expect((await gateway.getRequests("board.get"))[0]?.params).toEqual({
+        sessionKey,
+        agentId: "main",
+      });
       await document.getByRole("tab", { name: "Research" }).waitFor();
       const widget = document.locator('[data-widget-name="status"]');
       await widget.waitFor();
@@ -182,6 +185,7 @@ suite.define(() => {
       const grant = await gateway.waitForRequest("board.widget.grant");
       expect(grant.params).toEqual({
         sessionKey,
+        agentId: "main",
         name: "permissions",
         decision: "rejected",
         revision: 1,
@@ -265,7 +269,7 @@ suite.define(() => {
           viewport: { width: 393, height: 852 },
         },
         async ({ context, page }) => {
-          const widgetDocument = buildWidgetDocument(
+          let widgetDocument = buildWidgetDocument(
             "Nightly disk cleanup",
             `<style>
             .local-scroll{height:120px;overflow-y:auto}.local-row{height:40px}
@@ -282,14 +286,43 @@ suite.define(() => {
           ).join("")}</main>`,
           );
           const widgetUrl = `${suite.server.baseUrl}__widget/long-dashboard`;
+          const widgetSnapshot = {
+            ...boardSnapshot,
+            widgets: [
+              {
+                name: "long-dashboard",
+                tabId: "main",
+                title: "Nightly disk cleanup",
+                contentKind: "html",
+                sizeW: 12,
+                sizeH: 6,
+                position: 0,
+                grantState: "none",
+                revision: 1,
+                frameUrl: widgetUrl,
+                instanceId: "long-dashboard-instance",
+                viewTicket: "long-dashboard-ticket",
+                viewTicketTtlMs: 1_200_000,
+                viewGeneration: "long-dashboard-generation",
+                sandboxUrl: SANDBOX_HOST_PATH,
+                sandboxPort,
+                sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+              },
+            ],
+          };
+          let releaseDocument!: () => void;
+          const documentGate = new Promise<void>((resolve) => {
+            releaseDocument = resolve;
+          });
           await page.route(widgetUrl, async (route) => {
+            await documentGate;
             await route.fulfill({
               body: widgetDocument,
               contentType: "text/html; charset=utf-8",
               status: 200,
             });
           });
-          await installMockGateway(page, {
+          const gateway = await installMockGateway(page, {
             sessionKey,
             featureMethods: ["board.get"],
             methodResponses: {
@@ -301,30 +334,7 @@ suite.define(() => {
                 boardFace: sessionRow.boardFace,
               },
               "sessions.describe": { session: sessionRow },
-              "board.get": {
-                ...boardSnapshot,
-                widgets: [
-                  {
-                    name: "long-dashboard",
-                    tabId: "main",
-                    title: "Nightly disk cleanup",
-                    contentKind: "html",
-                    sizeW: 12,
-                    sizeH: 6,
-                    position: 0,
-                    grantState: "none",
-                    revision: 1,
-                    frameUrl: widgetUrl,
-                    instanceId: "long-dashboard-instance",
-                    viewTicket: "long-dashboard-ticket",
-                    viewTicketTtlMs: 1_200_000,
-                    viewGeneration: "long-dashboard-generation",
-                    sandboxUrl: SANDBOX_HOST_PATH,
-                    sandboxPort,
-                    sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
-                  },
-                ],
-              },
+              "board.get": widgetSnapshot,
             },
           });
 
@@ -334,15 +344,31 @@ suite.define(() => {
             '.board-widget[data-widget-name="long-dashboard"] .board-widget__frame',
           );
           await frame.waitFor();
+          try {
+            await expect
+              .poll(() =>
+                page
+                  .frames()
+                  .some((candidate) => candidate.parentFrame()?.url().includes(SANDBOX_HOST_PATH)),
+              )
+              .toBe(true);
+            await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
+            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+            expect(await frame.getAttribute("inert")).toBe("");
+            await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
+          } finally {
+            releaseDocument();
+          }
+          await expect
+            .poll(() => frame.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          expect(await frame.getAttribute("inert")).toBeNull();
+          expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(
+            0,
+          );
+          await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
-            .toBe(true);
-          await expect
-            .poll(() =>
-              page
-                .frames()
-                .some((candidate) => candidate.parentFrame()?.url().includes(SANDBOX_HOST_PATH)),
-            )
             .toBe(true);
           const embeddedFrame = page
             .frames()
@@ -443,6 +469,44 @@ suite.define(() => {
           expect(finalRowBox.y + finalRowBox.height).toBeLessThanOrEqual(
             finalBoardBox.y + finalBoardBox.height + 1,
           );
+
+          widgetDocument = buildWidgetDocument(
+            "Cleanup controls",
+            `<button style="position:fixed;top:24px;left:24px"
+              onclick="this.textContent='Cleanup requested'">Run cleanup</button>`,
+          );
+          await gateway.setMethodResponse("board.get", {
+            ...widgetSnapshot,
+            revision: 2,
+            widgets: [{ ...widgetSnapshot.widgets[0], revision: 2 }],
+          });
+          await gateway.emitGatewayEvent("board.changed", { sessionKey, widget: "long-dashboard" });
+          const replacement = page.frameLocator(".board-widget__frame").frameLocator("iframe");
+          const cleanup = replacement.getByRole("button", { name: "Run cleanup", exact: true });
+          await cleanup.waitFor();
+          expect(
+            await replacement.locator("body").evaluate((body) => {
+              if (!(body instanceof HTMLElement)) {
+                throw new Error("Widget body is not an HTML element");
+              }
+              return Math.max(
+                body.scrollHeight,
+                body.offsetHeight,
+                body.getBoundingClientRect().height,
+              );
+            }),
+          ).toBe(0);
+          await expect
+            .poll(() => frame.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(
+            0,
+          );
+          await cleanup.click();
+          await replacement
+            .getByRole("button", { name: "Cleanup requested", exact: true })
+            .waitFor();
+          await page.screenshot({ path: `${suite.artifactDir}/dashboard-fixed-controls.png` });
         },
       );
     } finally {
@@ -452,10 +516,29 @@ suite.define(() => {
 
   it("makes dashboard main and restores chat after focus", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const widgetUrl = `${suite.server.baseUrl}__widget/seamless-dashboard`;
+      await page.route(widgetUrl, (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: buildWidgetDocument(
+            "Release overview",
+            `<style>body{min-height:100vh;background:#e8f0ee;color:#193e35}main{padding:32px}h1{font-size:48px}</style>
+            <main><p>RELEASE OVERVIEW</p><h1>Everything in view.</h1><p>One dashboard, one uninterrupted canvas.</p>
+            <input aria-label="Release note" placeholder="Release note"></main>`,
+          ),
+        }),
+      );
+      const singleWidget = {
+        ...boardSnapshot,
+        tabs: [boardSnapshot.tabs[0]],
+        widgets: [
+          { ...boardSnapshot.widgets[0], sizeW: 12, grantState: "none", frameUrl: widgetUrl },
+        ],
+      };
       const gateway = await installMockGateway(page, {
         sessionKey,
         featureMethods: ["board.get"],
-        methodResponses: { "board.get": boardSnapshot },
+        methodResponses: { "board.get": singleWidget },
       });
       await rememberMainTab(page);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
@@ -464,13 +547,60 @@ suite.define(() => {
       await page.locator(".board-session-surface").waitFor();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
+      const widget = page.locator('[data-widget-name="status"]');
+      const frame = widget.locator("iframe");
+      const note = page.frameLocator('[data-widget-name="status"] iframe').getByRole("textbox");
+      await note.fill("Keep this draft");
+      const frameHandle = await frame.elementHandle();
       await focusChatSidePanel(page);
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+      await page.mouse.move(0, 0);
+      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
+      const frameInsets = () =>
+        frame.evaluate((element) => {
+          const board = element.closest("openclaw-board-view")!;
+          const outer = board.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            left: inner.left - outer.left,
+            right: outer.right - inner.right,
+            top: inner.top - outer.top,
+          };
+        });
+      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0 });
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "0px",
+      );
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
+        "0px",
+      );
       await page.getByRole("button", { name: "Restore split", exact: true }).click();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
       await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "1px",
+      );
+      expect(await frame.evaluate((element, previous) => element === previous, frameHandle)).toBe(
+        true,
+      );
+      expect(await note.inputValue()).toBe("Keep this draft");
+      await page.getByRole("button", { name: "Focus", exact: true }).click();
+      await frame.waitFor({ state: "visible" });
+      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0 });
+      await gateway.setMethodResponse("board.get", {
+        ...singleWidget,
+        revision: 2,
+        widgets: [...singleWidget.widgets, boardSnapshot.widgets[1]],
+      });
+      await gateway.emitGatewayEvent("board.changed", { sessionKey });
+      await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "1px",
+      );
+      expect((await frameInsets()).left).toBeGreaterThan(0);
+      expect(await note.inputValue()).toBe("Keep this draft");
     });
   });
 

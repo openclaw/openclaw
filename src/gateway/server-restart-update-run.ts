@@ -3,42 +3,102 @@ import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-cont
 import {
   finishUpdateRun,
   getUpdateRun,
+  recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 
 /** The booting Gateway records only its own observations; the CLI owns pending handoffs. */
-export function finalizeRestartUpdateRun(payload: RestartSentinelPayload, pendingExpired = false) {
+export async function finalizeRestartUpdateRun(
+  payload: RestartSentinelPayload,
+  pendingExpired = false,
+) {
   const updateRunId = payload.stats?.runId;
   let updateRun = updateRunId ? getUpdateRun(updateRunId) : undefined;
-  if (updateRun) {
+  if (updateRun?.status === "running") {
+    if (!updateRun.origin.sessionKey && payload.sessionKey) {
+      updateRun = recordUpdateRunPhase(updateRun.runId, updateRun.phase, {
+        origin: {
+          sessionKey: payload.sessionKey,
+          ...(payload.deliveryContext
+            ? {
+                deliveryContext: {
+                  ...payload.deliveryContext,
+                  threadId: payload.threadId,
+                },
+              }
+            : {}),
+        },
+      });
+    }
+    if (
+      updateRun.status === "running" &&
+      (updateRun.phase === "restarting" || updateRun.phase === "verifying")
+    ) {
+      updateRun = recordUpdateRunPhase(updateRun.runId, "verifying");
+    }
     const runningVersion = resolveRuntimeServiceVersion();
     const runningBuildId = resolveRuntimeServiceBuildId();
-    const expectedVersion = updateRun.after.version ?? updateRun.target.version;
-    const expectedBuildId = updateRun.after.buildId;
+    // A failed update's restored boot serves the previous version. The restore
+    // owner already verified that identity against the restored disk state and
+    // recorded it; regrading this boot against the update target would
+    // overwrite the verified fact with a version mismatch. An empty
+    // after.version marks that path: target verification never succeeded, so
+    // the recorded versionMatch could only have come from the restore. Reuse
+    // it only for the exact binary the recorder verified — a boot serving the
+    // recorded version under a different (or unverifiable) build is another
+    // binary and must be regraded against the update target.
+    const recordedBuildId =
+      typeof updateRun.verification.runningBuildId === "string"
+        ? updateRun.verification.runningBuildId
+        : undefined;
+    const restoredVerification =
+      updateRun.verification.versionMatch === true &&
+      !updateRun.after.version &&
+      typeof updateRun.verification.runningVersion === "string" &&
+      updateRun.verification.runningVersion === runningVersion &&
+      (recordedBuildId === undefined || recordedBuildId === runningBuildId);
+    const expectedVersion = restoredVerification
+      ? runningVersion
+      : (updateRun.after.version ?? updateRun.target.version);
+    const expectedBuildId = restoredVerification ? undefined : updateRun.after.buildId;
     const pluginErrors = getActivePluginRegistry()
       ?.diagnostics.filter((entry) => entry.level === "error")
       .map((entry) => entry.message);
-    updateRun = recordUpdateRunVerification(updateRun.runId, {
-      booted: true,
-      serviceRunning: true,
-      pid: process.pid,
-      runningVersion,
-      ...(runningBuildId ? { runningBuildId } : {}),
-      ...(expectedVersion
-        ? {
-            versionMatch:
-              expectedVersion === runningVersion &&
-              (!expectedBuildId || expectedBuildId === runningBuildId),
-          }
-        : {}),
-      ...(pluginErrors ? { pluginErrors } : {}),
-      ...(payload.doctorHint ? { doctorHint: payload.doctorHint } : {}),
-    });
-    // The CLI still owns a pending handoff. A boot proves liveness, not that
-    // its validation finished; preserve the sentinel's existing retry flow.
-    if (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload)) {
+    updateRun = recordUpdateRunVerification(
+      updateRun.runId,
+      {
+        booted: true,
+        serviceRunning: true,
+        pid: process.pid,
+        runningVersion,
+        ...(runningBuildId ? { runningBuildId } : {}),
+        ...(expectedVersion
+          ? {
+              versionMatch:
+                expectedVersion === runningVersion &&
+                (!expectedBuildId || expectedBuildId === runningBuildId),
+            }
+          : {}),
+        ...(pluginErrors ? { pluginErrors } : {}),
+        ...(payload.doctorHint ? { doctorHint: payload.doctorHint } : {}),
+      },
+      { onlyIfRunning: true },
+    );
+    if (updateRun.phase === "verifying" && updateRun.status === "running") {
+      const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
+      await createUpdateRunNotifier(updateRun)(updateRun, "verifying");
+    }
+    // A managed handoff preserves its original trigger, while an unmanaged RPC
+    // also reaches restarting. Only the recorded owner can finish CLI verification.
+    const orchestratorOwnsVerification =
+      updateRun.status === "running" &&
+      (updateRun.trigger === "cli" || Boolean(payload.stats?.handoffId));
+    if (
+      !orchestratorOwnsVerification &&
+      (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
+    ) {
       updateRun = finishUpdateRun(updateRun.runId, {
         status:
           pendingExpired ||

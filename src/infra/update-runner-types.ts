@@ -1,12 +1,22 @@
+import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import type {
+  UpdateDoctorConfigChange,
+  UpdateDoctorConfigWriteRefusal,
+} from "./update-doctor-config.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
+import type { UpdateFailureFact } from "./update-failure-facts.js";
 import type { GlobalInstallManager } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
+import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
-export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
+export type UpdateStepAdvisory =
+  | PackageUpdateStepAdvisory
+  | { kind: "candidate-runtime-unavailable" | "recoverable-maintenance"; message: string };
 
 export type UpdateStepResult = {
   name: string;
@@ -20,15 +30,22 @@ export type UpdateStepResult = {
   killed?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
   advisory?: UpdateStepAdvisory;
+  /** Complete owner-classified warnings when one step reports several outcomes. */
+  warnings?: string[];
+  failureFacts?: UpdateFailureFact[];
+  configChanges?: UpdateDoctorConfigChange[];
+  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
+  snapshotCapacity?: UpdateSnapshotCapacity;
 };
 
 export type UpdateRunResult = {
+  localOverrides?: LocalPackageOverridesResult;
   runId?: string;
   status: "ok" | "error" | "skipped";
   mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
   root?: string;
   reason?: string;
-  before?: { sha?: string | null; version?: string | null };
+  before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
     version?: string | null;
@@ -40,6 +57,7 @@ export type UpdateRunResult = {
   recovery?: UpdateRecovery;
   postUpdate?: {
     plugins?: {
+      failureFacts?: UpdateFailureFact[];
       status: "ok" | "warning" | "skipped" | "error";
       reason?: string;
       changed: boolean;
@@ -58,21 +76,7 @@ export type UpdateRunResult = {
       };
       npm: {
         changed: boolean;
-        outcomes: Array<{
-          pluginId: string;
-          status: "updated" | "unchanged" | "skipped" | "error";
-          message: string;
-          currentVersion?: string;
-          nextVersion?: string;
-          channelFallback?: {
-            requestedSpec: string;
-            usedSpec: string;
-            requestedLabel: string;
-            usedLabel: string;
-            reason: "unavailable" | "failed";
-            message: string;
-          };
-        }>;
+        outcomes: PluginUpdateOutcome[];
       };
       integrityDrifts: Array<{
         pluginId: string;
@@ -109,6 +113,7 @@ export type UpdateStepInfo = {
 type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 
 export type UpdateStepProgress = {
+  onHeartbeat?: () => void;
   onStepStart?: (step: UpdateStepInfo) => void;
   onStepComplete?: (step: UpdateStepCompletion) => void;
 };
@@ -123,6 +128,23 @@ export type UpdateRunnerOptions = {
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  /** Expose a new checkout only after target admission; subsequent work uses the published path. */
+  publishGitCheckout?: () => Promise<string>;
+  /** Read-only admission before executing a fetched candidate; never stops a service. */
+  inspectGitTarget?: (target: {
+    schemaVersions?: OpenClawSchemaVersions;
+    metadataUnreadable?: string;
+  }) => Promise<void>;
+  /** Admit the built candidate after validation, before retention or activation. */
+  inspectGitCandidate?: (candidateRoot: string) => Promise<void>;
+  validateCandidate?: (root: string) => Promise<void>;
+  /** CLI-owned activation Doctor retains its config writer and requester authority. */
+  runGitDoctor?: (root: string) => Promise<UpdateStepResult | null>;
+  prepareGitExposure?: (
+    candidateRoot: string,
+    candidateSha: string,
+    env: NodeJS.ProcessEnv | undefined,
+  ) => Promise<void>;
   beforeGitMutation?: (target: {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;

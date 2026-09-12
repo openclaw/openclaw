@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const controlUiBasePath = "/rosita";
@@ -19,12 +21,17 @@ beforeEach(() => {
 
 suite.define(() => {
   it("previews, downloads, and opens a ticketed generated image", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const filenamePrefix = "a".repeat(119);
+    const imageTitle = `${filenamePrefix}📊`;
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    await page.route(`**${controlUiBasePath}/chat`, async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: { ...response.headers(), "content-security-policy": buildControlUiCspHeader() },
+      });
+    });
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const imageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
@@ -53,7 +60,7 @@ suite.define(() => {
               type: "image",
               artifactId,
               url: imageUrl,
-              alt: "Ticketed generated image",
+              alt: imageTitle,
               mimeType: "image/png",
               width: 1280,
               height: 358,
@@ -67,7 +74,7 @@ suite.define(() => {
           artifact: {
             id: artifactId,
             type: "image",
-            title: "Ticketed generated image",
+            title: imageTitle,
             mimeType: "image/png",
             download: { mode: "url" },
           },
@@ -79,7 +86,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}${controlUiBasePath.slice(1)}/chat`);
-      const image = page.getByAltText("Ticketed generated image");
+      const image = page.getByAltText(imageTitle);
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() =>
@@ -101,9 +108,7 @@ suite.define(() => {
       const imageActions = imageFrame.locator(".chat-image-actions");
       await expect.poll(() => imageActions.getByRole("button").count()).toBe(2);
       await expect
-        .poll(() =>
-          imageActions.getByRole("button", { name: "Open image Ticketed generated image" }).count(),
-        )
+        .poll(() => imageActions.getByRole("button", { name: `Open image ${imageTitle}` }).count())
         .toBe(0);
       const downloadButton = imageActions.getByRole("button", { name: "Download image" });
       await expect
@@ -127,14 +132,14 @@ suite.define(() => {
         .toMatchObject({ hit: true, pointerEvents: "auto" });
       const download = page.waitForEvent("download");
       await downloadButton.click();
-      expect((await download).suggestedFilename()).toBe("Ticketed generated image.png");
+      expect((await download).suggestedFilename()).toBe(`${filenamePrefix}.png`);
 
-      await page.getByRole("button", { name: "Open image Ticketed generated image" }).click();
+      await page.getByRole("button", { name: `Open image ${imageTitle}` }).click();
       await page
-        .getByRole("dialog", { name: "Image preview: Ticketed generated image" })
+        .getByRole("dialog", { name: `Image preview: ${imageTitle}` })
         .waitFor({ state: "visible" });
-      expect(requestedVariants).toEqual(["thumbnail", "full"]);
-      expect(await gateway.getRequests("artifacts.download")).toHaveLength(2);
+      expect(requestedVariants).toEqual(["thumbnail", "full", "full"]);
+      expect(await gateway.getRequests("artifacts.download")).toHaveLength(3);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -1,6 +1,5 @@
 // Memory Core plugin module coordinates synchronization and shadow reindexing.
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -36,6 +35,7 @@ import {
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
+import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -55,7 +55,9 @@ import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type MemorySyncProviderGenerationBase = {
-  database: DatabaseSync;
+  database: MemoryIndexDatabase;
+  databaseRevision: number;
+  cacheWritesInvalidated: boolean;
   providerKey: string;
   identities: MemoryIndexProviderIdentity[];
 };
@@ -64,6 +66,7 @@ export type MemorySyncProviderGeneration =
   | (MemorySyncProviderGenerationBase & { kind: "fts-only"; provider: null })
   | (MemorySyncProviderGenerationBase & {
       kind: "semantic";
+      embeddingDimensions?: number;
       provider: EmbeddingProvider;
       runtime?: EmbeddingProviderRuntime;
     });
@@ -76,6 +79,8 @@ export type MemorySemanticProviderGeneration = Extract<
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
+  protected abstract readonly createProvider: MemoryManagerProviderFactory;
+  protected abstract releaseProvider(provider: EmbeddingProvider): void;
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
@@ -323,9 +328,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
             progress: progress ?? undefined,
           });
-          if (shouldSyncMemory) {
-            this.clearMemoryRetryState();
-          }
           if (shouldSyncSessions) {
             this.clearSessionRetryState();
           } else {
@@ -334,7 +336,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         } else {
           if (shouldSyncMemory) {
             await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-            this.clearMemoryRetryState();
           }
 
           if (shouldSyncSessions) {
@@ -349,6 +350,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
         }
       } catch (err) {
+        this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
         const shouldFallback = this.shouldFallbackOnError(err);
         if (shouldFallback) {
@@ -378,7 +380,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
       // Full rebuild failures (including forced preflight) leave the primary alone.
       if (!needsFullReindex) {
-        this.pruneEmbeddingCacheIfNeeded();
+        await this.pruneEmbeddingCacheIfNeeded();
       }
     }
   }
@@ -473,6 +475,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     let fallbackResult;
     try {
       fallbackResult = await createEmbeddingProvider({
+        createProvider: this.createProvider,
         config: this.cfg,
         agentDir: resolveAgentDir(this.cfg, this.agentId),
         ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
@@ -539,7 +542,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       const rebuilt = await this.withReindexDatabase(shadow, async () => {
         try {
           this.ensureSchema();
-          await this.seedEmbeddingCache(originalDb);
 
           const shouldSyncMemory = shouldRetryMemoryOnFailure;
           const shouldSyncSessions = shouldRetrySessionsOnFailure;
@@ -551,9 +553,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               needsFullReindex: true,
               progress: params.progress,
             });
-            if (shouldSyncMemory) {
-              this.clearMemoryRetryState();
-            }
             if (shouldSyncSessions) {
               this.clearSessionRetryState();
             } else {
@@ -562,7 +561,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           } else {
             if (shouldSyncMemory) {
               await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearMemoryRetryState();
             }
 
             if (shouldSyncSessions) {
@@ -606,9 +604,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
 
           this.writeMeta(nextMeta);
-          // Bound the cache before copying it into the shared agent database;
-          // deleting overflow afterward does not undo primary-file growth.
-          this.pruneEmbeddingCacheIfNeeded();
           return {
             nextMeta,
             vectorIndexComplete,
@@ -643,6 +638,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
+      // Cache-only rebuilds bypass insertion-time eviction; prune the canonical
+      // cache only after successful publication so failed rebuilds retain their work.
+      await this.pruneEmbeddingCacheIfNeeded();
     } catch (err) {
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({

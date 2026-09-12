@@ -8,13 +8,9 @@ import {
   shouldPersistAbortCutoff,
   type AbortCutoff,
 } from "./abort-cutoff.js";
-import {
-  abortSessionRunTargetWithOutcome,
-  formatAbortReplyText,
-  isAbortTrigger,
-  setAbortMemory,
-  stopSubagentsForRequester,
-} from "./abort.js";
+import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./abort-operation.js";
+import { isAbortTrigger, setAbortMemory } from "./abort-primitives.js";
+import { formatAbortReplyText } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
   persistAbortTargetEntry,
@@ -38,30 +34,15 @@ function resolveAbortTarget(params: {
 }): AbortTarget {
   const targetSessionKey =
     normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
-  const { entry, key } = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
-  if (entry && key) {
-    return {
-      entry,
-      key,
-      sessionId: replyRunRegistry.resolveSessionId(key) ?? entry.sessionId,
-    };
-  }
-  if (
-    params.sessionEntry &&
-    params.sessionKey &&
-    (!targetSessionKey || targetSessionKey === params.sessionKey)
-  ) {
-    return {
-      entry: params.sessionEntry,
-      key: params.sessionKey,
-      sessionId:
-        replyRunRegistry.resolveSessionId(params.sessionKey) ?? params.sessionEntry.sessionId,
-    };
-  }
+  const resolved = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
+  const entry =
+    resolved.entry ??
+    (targetSessionKey && targetSessionKey === params.sessionKey ? params.sessionEntry : undefined);
+  const key = resolved.key ?? targetSessionKey;
   return {
-    entry: undefined,
-    key: targetSessionKey,
-    sessionId: targetSessionKey ? replyRunRegistry.resolveSessionId(targetSessionKey) : undefined,
+    entry,
+    key,
+    sessionId: (key ? replyRunRegistry.resolveSessionId(key) : undefined) ?? entry?.sessionId,
   };
 }
 
@@ -110,6 +91,7 @@ async function applyAbortTarget(params: {
     return abortOutcome;
   }
 
+  await abortOutcome.retirement;
   const persisted = await persistAbortTargetEntry({
     isCurrent: params.isCurrent,
     entry: abortTarget.entry,
@@ -165,6 +147,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   const { stopped, failed } = await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
+    requesterAgentId: params.agentId,
     beforeKill: async () => {
       abortOutcome = await applyAbortTarget({
         ...buildAbortTargetApplyParams(params, abortTarget),

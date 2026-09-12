@@ -1,4 +1,3 @@
-// Irc tests cover send plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,15 +20,10 @@ const hoisted = vi.hoisted(() => {
     convertMarkdownTables,
     stripMarkdown,
     record,
-    normalizeIrcMessagingTarget: vi.fn((value: string) => value.trim()),
     connectIrcClient: vi.fn(),
     buildIrcConnectOptions,
   };
 });
-
-vi.mock("./normalize.js", () => ({
-  normalizeIrcMessagingTarget: hoisted.normalizeIrcMessagingTarget,
-}));
 
 vi.mock("./client.js", () => ({
   connectIrcClient: hoisted.connectIrcClient,
@@ -45,14 +39,6 @@ vi.mock("./protocol.js", async () => {
     ...actual,
     makeIrcMessageId: () => "irc-msg-1",
   };
-});
-
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/plugin-config-runtime")) as Record<
-    string,
-    unknown
-  >;
-  return original;
 });
 
 vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async () => {
@@ -88,19 +74,14 @@ function resetHoistedMocks() {
   hoisted.convertMarkdownTables.mockReset().mockImplementation((text: string) => text);
   hoisted.stripMarkdown.mockReset().mockImplementation((text: string) => text);
   hoisted.record.mockReset();
-  hoisted.normalizeIrcMessagingTarget
-    .mockReset()
-    .mockImplementation((value: string) => value.trim());
   hoisted.connectIrcClient.mockReset();
   hoisted.buildIrcConnectOptions.mockReset().mockReturnValue({});
 }
 
 afterAll(() => {
-  vi.doUnmock("./normalize.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./connect-options.js");
   vi.doUnmock("./protocol.js");
-  vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
   vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
   vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.resetModules();

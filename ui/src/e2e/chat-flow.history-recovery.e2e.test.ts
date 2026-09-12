@@ -20,17 +20,14 @@ import {
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 type ChatFlowTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it("keeps an unrelated retained transcript after another tab deletes a session", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionA = "agent:main:session-a";
     const sessionB = "agent:main:session-b";
@@ -272,11 +269,7 @@ suite.define(() => {
   });
 
   it("keeps valid assistant history visible after a malformed transcript block", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const visibleAnswer = "The valid assistant answer remains visible.";
     const gateway = await installMockGateway(page, {
@@ -301,11 +294,7 @@ suite.define(() => {
   });
 
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
     const currentSessionMessages = [
@@ -596,6 +585,7 @@ suite.define(() => {
       const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const thread = activePane.locator(".chat-thread");
       await thread.hover();
+      const previousScrollHeight = await thread.evaluate((element) => element.scrollHeight);
       await page.mouse.wheel(0, -1_000_000);
       await expect
         .poll(() =>
@@ -606,6 +596,16 @@ suite.define(() => {
           ),
         )
         .toBe(140);
+      await expect
+        .poll(() =>
+          thread.evaluate(
+            (element, previousHeight) =>
+              element.scrollHeight > previousHeight && element.scrollTop > 0,
+            previousScrollHeight,
+          ),
+        )
+        .toBe(true);
+      await waitForChatScrollIdle(page);
       // Prepending preserves the visible anchor. A renewed upward gesture
       // reaches the newly loaded start instead of teleporting the reader.
       await page.mouse.wheel(0, -1_000_000);
@@ -859,12 +859,6 @@ suite.define(() => {
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
-      await gateway.setHistoryMessages([
-        {
-          role: "user",
-          __openclaw: { idempotencyKey: `${runId}:user` },
-        },
-      ]);
       await gateway.emitChatFinal({ runId, text: "Delivered after reconnect." });
       await queue.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });

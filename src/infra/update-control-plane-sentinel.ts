@@ -8,9 +8,14 @@ import {
   type RestartSentinelPayload,
 } from "./restart-sentinel.js";
 import {
+  resolveUpdateRestartNoticeMeta,
+  shouldPublishUpdateRestartNotice,
+} from "./update-restart-notice.js";
+import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
 } from "./update-restart-sentinel-payload.js";
+import { getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Control-plane update sentinel helpers preserve update metadata while a
@@ -81,6 +86,7 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
   const threadId = readNonBlankString(value.threadId);
   const handoffId = readNonBlankString(value.handoffId);
   const root = readNonBlankString(value.root);
+  const target = readNonBlankString(value.target);
   const triageContextPath = readNonBlankString(value.triageContextPath);
   const channel = isRecord(value.deliveryContext)
     ? readNonBlankString(value.deliveryContext.channel)
@@ -107,6 +113,7 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
       ? { serviceStoppedAtMs: value.serviceStoppedAtMs }
       : {}),
     ...(root ? { root } : {}),
+    ...(target ? { target } : {}),
     ...(triageContextPath ? { triageContextPath } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
@@ -139,21 +146,32 @@ export async function readControlPlaneUpdateSentinelMeta(
 }
 
 /** Write an update restart sentinel with control-plane routing metadata. */
-export async function writeControlPlaneUpdateRestartSentinel(params: {
-  result: UpdateRunResult;
-  meta: UpdateRestartSentinelMeta;
-}): Promise<void> {
+export async function writeControlPlaneUpdateRestartSentinel(
+  params: { result: UpdateRunResult; meta: UpdateRestartSentinelMeta },
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const runId = params.meta.runId ?? params.result.runId;
+  const run = runId ? getUpdateRun(runId, { env }) : undefined;
+  const meta = resolveUpdateRestartNoticeMeta(run, params.meta);
+  if (!shouldPublishUpdateRestartNotice(run, meta)) {
+    return;
+  }
   await writeRestartSentinel(
     buildUpdateRestartSentinelPayload({
       result: params.result,
-      meta: params.meta,
+      meta,
     }),
+    env,
   );
 }
 
 /** Mark the pending update restart sentinel as failed. */
 export async function markControlPlaneUpdateRestartSentinelFailure(
   reason: string,
+  meta?: UpdateRestartSentinelMeta,
 ): Promise<RestartSentinelPayload | null> {
-  return (await markUpdateRestartSentinelFailure(reason))?.payload ?? null;
+  if (meta?.runId && !shouldPublishUpdateRestartNotice(getUpdateRun(meta.runId), meta)) {
+    return null;
+  }
+  return (await markUpdateRestartSentinelFailure(reason, process.env, meta))?.payload ?? null;
 }

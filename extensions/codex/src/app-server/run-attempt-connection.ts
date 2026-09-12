@@ -13,15 +13,16 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
+import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerPreparedAuthHandoff,
-} from "./auth-bridge.js";
+} from "./auth-profile.js";
 import {
   assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
+import { resolveArgs } from "./config-utils.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   isCodexPairedNodeRemoteExecPlacementSandbox,
@@ -35,6 +36,7 @@ import {
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
@@ -82,7 +84,22 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         ? { expected: params.expectedRuntimeArtifact }
         : {}
       : undefined;
-  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const configuredPlugin = readCodexPluginConfig(options.pluginConfig);
+  // The route planner leaves auth with the native owner only after rejecting
+  // host credential substitution. Keep explicit homes and prepared profiles intact.
+  const pluginConfig =
+    params.runtimePlan?.auth.deferredRouteSupport &&
+    !configuredPlugin.appServer?.homeScope &&
+    (configuredPlugin.appServer?.transport === undefined ||
+      configuredPlugin.appServer.transport === "stdio") &&
+    !isCodexAppServerProxyLaunch(
+      resolveArgs(configuredPlugin.appServer?.args, process.env.OPENCLAW_CODEX_APP_SERVER_ARGS),
+    )
+      ? {
+          ...configuredPlugin,
+          appServer: { ...configuredPlugin.appServer, homeScope: "user" as const },
+        }
+      : configuredPlugin;
   const requirementsToml = readCodexRequirementsToml({});
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIdsStrict({
@@ -130,7 +147,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const assertLocalTargetSupported = (unsupported: boolean) => {
     if (preparedEnvironment?.localProcessEnv && unsupported) {
       throw new Error(
-        "This runtime cannot target the diagnosed local installation. Use the saved prompt with a suggested external or manual handoff on this machine.",
+        "This runtime cannot target the diagnosed local installation. Use an owned local Codex stdio process, or use the saved prompt with a suggested external or manual handoff on this machine.",
       );
     }
   };
@@ -155,9 +172,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
-    // Loopback WebSockets can forward to another host; their URL does not attest peer locality.
+    // Peer locality is not process ownership: disconnected socket turns can outlive recovery.
     assertLocalTargetSupported(
-      appServer.start.transport === "websocket" || Boolean(appServer.remoteWorkspaceRoot),
+      appServer.start.transport !== "stdio" || Boolean(appServer.remoteWorkspaceRoot),
     );
     return shellEnvironment
       ? {
@@ -385,7 +402,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
-    turnSucceeded: false,
+    // SAFETY: Finalization records a settled status only after native completion and local outcome checks.
+    settledTurnStatus: undefined as "completed" | "failed" | undefined,
     explicitCancellationObserved: false,
     explicitCancellationReason: undefined as unknown,
     terminalOutcomeFrozen: false,

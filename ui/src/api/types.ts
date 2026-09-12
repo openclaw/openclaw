@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  ArtifactSummary as ProtocolArtifactSummary,
   CronJob as ProtocolCronJob,
   CronListParams,
   CronRunLogEntry as ProtocolCronRunLogEntry,
@@ -11,25 +12,23 @@ import type {
   ModelChoice as ProtocolModelChoice,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
-import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   SessionCompactionCheckpoint as ProtocolSessionCompactionCheckpoint,
-  SessionObserverDigest,
   SessionsCompactionBranchResult as ProtocolSessionsCompactionBranchResult,
   SessionsCompactionListResult as ProtocolSessionsCompactionListResult,
   SessionsCompactionRestoreResult as ProtocolSessionsCompactionRestoreResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import type { SessionGoal } from "../../../src/config/sessions/types.js";
-import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
-import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
-  GatewayAgentRuntime,
+  GatewaySessionRow as GatewayWireSessionRow,
+  GatewaySessionsDefaults as GatewayWireSessionsDefaults,
+  SessionsPatchResult as GatewayWireSessionsPatchResult,
+} from "../../../src/gateway/session-utils.types.js";
+import type {
   GatewayAgentRow as SharedGatewayAgentRow,
   GatewayContextWindowOption,
   GatewayThinkingLevelOption,
@@ -37,6 +36,10 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type {
+  AgentIdentityResult,
+  ArtifactsDownloadResult as ArtifactDownloadResult,
+  ConfigSchemaResponse,
+  ModelsListResult as ModelCatalogResult,
   AgentsFileEntry as AgentFileEntry,
   AgentsFilesListResult,
   AgentsFilesGetResult,
@@ -48,6 +51,7 @@ export type {
   CronScratchGetResult,
   UpdateAvailable,
   UpdateHoldResult,
+  UpdateReportResult,
   UpdateScheduleState,
 } from "../../../packages/gateway-protocol/src/index.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
@@ -97,148 +101,71 @@ export type WhatsAppStatus = {
   lastError?: string | null;
 };
 
-type TelegramBot = {
-  id?: number | null;
-  username?: string | null;
-};
-
-type TelegramWebhook = {
-  url?: string | null;
-  hasCustomCert?: boolean | null;
-};
-
-type TelegramProbe = {
+type ChannelProbe = {
   ok: boolean;
   status?: number | null;
   error?: string | null;
   elapsedMs?: number | null;
-  bot?: TelegramBot | null;
-  webhook?: TelegramWebhook | null;
 };
 
-export type TelegramStatus = {
+type ChannelStatus<Probe = ChannelProbe> = {
   configured: boolean;
-  tokenSource?: string | null;
   running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: Probe | null;
+  lastProbeAt?: number | null;
+};
+
+type TelegramProbe = ChannelProbe & {
+  bot?: { id?: number | null; username?: string | null } | null;
+  webhook?: { url?: string | null; hasCustomCert?: boolean | null } | null;
+};
+
+export type TelegramStatus = ChannelStatus<TelegramProbe> & {
+  tokenSource?: string | null;
   mode?: string | null;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: TelegramProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type DiscordBot = {
-  id?: string | null;
-  username?: string | null;
+type DiscordProbe = ChannelProbe & {
+  bot?: { id?: string | null; username?: string | null } | null;
 };
 
-type DiscordProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  bot?: DiscordBot | null;
-};
-
-export type DiscordStatus = {
-  configured: boolean;
+export type DiscordStatus = ChannelStatus<DiscordProbe> & {
   tokenSource?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: DiscordProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type GoogleChatProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-};
-
-export type GoogleChatStatus = {
-  configured: boolean;
+export type GoogleChatStatus = ChannelStatus & {
   credentialSource?: string | null;
   audienceType?: string | null;
   audience?: string | null;
   webhookPath?: string | null;
   webhookUrl?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: GoogleChatProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type SlackBot = {
+type SlackIdentity = {
   id?: string | null;
   name?: string | null;
 };
 
-type SlackTeam = {
-  id?: string | null;
-  name?: string | null;
+type SlackProbe = ChannelProbe & {
+  bot?: SlackIdentity | null;
+  team?: SlackIdentity | null;
 };
 
-type SlackProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  bot?: SlackBot | null;
-  team?: SlackTeam | null;
-};
-
-export type SlackStatus = {
-  configured: boolean;
+export type SlackStatus = ChannelStatus<SlackProbe> & {
   botTokenSource?: string | null;
   appTokenSource?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: SlackProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type SignalProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  version?: string | null;
-};
-
-export type SignalStatus = {
-  configured: boolean;
+export type SignalStatus = ChannelStatus<ChannelProbe & { version?: string | null }> & {
   baseUrl: string;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: SignalProbe | null;
-  lastProbeAt?: number | null;
 };
 
-type IMessageProbe = {
-  ok: boolean;
-  error?: string | null;
-};
-
-export type IMessageStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
+export type IMessageStatus = ChannelStatus<Pick<ChannelProbe, "ok" | "error">> & {
   cliPath?: string | null;
   dbPath?: string | null;
-  probe?: IMessageProbe | null;
-  lastProbeAt?: number | null;
 };
 
 export type NostrProfile = {
@@ -280,134 +207,40 @@ export type ConfigSnapshot = {
   issues?: ConfigSnapshotIssue[] | null;
 };
 
-export type ConfigSchemaResponse = {
-  schema: unknown;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
-
 export type PresenceEntry = ProtocolPresenceEntry;
 
-export type GatewaySessionsDefaults = {
-  modelProvider: string | null;
-  model: string | null;
-  contextTokens: number | null;
-  contextWindow?: string;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  agentRuntime?: GatewayAgentRuntime;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  modelSelectionTarget?: "session" | "agent" | "global";
-};
+export type GatewaySessionsDefaults = GatewayWireSessionsDefaults;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
 
 export type AgentsListResult = ProtocolAgentsListResult;
 
-export type AgentIdentityResult = {
-  agentId: string;
-  name: string;
-  nameSource?: "config" | "agent" | "workspace" | "default";
-  avatar: string;
-  avatarSource?: string | null;
-  avatarStatus?: "none" | "local" | "remote" | "data" | null;
-  avatarReason?: string | null;
-  emoji?: string;
-};
-
-type SessionWorkspaceArtifactEntry = {
-  id: string;
-  type: string;
-  title: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  source?: string;
-  download: {
-    mode: "bytes" | "url" | "unsupported";
-  };
-};
+type SessionWorkspaceArtifactEntry = ProtocolArtifactSummary;
 
 // The workspace view joins file results with separately fetched artifacts.
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
 };
 
-export type ArtifactDownloadResult = {
-  artifact: SessionWorkspaceArtifactEntry;
-  encoding?: "base64";
-  data?: string;
-  url?: string;
-  expiresAt?: string;
-};
-
-type SubagentRunState = "active" | "interrupted" | "historical";
-
 export type SessionCompactionCheckpoint = Omit<
   ProtocolSessionCompactionCheckpoint,
   "tokensVersion"
 >;
 
-type SessionCompactionCheckpointPreview = Pick<
-  SessionCompactionCheckpoint,
-  "checkpointId" | "createdAt" | "reason"
->;
-
-export type GatewaySessionRow = SessionRow & {
-  placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
-  icon?: string;
-  channelAvatarUrl?: string;
-  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
-  category?: string;
-  surface?: string;
-  subject?: string;
-  room?: string;
-  space?: string;
-  agentStatus?: SessionAgentStatus;
-  observerDigest?: Pick<
-    SessionObserverDigest,
-    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
-  >;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  contextWindow?: string;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  fastMode?: FastMode;
-  effectiveFastMode?: FastMode;
-  effectiveFastModeSource?: FastModeSource;
-  fastAutoOnSeconds?: number;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  hasActiveRun?: boolean;
-  activeRunIds?: string[];
-  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
-  hasAutomation?: boolean;
-  subagentRunState?: SubagentRunState;
-  hasActiveSubagentRun?: boolean;
-  startedAt?: number;
-  endedAt?: number;
-  runtimeMs?: number;
-  /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
-  runtimeSampledAt?: number;
-  modelSelectionLocked?: boolean;
-  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
-  queueMode?: QueueMode;
-  effectiveQueueMode?: QueueMode;
-  agentRuntime?: GatewayAgentRuntime;
-  compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
-  goal?: SessionGoal;
-};
+export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
+  Pick<SessionRow, "archivedBy" | "updatedAt"> & {
+    /** Transient UI-owned Swarm note overlays, not persisted session fields. */
+    swarmPhase?: string;
+    swarmPhaseRank?: number;
+    swarmLog?: string;
+    icon?: string;
+    channelAvatarUrl?: string;
+    surface?: string;
+    room?: string;
+    /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
+    runtimeSampledAt?: number;
+  };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
@@ -445,6 +278,11 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  createdAt?: number;
+  pinnedAt?: number;
+  lastReadAt?: number;
+  lastActivityAt?: number;
+  lastInteractionAt?: number;
   permissionMode?: GatewaySessionRow["permissionMode"];
   archivedAt?: number;
   archiveReason?: SessionEntryArchiveReason;
@@ -456,17 +294,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-}> & {
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: GatewayAgentRuntime;
-    contextWindow?: string;
-    contextWindows?: GatewayContextWindowOption[];
-    thinkingLevel?: string;
-    thinkingLevels?: GatewayThinkingLevelOption[];
-  };
-};
+}> &
+  Pick<GatewayWireSessionsPatchResult, "resolved">;
 
 export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 
@@ -523,111 +352,21 @@ export type CronRunsResult = {
   hasMore?: boolean;
 };
 
-type SkillsStatusConfigCheck = {
-  path: string;
-  satisfied: boolean;
-};
-
-type SkillInstallOption = {
-  id: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label: string;
-  bins: string[];
-};
-
-export type SkillClawHubLink =
-  | {
-      status: "linked";
-      valid: true;
-      registry: string;
-      slug: string;
-      ownerHandle?: string;
-      requestedReference?: string;
-      installedVersion: string;
-      installedAt: number;
-      originPath?: string;
-      lockPath?: string;
-    }
-  | {
-      status: "invalid";
-      valid: false;
-      reason: string;
-      registry?: string;
-      slug?: string;
-      installedVersion?: string;
-      installedAt?: number;
-      originPath?: string;
-      lockPath?: string;
-    };
-
-type SkillCardStatus = {
-  present: true;
-  path: string;
-  sizeBytes: number;
-};
-
-export type SkillStatusEntry = {
-  name: string;
-  description: string;
-  source: string;
-  filePath: string;
-  baseDir: string;
-  skillKey: string;
-  bundled?: boolean;
-  primaryEnv?: string;
-  emoji?: string;
-  homepage?: string;
-  always: boolean;
-  disabled: boolean;
-  blockedByAllowlist: boolean;
-  blockedByAgentFilter?: boolean;
-  eligible: boolean;
-  modelVisible?: boolean;
-  userInvocable?: boolean;
-  commandVisible?: boolean;
-  requirements: {
-    anyBins: string[];
-    bins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    anyBins: string[];
-    bins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  configChecks: SkillsStatusConfigCheck[];
-  install: SkillInstallOption[];
-  clawhub?: SkillClawHubLink;
-  skillCard?: SkillCardStatus;
-};
-
-export type SkillStatusReport = {
-  workspaceDir: string;
-  managedSkillsDir: string;
-  agentId?: string;
-  agentSkillFilter?: string[];
-  skills: SkillStatusEntry[];
-};
+export type {
+  SkillStatusEntry,
+  SkillStatusReport,
+} from "../../../src/skills/discovery/status.types.js";
+export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/clawhub-status.js";
 
 export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
 
 /** A model entry returned by the gateway model-catalog endpoint. */
-export type ModelCatalogEntry = Omit<ProtocolModelChoice, "input"> & {
-  input?: Array<"text" | "image" | "document">;
-};
+export type ModelCatalogEntry = ProtocolModelChoice;
 
 export type ModelCatalogProviderOutcome =
   import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
-export type ModelCatalogResult = {
-  models: ModelCatalogEntry[];
-  providerOutcomes?: ModelCatalogProviderOutcome[];
-};
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
@@ -650,6 +389,9 @@ export type ModelAuthStatusProfile =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProfile;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
+export type ProviderLoginOption = NonNullable<
+  NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
+>[number];
 export type ModelsProbeResult =
   import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
 export type SystemAgentSetupActivateParams =

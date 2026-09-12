@@ -34,7 +34,7 @@ import {
   loadSessionCostSummariesFromCache,
 } from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
-import { testApi, usageHandlers } from "./usage.js";
+import { usageHandlers } from "./usage.js";
 
 type StoredFixture = { key: string; agentId: string; entry: SessionEntry };
 type DiscoveredFixture = { agentId: string; sessionId: string };
@@ -67,13 +67,28 @@ async function queryUsage(options: {
   config?: OpenClawConfig;
   params?: Record<string, unknown>;
 }): Promise<SessionsUsageResult> {
+  const runtimeConfig = { ...(options.config ?? defaultConfig) };
   return await withTempDir("usage-owner-", async (stateDir) =>
     withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const store = Object.fromEntries(options.rows.map(({ key, entry }) => [key, entry]));
+      const loadSessionEntry = (key: string) => store[key];
       const fixtureStore = {
         durableTargets: [],
         storePath: "(multiple)",
-        store: Object.fromEntries(options.rows.map(({ key, entry }) => [key, entry])),
-        agentIdBySessionKey: new Map(options.rows.map(({ key, agentId }) => [key, agentId])),
+        store,
+        targetsBySessionKey: new Map(
+          options.rows.map(({ key, agentId, entry }) => [
+            key,
+            {
+              agentId,
+              modelSource: { entry, loadSessionEntry },
+              storeTarget: {
+                agentId,
+                storePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+              },
+            },
+          ]),
+        ),
       };
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue(fixtureStore);
       vi.mocked(discoverAllSessions).mockImplementation(async ({ agentId }) =>
@@ -106,7 +121,7 @@ async function queryUsage(options: {
         )({
           respond,
           params: { range: "all", limit: 10, agentScope: "all", ...options.params },
-          context: { getRuntimeConfig: () => options.config ?? defaultConfig },
+          context: { getRuntimeConfig: () => runtimeConfig },
         } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
         expect(respond).toHaveBeenCalledTimes(1);
         const call = expectDefined(respond.mock.calls[0], "sessions.usage response");
@@ -144,7 +159,6 @@ function expectRows(
 
 describe("sessions.usage owner attribution", () => {
   beforeEach(() => {
-    testApi.sessionsUsageCache.clear();
     vi.clearAllMocks();
   });
 

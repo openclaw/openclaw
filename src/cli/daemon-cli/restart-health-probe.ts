@@ -1,4 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -23,7 +24,10 @@ import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { sleep } from "../../utils.js";
-import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
+import type {
+  GatewayPortHealthSnapshot,
+  UnavailablePluginHealthSummary,
+} from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
 export type GatewayRestartProbeAuth = {
@@ -34,8 +38,10 @@ export type GatewayRestartProbeAuth = {
 export type GatewayReachability = {
   reachable: boolean;
   gatewayVersion: string | null;
+  gatewayBootId?: string;
   gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
+  unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
   probeError?: string;
 };
@@ -52,10 +58,13 @@ export async function waitForGatewayHttpReadiness(params: {
   deadlineAt: number;
   delayMs: number;
   port: number;
+  signal?: AbortSignal;
 }): Promise<GatewayHttpReadiness> {
+  params.signal?.throwIfAborted();
   const probe = createConfiguredGatewayLocalProbe(params.config ?? {});
   let latest: GatewayHttpReadiness = { healthz: null, readyz: null };
   for (let attempt = 0; attempt < params.attempts; attempt += 1) {
+    params.signal?.throwIfAborted();
     const remainingMs = params.deadlineAt - Date.now();
     if (remainingMs <= 0) {
       return latest;
@@ -67,6 +76,7 @@ export async function waitForGatewayHttpReadiness(params: {
           pathname: "/healthz",
           port: params.port,
           timeoutMs: Math.min(remainingMs, 3_000),
+          ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
       probe
@@ -75,9 +85,11 @@ export async function waitForGatewayHttpReadiness(params: {
           pathname: "/readyz",
           port: params.port,
           timeoutMs: Math.min(remainingMs, 3_000),
+          ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
     ]);
+    params.signal?.throwIfAborted();
     latest = { healthz, readyz };
     if (healthz === 200 && readyz === 200) {
       return latest;
@@ -87,7 +99,7 @@ export async function waitForGatewayHttpReadiness(params: {
       if (remainingDelayMs <= 0) {
         return latest;
       }
-      await sleep(Math.min(params.delayMs, remainingDelayMs));
+      await sleep(Math.min(params.delayMs, remainingDelayMs), params.signal);
     }
   }
   return latest;
@@ -208,6 +220,27 @@ function readChannelProbeErrors(health: unknown): Array<{ id: string; error: str
   return errors;
 }
 
+function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
+  const unavailable = asOptionalRecord(asOptionalRecord(health)?.plugins)?.unavailable;
+  if (!Array.isArray(unavailable)) {
+    return [];
+  }
+  return unavailable.flatMap((entry) => {
+    const plugin = asOptionalRecord(entry);
+    const diagnostic = asOptionalRecord(plugin?.diagnostic);
+    if (
+      typeof plugin?.id !== "string" ||
+      plugin.state !== "configured-unavailable" ||
+      diagnostic?.kind !== "plugin-verification" ||
+      typeof diagnostic.reason !== "string" ||
+      typeof diagnostic.detail !== "string"
+    ) {
+      return [];
+    }
+    return [{ id: plugin.id, reason: diagnostic.reason, detail: diagnostic.detail }];
+  });
+}
+
 export async function confirmGatewayReachable(params: {
   port: number;
   auth?: GatewayRestartProbeAuth;
@@ -215,12 +248,15 @@ export async function confirmGatewayReachable(params: {
   configuredProbe?: ConfiguredGatewayLocalProbe;
   env?: NodeJS.ProcessEnv;
   allowDeviceIdentityRequired?: boolean;
+  signal?: AbortSignal;
 }): Promise<GatewayReachability> {
+  params.signal?.throwIfAborted();
   const result: GatewayReachability = {
     reachable: false,
     gatewayVersion: null,
     gatewayBuildId: undefined,
     activatedPluginErrors: [],
+    unavailablePlugins: [],
     channelProbeErrors: [],
   };
   try {
@@ -237,6 +273,7 @@ export async function confirmGatewayReachable(params: {
     const authNone = context.config.gateway?.auth?.mode === "none";
     // Readiness is first-party local control. CLI shared auth preserves read scopes;
     // auth-none uses the existing loopback backend contract without pairing a device.
+    params.signal?.throwIfAborted();
     const health = await callGateway({
       config: context.config,
       localPortOverride: params.port,
@@ -252,15 +289,19 @@ export async function confirmGatewayReachable(params: {
       deviceIdentity: null,
       sharedStateMode: "read-only",
       timeoutMs: 3_000,
+      ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;
+        result.gatewayBootId = hello.server.bootId;
         result.gatewayBuildId = hello.server.buildId ?? null;
       },
     });
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
+    result.unavailablePlugins = readUnavailablePlugins(health);
     result.channelProbeErrors = readChannelProbeErrors(health);
   } catch (error) {
+    params.signal?.throwIfAborted();
     // Only a correlated Gateway rejection proves protocol reachability. Bare socket
     // closes (including foreign listeners) must never satisfy restart health.
     result.reachable =
@@ -275,6 +316,7 @@ export async function confirmGatewayReachable(params: {
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }
+  params.signal?.throwIfAborted();
   return result;
 }
 
@@ -286,10 +328,7 @@ export type GatewayRestartProbeContext = {
 export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
 ): Promise<GatewayRestartProbeContext> {
-  const mergedEnv = {
-    ...(process.env as Record<string, string | undefined>),
-    ...(env ?? undefined),
-  } as NodeJS.ProcessEnv;
+  const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   const cfg = await createConfigIO({
     env: mergedEnv,
     observe: false,

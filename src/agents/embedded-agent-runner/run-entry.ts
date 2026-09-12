@@ -11,6 +11,10 @@ import {
   normalizeAgentRunTerminalReplySnapshot,
 } from "../agent-run-terminal-reply.js";
 import {
+  createAssistantErrorTranscript,
+  type AssistantErrorTranscript,
+} from "../assistant-error-transcript.js";
+import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,
 } from "../harness/context-engine-logical-turn.js";
@@ -30,6 +34,7 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import { isProviderModelRerouted } from "../provider-model-route.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -38,6 +43,7 @@ import {
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 type RunEntryCandidateOptions = {
+  assistantErrorTranscript: AssistantErrorTranscript;
   classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
@@ -61,6 +67,7 @@ type RunEntryHarnessPreparation =
     };
 
 type DeliveryEvidence = {
+  hasRetryBlockedDelivery: boolean;
   hasDirectlySentBlockReply: boolean;
   hasBlockReplyPipelineOutput: boolean;
 };
@@ -243,8 +250,7 @@ function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
           requested,
           rerouted:
             terminalReceipt.rerouted ||
-            terminalReceipt.effective.provider !== requested.provider ||
-            terminalReceipt.effective.model !== requested.model,
+            isProviderModelRerouted(requested, terminalReceipt.effective),
         },
       }
     : params.result.meta.agentMeta;
@@ -308,9 +314,10 @@ function buildTerminal(params: {
           },
           successfulToolNames: ["message"],
           sourceReplyDelivered: true as const,
-          rerouted:
-            agentMeta.provider !== params.requested.provider ||
-            agentMeta.model !== params.requested.model,
+          rerouted: isProviderModelRerouted(params.requested, {
+            provider: agentMeta.provider,
+            model: agentMeta.model,
+          }),
         }
       : undefined);
   const terminalReceipt =
@@ -372,10 +379,16 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
   const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+    identity: params.identity,
     config: params.selection.cfg,
     agentDir: params.selection.agentDir,
     workspaceDir: params.harness.workspaceDir,
   });
+  const assistantErrorTranscript = createAssistantErrorTranscript({
+    runId: params.identity.runId,
+    config: params.selection.cfg,
+  });
+  let failed = true;
   let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
   let candidateIndex = 0;
   const committedSideEffect =
@@ -388,6 +401,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     model: string;
     agentHarnessRuntimeOverride?: string;
   }) => {
+    assistantErrorTranscript.clear();
     const key = [
       candidate.provider,
       candidate.model,
@@ -420,12 +434,16 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   // delivered its reply, producing a duplicate visible answer (#113788). Consult the
   // same live delivery evidence the result classifier already uses so both exit
   // paths suppress fallback after a delivered reply.
-  const canFallbackAfterError = committedSideEffect
+  const canFallback = committedSideEffect
     ? () => !committedSideEffect()
     : readChannelDeliveryEvidence
       ? () => {
           const evidence = readChannelDeliveryEvidence();
-          return !evidence.hasDirectlySentBlockReply && !evidence.hasBlockReplyPipelineOutput;
+          return (
+            !evidence.hasDirectlySentBlockReply &&
+            !evidence.hasBlockReplyPipelineOutput &&
+            !evidence.hasRetryBlockedDelivery
+          );
         }
       : undefined;
   try {
@@ -485,9 +503,14 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
-            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) => result.classification,
+            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
+              result.result.meta.modelFallbackStopReason
+                ? { stopReason: result.result.meta.modelFallbackStopReason }
+                : canFallback?.() === false
+                  ? undefined
+                  : result.classification,
           }),
-      ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
+      ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
@@ -506,6 +529,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             }),
           }),
       run: async (provider, model, options) => {
+        assistantErrorTranscript.clear();
         if (!options) {
           throw new Error("Model fallback attempt is missing routing provenance");
         }
@@ -516,6 +540,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           | { result: EmbeddedAgentRunResult; value: ModelFallbackResultClassification }
           | undefined;
         const classifyResult = (result: EmbeddedAgentRunResult) => {
+          // Custody can settle between classification and finalization; never cache its veto.
+          if (canFallback?.() === false) {
+            return undefined;
+          }
           if (!classified || classified.result !== result) {
             const classification =
               params.behavior.kind === "maintenance"
@@ -534,15 +562,13 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             // returns a replacement that must not inherit its predecessor's decision.
             classified = {
               result,
-              value:
-                effectiveClassification && committedSideEffect?.()
-                  ? undefined
-                  : effectiveClassification,
+              value: effectiveClassification,
             };
           }
           return classified.value;
         };
         const result = await params.runCandidate(provider, model, {
+          assistantErrorTranscript,
           classifyResult,
           allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
           isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
@@ -582,6 +608,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       result: candidateResult,
       fallbackExhausted: outcome === "exhausted",
     });
+    failed = terminalOutcome.status === "error";
     const result = mergeRunEntryExecutionTrace({
       result: candidateResult,
       terminalStatus: terminalOutcome.status,
@@ -660,6 +687,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
         lease: contextEngineLogicalTurnLease,
       });
     }
-    await contextEngineLogicalTurnLease.dispose();
+    try {
+      await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
+    } finally {
+      await contextEngineLogicalTurnLease.dispose();
+    }
   }
 }

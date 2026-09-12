@@ -9,10 +9,32 @@ export const VITEST_PRETEST_BUILD_SECONDS: Record<VitestPretestBuildMode, number
   "private-qa": 104,
 };
 
+// Placement observations cannot become parent samples or influence file splitting.
+// Configs own this identity: generated stripe names can change around the same readers.
+export function runtimePlacementTimingKey(group: {
+  configs: readonly string[];
+  env?: Readonly<Record<string, string>>;
+  includePatterns?: readonly string[];
+  pretestBuildMode?: VitestPretestBuildMode;
+}): string | undefined {
+  if (!group.pretestBuildMode || !group.includePatterns?.length) {
+    return undefined;
+  }
+  const identity = JSON.stringify({
+    configs: group.configs,
+    env: Object.entries(group.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+    includePatterns: group.includePatterns.toSorted(),
+    pretestBuildMode: group.pretestBuildMode,
+  });
+  return `runtime-placement#${createHash("sha1").update(identity).digest("hex")}`;
+}
+
 export type VitestShardTimingSpec = {
   config: string;
   env?: NodeJS.ProcessEnv;
   includePatterns?: readonly string[] | null;
+  /** Exact chunk files for scheduling; does not configure execution filtering. */
+  timingTargets?: readonly string[];
   watchMode?: boolean;
 };
 
@@ -39,6 +61,7 @@ type CompactSplitTimingGenerationSpec = {
 export type CompactSplitTimingKey = {
   expectedParts: number;
   generationKey: string;
+  parentShardName: string;
   part: number;
   selectorKey: string;
 };
@@ -59,6 +82,7 @@ export function parseCompactSplitTimingKey(value: string): CompactSplitTimingKey
   return {
     expectedParts,
     generationKey: `${match[1]}#generation-${match[2]}#parts-${expectedParts}`,
+    parentShardName: match[1]!.slice(0, match[1]!.lastIndexOf("#selector-")),
     part,
     selectorKey: match[1]!,
   };
@@ -93,18 +117,17 @@ export function createCompactSplitTimingGeneration(params: CompactSplitTimingGen
 }
 
 export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
-  if (!Array.isArray(spec.includePatterns) || spec.includePatterns.length === 0) {
+  const targets = spec.timingTargets ?? spec.includePatterns;
+  if (!Array.isArray(targets) || targets.length === 0) {
     return spec.config;
   }
 
   const shardName = sanitizeTimingLabel(spec.env?.[SHARD_NAME_ENV_KEY] ?? "");
-  if (shardName) {
+  if (shardName && !spec.timingTargets) {
     return `${spec.config}#${shardName}`;
   }
 
-  return `${spec.config}#include-${spec.includePatterns.length}-${hashIncludePatterns(
-    spec.includePatterns,
-  )}`;
+  return `${spec.config}#include-${targets.length}-${hashIncludePatterns(targets)}`;
 }
 
 // Advisory per-file cost hints (seconds) for stripe balancing, from file walls,

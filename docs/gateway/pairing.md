@@ -34,9 +34,42 @@ removed.
 4. Until approval, node commands stay filtered; approval exposes the declared
    surface, subject to the normal command policy.
 
-Pending requests expire automatically **5 minutes after the node's last
-retry** — an actively reconnecting node keeps its one pending request alive
-rather than generating a fresh request (and approval prompt) per attempt.
+Pending **node capability** requests do not expire just because time passes.
+They survive node disconnects and Gateway restarts, and remain pending until
+approved, rejected, superseded by a changed surface, or cleared by the node
+lifecycle, such as removal of the node role or a successful reconnect that no
+longer needs that approval.
+
+A pending capability request does not grant access. Approval still requires the
+operator scopes for the requested commands. Before updating a live connection,
+the Gateway checks its pairing identity and generation against the persisted
+approval and limits access to the capabilities and commands that connection
+declared.
+
+An initial unapproved surface has no effective commands. While a later expansion
+waits, previously approved commands remain effective only if the node still
+declares them and Gateway command policy allows them.
+
+The **5-minute expiry** still applies to **device-pairing** requests,
+not to capability approvals on an already-paired device.
+
+### Upgrades and older writers
+
+Upgrade the Gateway and any CLI that directly writes the same state database
+together. An older app or CLI that only calls the Gateway over RPC is not a
+direct database writer; the Gateway handles those requests.
+
+The capability-request storage format is unchanged. Older Gateway or direct CLI
+writers still apply the former five-minute expiry and can persist deletion of
+aged requests, including during unrelated pairing updates. Downgrading can
+therefore restore the old expiry behavior; lifecycle retention is not guaranteed
+while an older version writes the database.
+
+On upgrade, an aged request that an older version only hid from its output can
+become visible again if it is still stored. It still requires explicit approval.
+An upgrade cannot recover an already deleted request: the node must submit a
+fresh capability request for the operator to review. Existing device pairing and
+previously approved capabilities are separate from that pending request.
 
 ## One-paste node pairing
 
@@ -56,17 +89,40 @@ leaf certificate. The bootstrap token expires after 10 minutes. Explicit
 The bootstrap token and resulting device credential are separate, like a
 short-lived Tailscale auth key and the durable device identity it admits.
 Revoking or expiring the setup link does not revoke the paired device; remove
-the device separately when needed. The link never pre-approves `system.run` or
-folder sync. Those operations still use pending approval or
+the device separately when needed. Administrator-minted bootstrap enrollment
+approves the device and its first declared command surface, including `system.run`
+when declared, like
 [SSH-verified device auto-approval](#ssh-verified-device-auto-approval-default).
+Later command, capability, or permission expansion still requires approval.
+Gateway command policy and [node-local exec approvals](/tools/exec-approvals)
+remain separate gates. Local exec approvals default to `full` with `ask: "off"`;
+configure them before using a link if that access is too broad.
 
 ## CLI workflow (headless friendly)
 
+For manual device admission, first run on the Gateway:
+
+```bash
+openclaw devices list
+openclaw devices approve <deviceRequestId>
+```
+
+Restart the installed node with `openclaw node restart`, or stop and rerun its
+foreground command. A node paused on `PAIRING_REQUIRED` does not resume after
+manual approval. Its reconnect creates the separate command-surface request:
+
 ```bash
 openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes reject <requestId>
+openclaw nodes approve <nodeRequestId>
 openclaw nodes status
+openclaw nodes describe --node <idOrNameOrIp>
+```
+
+The device and node request IDs are distinct. To reject a surface request or
+manage an existing node instead:
+
+```bash
+openclaw nodes reject <nodeRequestId>
 openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
@@ -79,7 +135,7 @@ Events:
 
 - `node.pair.requested` - emitted when a new pending request is created.
 - `node.pair.resolved` - emitted when a request is approved, rejected, or
-  expired.
+  cleared by the node lifecycle.
 
 Methods:
 
@@ -121,13 +177,13 @@ top-level Gateway `fs.listDir` RPC needs `operator.write` for
 workspace-contained host browsing and `operator.admin` when `nodeId` is present.
 
 <Warning>
-Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
+Node surface approval records the durable command/capability ceiling. It does
+not grant commands that the node adds later or no longer declares.
 
-- Live node commands come from what the node declares on connect, filtered by
-  the gateway's global node command policy (`gateway.nodes.commands.allow` and
-  `gateway.nodes.commands.deny`).
-- Per-node `system.run` allow and ask policy lives on the node in
-  `exec.approvals.node.*`, not in the pairing record.
+- Live commands must be both declared and approved, then pass the Gateway's
+  command policy (`gateway.nodes.commands.allow` and `gateway.nodes.commands.deny`).
+- Shell allowlist and ask policy for `system.run` live in the node's
+  [exec approvals](/tools/exec-approvals), not in the pairing record.
 
 </Warning>
 
@@ -265,7 +321,9 @@ for the full identity, app/core versions, and request metadata.
 **Approve Node** approves the node's declared capabilities; it does not rotate
 the device's access token. **Command-Return** approves only a single displayed
 request. Return alone does not approve. **Not Now** or **Escape** hides the panel
-without resolving requests; they remain pending until resolved or expired.
+without resolving requests. Device-pairing requests retain their normal
+expiry; node capability requests remain pending until their lifecycle resolves
+them.
 
 For multiple requests, **Approve All** and **Reject All** apply only to the
 displayed requests. Requests arriving after that view was displayed are not
@@ -309,6 +367,8 @@ Security boundary:
   network locality alone.
 - Only a fresh `role: node` device pairing request with no requested scopes is
   eligible.
+- This approves the device only. Its first command surface still needs
+  `openclaw nodes pending` and `openclaw nodes approve <nodeRequestId>`.
 - Operator, browser, Control UI, and WebChat clients stay manual.
 - Role, scope, metadata, and public-key upgrades stay manual.
 - Same-host loopback trusted-proxy header paths are not eligible, because that
@@ -407,5 +467,6 @@ Security notes:
 ## Related
 
 - [Channel pairing](/channels/pairing)
+- [Gateway protocol auth](/gateway/protocol/auth) — the wire contract for device identity, pairing signatures, and device tokens
 - [Nodes CLI](/cli/nodes)
 - [Devices CLI](/cli/devices)

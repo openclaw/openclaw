@@ -1,4 +1,3 @@
-// Maintains interactive plugin registry entries discovered from manifests.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizePluginInteractiveNamespace,
@@ -7,9 +6,9 @@ import {
   validatePluginInteractiveNamespace,
 } from "./interactive-shared.js";
 import { clearPluginInteractiveHandlersState } from "./interactive-state.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
-  getActivePluginChannelRegistry,
   getPluginRegistrationContext,
   requireActivePluginChannelRegistry,
   resolveDirectPluginRegistrationOwner,
@@ -22,8 +21,6 @@ export type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration 
   pluginName?: string;
   pluginRoot?: string;
 };
-
-const getInteractiveHandlers = () => getActivePluginChannelRegistry()?.interactiveHandlers ?? [];
 
 /** Registration result for plugin interactive namespace handlers. */
 type InteractiveRegistrationResult = {
@@ -42,18 +39,6 @@ function asInteractiveHandlerLookup(registrations: readonly RegisteredInteractiv
         (entry) => toPluginInteractiveRegistryKey(entry.channel, entry.namespace) === key,
       ),
   };
-}
-
-/** Resolves a channel payload to a registered plugin interactive namespace handler. */
-export function resolvePluginInteractiveNamespaceMatch(
-  channel: string,
-  data: string,
-): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
-  return resolvePluginInteractiveMatch({
-    interactiveHandlers: asInteractiveHandlerLookup(getInteractiveHandlers()),
-    channel,
-    data,
-  });
 }
 
 /** Resolves a handler from registry-owned registrations without changing global state. */
@@ -92,7 +77,7 @@ function registerPluginInteractiveHandlerWithOptions(
     };
   }
   registrations.push({
-    ...registration,
+    ...wrapCurrentPluginInstance(registration),
     namespace,
     channel: normalizeOptionalLowercaseString(registration.channel) ?? "",
     pluginId,

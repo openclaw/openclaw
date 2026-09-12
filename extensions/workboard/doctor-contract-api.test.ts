@@ -13,6 +13,7 @@ import { stateMigrations } from "./doctor-contract-api.js";
 import type { PersistedWorkboardCard } from "./src/persistence-types.js";
 import { createWorkboardSqliteStores } from "./src/sqlite-store.js";
 import { WorkboardStore } from "./src/store.js";
+import { sqliteTestAuxStores } from "./src/test/sqlite-store.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -451,7 +452,7 @@ describe("workboard doctor contract", () => {
       expect(await attachmentStore.entries()).toHaveLength(1);
 
       const reopenedStores = createWorkboardSqliteStores({ env });
-      const store = new WorkboardStore(reopenedStores.cards);
+      const store = new WorkboardStore(reopenedStores.cards, sqliteTestAuxStores(reopenedStores));
       expect(await store.get("card-1")).toMatchObject({ title: "Current card" });
       expect(await reopenedStores.attachments.lookup("attachment-1")).toBeUndefined();
       reopenedStores.close();

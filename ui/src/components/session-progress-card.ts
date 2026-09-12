@@ -184,6 +184,7 @@ export function progressCardHeadsUp(
   card: ProgressCard | null | undefined,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
+  hasActiveRun = true,
 ): ProgressCardHeadsUp | null {
   const staleForRun = card ? isProgressCardStaleForRun(card, startedAt) : false;
   if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && !staleForRun) {
@@ -197,7 +198,8 @@ export function progressCardHeadsUp(
   if (!step) {
     return null;
   }
-  const status = step.status === "in_progress" && staleForRun ? "paused" : step.status;
+  const status =
+    step.status === "in_progress" && (staleForRun || !hasActiveRun) ? "paused" : step.status;
   return { ...counts, status, step: step.step };
 }
 
@@ -355,8 +357,14 @@ export function renderSessionProgressCard(
     validEndedAt >= validStartedAt &&
     validUpdatedAt !== undefined &&
     validUpdatedAt >= validStartedAt;
-  // A later run does not own durable progress last updated before it started.
-  const effectiveHasActiveRun = hasActiveRun && !isProgressCardStaleForRun(card, startedAt);
+  // A later run does not own durable progress last updated before it starts.
+  // Queued runs can retain the previous run's timestamps, but do not own its progress.
+  const hasCurrentRunActivity =
+    hasActiveRun &&
+    !isProgressCardStaleForRun(card, startedAt) &&
+    (validUpdatedAt === undefined ||
+      (sessionStatus !== "queued" &&
+        (validStartedAt !== undefined || sessionStatus === undefined)));
   const terminalTimestamp =
     sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && hasValidRunWindow
       ? validEndedAt
@@ -412,7 +420,7 @@ export function renderSessionProgressCard(
         })
       : nothing;
     const presentedCurrentStatus =
-      currentStep?.status === "in_progress" && !effectiveHasActiveRun && !terminalOutcomeKey
+      currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcomeKey
         ? "paused"
         : currentStep?.status;
     const summaryIndicator =
@@ -485,7 +493,7 @@ export function renderSessionProgressCard(
       </summary>
       <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
         ${renderProgressCardMarkdown(card.markdown)}
-        ${renderSteps(card, effectiveHasActiveRun, effectiveSessionStatus)}
+        ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
       </div>
     </details>`;
   }
@@ -502,6 +510,6 @@ export function renderSessionProgressCard(
         >${dismiss}
       </span>
     </div>
-    ${renderBody(card, effectiveHasActiveRun, effectiveSessionStatus)}
+    ${renderBody(card, hasCurrentRunActivity, effectiveSessionStatus)}
   </section>`;
 }

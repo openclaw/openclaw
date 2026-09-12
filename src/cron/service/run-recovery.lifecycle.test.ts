@@ -17,10 +17,10 @@ import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
-  inspectActiveCronRunReceipt,
   prepareCronRunReceiptClaim,
   type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { locked } from "./locked.js";

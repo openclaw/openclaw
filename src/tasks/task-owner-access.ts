@@ -21,7 +21,7 @@ type TaskOwnerIdentity = {
   config?: OpenClawConfig;
 };
 
-function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): boolean {
+export function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): boolean {
   if (
     task.scopeKind !== "session" ||
     normalizeOptionalString(task.ownerKey) !== normalizeOptionalString(identity.callerOwnerKey)

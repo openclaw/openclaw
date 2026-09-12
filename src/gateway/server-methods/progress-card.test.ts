@@ -6,6 +6,7 @@ import {
   type ProgressCard,
   type ProgressCardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import type { ProgressCardStore } from "../progress-card-store.js";
 import { createProgressCardHandlers } from "./progress-card.js";
@@ -13,49 +14,154 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 function createHarness() {
   const cards = new Map<string, ProgressCard>();
-  const store: ProgressCardStore = {
-    get: (sessionKey) => cards.get(sessionKey) ?? null,
-    put: (sessionKey, input) => {
-      const current = cards.get(sessionKey);
-      if (!input.markdown && !input.steps?.length) {
-        if (input.expectedRevision !== undefined && current?.revision !== input.expectedRevision) {
-          return { card: current ?? null };
-        }
-        cards.delete(sessionKey);
-        return { card: null };
+  const get = vi.fn<ProgressCardStore["get"]>(async (sessionKey) => cards.get(sessionKey) ?? null);
+  const put = vi.fn<ProgressCardStore["put"]>(async (sessionKey, input) => {
+    const current = cards.get(sessionKey);
+    if (!input.markdown && !input.steps?.length) {
+      if (input.expectedRevision !== undefined && current?.revision !== input.expectedRevision) {
+        return { card: current ?? null };
       }
-      const card = {
-        sessionKey,
-        revision: (cards.get(sessionKey)?.revision ?? 0) + 1,
-        updatedAt: Date.now(),
-        ...(input.markdown ? { markdown: input.markdown } : {}),
-        ...(input.steps ? { steps: input.steps } : {}),
-      };
-      cards.set(sessionKey, card);
-      return { card };
-    },
-  };
-  const handlers = createProgressCardHandlers(store);
+      cards.delete(sessionKey);
+      return { card: null };
+    }
+    const card = {
+      sessionKey,
+      revision: (cards.get(sessionKey)?.revision ?? 0) + 1,
+      updatedAt: Date.now(),
+      ...(input.markdown ? { markdown: input.markdown } : {}),
+      ...(input.steps ? { steps: input.steps } : {}),
+    };
+    cards.set(sessionKey, card);
+    return { card };
+  });
+  const handlers = createProgressCardHandlers({ get, put });
   const broadcast = vi.fn();
-  const invoke = async (method: "progressCard.get" | "progressCard.put", params: unknown) => {
-    const respond = vi.fn<RespondFn>();
+  const invoke = async (
+    method: "progressCard.get" | "progressCard.put",
+    params: unknown,
+    respond = vi.fn<RespondFn>(),
+  ) => {
     await handlers[method]!({
       params,
       respond,
       context: {
         broadcast,
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
       } as unknown as GatewayRequestContext,
     } as never);
     return respond;
   };
-  return { broadcast, invoke };
+  return { broadcast, invoke, get, put };
 }
 
 describe("progress card gateway methods", () => {
+  it.each(["get", "put"] as const)(
+    "waits for %s before responding or broadcasting",
+    async (operation) => {
+      const harness = createHarness();
+      const card: ProgressCard = {
+        sessionKey: "agent:main:main",
+        markdown: "Saved",
+        revision: 3,
+        updatedAt: 1,
+      };
+      const release = createDeferredCore();
+      harness.get.mockImplementationOnce(async () => {
+        await release.promise;
+        return card;
+      });
+      harness.put.mockImplementationOnce(async () => {
+        await release.promise;
+        return { card };
+      });
+      const respond = vi.fn<RespondFn>();
+      const pending = harness.invoke(
+        `progressCard.${operation}`,
+        {
+          sessionKey: card.sessionKey,
+          ...(operation === "put" ? { markdown: card.markdown } : {}),
+        },
+        respond,
+      );
+      try {
+        expect(harness[operation]).toHaveBeenCalledOnce();
+        expect(respond).not.toHaveBeenCalled();
+        expect(harness.broadcast).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending;
+      }
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { card }, undefined);
+      expect(harness.broadcast).toHaveBeenCalledTimes(operation === "put" ? 1 : 0);
+      if (operation === "put") {
+        expect(harness.broadcast).toHaveBeenCalledWith(
+          "progressCard.changed",
+          { sessionKey: card.sessionKey, revision: 3 },
+          { sessionKeys: [card.sessionKey], agentId: "main" },
+        );
+      }
+    },
+  );
+
+  it.each(["get", "put"] as const)(
+    "reports rejected %s without publishing or retrying",
+    async (operation) => {
+      const harness = createHarness();
+      const release = createDeferredCore();
+      harness.get.mockImplementationOnce(async () => {
+        await release.promise;
+        return null;
+      });
+      harness.put.mockImplementationOnce(async () => {
+        await release.promise;
+        return { card: null };
+      });
+      const respond = vi.fn<RespondFn>();
+      const pending = harness.invoke(
+        `progressCard.${operation}`,
+        { sessionKey: "agent:main:main" },
+        respond,
+      );
+      release.reject(new Error("storage unavailable"));
+      await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("storage unavailable"),
+        }),
+      );
+      expect(harness.broadcast).not.toHaveBeenCalled();
+      expect(harness[operation]).toHaveBeenCalledOnce();
+    },
+  );
+
   it("registers read and write scopes", () => {
     expect(resolveCoreOperatorGatewayMethodScope("progressCard.get")).toBe("operator.read");
     expect(resolveCoreOperatorGatewayMethodScope("progressCard.put")).toBe("operator.write");
+  });
+
+  it.each([
+    { agentId: "missing", message: "Unknown agent id" },
+    { agentId: "bad owner", message: "Unknown agent id" },
+    { agentId: "work", message: 'does not match session key agent "main"' },
+  ])("rejects explicit owner $agentId before accessing cards", async ({ agentId, message }) => {
+    const { broadcast, invoke, get, put } = createHarness();
+    for (const method of ["progressCard.get", "progressCard.put"] as const) {
+      const response = await invoke(method, { sessionKey: "agent:main:main", agentId });
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining(message),
+        }),
+      );
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("roundtrips markdown and steps, strips invisible Unicode, and broadcasts the revision", async () => {
@@ -85,10 +191,14 @@ describe("progress card gateway methods", () => {
       { card: expect.objectContaining({ markdown: "ABC", steps: expectedSteps, revision: 1 }) },
       undefined,
     );
-    expect(broadcast).toHaveBeenCalledWith("progressCard.changed", {
-      sessionKey: "agent:main:main",
-      revision: 1,
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "progressCard.changed",
+      {
+        sessionKey: "agent:main:main",
+        revision: 1,
+      },
+      { sessionKeys: ["agent:main:main"], agentId: "main" },
+    );
   });
 
   it.each([
@@ -154,10 +264,14 @@ describe("progress card gateway methods", () => {
     const clear = await invoke("progressCard.put", { sessionKey: "agent:main:main" });
 
     expect(clear).toHaveBeenCalledWith(true, { card: null }, undefined);
-    expect(broadcast).toHaveBeenCalledWith("progressCard.changed", {
-      sessionKey: "agent:main:main",
-      revision: null,
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "progressCard.changed",
+      {
+        sessionKey: "agent:main:main",
+        revision: null,
+      },
+      { sessionKeys: ["agent:main:main"], agentId: "main" },
+    );
   });
 
   it("dismisses only the matching completed revision", async () => {
@@ -184,9 +298,13 @@ describe("progress card gateway methods", () => {
     );
     expect(dismissed).toHaveBeenCalledWith(true, { card: null }, undefined);
     expect(broadcast).toHaveBeenCalledOnce();
-    expect(broadcast).toHaveBeenCalledWith("progressCard.changed", {
-      sessionKey: "agent:main:main",
-      revision: null,
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "progressCard.changed",
+      {
+        sessionKey: "agent:main:main",
+        revision: null,
+      },
+      { sessionKeys: ["agent:main:main"], agentId: "main" },
+    );
   });
 });

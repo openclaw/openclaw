@@ -12,17 +12,19 @@ openclaw onboard
 ```
 
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
-Windows (native or WSL2). On a fresh install, **Quick start** detects AI access
-already available on the machine, verifies it with a real completion, and opens
-the web dashboard with a foreground Gateway. **Custom setup** preserves the full
+Windows (native or WSL2). On a fresh install, **Quick start** detects available AI
+access, waits for you to choose a connection, verifies your choice with a real
+completion, and opens the web dashboard with a foreground Gateway. **Custom setup** preserves the full
 guided flow. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
 
-Guided onboarding establishes inference first: a real completion must succeed
-before workspace and Gateway setup continues. If no detected route works, it
-opens manual provider setup. Choosing **Skip for now** exits onboarding without
-starting OpenClaw.
+Guided onboarding verifies your selected connection before starting the Gateway
+and AI chat. Detected connections and supported providers share the same picker;
+failure or cancellation never automatically selects another provider. In local
+onboarding, **Skip for now** prepares the named agent's workspace and local Gateway
+configuration, then exits without starting either. Interrupted baseline setup
+resumes on the next run.
 
 The classic wizard remains available for remote Gateway setup, channel pairing,
 daemon controls, skills, and imports. Run it explicitly
@@ -91,10 +93,11 @@ conversationally. Docs: [Web tools](/tools/web).
 Fresh local interactive onboarding offers **Quick start** and **Custom setup**
 after a one-line pointer to the [security guide](/gateway/security). Quick start
 records the security acknowledgment; Custom setup shows the full security note
-and asks for confirmation. Quick start uses the default agent name `main` and
-full access, leaves telemetry consent unset, and skips route confirmation,
-memory import, and app recommendations. Custom setup keeps the telemetry choice,
-agent name, access mode, route confirmation, and optional setup prompts.
+and asks for confirmation. By default, Quick start uses the agent name `main` and
+full access, leaves telemetry consent unset, and skips memory import and app
+recommendations. Custom setup keeps the telemetry choice, agent name, access mode,
+and optional setup prompts. Both lanes require an explicit provider choice before
+a live completion or any provider installation, model selection, or credential write.
 
 Quick start follows this path:
 
@@ -105,20 +108,21 @@ Quick start follows this path:
    model. Pi and OpenCode installs may also be reported for context when they
    cannot serve as the reusable inference route. Gemini CLI and Antigravity are
    not offered as detected setup routes.
-3. Test detected candidates with real completions until one works, then announce
-   the selected route. Earlier failures are summarized quietly.
-4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
-   OpenRouter, or choose **More…** for the remaining providers. Each provider's
-   regions, plans, and supported browser, device, API-key, or token methods
-   appear in a second menu and are tested with the same real completion.
+3. Choose the detected connection you want, or select a supported provider.
+   Only that connection is tested with a real completion. If it fails, review the
+   error and choose whether to retry, select another provider, or skip.
+4. Choose **More…** for additional provider groups, including installable official
+   plugins. Each provider's regions, plans, and supported browser, device, API-key,
+   or token methods appear in a second menu. Plugin installation requires its
+   capability review before the selected provider's setup continues.
    For an unlisted endpoint, choose **Custom Provider** (under **More…** when shown) and enter
    its base URL, optional API key, compatibility, and model ID. Custom setup
    runs in the local CLI on the Gateway host and verifies a real reply before
    saving the provider or replacing the active model.
-   Choose **Skip for now** to exit without starting OpenClaw. Manual provider
-   setup continues through the remaining guided steps, including Gateway service
-   installation and optional setup. The quick-start defaults stay: agent name
-   `main`, full access, and telemetry consent unset.
+   Choose **Skip for now** to prepare the local baseline and exit without starting
+   the Gateway or AI chat. Choosing a provider through its manual setup keeps the
+   Quick start defaults: agent name `main`, full access, telemetry consent unset,
+   and a foreground Gateway after verification.
 5. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
 6. Start the Gateway in the foreground and open the browser dashboard. Press
@@ -126,15 +130,67 @@ Quick start follows this path:
    for background operation, `openclaw` for the TUI, or `openclaw dashboard` to
    reopen the web UI.
 
-The quick-start choice is not offered for configured installs, remote Gateway
+The Quick start choice is not offered for configured installs, remote Gateway
 chat setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.
 
-Re-running the command on a configured installation tests the current default
-model first, making the guided flow a verification and repair pass. A failing
-check never replaces the configured model automatically; onboarding stops and
-asks how to continue. Run `openclaw channels add` or `openclaw configure` for
+Re-running the command on a configured installation offers the current default
+model first. Select it for a verification and repair pass. A failed check never
+replaces the configured model automatically; onboarding waits for your next choice. Run `openclaw channels add` or `openclaw configure` for
 later non-inference additions; use `openclaw onboard` for provider or auth route
 changes.
+
+## Choose one agent or a team
+
+When guided onboarding creates the first agent, choose **One agent** (the
+default) or **A small team: a chief of staff plus specialists**. The team choice
+uses the same preset as `openclaw agents team create`: a chief of staff (`coordinator`), researcher,
+writer, and reviewer with separate workspaces, completed identities, and written
+role contracts. The chief of staff delegates suitable tasks and verifies specialist
+results before reporting to you.
+
+Guided setup creates the team after the selected provider passes its connection
+check. A failed check returns to provider selection without creating team members.
+Choosing **Skip** creates the workspaces for later use and reports that AI access
+still needs configuration.
+Guided setup remembers the chosen coordinator across restarts, including an
+interruption after provider activation but before member creation.
+
+For a team, `--workspace` is the parent directory; every member uses
+`<workspace>/<agent-id>`. After all members have been created, interrupted setup
+keeps that parent as its recovery workspace. Retry
+`openclaw onboard --workspace <workspace>` without `--team` to finish setup. Completion
+checks the full team roster and every member's workspace before closing the
+setup receipt; an incomplete or changed team stays pending with an error.
+
+If member creation itself fails, already-created members are retained and are
+not recreated automatically. Inspect `openclaw agents list` and repair the
+incomplete roster before retrying setup.
+
+Select the team directly in an interactive or non-interactive run with `--team`:
+
+```bash
+openclaw onboard --team
+openclaw onboard --non-interactive --team --accept-risk
+```
+
+The usual non-interactive provider and Gateway options still apply. Onboarding
+targets the coordinator explicitly for chat. It sets
+`agents.defaults.systemAgent.agentId` to the coordinator only when no ambient
+owner is configured; an existing owner is preserved and reported. A team does
+not introduce a universal default agent or change global delegation or tool
+policy. To address it later, use an explicit target:
+
+```bash
+openclaw agent --agent coordinator --message "Research a topic and prepare a draft."
+```
+
+`--team` is for local first-agent setup. It cannot be combined with remote,
+classic, or import onboarding. If an agent roster already exists, use
+`openclaw agents team create` instead.
+
+See [Team preset](/concepts/multi-agent#team-preset) for the delegation config and
+[`agents team create`](/cli/agents#agents-team-create) to add a namespaced team
+to an existing installation.
 
 ## Classic wizard setup modes
 
@@ -189,7 +245,7 @@ Local mode (default) walks through these steps:
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
    Fresh OpenAI API-key and ChatGPT/Codex setup default to
-   `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+   `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
    supported and resolves to Sol. Re-running setup preserves an existing
    explicit model, including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
    account does not expose GPT-5.6.
@@ -208,12 +264,20 @@ Local mode (default) walks through these steps:
    model/auth setup once or be ignored without blocking the rest of the
    classic wizard. Ignoring it does not unlock OpenClaw; conversational setup
    still requires a passing inference check.
-3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
-   interactive token mode, choose plaintext token storage (default) or opt
-   into a SecretRef. Non-interactive SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
+3. **Gateway** - port, bind address, secret storage, and Tailscale exposure.
+   Generates a Gateway secret in token mode by default, without asking you to
+   choose token or password. Existing password-mode configs are preserved;
+   `--gateway-auth password` or `--gateway-password <value>` selects password
+   mode explicitly. Tailscale Funnel still requires password mode. Choose
+   plaintext secret storage (default) or opt into a SecretRef. Non-interactive
+   token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 4. **Channels** - built-in and official plugin chat channels, including
    Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
-   QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
+   QQ Bot, Signal, Slack, Telegram, WhatsApp, and more. When no command owner
+   exists, completed channel setup offers a separate operator-account step for
+   `/update` and other administration. Enter your own user ID and confirm it, or
+   skip. This works in servers and groups without DM pairing and does not promote
+   chat allowlists. See [command owner setup](/channels/pairing#set-up-an-owner-without-dm-pairing).
 5. **Web search** - configures an optional search provider.
 6. **Skills** - installs recommended skills and their optional dependencies.
 7. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit
@@ -267,7 +331,7 @@ Notes:
 - Default workspace: `~/.openclaw/workspace-<agentId>` (or under
   `agents.defaults.workspace` if that is set).
 - Add `bindings` to route inbound messages to this agent (onboarding can do this for you).
-- Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
+- Non-interactive flags: `--role`, `--model`, `--agent-dir`, `--bind`, `--non-interactive`. With `--role`, `--workspace` can be omitted. See [Role templates](/cli/agents#role-templates).
 
 ## Full reference
 

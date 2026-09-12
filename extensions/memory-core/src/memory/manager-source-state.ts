@@ -10,10 +10,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { readMemorySourceHash } from "./manager-source-index-kernel.js";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -38,11 +38,13 @@ export async function resolveMemorySourceFileEntries(params: {
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
+  onSkippedSymlinkRoot?: (root: string) => void;
 }): Promise<MemoryFileEntry[]> {
   const files = await listMemoryFiles(
     params.workspaceDir,
     params.settings.extraPaths,
     params.settings.multimodal,
+    params.onSkippedSymlinkRoot,
   );
   return (
     await runWithConcurrency(
@@ -73,13 +75,24 @@ export async function inspectMemorySourceState(params: {
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
 }): Promise<MemorySourceInspection> {
-  const entries = await resolveMemorySourceFileEntries(params);
+  const skippedRoots = new Set<string>();
+  const entries = await resolveMemorySourceFileEntries({
+    ...params,
+    onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
+  });
   const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
   return {
     source: "memory",
     dirty: hasMemorySourceDrift({ entries, indexedRows }),
     eligible: entries.length,
-    issues: entries.length === 0 ? ["no eligible memory files found"] : [],
+    issues: [
+      ...(entries.length === 0 ? ["no eligible memory files found"] : []),
+      ...Array.from(
+        skippedRoots,
+        (root) =>
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+      ),
+    ],
   };
 }
 
@@ -107,12 +120,5 @@ export function resolveMemorySourceExistingHash(params: {
   if (params.existingHashes) {
     return params.existingHashes.get(params.path);
   }
-  return executeSqliteQueryTakeFirstSync(
-    params.db,
-    getNodeSqliteKysely<MemorySourceDatabase>(params.db)
-      .selectFrom("memory_index_sources")
-      .select("hash")
-      .where("path", "=", params.path)
-      .where("source", "=", params.source),
-  )?.hash;
+  return readMemorySourceHash(params.db, params.source, params.path);
 }

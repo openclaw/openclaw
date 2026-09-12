@@ -37,10 +37,16 @@ actor RemoteTunnelManager {
     private var lastRestartAt: Date?
     private let restartBackoffSeconds: TimeInterval = 2.0
 
+    func controlTunnelStatus() -> (running: Bool, localPort: UInt16?) {
+        guard !self.isShutDown, self.retirementInFlight == nil,
+              let active = self.controlTunnel, active.tunnel.isRunning
+        else { return (false, nil) }
+        return (true, active.tunnel.localPort)
+    }
+
     func controlTunnelRouteIfRunning() async -> Route? {
         guard !self.isShutDown, self.retirementInFlight == nil else { return nil }
-        guard let configuration = try? RemotePortTunnel.configuration(
-            remotePort: GatewayEnvironment.gatewayPort())
+        guard let configuration = try? RemotePortTunnel.configuration()
         else {
             self.beginRetirement()
             await self.waitForRetirement()
@@ -67,9 +73,8 @@ actor RemoteTunnelManager {
     {
         await self.waitForRetirement()
         guard self.lifecycleGeneration == lifecycleGeneration else { return .none }
-        guard let currentConfiguration = try? RemotePortTunnel.configuration(
-            remotePort: GatewayEnvironment.gatewayPort()),
-            Self.isCurrentConfiguration(requested: configuration, current: currentConfiguration)
+        guard let currentConfiguration = try? RemotePortTunnel.configuration(),
+              Self.isCurrentConfiguration(requested: configuration, current: currentConfiguration)
         else {
             return .staleConfiguration
         }
@@ -80,13 +85,12 @@ actor RemoteTunnelManager {
                 await self.waitForRetirement()
                 return .retired(replacementGeneration)
             }
-            guard active.tunnel.isRunning,
-                  let local = active.tunnel.localPort
-            else {
+            guard active.tunnel.isRunning else {
                 let replacementGeneration = self.beginRetirement()
                 await self.waitForRetirement()
                 return .retired(replacementGeneration)
             }
+            let local = active.tunnel.localPort
             let pid = active.tunnel.processIdentifier
             let isListening = await PortGuardian.shared.isListening(port: Int(local), pid: pid)
             // PortGuardian suspends this actor. A concurrent stop or replacement
@@ -96,7 +100,7 @@ actor RemoteTunnelManager {
                   current.configuration == active.configuration,
                   current.route == active.route
             else { return .none }
-            if (try? RemotePortTunnel.configuration(remotePort: GatewayEnvironment.gatewayPort())) != configuration {
+            if (try? RemotePortTunnel.configuration()) != configuration {
                 return .staleConfiguration
             }
             if isListening {
@@ -157,7 +161,7 @@ actor RemoteTunnelManager {
     }
 
     /// Ensure an SSH tunnel is running for the gateway control port.
-    /// Returns the local forwarded port (usually the configured gateway port).
+    /// Returns the local forwarded port configured by gateway.remote.url.
     func ensureControlTunnel() async throws -> UInt16 {
         try await self.ensureControlTunnelRoute().localPort
     }
@@ -177,8 +181,7 @@ actor RemoteTunnelManager {
             guard self.lifecycleGeneration == lifecycleGeneration else {
                 throw CancellationError()
             }
-            let configuration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            let configuration = try RemotePortTunnel.configuration()
             if let route = try await self.resolveLookup(
                 self.lookupControlTunnelRoute(
                     configuration: configuration,
@@ -205,13 +208,12 @@ actor RemoteTunnelManager {
             // current configuration in the same actor turn that claims creation.
             try Task.checkCancellation()
             guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
-            let currentConfiguration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            let currentConfiguration = try RemotePortTunnel.configuration()
             guard self.retirementInFlight == nil, self.controlTunnel == nil,
                   self.createInFlight == nil, currentConfiguration == configuration
             else { continue }
 
-            let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
+            let desiredPort = configuration.preferredLocalPort ?? 18789
             let token = UUID()
             let task = Task {
                 try await RemotePortTunnel.create(
@@ -235,8 +237,7 @@ actor RemoteTunnelManager {
                 tunnel,
                 token: token,
                 configuration: configuration,
-                lifecycleGeneration: lifecycleGeneration,
-                fallbackPort: desiredPort)
+                lifecycleGeneration: lifecycleGeneration)
         }
     }
 
@@ -248,8 +249,7 @@ actor RemoteTunnelManager {
         guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
         guard let create = createInFlight else { return .none }
         guard create.configuration == configuration else {
-            let currentConfiguration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            let currentConfiguration = try RemotePortTunnel.configuration()
             guard Self.isCurrentConfiguration(
                 requested: configuration,
                 current: currentConfiguration)
@@ -278,8 +278,7 @@ actor RemoteTunnelManager {
             tunnel,
             token: create.token,
             configuration: configuration,
-            lifecycleGeneration: create.lifecycleGeneration,
-            fallbackPort: UInt16(GatewayEnvironment.gatewayPort())))
+            lifecycleGeneration: create.lifecycleGeneration))
     }
 
     @discardableResult
@@ -317,8 +316,7 @@ actor RemoteTunnelManager {
         _ tunnel: RemotePortTunnel,
         token: UUID,
         configuration: RemotePortTunnel.Configuration,
-        lifecycleGeneration: UInt64,
-        fallbackPort: UInt16) async throws -> Route
+        lifecycleGeneration: UInt64) async throws -> Route
     {
         guard self.lifecycleGeneration == lifecycleGeneration else {
             await self.waitForRetirement()
@@ -333,8 +331,7 @@ actor RemoteTunnelManager {
         }
         let currentConfiguration: RemotePortTunnel.Configuration
         do {
-            currentConfiguration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            currentConfiguration = try RemotePortTunnel.configuration()
         } catch {
             self.beginRetirement()
             await self.waitForRetirement()
@@ -352,7 +349,7 @@ actor RemoteTunnelManager {
         }
         self.createInFlight = nil
         self.tunnelGeneration &+= 1
-        let resolvedPort = tunnel.localPort ?? fallbackPort
+        let resolvedPort = tunnel.localPort
         let route = Route(localPort: resolvedPort, generation: tunnelGeneration)
         self.controlTunnel = ActiveTunnel(
             tunnel: tunnel,
@@ -370,7 +367,9 @@ actor RemoteTunnelManager {
         await self.stopAll()
     }
 
-    func stopAll() async {
+    func stopAll(ifCurrent: @Sendable () -> Bool = { true }) async {
+        // A queued reset cannot retire a successor selected before this actor admits it.
+        guard ifCurrent() else { return }
         // Invalidate every captured route before terminating processes. Delayed
         // health checks and create completions cannot resurrect this epoch.
         self.beginRetirement()

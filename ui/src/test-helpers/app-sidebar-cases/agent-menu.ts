@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
@@ -23,6 +25,26 @@ function pointerEvent(type: "pointerenter" | "pointerleave", pointerType = "mous
 }
 
 describe("AppSidebar agent chip", () => {
+  it("keeps a configured avatar blank while waiting for authentication", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ hello: null });
+    const fetchAvatar = vi.spyOn(globalThis, "fetch");
+    const { sidebar } = await mountSidebar(
+      gateway.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      {
+        ...TWO_AGENTS,
+        agents: [{ id: "main", identity: { avatarUrl: "/avatar/main", emoji: "🦞" } }],
+      },
+    );
+    const avatar = sidebar.querySelector(".sidebar-agent-card__avatar .identity-avatar--agent");
+    expect(avatar?.classList).toContain("is-pending");
+    expect(avatar?.classList).not.toContain("is-fallback");
+    expect(avatar?.querySelector("img")).toBeNull();
+    expect(fetchAvatar).not.toHaveBeenCalled();
+  });
+
   it("loads the workspace identity used by the Agents editor", async () => {
     const request = vi.fn().mockResolvedValue({
       agentId: "main",
@@ -133,9 +155,9 @@ describe("AppSidebar agent chip", () => {
       const rustRow = [
         ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch"),
       ].find((row) => row.textContent?.includes("rust-claw"));
-      expect(
-        rustRow?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
-      ).toBe("🦀");
+      expect(rustRow?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+        "🦀",
+      );
     });
   });
 
@@ -211,6 +233,10 @@ describe("AppSidebar agent chip", () => {
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu).not.toBeNull();
     expect(menu?.querySelector(".sidebar-pair-mobile")).toBeNull();
+    expect(menu?.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    expect(menu?.querySelector('[role="separator"]')?.previousElementSibling?.className).toBe(
+      "sidebar-agent-menu__agent-grid",
+    );
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
     expect(
@@ -220,24 +246,24 @@ describe("AppSidebar agent chip", () => {
     ).toEqual([
       "agent:main",
       "agent:research",
+      "command:sidebar-agents",
+      "command:all-agents",
       "command:new-agent",
       "command:capabilities",
       "command:agent-settings",
     ]);
 
-    const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
+    const agentRows = [...(menu?.querySelectorAll(".sidebar-agent-menu__agent-switch") ?? [])];
     expect(agentRows).toHaveLength(2);
     expect(agentRows[0]?.classList.contains("sidebar-agent-menu__agent-switch--active")).toBe(true);
     expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-tile")).not.toBeNull();
-    expect(menu?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "🦞",
-    );
-    expect(menu?.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src).toContain(
+    expect(menu?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
+    expect(menu?.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
       "data:image/png;base64,eA==",
     );
     const switchMenu = menu;
     const researchRow = [
-      ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
+      ...(switchMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch") ?? []),
     ].find((row) => row.textContent?.includes("research"));
     expect(researchRow).toBeDefined();
     switchMenu?.dispatchEvent(
@@ -462,36 +488,49 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it("collapses a single-agent roster to the three agent actions", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
-      },
-    );
-    sidebar.connected = true;
-    await sidebar.updateComplete;
+  it.each([0, 1])(
+    "keeps the mode toggle and agent actions with %i configured agents",
+    async (count) => {
+      const gateway = createGateway({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(
+        gateway,
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: count === 0 ? [] : [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
+        },
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector(".sidebar-agent-menu");
-    expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
-    expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
-    expect(
-      [...(menu?.children ?? [])]
-        .filter((element) => element.localName === "wa-dropdown-item")
-        .map((element) => element.getAttribute("value")),
-    ).toEqual(["command:new-agent", "command:capabilities", "command:agent-settings"]);
-  });
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector(".sidebar-agent-menu");
+      expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
+      expect(menu?.querySelector('[role="separator"]')).toBeNull();
+      expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+      expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
+      expect(
+        [...(menu?.children ?? [])]
+          .filter((element) => element.localName === "wa-dropdown-item")
+          .map((element) => element.getAttribute("value")),
+      ).toEqual([
+        "command:sidebar-agents",
+        "command:all-agents",
+        "command:new-agent",
+        "command:capabilities",
+        "command:agent-settings",
+      ]);
+    },
+  );
 
-  it("navigates to the agents settings page with the active agent preselected", async () => {
+  it.each([
+    { label: "All agents", navigation: ["agents-home", undefined] },
+    { label: "Agent settings", navigation: ["agents", { pathname: "/settings/agents/main" }] },
+  ])("navigates to $label and closes the agent menu", async ({ label, navigation }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -506,13 +545,13 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    const settingsRow = [
+    const actionRow = [
       ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
-    ].find((row) => row.textContent?.includes("Agent settings"));
-    expect(settingsRow).toBeDefined();
-    settingsRow?.click();
+    ].find((row) => row.textContent?.includes(label));
+    expect(actionRow).toBeDefined();
+    actionRow?.click();
     await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith("agents", { pathname: "/settings/agents/main" });
+    expect(onNavigate).toHaveBeenCalledWith(...navigation);
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 
@@ -618,5 +657,74 @@ describe("AppSidebar agent chip", () => {
         ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
       ),
     ).toHaveLength(12);
+  });
+
+  it("loads switcher avatar tiles through the authenticated avatar loader", async () => {
+    const avatarRoute = "/avatar/research?v=140879";
+    const createObjectURL = vi.fn(() => "blob:agent-avatar");
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const response = createDeferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>().mockReturnValue(response.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    setAvatarGatewayOrigin(globalThis.location.origin, ["secret-token"]);
+    try {
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        {
+          ...TWO_AGENTS,
+          agents: [
+            { id: "main", identity: { name: "Molty", emoji: "🦞" } },
+            { id: "research", identity: { avatarUrl: avatarRoute } },
+          ],
+        },
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector(".sidebar-agent-menu");
+      expect(menu).not.toBeNull();
+      const researchRow = [
+        ...(menu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch") ?? []),
+      ].find((row) => row.textContent?.includes("research"));
+      expect(researchRow).toBeDefined();
+      const avatar = researchRow?.querySelector(".agent-select__avatar");
+      expect(avatar?.classList).toContain("is-pending");
+      expect(avatar?.classList).not.toContain("is-fallback");
+
+      response.resolve(
+        new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+      );
+      await vi.waitFor(() => {
+        expect(
+          researchRow
+            ?.querySelector<HTMLImageElement>(".agent-select__avatar img")
+            ?.getAttribute("src"),
+        ).toBe("blob:agent-avatar");
+      });
+      expect(avatar?.classList).toContain("is-pending");
+      avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
+      expect(avatar?.classList).not.toContain("is-pending");
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${globalThis.location.origin}/avatar/research?v=140879`,
+        expect.objectContaining({
+          headers: { Authorization: "Bearer secret-token" },
+        }),
+      );
+    } finally {
+      response.resolve(new Response(null, { status: 404 }));
+      setAvatarGatewayOrigin(null);
+      vi.unstubAllGlobals();
+    }
   });
 });

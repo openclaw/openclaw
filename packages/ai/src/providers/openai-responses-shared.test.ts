@@ -5,6 +5,7 @@ import type {
   Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -13,6 +14,7 @@ import {
 import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -105,14 +107,7 @@ function createAssistantOutput(): AssistantMessage {
     api: nativeOpenAIModel.api,
     provider: nativeOpenAIModel.provider,
     model: nativeOpenAIModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 0,
     content: [],
@@ -152,7 +147,7 @@ describe("convertResponsesToolPayload", () => {
       },
     ] satisfies Tool[];
 
-    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel }).tools;
+    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel });
 
     expect(converted).toEqual([
       {
@@ -185,7 +180,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool.strict).toBe(false);
@@ -207,7 +202,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: proxyOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool).not.toHaveProperty("strict");
@@ -230,7 +225,7 @@ describe("convertResponsesToolPayload", () => {
     } satisfies Tool;
 
     expect(
-      convertResponsesToolPayload([zeta, alpha]).tools.map(
+      convertResponsesToolPayload([zeta, alpha]).map(
         (tool) => expectResponsesFunctionTool(tool).name,
       ),
     ).toEqual(["alpha", "zeta"]);
@@ -256,7 +251,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     expect(converted).toEqual([
       {
@@ -453,14 +448,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -518,14 +506,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -565,14 +546,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [
@@ -602,14 +576,7 @@ describe("convertResponsesMessages", () => {
               },
             ],
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_abc|fc_prior",
-            toolName: "price_lookup",
-            content: [{ type: "text", text: "$83.95" }],
-            isError: false,
-            timestamp: 2,
-          },
+          makeTextToolResult("call_abc|fc_prior", "price_lookup", "$83.95", false, 2),
         ],
       } satisfies Context,
       allowedToolCallProviders,
@@ -653,14 +620,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
@@ -698,14 +658,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [
@@ -747,14 +700,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }],
@@ -820,14 +766,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -2239,14 +2178,7 @@ describe("processResponsesStream", () => {
         systemPrompt: "",
         messages: [
           output,
-          {
-            role: "toolResult",
-            toolCallId: "call_weather|fc_weather",
-            toolName: "weather",
-            content: [{ type: "text", text: "Rain" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1),
         ],
       } satisfies Context,
       testAllowedToolCallProviders,
@@ -3573,14 +3505,7 @@ describe("Azure OpenAI Responses content type support", () => {
             api: azureModel.api,
             provider: azureModel.provider,
             model: azureModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [

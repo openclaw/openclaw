@@ -3,7 +3,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
+import {
+  testing as extraParamsTesting,
+  type WrapProviderStreamFnParams,
+} from "./embedded-agent-runner/extra-params.test-support.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
@@ -11,9 +15,8 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
     buildHookProviderCacheKey: () => "test-provider-hook-cache-key",
     clearProviderRuntimePluginCacheForTest: vi.fn(),
   },
-  prepareProviderExtraParams: () => undefined,
-  resolveProviderExtraParamsForTransport: () => undefined,
-  wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
+  ensureProviderRuntimePluginHandle: vi.fn(),
+  getModelProviderRuntimePluginHandle: () => undefined,
 }));
 
 const ANTHROPIC_DEFAULT_BETAS = [
@@ -246,10 +249,6 @@ import {
   resolvePreparedExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
 import { log } from "./embedded-agent-runner/logger.js";
-
-type WrapProviderStreamFnParams = Parameters<
-  typeof import("../plugins/provider-hook-runtime.js").wrapProviderStreamFn
->[0];
 
 function installFullProviderRuntimeDepsForTest() {
   // Install a test-only provider runtime that composes the same wrapper families
@@ -857,14 +856,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "opencode",
       model: "xiaomi/mimo-v2-pro",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: 1,
     } as const;
@@ -1209,6 +1201,74 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
     expect(payload).not.toHaveProperty("store");
+  });
+
+  it("applies extra_body tuning-key overrides without warning", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "deepseek",
+        applyModelId: "deepseek-chat",
+        extraParamsOverride: {
+          extra_body: {
+            thinking: { type: "disabled" },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "deepseek",
+          id: "deepseek-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+        } as Model<"openai-completions">,
+        payload: {
+          messages: [],
+          model: "deepseek-chat",
+          thinking: { type: "enabled" },
+        },
+      });
+
+      expect(payload.thinking).toEqual({ type: "disabled" });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it.each<[string, unknown]>([
+    ["messages", [{ role: "user", content: "configured message" }]],
+    ["model", "configured-model"],
+    ["stream", true],
+  ])("warns when extra_body overrides framework-managed %s", (key, value) => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "deepseek",
+        applyModelId: "deepseek-chat",
+        extraParamsOverride: {
+          extra_body: {
+            [key]: value,
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "deepseek",
+          id: "deepseek-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+        } as Model<"openai-completions">,
+        payload: {
+          messages: [],
+          model: "deepseek-chat",
+          stream: true,
+        },
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`framework-managed request keys: ${key}`),
+      );
+      expect(payload[key]).toEqual(value);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {
@@ -2230,7 +2290,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
   });
 
-  it("keys prepared extra-param memoization by resolved model transport inputs", () => {
+  it("prepares extra params from each model's transport inputs", () => {
     const resolveProviderExtraParamsForTransport = vi.fn((params) => ({
       patch: {
         transportFamily: params.context.model?.api,
@@ -2303,7 +2363,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(differentModelHeadersParams.baseUrl).toBe("https://api-two.example/v1");
     expect(differentModelHeadersParams.headerAuth).toBe("two");
     expect(repeatedResponsesParams.transportFamily).toBe("openai-responses");
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(3);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(4);
   });
 
   it("passes explicit settings transport to transport extra-param hooks", () => {

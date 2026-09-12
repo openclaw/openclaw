@@ -105,6 +105,7 @@ export function createBeamRequestHandler(params: {
         sendJson(res, 400, { ok: false, error: parsed.error });
         return true;
       }
+      await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       const receivedAt = params.now?.() ?? Date.now();
       await params.store.update(parsed.value.beamId, (existing) => {
         const revisionOrder = existing

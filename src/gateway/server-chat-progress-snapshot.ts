@@ -34,6 +34,10 @@ export function updateChatRunProgressSnapshot(
       "preparing_context",
       "starting_model",
     ].includes(phase);
+  const isRetryStatus = event.stream === "run_status" && phase === "retrying";
+  const isAssistant =
+    event.stream === "assistant" &&
+    Boolean(snapshot?.events.some((candidate) => candidate.stream === "run_status"));
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -66,7 +70,7 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isPreamble && !isUsage) {
+  if (mode === "summary" && !isTool && !isPreamble && !isUsage && !isRetryStatus && !isAssistant) {
     return snapshot;
   }
   if (
@@ -74,6 +78,8 @@ export function updateChatRunProgressSnapshot(
     !isPreamble &&
     !isUsage &&
     !isStartupStatus &&
+    !isRetryStatus &&
+    !isAssistant &&
     !isStandaloneGuardian &&
     !isNotice &&
     !resolvesStrictReview
@@ -97,9 +103,29 @@ export function updateChatRunProgressSnapshot(
     ? next.events.find((candidate) => candidate.stream === "usage")
     : undefined;
 
+  let recounted = false;
   const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
-    next.events = next.events.filter((candidate) => !predicate(candidate));
-    next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
+    let removedBytes = 0;
+    next.events = next.events.filter((candidate) => {
+      if (!predicate(candidate)) {
+        return true;
+      }
+      if (recounted) {
+        removedBytes += jsonUtf8Bytes(candidate);
+      }
+      return false;
+    });
+    if (recounted) {
+      next.byteLength -= removedBytes;
+    } else {
+      // Nested producer payloads can change between updates. Recount once,
+      // then charge only evictions during this synchronous update.
+      next.byteLength = next.events.reduce(
+        (total, candidate) => total + jsonUtf8Bytes(candidate),
+        0,
+      );
+      recounted = true;
+    }
   };
 
   if (
@@ -112,10 +138,10 @@ export function updateChatRunProgressSnapshot(
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.
     removeWhere((candidate) => candidate.stream === "usage");
-  } else if (isStartupStatus || isTool || isPreamble) {
-    // Remove superseded startup and item state together; recount retained mutable payloads once.
+  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isPreamble) {
+    // Progress clears transient statuses; retry waits may begin after tools completed.
     removeWhere((candidate) => {
-      if (candidate.stream === "run_status") {
+      if (candidate.stream === "run_status" || candidate.stream === "assistant") {
         return true;
       }
       if (isPreamble) {
@@ -170,13 +196,15 @@ export function updateChatRunProgressSnapshot(
           isError: phase === "result" ? data.isError : undefined,
           result: phase === "result" ? data.result : undefined,
         }
-    : isPreamble
-      ? {
-          kind: "preamble",
-          itemId: preambleItemId || undefined,
-          progressText: data.progressText,
-        }
-      : { ...previousUsage?.data, ...data };
+    : isAssistant
+      ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
+      : isPreamble
+        ? {
+            kind: "preamble",
+            itemId: preambleItemId || undefined,
+            progressText: data.progressText,
+          }
+        : { ...previousUsage?.data, ...data };
   for (const key of Object.keys(storedData)) {
     if (storedData[key] === undefined) {
       delete storedData[key];

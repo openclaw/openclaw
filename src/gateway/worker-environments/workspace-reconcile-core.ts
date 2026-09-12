@@ -22,6 +22,7 @@ import {
   entryMatches,
   localPath,
   readWorkspaceFileSnapshot,
+  removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
 export {
   MAX_RECONCILIATION_ENTRIES,
@@ -184,6 +185,7 @@ export async function readActualWorkspaceManifest(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  signal?: AbortSignal;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
   return await readActualWorkspaceManifestImpl(params);
 }
@@ -307,32 +309,7 @@ export async function applyWorkspaceDirectoryChanges(params: {
       // A concurrent local replacement or chmod wins and becomes a conflict.
       continue;
     }
-    let children: string[];
-    try {
-      children = await workspaceRoot.list(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      throw error;
-    }
-    if (children.length > 0) {
-      // Conflicted descendants deliberately keep their containing directory
-      // even when the cloud result removed that directory.
-      continue;
-    }
-    try {
-      await workspaceRoot.remove(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      const racedChildren = await workspaceRoot.list(entryPath).catch(() => undefined);
-      if (racedChildren?.length) {
-        continue;
-      }
-      throw error;
-    }
+    await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
 }
 
@@ -559,19 +536,4 @@ export function retainedConflictPaths(
   return [...conflicts]
     .filter((entryPath) => !hasPathAncestor(blockingConflicts, entryPath))
     .toSorted();
-}
-
-export async function assertWorkspaceResultStable(params: {
-  root: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
-}): Promise<void> {
-  await assertWorkspaceMatchesManifest({ root: params.root, manifest: params.current });
-  const preflight = await preflightWorkspaceApply(params);
-  const unstablePath = preflight.conflictPaths[0] ?? preflight.applyPaths.values().next().value;
-  if (unstablePath) {
-    throw new ConcurrentWorkspacePathError(
-      `Gateway workspace changed after cloud dispatch: ${unstablePath}`,
-    );
-  }
 }

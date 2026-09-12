@@ -65,6 +65,28 @@ describe("kysely sync helpers", () => {
     ]);
   });
 
+  it("stops first-row selects without evaluating later rows and releases the reader", () => {
+    database = new DatabaseSync(":memory:");
+    database.exec("create table items (id integer primary key, name text not null)");
+    database.exec("insert into items values (1, 'Ada'), (2, 'Grace'), (3, 'Lin')");
+    enableNodeSqliteKyselyStatementCache(database);
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const visited: number[] = [];
+    database.function("visit", (id) => {
+      visited.push(Number(id));
+      return id;
+    });
+    const select = db.selectFrom("items").select(db.fn<number>("visit", ["id"]).as("id"));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      visited.length = 0;
+      expect(executeSqliteQueryTakeFirstSync(database, select)).toEqual({ id: 1 });
+      expect(visited).toEqual([1]);
+    }
+    database.exec("drop table items");
+    database.exec("create table items (id integer primary key, name text not null)");
+    expect(executeSqliteQueryTakeFirstSync(database, select)).toBeUndefined();
+  });
+
   it("preserves raw readers and distinguishes writes with and without returned rows", () => {
     database = new DatabaseSync(":memory:");
     database.exec("create table items (id integer primary key, name text not null)");
@@ -399,13 +421,15 @@ describe("kysely sync helpers", () => {
     expect(executeSqliteQuerySync(database, lengthOf("small")).rows).toEqual([{ value: 5 }]);
     expect(prepares.calls()).toBe(2);
 
-    const oversized = "x".repeat(64 * 1024 + 1);
-    expect(executeSqliteQuerySync(database, lengthOf(oversized)).rows).toEqual([
-      { value: oversized.length },
-    ]);
-    expect(prepares.calls()).toBe(3);
-    expect(executeSqliteQuerySync(database, lengthOf("small")).rows).toEqual([{ value: 5 }]);
-    expect(prepares.calls()).toBe(3);
+    for (const oversized of ["x".repeat(64 * 1024 + 1), "漢".repeat(24 * 1024)]) {
+      const before = prepares.calls();
+      expect(executeSqliteQuerySync(database, lengthOf(oversized)).rows).toEqual([
+        { value: oversized.length },
+      ]);
+      expect(prepares.calls()).toBe(before + 1);
+      expect(executeSqliteQuerySync(database, lengthOf("small")).rows).toEqual([{ value: 5 }]);
+      expect(prepares.calls()).toBe(before + 1);
+    }
 
     const oversizedSql = db.selectNoFrom(
       /* kysely-allow-raw: admission-gate test needs an oversized SQL text, only reachable via raw. */
@@ -413,7 +437,7 @@ describe("kysely sync helpers", () => {
     );
     expect(executeSqliteQuerySync(database, oversizedSql).rows).toEqual([{ value: 1 }]);
     expect(executeSqliteQuerySync(database, oversizedSql).rows).toEqual([{ value: 1 }]);
-    expect(prepares.calls()).toBe(5);
+    expect(prepares.calls()).toBe(6);
   });
 
   it("invalidates prepared statements when the database is deserialized", () => {
@@ -451,33 +475,38 @@ describe("kysely sync helpers", () => {
     expect(prepares.calls()).toBe(3);
   });
 
-  it.each(["eager", "lazy"])("reads current columns without allocating metadata (%s)", (mode) => {
-    database = new DatabaseSync(":memory:");
-    database.exec("create table items (id integer primary key, name text not null)");
-    database.exec("insert into items (id, name) values (1, 'Ada')");
-    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
-    const select = db.selectFrom("items").selectAll();
-    const prepares = countPrepares(database);
-    const columns = vi.spyOn(StatementSync.prototype, "columns");
-    const read = () =>
-      mode === "eager"
-        ? executeSqliteQuerySync(database!, select).rows
-        : [...iterateSqliteQuerySync(database!, select)];
-    try {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        expect(read()).toEqual([{ id: 1, name: "Ada" }]);
+  it.each(["eager", "lazy", "first"])(
+    "reads current columns without allocating metadata (%s)",
+    (mode) => {
+      database = new DatabaseSync(":memory:");
+      database.exec("create table items (id integer primary key, name text not null)");
+      database.exec("insert into items (id, name) values (1, 'Ada')");
+      const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+      const select = db.selectFrom("items").selectAll();
+      const prepares = countPrepares(database);
+      const columns = vi.spyOn(StatementSync.prototype, "columns");
+      const read = () =>
+        mode === "eager"
+          ? executeSqliteQuerySync(database!, select).rows
+          : mode === "first"
+            ? [executeSqliteQueryTakeFirstSync(database!, select)]
+            : [...iterateSqliteQuerySync(database!, select)];
+      try {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          expect(read()).toEqual([{ id: 1, name: "Ada" }]);
+        }
+        expect(prepares.calls()).toBe(mode === "lazy" ? 3 : 2);
+
+        database.exec("alter table items add column note text not null default 'new'");
+
+        expect(read()).toEqual([{ id: 1, name: "Ada", note: "new" }]);
+        expect(prepares.calls()).toBe(mode === "lazy" ? 4 : 2);
+        expect(columns).not.toHaveBeenCalled();
+      } finally {
+        columns.mockRestore();
       }
-      expect(prepares.calls()).toBe(mode === "eager" ? 2 : 3);
-
-      database.exec("alter table items add column note text not null default 'new'");
-
-      expect(read()).toEqual([{ id: 1, name: "Ada", note: "new" }]);
-      expect(prepares.calls()).toBe(mode === "eager" ? 2 : 4);
-      expect(columns).not.toHaveBeenCalled();
-    } finally {
-      columns.mockRestore();
-    }
-  });
+    },
+  );
 
   it("resets a cached row statement after a step-time error", () => {
     database = new DatabaseSync(":memory:");

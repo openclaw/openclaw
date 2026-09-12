@@ -1,14 +1,16 @@
 import type { TranscriptSessionSummary } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import {
+  isTranscriptSelectionCurrent,
+  isTranscriptSelectionOwned,
+  isTranscriptSessionActive,
+  resolveSourceProvider,
+  type TranscriptsRuntimeContext,
+} from "../../transcripts/capture.js";
 import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import {
-  isTranscriptSessionActive,
-  resolveSourceProvider,
-  toolText,
-  type TranscriptsRuntimeContext,
-} from "./transcripts-tool-runtime.js";
+import { toolText } from "./transcripts-tool-result.js";
 import {
   canAccessTranscriptSession,
   resolveTranscriptToolSession,
@@ -31,7 +33,8 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
   // Page before authorization, but limit after it: hidden meetings must not crowd
   // accessible captures out of the result. No per-meeting database queries.
   for (let offset = 0; sessions.length < limit; offset += 200) {
-    const entries = store.listReadEntries({ limit: 200, offset });
+    const entries = await store.listReadEntries({ limit: 200, offset });
+    ctx.assertCallerActive?.();
     for (const entry of entries) {
       if (!(await canAccessTranscriptSession(ctx, entry.session, "list"))) {
         continue;
@@ -72,12 +75,24 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
 export async function showPastTranscript(params: ReadParams) {
   const { ctx, store } = params;
   const selection = await resolveTranscriptToolSession({ ...params, action: "show" });
-  const entry = store.listReadEntries({ limit: 1, session: selection.session })[0];
+  const entry = (await store.listReadEntries({ limit: 1, session: selection.session }))[0];
+  ctx.assertCallerActive?.();
   if (!entry) {
     throw new Error(`transcripts session not found: ${selection.selector}`);
   }
   const notes = await readTranscriptNotes(store, selection.session);
+  const current = await isTranscriptSelectionCurrent(selection, store);
   ctx.assertCallerActive?.();
+  if (!current || !isTranscriptSelectionOwned(selection)) {
+    const text = "Transcript changed while reading. Retry show to read the current notes.";
+    return toolText(text, {
+      text,
+      sessionId: selection.session.sessionId,
+      selector: selection.selector,
+      skipped: true,
+      retryable: true,
+    });
+  }
   const session = projectTranscriptSession(
     { ...entry, session: selection.session },
     isTranscriptSessionActive(selection.session),
@@ -104,6 +119,7 @@ export async function showPastTranscript(params: ReadParams) {
   return {
     content: [{ type: "text" as const, text }],
     details: {
+      text,
       selector,
       sessionId,
       title,

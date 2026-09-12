@@ -2,6 +2,8 @@ import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
+import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
@@ -110,10 +112,11 @@ type ChatRunRecord = {
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
+  canvasBlocks?: ChatCanvasBlock[];
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
-  assistantScope?: { itemId: string; prefix: string };
+  assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
   agentText?: Partial<
@@ -233,6 +236,7 @@ export type ChatRunState = {
     runId: string,
     options?: { final?: boolean },
   ) => { text: string; suppress: boolean };
+  flushPendingText: (runId: string) => void;
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
   recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
@@ -274,6 +278,7 @@ export function createChatRunState(): ChatRunState {
     delete record.bufferProjection;
     delete record.planSnapshot;
     delete record.progressSnapshot;
+    delete record.canvasBlocks;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.assistantScope;
@@ -333,6 +338,17 @@ export function createChatRunState(): ChatRunState {
     toolEventRecipients,
     getOrCreate: store.getOrCreate,
     resolveBuffer,
+    flushPendingText: (runId) => {
+      const record = store.runs.get(runId);
+      if (!record) {
+        return;
+      }
+      const pending = Object.values(record.pendingTextFlushes ?? {});
+      clearPendingLiveTextFlushes(record);
+      for (const flush of pending) {
+        flush.flush();
+      }
+    },
     hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
     deleteAbortMarker: (runId) => {
       const record = store.runs.get(runId);
@@ -587,11 +603,21 @@ export function createSessionMessageSubscriberRegistry(
 function createToolEventRecipientRegistryForStore(
   store: ChatRunRecordStore,
 ): ToolEventRecipientRegistry {
-  const prune = () => {
-    if (store.runs.size === 0) {
+  let nextPruneAt = Infinity;
+  const prune = (updated: ChatRunToolRecipientState) => {
+    // Refreshes can move expiry later; a conservative lower bound avoids a
+    // full run scan on each tool event while retaining exact expiry cleanup.
+    nextPruneAt = Math.min(
+      nextPruneAt,
+      updated.finalizedAt
+        ? updated.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
+        : updated.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS,
+    );
+    const now = Date.now();
+    if (now < nextPruneAt) {
       return;
     }
-    const now = Date.now();
+    nextPruneAt = Infinity;
     for (const [runId, record] of store.runs) {
       const entry = record.toolRecipient;
       if (!entry) {
@@ -603,6 +629,8 @@ function createToolEventRecipientRegistryForStore(
       if (now >= cutoff) {
         delete record.toolRecipient;
         store.releaseIfEmpty(runId);
+      } else {
+        nextPruneAt = Math.min(nextPruneAt, cutoff);
       }
     }
   };
@@ -612,25 +640,20 @@ function createToolEventRecipientRegistryForStore(
       return;
     }
     const now = Date.now();
-    const record = store.getOrCreate(runId);
-    const existing = record.toolRecipient;
-    if (existing) {
-      existing.connIds.add(connId);
-      existing.updatedAt = now;
-    } else {
-      record.toolRecipient = {
-        connIds: new Set([connId]),
-        updatedAt: now,
-      };
-    }
-    prune();
+    const entry = (store.getOrCreate(runId).toolRecipient ??= {
+      connIds: new Set<string>(),
+      updatedAt: now,
+    });
+    entry.connIds.add(connId);
+    entry.updatedAt = now;
+    prune(entry);
   };
 
   const get = (runId: string) => {
     const entry = store.runs.get(runId)?.toolRecipient;
     if (entry) {
       entry.updatedAt = Date.now();
-      prune();
+      prune(entry);
     }
     // Pruning may retire this finalized run; never return its former audience.
     return store.runs.get(runId)?.toolRecipient?.connIds;
@@ -642,7 +665,7 @@ function createToolEventRecipientRegistryForStore(
       return;
     }
     entry.finalizedAt = Date.now();
-    prune();
+    prune(entry);
   };
 
   return { add, get, markFinal };

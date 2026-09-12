@@ -137,7 +137,7 @@ export function evaluateRuntimeEligibility(
   const remotePlatforms = params.remotePlatforms ?? [];
   if (
     osList.length > 0 &&
-    !osList.includes(resolveRuntimePlatform()) &&
+    !osList.includes(process.platform) &&
     !remotePlatforms.some((platform) => osList.includes(platform))
   ) {
     return false;
@@ -145,19 +145,7 @@ export function evaluateRuntimeEligibility(
   if (params.always === true) {
     return true;
   }
-  return evaluateRuntimeRequires({
-    requires: params.requires,
-    hasBin: params.hasBin,
-    hasRemoteBin: params.hasRemoteBin,
-    hasAnyRemoteBin: params.hasAnyRemoteBin,
-    hasEnv: params.hasEnv,
-    isConfigPathTruthy: params.isConfigPathTruthy,
-  });
-}
-
-/** Returns the current Node runtime platform used by eligibility checks. */
-function resolveRuntimePlatform(): string {
-  return process.platform;
+  return evaluateRuntimeRequires(params);
 }
 
 function windowsPathExtensions(): string[] {
@@ -174,8 +162,9 @@ const hasBinaryCache = new Set<string>();
 
 /** Checks PATH for an executable binary, including PATHEXT candidates on Windows. */
 export function hasBinary(bin: string): boolean {
+  const isWindows = process.platform === "win32";
   const pathEnv = process.env.PATH ?? "";
-  const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
+  const pathExt = isWindows ? (process.env.PATHEXT ?? "") : "";
   if (cachedHasBinaryPath !== pathEnv || cachedHasBinaryPathExt !== pathExt) {
     cachedHasBinaryPath = pathEnv;
     cachedHasBinaryPathExt = pathExt;
@@ -186,11 +175,15 @@ export function hasBinary(bin: string): boolean {
   }
 
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
-  const extensions = process.platform === "win32" ? windowsPathExtensions() : [""];
+  const extensions = isWindows ? windowsPathExtensions() : [""];
   for (const part of parts) {
     for (const ext of extensions) {
       const candidate = path.join(part, bin + ext);
       try {
+        // Avoid missing-file errors without changing Windows symlink checks.
+        if (!isWindows && !fs.existsSync(candidate)) {
+          continue;
+        }
         fs.accessSync(candidate, fs.constants.X_OK);
         hasBinaryCache.add(bin);
         return true;

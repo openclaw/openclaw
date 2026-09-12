@@ -29,6 +29,16 @@ The current CLI reads a local package directory, `CLAW.md`, or grouped JSON mani
 Publishing, searching, and installing whole Claws through ClawHub are a
 separate registry track and are not part of this command surface yet.
 
+## Bundled role Claws
+
+The bundled `coordinator`, `researcher`, `writer`, and `reviewer` roles are Claw
+sources at `docs/reference/templates/roles/<role>` in a source checkout, with no
+`package.json` requirement. Use [`agents add --role`](/cli/agents#role-templates)
+or `openclaw claws add docs/reference/templates/roles/<role>` through the
+[preview and consent flow](/cli/claws#inspect-and-preview).
+[`agents team create`](/cli/agents#agents-team-create) owns delegation wiring;
+the role Claws will carry those settings once separate Claw profile support lands.
+
 ## Create a Claw package
 
 A package contains `package.json`, a `CLAW.md` manifest, and any conventional
@@ -82,6 +92,12 @@ conflict.
 ```yaml
 schemaVersion: 1
 agent:
+  model:
+    primary: acme/primary
+    fallbacks: [acme/fallback]
+  subagents:
+    allowAgents: [researcher, writer]
+    delegationMode: prefer
   tools:
     allow: [read, write, cron]
     deny: [exec]
@@ -98,6 +114,23 @@ This profile exists only inside the Claw package. OpenClaw validates and uses it
 while inspecting, adding, updating, and exporting that Claw; it is not copied
 to the user's normal OpenClaw configuration path. Other harnesses consume the
 portable manifest and interpret only their own conventional profile.
+
+`agent.model` selects a required `primary` reference and optional ordered
+`fallbacks`. Every reference must use non-empty `provider/model` form; the
+`acme` references above are examples to replace with your configured models.
+`agent.subagents.allowAgents` lists delegation target agent IDs using the same
+lowercase ID rules as the Claw agent. An empty list explicitly grants no
+delegation targets. Optional `delegationMode` accepts `suggest` or `prefer`.
+Both objects are optional and reject unknown keys.
+
+Add and update plans disclose the model and delegation configuration. Models
+absent from the local catalog and targets absent from the local agent roster
+produce notices, not blockers. The exact plan consent applies these values as
+declared, so a team can be installed one Claw at a time. Configure unavailable
+models and install missing targets before using them. `claws dev` checks the
+local catalog offline. Status detects changes to either field through agent
+configuration drift, and export preserves explicit agent settings without
+copying inherited defaults.
 
 The same strict version 1 schema continues to accept grouped JSON manifests.
 Grouped JSON discovers the same conventional profile rather than embedding a
@@ -243,7 +276,9 @@ Cron jobs declare scheduled work for the new agent:
 ```
 
 Claws use the existing Gateway scheduler and bind created jobs to the new
-agent. Preview, provenance, status, and removal cover those jobs without
+agent. Before creating jobs during add or update, Claws wait for the target
+agent to appear in the Gateway's applied configuration. Preview, provenance,
+status, and removal cover those jobs without
 changing the behavior of ordinary cron commands. Removal rereads the live job
 through the Gateway and preserves it when its owned definition changed after
 planning.
@@ -340,6 +375,21 @@ instructions, writes declared workspace assets, realizes workspace skills, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
 and retries fail closed when owned content drifted.
 
+With a local Gateway running, Claw add and update apply their plugin requirements
+before continuing to the agent, workspace, MCP, and cron phases. One bounded
+handoff reloads the affected packages after the package leases have been released;
+it does not restart the Gateway or reload unrelated plugins. A live requirement
+batch supports at most 64 plugin packages. Normal package, capability, and trust
+confirmation still apply.
+
+If installation was saved but runtime activation was not confirmed, the command
+reports that distinction and stops before later phases. Inspect the reported
+error and preview again before retrying. An exact retry reuses the saved package
+and retries activation. Successfully realized shared requirements remain installed
+if a later Claw phase fails. Disabled or metadata-only entries remain unevaluated;
+their source has not been verified by runtime execution. With no local Gateway,
+installation retains the existing restart requirement.
+
 ## Inspect installed state
 
 ```bash
@@ -418,9 +468,14 @@ openclaw claws remove incident-triage \
 ```
 
 The default removes eligible managed state and releases referenced state.
+Eligible Claw-owned schedules appear once as removal actions. The serving
+Gateway also identifies this agent's config-owned heartbeat and Skill Workshop
+monitors, including disabled monitors, as removal actions. Ordinary schedules,
+imported heartbeat tasks, uncorroborated monitors, and jobs in another scheduler store
+remain blockers.
 Modified files and resources with another current owner are retained or
 blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
-them. Globally installed plugins are retained while this Claw's reference is
+them. By default, globally installed plugins are retained while this Claw's reference is
 released. Removal reports which retained requirements Claw add introduced; use
 the ordinary plugin lifecycle separately when you intend to uninstall a
 process-wide plugin.
@@ -428,8 +483,21 @@ process-wide plugin.
 Directories containing another agent's registered database are retained, even
 when that database is closed. If removal reports that an agent database is
 still open, stop the command or restart the Gateway holding it before retrying.
-Removing scheduled jobs still requires a running Gateway. A database-lease
-refusal leaves the agent config, execution approvals, and creation history unchanged.
+Preview works offline. Persisted monitor rows remain blockers until the serving
+Gateway can verify their ownership. Actual removal requires a running Gateway
+with administrator access to the same config, state database, and scheduler
+store, even when no scheduled rows remain. The Gateway requests cancellation of consented scheduled work and waits
+for its running code to finish before local cleanup. Removing a job row or
+receiving its cancellation outcome does not establish that its code has stopped.
+After config removal, cleanup also waits for the Gateway to apply that change
+and remove the monitors. A database-lease refusal leaves the agent config,
+execution approvals, and creation history unchanged.
+
+If cancellation, drainage, or config convergence cannot finish, removal reports
+`partial` with `monitor_cleanup_failed` and keeps its deletion fence and cleanup
+record. Local files remain intact. Resolve the reported failure, preview again,
+and retry removal. The fence prevents new runs and agent recreation until cleanup
+finishes; restarting the Gateway does not discard an incomplete removal.
 
 If session cleanup or transcript archive export fails after the agent is removed
 from config, removal reports `partial` with `session_cleanup_failed` and retains
@@ -437,7 +505,8 @@ its cleanup record. Correct the reported error, preview removal again, and retry
 to finish cleanup before recreating the agent.
 
 To remove unchanged Claw-introduced references that have no other current
-owner, include `--remove-unused` in both preview and apply. To select exact
+owner, include `--remove-unused` in both preview and apply. Global plugins are
+excluded from this generic cleanup mode. To select exact
 referenced resources instead, repeat `--remove-referenced`:
 
 ```bash
@@ -449,6 +518,22 @@ openclaw claws remove incident-triage \
 Use `--force-referenced` only after reviewing the displayed dependents,
 independent owners, and pre-existing origin. It allows selected cleanup despite
 those conflicts; it does not skip plan-integrity consent.
+
+For a selected plugin, the serving Gateway withdraws its runtime capabilities
+and attempts cleanup before deleting its installed files. The command waits for
+runtime application and reports the resulting Gateway generation without
+restarting the Gateway. Ownership and artifact changes after preview require a
+fresh plan. Cleanup is best effort: warnings appear in the result's `warnings`
+list and in human-readable output, without turning a completed removal into a
+failed result.
+
+If package cleanup fails, removal reports `partial` with `package_cleanup_failed`
+and retains its cleanup record. Earlier removal steps are not rolled back.
+A Gateway runtime replacement failure stops the remaining package phase and
+reports unattempted packages as retained, alongside earlier outcomes and warnings.
+Ordinary package errors continue best-effort cleanup of the other selections.
+Resolve the reported failure, preview again, and retry; a lost connection never
+causes an automatic local uninstall.
 
 ## Export an installed agent
 
@@ -508,4 +593,4 @@ and a new preview before retrying.
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)
 - [Cron jobs](/automation/cron-jobs)
-- [MCP configuration](/gateway/configuration-reference#mcp)
+- [MCP configuration](/gateway/config-extensions#mcp)

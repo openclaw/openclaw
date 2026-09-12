@@ -7,18 +7,22 @@ import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.t
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
+import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
   consumePaneSessionHandoff,
   type PaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
@@ -169,6 +173,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
       if (state && !deferredHydrationActive) {
         this.markSessionRead(selectedChatSessionRow(state));
+        if (
+          state.connected &&
+          this.resolveChatReadTarget() &&
+          (state.chatRunId || selectedChatSessionRow(state)?.hasActiveRun)
+        ) {
+          // Keep the retained transcript visible while reconciling the live run's
+          // authoritative start time and activity after a foreground return.
+          void loadChatHistory(state, { deferBranches: true });
+        }
       }
       if (
         state &&
@@ -185,6 +198,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.minutePoll.stop();
     if (this.state) {
       retireChatBranchRequests(this.state);
+      // Unwatch can cancel an admitted refresh before sync; a later presentation
+      // must not inherit a receipt for work its watch no longer owns.
+      retirePullRequestRefreshes(this.state);
     }
     this.swarmHydrator?.dispose();
     this.swarmHydrator = null;
@@ -282,21 +298,61 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.requestUpdate?.();
     if (handoff.send) {
+      const composer = getChatComposerState(this.presentationId);
+      const editRevision = composer.editRevision;
       queueMicrotask(() => {
-        if (
-          this.state !== state ||
-          state.sessionKey !== sessionKey ||
-          !this.active ||
-          !this.presented
-        ) {
+        // The initial pane applies its gateway snapshot after consuming the handoff.
+        if (this.state !== state || state.sessionKey !== sessionKey) {
           return;
         }
-        void state.handleSendChat().catch((error: unknown) => {
-          if (this.state === state && state.sessionKey === sessionKey) {
-            setChatError(state, formatUiError(error));
-            state.requestUpdate?.();
-          }
-        });
+        const client = state.client;
+        const connectionEpoch = state.connectionEpoch;
+        const sessions = state.sessions;
+        const attachments = state.chatAttachments;
+        const mentions = state.chatMentions;
+        const goalMode = state.chatGoalDraftMode;
+        const presentationOwner = this.headerOutcomeOwner;
+        const isCurrent = () =>
+          this.state === state &&
+          state.sessionKey === sessionKey &&
+          state.connected &&
+          state.client === client &&
+          state.connectionEpoch === connectionEpoch &&
+          state.sessions === sessions &&
+          this.isConnected &&
+          this.active &&
+          this.ownsHeaderOutcome(presentationOwner) &&
+          // IME and dictation own edits before they commit text to the draft store.
+          composer.editRevision === editRevision &&
+          state.chatMessage === handoff.draft &&
+          state.chatAttachments === attachments &&
+          state.chatMentions === mentions &&
+          state.chatGoalDraftMode === goalMode;
+        if (!isCurrent()) {
+          return;
+        }
+        // Catalog continuation already owns a send intent. Join the pane's initial
+        // history load; manual input during that load never creates such an intent.
+        const load = getChatHistoryLoadState(state);
+        const ready =
+          load.phase === "in-flight"
+            ? load.promise
+            : load.phase === "idle" && isInitialChatHistoryUnavailable(state)
+              ? loadChatHistory(state, { startup: true, deferBranches: true })
+              : Promise.resolve();
+        void ready
+          .then(() => {
+            if (isCurrent() && !isInitialChatHistoryUnavailable(state)) {
+              return state.handleSendChat();
+            }
+            return undefined;
+          })
+          .catch((error: unknown) => {
+            if (isCurrent()) {
+              setChatError(state, formatUiError(error));
+              state.requestUpdate?.();
+            }
+          });
       });
     }
   }

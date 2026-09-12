@@ -1,4 +1,4 @@
-import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
@@ -26,6 +26,7 @@ import {
   type MemoryToolOptions,
 } from "./src/memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
+import { prepareMemoryManagerReload } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
@@ -109,7 +110,7 @@ function createLazyStandingIntentTool(
     reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
-  const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+  const agentId = resolveSessionAgentIdStrict({
     sessionKey: ctx.sessionKey,
     config: cfg,
     agentId: ctx.agentId,
@@ -190,17 +191,14 @@ function resolveMemoryToolOptions(
 
 function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
+    prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
     },
     async authorizeSearchHits(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
-      const runtime = createMemoryRuntime(host);
-      if (!runtime.authorizeSearchHits) {
-        throw new Error("memory-core runtime search authorization is unavailable");
-      }
-      return await runtime.authorizeSearchHits(params);
+      return await createMemoryRuntime(host).authorizeSearchHits(params);
     },
     async classifyWorkspaceMemoryPaths(params) {
       const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
@@ -212,16 +210,14 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       }
       return await classifyWorkspaceMemoryPaths(params);
     },
-    resolveMemoryBackendConfig(params) {
-      return resolveMemoryBackendConfig(params);
-    },
+    resolveMemoryBackendConfig,
     async closeAllMemorySearchManagers() {
       const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeAllMemorySearchManagers?.();
+      await runtime.closeAllMemorySearchManagers();
     },
     async closeMemorySearchManager(params) {
       const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeMemorySearchManager?.(params);
+      await runtime.closeMemorySearchManager(params);
     },
   };
 }
@@ -258,7 +254,7 @@ export default definePluginEntry({
           agentId: params.agentId,
           agentSessionKey: params.agentSessionKey,
         });
-        return context ? buildMemoryPromptSection({ ...params, sources: context.sources }) : [];
+        return context ? buildMemoryPromptSection(params) : [];
       },
       flushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,
@@ -291,19 +287,25 @@ export default definePluginEntry({
         return undefined;
       }
       try {
+        const invocation = ctx.hookInvocation;
+        if (!invocation) {
+          throw new Error("prompt hook invocation support is required; intent matching skipped");
+        }
         const module = await loadStandingIntentsModule();
+        invocation.assertActive();
         if (!module.isEligibleStandingIntentTurn(ctx)) {
           return undefined;
         }
         const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-        const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+        const agentId = resolveSessionAgentIdStrict({
           sessionKey: ctx.sessionKey,
           config,
           agentId: ctx.agentId,
         });
-        const intents = module.matchStandingIntents({
+        const intents = await module.matchStandingIntents({
           agentId,
           prompt: event.prompt,
+          assertCurrent: invocation.assertActive,
           ...((ctx.channelId ?? ctx.chatId)
             ? { channel: (ctx.channelId ?? ctx.chatId) as string }
             : {}),
@@ -332,12 +334,12 @@ export default definePluginEntry({
         try {
           const module = await loadStandingIntentsModule();
           const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-          const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+          const agentId = resolveSessionAgentIdStrict({
             sessionKey: ctx.sessionKey,
             config,
             agentId: ctx.agentId,
           });
-          module.sweepStandingIntents({ agentId });
+          await module.sweepStandingIntents({ agentId });
         } catch (error) {
           api.logger.warn?.(
             `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,

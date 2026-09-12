@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { parseCliOutput } from "../../agents/cli-output.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   abortEmbeddedAgentRun,
@@ -13,6 +15,12 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import {
+  beginForegroundSessionMaintenance,
+  waitForSessionMaintenance,
+} from "../../agents/session-maintenance/coordinator.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -23,7 +31,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
@@ -33,14 +40,24 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -49,6 +66,7 @@ import {
   createTestQueuedFollowupRun,
   createTestTemplateContext,
 } from "./agent-runner.test-fixtures.js";
+import { clearPendingFinalDeliveryAfterSuccess } from "./dispatch-from-config.pending-final.js";
 import type { FollowupRun } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
@@ -129,8 +147,11 @@ vi.mock("../../agents/model-auth.js", () => ({
 
 vi.mock("../../agents/embedded-agent.js", () => {
   return {
-    compactEmbeddedAgentSession: (params: unknown) =>
-      compactState.compactEmbeddedAgentSessionMock(params),
+    compactEmbeddedAgentSession: (
+      ...args: Parameters<
+        typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession
+      >
+    ) => compactState.compactEmbeddedAgentSessionMock(...args),
     runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     abortEmbeddedAgentRun: (sessionId: string) => {
       abortEmbeddedAgentRunMock(sessionId);
@@ -668,122 +689,243 @@ describe("runReplyAgent auto-compaction token update", () => {
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
   });
 
-  it("executes the next user turn in the default 32K early-flush interval without compaction", async () => {
-    const tmp = tempDirs.make("openclaw-early-flush-");
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 10_920,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 0,
-    };
-    const prompt = "What is two plus two? Answer in one short sentence without tools.";
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://example.test",
-            models: [
-              {
-                id: "claude-opus-4-6",
-                name: "Test model",
-                contextTokens: 32_768,
-                reasoning: false,
-                input: ["text"],
-                maxTokens: 8_192,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
+  it.each([
+    { preempted: false, retiredGateway: false },
+    { preempted: true, retiredGateway: false },
+    { preempted: false, retiredGateway: true },
+    { preempted: false, retiredGateway: false, compactAfterFlush: true },
+  ])(
+    "defers optional memory until real delivery settles ($preempted, retired=$retiredGateway, compact=$compactAfterFlush)",
+    async ({ preempted, retiredGateway, compactAfterFlush = false }) => {
+      const tmp = tempDirs.make("openclaw-early-flush-");
+      const logPath = path.join(tmp, "maintenance.log");
+      setLoggerOverride({ level: "debug", consoleLevel: "silent", file: logPath });
+      const storePath = path.join(tmp, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 10_920,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 0,
+      };
+      const prompt = "What is two plus two? Answer in one short sentence without tools.";
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: "session",
+        resetTriggered: false,
+      });
+      const delivery = createDeferred();
+      const requestBudget = {
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 9_500,
+        pendingTokens: 512,
+        pendingUserIdempotencyKey: "processed-user",
+      };
+      let memoryParams: RunEmbeddedAgentInternalParams | undefined;
+      let memoryScope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+      let gatewayActive = true;
+      const gatewayContext = {
+        terminalSessions: {},
+        resolveGatewayContext: () => (gatewayActive ? gatewayContext : undefined),
+      } as never;
+      const resolveGatewayContext = () => gatewayContext;
+      let releaseForeground: (() => void) | undefined;
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://example.test",
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  name: "Test model",
+                  contextTokens: 32_768,
+                  reasoning: false,
+                  input: ["text"],
+                  maxTokens: 8_192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
           },
         },
-      },
-    };
-    registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
-      expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
-        { id: "claude-opus-4-6", contextTokens: 32_768 },
-      ]);
-      expect(contextWindowTokens).toBe(32_768);
-      return {
-        softThresholdTokens: 4_000,
-        reserveTokensFloor: 20_000,
-        forceFlushTranscriptBytes: 1_000_000_000,
-        prompt: "Pre-compaction memory flush.",
-        systemPrompt: "Write durable memory, then reply NO_REPLY.",
-        relativePath: "memory/active.md",
       };
-    });
-    // The usage counters are from bounded QA metadata. This assembled prompt and
-    // transcript are synthetic; their estimates are not an observed second-turn budget.
-    const terminalEvent = (input: number, output: number) => ({
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-        stopReason: "stop",
-        usage: { input, output, totalTokens: input + output },
-      },
-    });
-    runEmbeddedAgentMock.mockImplementation(
-      async (params: { trigger?: string; prompt?: string; config?: OpenClawConfig }) => {
+      registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
+        expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
+          { id: "claude-opus-4-6", contextTokens: 32_768 },
+        ]);
+        expect(contextWindowTokens).toBe(32_768);
+        return {
+          softThresholdTokens: 4_000,
+          reserveTokensFloor: 20_000,
+          forceFlushTranscriptBytes: 1_000_000_000,
+          prompt: "Pre-compaction memory flush.",
+          systemPrompt: "Write durable memory, then reply NO_REPLY.",
+          relativePath: "memory/active.md",
+        };
+      });
+      // The usage counters are from bounded QA metadata. This assembled prompt and
+      // transcript are synthetic; their estimates are not an observed second-turn budget.
+      const terminalMessage = (input: number, output: number) =>
+        makeAssistantMessageFixture({
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-6",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+          usage: {
+            input,
+            output,
+            totalTokens: input + output,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
+      runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentInternalParams) => {
         expect(params.config?.models?.providers?.anthropic?.models).toEqual(
           config.models?.providers?.anthropic?.models,
         );
         if (params.trigger === "memory") {
-          await replaceTranscriptEvents(scope, [terminalEvent(7_039, 34)]);
+          memoryParams = params;
+          memoryScope = getPluginRuntimeGatewayRequestScope();
+          const privateTranscript = expectDefined(params.sessionManager, "memory transcript");
+          expect(privateTranscript.getSessionTarget()).toBeUndefined();
+          privateTranscript.appendMessage(terminalMessage(7_039, 34));
           return {
             payloads: [],
             meta: { agentMeta: { lastCallUsage: { input: 7_039, output: 34 } } },
           };
         }
         expect(params.prompt).toContain(prompt);
-        return { payloads: [{ text: "Two plus two is four." }], meta: {} };
-      },
-    );
-    try {
-      // Memory-flush persistence reads runtime config again; share its authoritative source
-      // with the queued turn so the selected model cannot escape into real catalog discovery.
-      setRuntimeConfigSnapshot(config, config);
-      await replaceSessionEntry(scope, sessionEntry);
-      await replaceTranscriptEvents(scope, [terminalEvent(10_920, 10)]);
-      const result = await createBaseRun({
-        followup: { prompt },
-        run: {
-          agentId: "main",
-          agentDir: path.join(tmp, "agent"),
-          sessionKey,
-          sessionFile: path.join(tmp, "session.jsonl"),
-          workspaceDir: tmp,
-          model: "claude-opus-4-6",
-          config,
-        },
-        reply: {
-          commandBody: prompt,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
-          storePath,
-        },
-      }).run();
-
-      expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
-      expect(runtimeErrorMock).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual([
-        "memory",
-        "user",
-      ]);
-      expectReplyText(result, "Two plus two is four.");
-      expect(loadSessionEntry(scope)?.memoryFlush).toMatchObject({
-        kind: "succeeded",
-        compactionCount: 0,
+        params.onSuccessfulAuthProfile?.(undefined);
+        params.onCompactionRequestBudget?.(requestBudget);
+        return {
+          payloads: [{ text: "Two plus two is four." }],
+          meta: {
+            agentMeta: {
+              sessionId: "session",
+              agentHarnessId: "openclaw",
+              provider: "anthropic",
+              model: "claude-opus-4-6",
+              lastCallUsage: { input: compactAfterFlush ? 26_000 : 10_920, output: 10 },
+            },
+          },
+        };
       });
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
+      try {
+        // Memory-flush persistence reads runtime config again; share its authoritative source
+        // with the queued turn so the selected model cannot escape into real catalog discovery.
+        setRuntimeConfigSnapshot(config, config);
+        await replaceSessionEntry(scope, sessionEntry);
+        SessionManager.open(scope, tmp).appendMessage(terminalMessage(10_920, 10));
+        const turn = createBaseRun({
+          followup: { prompt },
+          run: {
+            agentId: "main",
+            agentDir: path.join(tmp, "agent"),
+            sessionKey,
+            sessionFile: path.join(tmp, "session.jsonl"),
+            workspaceDir: tmp,
+            model: "claude-opus-4-6",
+            config,
+            timeoutMs: 600_000,
+            senderIsOwner: true,
+          },
+          reply: {
+            commandBody: prompt,
+            sessionEntry,
+            sessionStore: { [sessionKey]: sessionEntry },
+            sessionKey,
+            storePath,
+            replyOperation: operation,
+          },
+        });
+        const result = await withPluginRuntimeGatewayRequestScope(
+          {
+            isWebchatConnect: () => false,
+            resolveGatewayContext,
+            nodePlacementGrantAuthority: {
+              agentId: "main",
+              sessionKey,
+              runId: "foreground",
+              assertCurrent: () => {},
+            },
+          },
+          turn.run,
+        );
+
+        expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+        expect(runtimeErrorMock).not.toHaveBeenCalled();
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        expectReplyText(result, "Two plus two is four.");
+        expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        let maintenanceSettled = false;
+        const maintenance = waitForSessionMaintenance(sessionKey).then(() => {
+          maintenanceSettled = true;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(maintenanceSettled).toBe(false);
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        operation.completeWithAfterClearBarrier(delivery.promise, 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        if (preempted) {
+          releaseForeground = await beginForegroundSessionMaintenance(sessionKey);
+        }
+        vi.useRealTimers();
+        const completion = getReplyPayloadMetadata(
+          expectDefined(Array.isArray(result) ? result[0] : result, "delivered reply"),
+        )?.pendingFinalDeliveryCompletion;
+        expect(completion).toBeDefined();
+        await settlePendingFinalDelivery({ kind: "pending-final", ...completion! }, "delivered");
+        await clearPendingFinalDeliveryAfterSuccess(completion);
+        gatewayActive = !retiredGateway;
+        delivery.resolve();
+        await operation.ownerSettlement;
+        await maintenance;
+        await flushLogger();
+        const diagnostic = await fs.readFile(logPath, "utf8");
+        expect(
+          runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger),
+          diagnostic,
+        ).toEqual(preempted || retiredGateway ? ["user"] : ["user", "memory"]);
+        if (preempted || retiredGateway) {
+          expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        } else {
+          expect(memoryParams?.senderIsOwner).toBe(false);
+          expect(memoryScope?.nodePlacementGrantAuthority).toBeUndefined();
+          expect(memoryScope?.resolveGatewayContext?.()).toBe(gatewayContext);
+          expect(loadSessionEntry(scope)?.memoryFlush).toMatchObject({
+            kind: "succeeded",
+            compactionCount: 0,
+          });
+          if (compactAfterFlush) {
+            expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledWith(
+              expect.objectContaining({ trigger: "budget" }),
+              expect.objectContaining({
+                requestBudget: { ...requestBudget, pendingTokens: 0 },
+              }),
+            );
+          }
+        }
+      } finally {
+        vi.useRealTimers();
+        delivery.resolve();
+        operation.complete();
+        releaseForeground?.();
+        await waitForSessionMaintenance(sessionKey);
+        setLoggerOverride(null);
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     ["without side effects", { meta: { agentMeta: {} } }, true],
@@ -1254,40 +1396,62 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
-  it("does not treat diagnostic compaction metadata as a context-refresh trigger", async () => {
-    const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
-    await fs.writeFile(
-      path.join(workspaceDir, "AGENTS.md"),
-      [
-        "## Session Startup",
-        "Read the queued workspace startup file.",
-        "",
-        "## Red Lines",
-        "Never use the process cwd for this refresh.",
-      ].join("\n"),
-      "utf-8",
-    );
+  it.each([0, 1])(
+    "honors queued post-compaction sections with %i reported compactions",
+    async (compactionCount) => {
+      const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
+      await fs.writeFile(
+        path.join(workspaceDir, "AGENTS.md"),
+        [
+          "## Session Startup",
+          "Read the queued workspace startup file.",
+          "",
+          "## Red Lines",
+          "Never use the process cwd for this refresh.",
+        ].join("\n"),
+        "utf-8",
+      );
 
-    const { sessionKey } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-post-compaction-workspace-root-",
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+      const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-post-compaction-workspace-root-",
+        workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
           },
         },
-      },
-      agentMeta: {
-        compactionCount: 1,
-        lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
-      },
-    });
+        agentMeta: {
+          compactionCount,
+          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+        },
+      });
 
-    // agentMeta.compactionCount is diagnostic metadata from the harness result;
-    // post-compaction context refresh belongs to runner-owned compaction paths.
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
-  });
+      // The session seed pins an unrelated source-less snapshot. It must not erase
+      // the queued turn's explicit compaction configuration.
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(firstMockCallArg(runEmbeddedAgentMock, "embedded run params")).toMatchObject({
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
+          },
+        },
+      });
+      const events = peekSystemEvents(sessionKey);
+      expect(events).toHaveLength(compactionCount);
+      if (compactionCount > 0) {
+        expect(events[0]).toContain("Post-compaction context refresh");
+        expect(events[0]).toContain("Read the queued workspace startup file.");
+        expect(events[0]).toContain("Never use the process cwd for this refresh.");
+      }
+      // Result metadata can report presentation-only compaction, not durable writer custody.
+      expect(stored).toHaveProperty([sessionKey, "sessionId"], "session");
+      expect(stored).not.toHaveProperty([sessionKey, "compactionCount"]);
+    },
+  );
 });
 
 describe("runReplyAgent block streaming", () => {
@@ -2660,14 +2824,51 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it.each([
+    {
+      name: "split token counts",
+      usage: { input_tokens: 12, output_tokens: 3, cacheRead: 4, cacheWrite: 2 },
+      expected: "Usage: 12 in / 3 out · cache 4 cached / 2 new",
+    },
+    {
+      name: "input-only counts",
+      usage: { input_tokens: 12, total_tokens: 15 },
+      expected: "Usage: 12 in / ? out",
+    },
+    {
+      name: "output-only counts",
+      usage: { output_tokens: 3, total_tokens: 15 },
+      expected: "Usage: ? in / 3 out",
+    },
+    {
+      name: "total-only counts",
+      usage: { total_tokens: 1250 },
+      expected: "Usage: 1.3k total",
+    },
+    {
+      name: "cache-only counts",
+      usage: { cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: ? in / ? out · cache 800 cached / 200 new",
+    },
+    {
+      name: "total and cache counts without a split",
+      usage: { total_tokens: 1250, cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: 1.3k total · cache 800 cached / 200 new",
+    },
+  ])("shows $name without cost or session keys in tokens mode", async ({ usage, expected }) => {
+    const output = parseCliOutput({
+      raw: JSON.stringify({ result: "ok", usage }),
+      backend: { command: "fixture-cli" },
+      providerId: "fixture-cli",
+      outputMode: "json",
+    });
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
+      payloads: [{ text: output.text }],
       meta: {
         agentMeta: {
           provider: "amazon-bedrock",
           model: "us.anthropic.claude-sonnet-4-6",
-          usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
+          usage: output.usage,
         },
       },
     });
@@ -2696,8 +2897,7 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).toBe(`ok\n${expected}`);
     expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
   });
@@ -2929,6 +3129,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     didDeliverSourceReplyViaMessageTool?: boolean;
     finalAssistantText?: string;
     finalAssistantRawText?: string;
+    stopReason?: string;
     payloads?: ReplyPayload[];
     payloadText?: string;
     successfulCronAdds?: number;
@@ -2968,6 +3169,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       meta: {
         agentMeta: {},
         finalAssistantVisibleText: finalAssistantText,
+        ...(params.stopReason ? { stopReason: params.stopReason } : {}),
         ...(params.pendingContinuation ? { yielded: true } : {}),
         ...(params.finalAssistantRawText
           ? { finalAssistantRawText: params.finalAssistantRawText }
@@ -3259,6 +3461,42 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
 
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "does not recover a source-owned terminal reply before delivery (retry=%s)",
+    async (strandedReplyRetry) => {
+      const text =
+        "The requested action completed once. This recovered answer contains the result of the completed work and is ready for delivery to the original conversation. No completed action needs to run again.";
+      const { result } = await runPrivateFinalCase({
+        finalAssistantText: text,
+        payloads: [markReplyPayloadForSourceSuppressionDelivery({ text })],
+        strandedReplyRetry,
+      });
+
+      const payloads = normalizeReplyPayloads(result);
+      expect(payloads).toEqual([expect.objectContaining({ text })]);
+      const [payload] = payloads;
+      assert(payload);
+      expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
+      expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    },
+  );
+
+  it("surfaces a canonical failure despite a private partial reply", async () => {
+    const privateText =
+      "Private partial output before the provider failed. These internal notes describe unfinished work and must stay private. They are not a completed answer or a substitute for the terminal failure.";
+    const { result } = await runPrivateFinalCase({
+      finalAssistantText: privateText,
+      stopReason: "error",
+    });
+
+    const deliverable = normalizeReplyPayloads(result).filter(
+      (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    );
+    expect(deliverable).toEqual([expect.objectContaining({ isError: true })]);
+    expect(deliverable[0]?.text).not.toBe(privateText);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 

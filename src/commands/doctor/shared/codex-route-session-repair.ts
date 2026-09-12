@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir } from "../../../agents/agent-scope.js";
+import {
+  normalizeOptionalLowercaseString as normalizeString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../../agents/agent-scope.js";
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
@@ -12,6 +15,7 @@ import {
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
+import { getCliSessionBinding } from "../../../config/sessions/cli-session-binding.js";
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
@@ -37,20 +41,36 @@ import {
   normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   toOpenAIModelId,
+  resolveRuntimeModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import type {
   CodexSessionRouteRepairSummary,
   SessionRouteRepairResult,
 } from "./codex-route-types.js";
+import {
+  migrateLegacyRuntimeModelRef,
+  resolveLegacyRuntimeModelProviderAlias,
+} from "./legacy-runtime-model-providers.js";
+import {
+  createRetiredModelRefRepairResolver,
+  repairRetiredSessionModelRef,
+  type ModelRefRepairResolver,
+} from "./retired-model-ref-repair.js";
+
+type SessionModelRetirement = {
+  agentId: string;
+  resolve: ModelRefRepairResolver;
+  defaultModelRef?: string;
+  warnings: string[];
+};
 
 function rewriteSessionModelPair(params: {
   entry: SessionEntry;
   providerKey: "modelProvider" | "providerOverride";
   modelKey: "model" | "modelOverride";
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
-  let changed = false;
+}): { changed: boolean; runtime?: string } {
   const provider = normalizeString(params.entry[params.providerKey]);
   const model =
     typeof params.entry[params.modelKey] === "string" ? params.entry[params.modelKey] : undefined;
@@ -71,7 +91,7 @@ function rewriteSessionModelPair(params: {
         })
       : false);
   if (blockedIdentity) {
-    return false;
+    return { changed: false };
   }
   if (isLegacyCodexProviderId(provider)) {
     params.entry[params.providerKey] = "openai";
@@ -81,17 +101,73 @@ function rewriteSessionModelPair(params: {
         params.entry[params.modelKey] = modelId;
       }
     }
-    return true;
+    return { changed: true, runtime: "codex" };
   }
-  if (legacyProviderModelRef) {
-    const canonicalModel =
-      provider === "openai"
-        ? toOpenAIModelId(legacyProviderModelRef)
-        : toCanonicalOpenAIModelRef(legacyProviderModelRef);
-    if (canonicalModel) {
-      params.entry[params.modelKey] = canonicalModel;
-      changed = true;
-    }
+  const canonicalModel =
+    legacyProviderModelRef && toCanonicalOpenAIModelRef(legacyProviderModelRef);
+  if (canonicalModel) {
+    params.entry[params.modelKey] = canonicalModel;
+    return { changed: true, runtime: "codex" };
+  }
+  const scopedRuntimeRef =
+    model && (!provider || ["claude-cli", "google-gemini-cli"].includes(provider))
+      ? migrateLegacyRuntimeModelRef(model)
+      : null;
+  const rawRef = scopedRuntimeRef ? model : provider && model ? `${provider}/${model}` : model;
+  const migrated = scopedRuntimeRef ?? (rawRef ? migrateLegacyRuntimeModelRef(rawRef) : null);
+  if (
+    !migrated ||
+    (rawRef &&
+      isBlockedLegacyCodexModelRef({
+        modelRef: rawRef,
+        blockedModelIdentities: params.blockedModelIdentities,
+      }))
+  ) {
+    return { changed: false };
+  }
+  let changed = false;
+  if (params.entry[params.providerKey] !== migrated.provider) {
+    params.entry[params.providerKey] = migrated.provider;
+    changed = true;
+  }
+  if (params.entry[params.modelKey] !== migrated.model) {
+    params.entry[params.modelKey] = migrated.model;
+    changed = true;
+  }
+  return { changed, runtime: migrated.runtime };
+}
+
+function isCodexSessionRoute(entry: SessionEntry): boolean {
+  return (
+    isLegacyCodexProviderId(entry.modelProvider) ||
+    isLegacyCodexProviderId(entry.providerOverride) ||
+    (sessionProviderAllowsScopedModelRef(normalizeString(entry.modelProvider)) &&
+      isOpenAICodexModelRef(entry.model)) ||
+    (sessionProviderAllowsScopedModelRef(normalizeString(entry.providerOverride)) &&
+      isOpenAICodexModelRef(entry.modelOverride)) ||
+    normalizeRuntimeString(entry.agentRuntimeOverride) === "codex"
+  );
+}
+
+function normalizeCodexSessionHarness(
+  entry: SessionEntry,
+  legacyCodexHarness: boolean,
+  wasCodexRoute: boolean,
+): boolean {
+  if (!legacyCodexHarness && !wasCodexRoute && !isCodexSessionRoute(entry)) {
+    return false;
+  }
+  let changed = false;
+  if (
+    normalizeRuntimeString(entry.agentHarnessId) === "codex-cli" ||
+    (legacyCodexHarness && entry.agentHarnessId === undefined)
+  ) {
+    entry.agentHarnessId = "codex";
+    changed = true;
+  }
+  if (normalizeRuntimeString(entry.agentRuntimeOverride) === "codex-cli") {
+    entry.agentRuntimeOverride = "codex";
+    changed = true;
   }
   return changed;
 }
@@ -101,16 +177,6 @@ function sessionProviderAllowsScopedModelRef(provider: string | undefined): bool
   // OpenAI-compatible model may legitimately be ID'd "codex/<x>". Only an
   // absent or legacy provider field marks the model string as a scoped ref.
   return !provider || isLegacyCodexProviderId(provider);
-}
-
-function sessionModelPairHasLegacyRoute(provider: unknown, model: unknown): boolean {
-  const normalizedProvider = normalizeString(provider);
-  return (
-    isLegacyCodexProviderId(normalizedProvider) ||
-    (sessionProviderAllowsScopedModelRef(normalizedProvider) &&
-      typeof model === "string" &&
-      isOpenAICodexModelRef(model))
-  );
 }
 
 function clearStaleCodexFallbackNotice(
@@ -130,16 +196,11 @@ function clearStaleCodexFallbackNotice(
   return true;
 }
 
-function preserveRepairedSessionRuntimeIntent(entry: SessionEntry): boolean {
+function clearRepairedCodexSessionHarness(entry: SessionEntry): boolean {
   const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
-  const overrideRuntime = normalizeRuntimeString(entry.agentRuntimeOverride);
   let changed = false;
   if (entry.agentHarnessId !== undefined && harnessRuntime !== "openclaw") {
     delete entry.agentHarnessId;
-    changed = true;
-  }
-  if (overrideRuntime !== "openclaw" && entry.agentRuntimeOverride !== "codex") {
-    entry.agentRuntimeOverride = "codex";
     changed = true;
   }
   return changed;
@@ -185,32 +246,119 @@ function repairProviderlessCodexSessionOverride(
   return true;
 }
 
-/** Rewrite stale Codex model/provider/session runtime fields inside one session store object. */
+function migrateLegacyClaudeSessionField(
+  entry: SessionEntry,
+  sessionKey: string,
+  warnings?: string[],
+): boolean {
+  if (entry.claudeCliSessionId === undefined) {
+    return false;
+  }
+  if (!getCliSessionBinding(entry, "claude-cli")) {
+    const sessionId = normalizeOptionalString(entry.claudeCliSessionId);
+    // An incomplete binding can carry account/checkpoint metadata for another
+    // conversation. Preserve it rather than attaching that metadata to a guessed ID.
+    const hasUnboundMetadata = Object.entries(entry.cliSessionBindings?.["claude-cli"] ?? {}).some(
+      ([key, value]) => key !== "sessionId" && value !== undefined,
+    );
+    if (!sessionId || hasUnboundMetadata) {
+      const warning = `Session ${sessionKey}: legacy Claude CLI binding needs manual reconciliation; legacy binding state was preserved.`;
+      if (warnings && !warnings.includes(warning)) {
+        warnings.push(warning);
+      }
+      return false;
+    }
+    entry.cliSessionBindings = {
+      ...entry.cliSessionBindings,
+      "claude-cli": { sessionId },
+    };
+  }
+  delete entry.claudeCliSessionId;
+  return true;
+}
+
+function repairSessionAuthProfileReferences(
+  entry: SessionEntry,
+  profileIdMap: ReadonlyMap<string, string> | undefined,
+): boolean {
+  let changed = false;
+  const replacement =
+    typeof entry.authProfileOverride === "string"
+      ? profileIdMap?.get(entry.authProfileOverride.trim())
+      : undefined;
+  if (replacement !== undefined && replacement !== entry.authProfileOverride) {
+    entry.authProfileOverride = replacement;
+    changed = true;
+  }
+  const fallback = entry.modelFallback;
+  const previousReplacement =
+    typeof fallback?.prevAuthProfileOverride === "string"
+      ? profileIdMap?.get(fallback.prevAuthProfileOverride.trim())
+      : undefined;
+  if (
+    fallback &&
+    previousReplacement !== undefined &&
+    previousReplacement !== fallback.prevAuthProfileOverride
+  ) {
+    fallback.prevAuthProfileOverride = previousReplacement;
+    changed = true;
+  }
+  return changed;
+}
+
+/** Complete account renames or repair legacy session bindings and model routes. */
 function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
+  authProfileOnly?: boolean;
+  retirement?: SessionModelRetirement;
+  warnings?: string[];
 }): SessionRouteRepairResult {
   const now = params.now ?? Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
-    if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+    if (!entry) {
       continue;
     }
-    const changedRuntimeModelRoute = rewriteSessionModelPair({
+    if (params.authProfileOnly) {
+      if (
+        !isValidAgentHarnessSessionStoreEntry(sessionKey, entry) &&
+        repairSessionAuthProfileReferences(entry, params.authProfileIdMap)
+      ) {
+        entry.updatedAt = now;
+        sessionKeys.push(sessionKey);
+      }
+      continue;
+    }
+    const changedCliBinding = migrateLegacyClaudeSessionField(entry, sessionKey, params.warnings);
+    if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+      // Only the binding representation changes; locked identity, route and recency stay owned.
+      if (changedCliBinding) {
+        sessionKeys.push(sessionKey);
+      }
+      continue;
+    }
+    const legacyCodexHarness = normalizeRuntimeString(entry.agentHarnessId) === "codex-cli";
+    const wasCodexRoute = isCodexSessionRoute(entry);
+    const hasSelectedOverride = Boolean(entry.modelOverride?.trim());
+    const runtimeWasExplicit =
+      entry.agentRuntimeOverride !== undefined &&
+      normalizeRuntimeString(entry.agentRuntimeOverride) !== "auto";
+    const runtimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
       modelKey: "model",
       blockedModelIdentities: params.blockedModelIdentities,
     });
-    const changedOverrideModelRoute = rewriteSessionModelPair({
+    const overrideModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "providerOverride",
       modelKey: "modelOverride",
       blockedModelIdentities: params.blockedModelIdentities,
     });
-    if (changedOverrideModelRoute) {
+    if (overrideModelRoute.changed) {
       entry.modelOverrideRouteResolution = "resolved";
     }
     const changedProviderlessOverride = repairProviderlessCodexSessionOverride(
@@ -218,30 +366,51 @@ function repairCodexSessionStoreRoutes(params: {
       params.blockedModelIdentities,
     );
     const changedModelRoute =
-      changedRuntimeModelRoute || changedOverrideModelRoute || changedProviderlessOverride;
+      runtimeModelRoute.changed || overrideModelRoute.changed || changedProviderlessOverride;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(
       entry,
       params.blockedModelIdentities,
     );
-    const changedRuntimePins = changedModelRoute
-      ? preserveRepairedSessionRuntimeIntent(entry)
-      : false;
+    const selectedRuntime = changedProviderlessOverride
+      ? "codex"
+      : hasSelectedOverride
+        ? overrideModelRoute.runtime
+        : runtimeModelRoute.runtime;
+    const changedRuntimePins =
+      !runtimeWasExplicit &&
+      selectedRuntime !== undefined &&
+      entry.agentRuntimeOverride !== selectedRuntime;
+    if (changedRuntimePins) {
+      entry.agentRuntimeOverride = selectedRuntime;
+    }
+    const changedCodexRuntimeHarness =
+      selectedRuntime === "codex" ? clearRepairedCodexSessionHarness(entry) : false;
+    const changedCodexHarness = normalizeCodexSessionHarness(
+      entry,
+      legacyCodexHarness,
+      wasCodexRoute,
+    );
     // Providerless route repair first needs the legacy profile prefix; only the
     // auth migration owner's exact collision-aware map may rewrite its identity.
-    const mappedAuthProfileId =
-      typeof entry.authProfileOverride === "string"
-        ? params.authProfileIdMap?.get(entry.authProfileOverride)
-        : undefined;
-    const changedAuthProfile =
-      mappedAuthProfileId !== undefined && mappedAuthProfileId !== entry.authProfileOverride;
-    if (changedAuthProfile) {
-      entry.authProfileOverride = mappedAuthProfileId;
-    }
+    const changedAuthProfile = repairSessionAuthProfileReferences(entry, params.authProfileIdMap);
+    const changedRetiredModel = params.retirement
+      ? repairRetiredSessionModelRef(
+          entry,
+          params.retirement.agentId,
+          params.retirement.resolve,
+          params.retirement.defaultModelRef,
+          params.retirement.warnings,
+        )
+      : false;
     if (
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedRuntimePins &&
-      !changedAuthProfile
+      !changedCodexRuntimeHarness &&
+      !changedCodexHarness &&
+      !changedAuthProfile &&
+      !changedRetiredModel &&
+      !changedCliBinding
     ) {
       continue;
     }
@@ -264,74 +433,20 @@ function scanCodexSessionStoreRoutes(
   store: Record<string, SessionEntry>,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
   authProfileIdMap?: ReadonlyMap<string, string>,
+  retirement?: SessionModelRetirement,
+  warnings?: string[],
+  authProfileOnly = false,
 ): string[] {
-  return Object.entries(store).flatMap(([sessionKey, entry]) =>
-    entry &&
-    sessionEntryHasLegacyCodexRoute(sessionKey, entry, blockedModelIdentities, authProfileIdMap)
-      ? [sessionKey]
-      : [],
-  );
-}
-
-function sessionEntryHasLegacyCodexRoute(
-  sessionKey: string,
-  entry: SessionEntry,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-  authProfileIdMap?: ReadonlyMap<string, string>,
-): boolean {
-  if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
-    return false;
-  }
-  const isBlockedPair = (provider: unknown, model: unknown) => {
-    const normalizedProvider = normalizeString(provider);
-    const legacyProviderModelRef =
-      sessionProviderAllowsScopedModelRef(normalizedProvider) &&
-      typeof model === "string" &&
-      isOpenAICodexModelRef(model)
-        ? model
-        : undefined;
-    return (
-      isBlockedLegacyCodexModelPair({
-        providerId: provider,
-        modelId: model,
-        blockedModelIdentities,
-      }) ||
-      (legacyProviderModelRef &&
-        isBlockedLegacyCodexModelRef({
-          modelRef: legacyProviderModelRef,
-          blockedModelIdentities,
-        }))
-    );
-  };
-  const fallbackNoticeEndpoints = [
-    entry.fallbackNotice?.selectedModel,
-    entry.fallbackNotice?.activeModel,
-  ];
-  const hasBlockedFallbackNoticeEndpoint = fallbackNoticeEndpoints.some(
-    (modelRef) =>
-      isOpenAICodexModelRef(modelRef) &&
-      isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities }),
-  );
-  const hasRewritableFallbackNotice =
-    !hasBlockedFallbackNoticeEndpoint && fallbackNoticeEndpoints.some(isOpenAICodexModelRef);
-  const hasLegacyRoute =
-    (sessionModelPairHasLegacyRoute(entry.modelProvider, entry.model) &&
-      !isBlockedPair(entry.modelProvider, entry.model)) ||
-    (sessionModelPairHasLegacyRoute(entry.providerOverride, entry.modelOverride) &&
-      !isBlockedPair(entry.providerOverride, entry.modelOverride)) ||
-    (isProviderlessModelRef(entry.modelOverride) &&
-      isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
-      entry.authProfileOverrideSource === "auto" &&
-      entry.modelOverrideSource === "auto" &&
-      !normalizeString(entry.providerOverride) &&
-      !isBlockedPair(
-        normalizeString(entry.authProfileOverride)?.split(":", 1)[0],
-        entry.modelOverride,
-      )) ||
-    (typeof entry.authProfileOverride === "string" &&
-      authProfileIdMap?.has(entry.authProfileOverride)) ||
-    hasRewritableFallbackNotice;
-  return hasLegacyRoute;
+  // Preview executes the same repair against copies, so scanning and mutation
+  // cannot disagree about a route, account pin, or retirement condition.
+  return repairCodexSessionStoreRoutes({
+    store: structuredClone(store),
+    blockedModelIdentities,
+    authProfileIdMap,
+    authProfileOnly,
+    retirement,
+    warnings,
+  }).sessionKeys;
 }
 
 function resolveVerifiedSessionAuthProfileIdMap(params: {
@@ -358,9 +473,21 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
 
   return new Map(
     [...params.authProfileIdMap].filter(([legacyProfileId, canonicalProfileId]) => {
+      const separator = legacyProfileId.indexOf(":");
+      if (separator < 0) {
+        return false;
+      }
+      const legacyProvider = legacyProfileId.slice(0, separator);
+      const provider =
+        isLegacyCodexProviderId(legacyProvider) || legacyProfileId === "openai:codex-cli"
+          ? "openai"
+          : resolveLegacyRuntimeModelProviderAlias(legacyProvider)?.provider;
+      if (!provider) {
+        return false;
+      }
       const localCredential = localProfiles[canonicalProfileId];
       if (localCredential) {
-        return normalizeString(localCredential.provider) === "openai";
+        return normalizeString(localCredential.provider) === provider;
       }
       // A failed local import still owns its account. Never replace it with a
       // same-named main credential; inheritance is safe only without that source.
@@ -375,21 +502,21 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
             return false;
           }
           const canonicalLegacyCredential = parseLegacyCredentialEntry(
-            { ...legacyCredential, provider: "openai" },
-            "openai",
+            { ...legacyCredential, provider },
+            provider,
           );
           // A retained mixed-sidecar source still contains successful entries.
           // Permit deduped main inheritance only when exact account identity matches.
           return (
             canonicalLegacyCredential?.type === "oauth" &&
             inheritedCredential?.type === "oauth" &&
-            inheritedCredential.provider === "openai" &&
+            inheritedCredential.provider === provider &&
             (hasMatchingOAuthIdentity(canonicalLegacyCredential, inheritedCredential) ||
               areOAuthCredentialsEquivalent(canonicalLegacyCredential, inheritedCredential))
           );
         }
       }
-      return normalizeString(inheritedCredential?.provider) === "openai";
+      return normalizeString(inheritedCredential?.provider) === provider;
     }),
   );
 }
@@ -397,14 +524,47 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
 /** Scan or repair all configured agent session stores that still contain legacy Codex routes. */
 export async function maybeRepairCodexSessionRoutes(params: {
   cfg: OpenClawConfig;
+  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  authProfileOnly?: boolean;
   codexRuntimeReady?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
 }): Promise<CodexSessionRouteRepairSummary> {
   const env = params.env ?? process.env;
-  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).flatMap((target) => {
+  const authProfileOnly = !params.shouldRepair && params.authProfileOnly === true;
+  const shouldRepair = params.shouldRepair || authProfileOnly;
+  const warnings: string[] = [];
+  const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const resolveRetired = authProfileOnly
+    ? undefined
+    : createRetiredModelRefRepairResolver({
+        cfg: params.cfg,
+        checkModelPolicy: true,
+        retiredModelRefConfig: params.retiredModelRefConfig,
+        env,
+        warnings,
+        agentIds: [...new Set(sessionTargets.map((target) => target.agentId))],
+      });
+  const targets = sessionTargets.flatMap((target) => {
+    const defaultModelRef = resolveRetired
+      ? resolveAgentEffectiveModelPrimary(params.cfg, target.agentId)
+      : undefined;
+    const retirement = resolveRetired
+      ? {
+          agentId: target.agentId,
+          resolve: resolveRetired,
+          warnings,
+          defaultModelRef: defaultModelRef
+            ? resolveRuntimeModelRef({
+                cfg: params.cfg,
+                modelRef: defaultModelRef,
+                agentId: target.agentId,
+              })
+            : undefined,
+        }
+      : undefined;
     const sessionScope = {
       storePath: target.storePath,
       agentId: target.agentId,
@@ -416,21 +576,26 @@ export async function maybeRepairCodexSessionRoutes(params: {
       env,
       authProfileIdMap: params.authProfileIdMap,
     });
+    if (authProfileOnly && !authProfileIdMap?.size) {
+      return [];
+    }
     const staleSqliteSessionKeys: string[] = [];
     const scanEntry = ({ entry, sessionKey }: { entry: SessionEntry; sessionKey: string }) => {
       if (
-        sessionEntryHasLegacyCodexRoute(
-          sessionKey,
-          entry,
+        scanCodexSessionStoreRoutes(
+          { [sessionKey]: entry },
           params.blockedModelIdentities,
           authProfileIdMap,
-        )
+          retirement,
+          warnings,
+          authProfileOnly,
+        ).length > 0
       ) {
         staleSqliteSessionKeys.push(sessionKey);
       }
     };
     // Preview tolerates malformed legacy rows; repair mode uses strict canonical validation.
-    const sqliteEntryCount = params.shouldRepair
+    const sqliteEntryCount = shouldRepair
       ? scanDoctorSessionEntriesStrict(sessionScope, scanEntry)
       : scanDoctorSessionEntriesTolerant(sessionScope, scanEntry);
     const hasLegacyStore = !target.storePath.endsWith(".sqlite") && fs.existsSync(target.storePath);
@@ -441,14 +606,12 @@ export async function maybeRepairCodexSessionRoutes(params: {
             staleSqliteSessionKeys,
             hasLegacyStore,
             authProfileIdMap,
+            retirement,
           },
         ]
       : [];
   });
-  if (targets.length === 0) {
-    return emptyRepairSummary();
-  }
-  if (!params.shouldRepair) {
+  if (!shouldRepair) {
     const stale = targets.flatMap((target) => {
       const sessionKeys = new Set(target.staleSqliteSessionKeys);
       if (target.hasLegacyStore) {
@@ -456,6 +619,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
           loadLegacySessionStore(target.storePath),
           params.blockedModelIdentities,
           target.authProfileIdMap,
+          target.retirement,
+          warnings,
+          authProfileOnly,
         )) {
           sessionKeys.add(sessionKey);
         }
@@ -466,16 +632,18 @@ export async function maybeRepairCodexSessionRoutes(params: {
       scannedStores: targets.length,
       repairedStores: 0,
       repairedSessions: 0,
-      warnings:
-        stale.length > 0
+      warnings: [
+        ...warnings,
+        ...(stale.length > 0
           ? [
               [
-                "- Legacy `codex/*` or `openai-codex/*` session route state detected.",
+                "- Legacy session bindings or retired session model route state detected.",
                 `- Affected sessions: ${stale.length}.`,
-                "- Run `openclaw doctor --fix` to rewrite stale session model/provider pins across all agent session stores.",
+                "- Run `openclaw doctor --fix` to migrate legacy bindings and stale session model/provider pins across all agent session stores.",
               ].join("\n"),
             ]
-          : [],
+          : []),
+      ],
       changes: [],
     };
   }
@@ -498,6 +666,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
             store,
             blockedModelIdentities: params.blockedModelIdentities,
             authProfileIdMap: target.authProfileIdMap,
+            authProfileOnly,
+            retirement: target.retirement,
+            warnings,
           });
           return {
             result: repair,
@@ -518,6 +689,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
         loadLegacySessionStore(target.storePath),
         params.blockedModelIdentities,
         target.authProfileIdMap,
+        target.retirement,
+        warnings,
+        authProfileOnly,
       );
       if (staleLegacySessionKeys.length > 0) {
         const result = await updateLegacySessionStore(
@@ -527,6 +701,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
               store,
               blockedModelIdentities: params.blockedModelIdentities,
               authProfileIdMap: target.authProfileIdMap,
+              authProfileOnly,
+              retirement: target.retirement,
+              warnings,
             }),
           { skipMaintenance: true },
         );
@@ -540,28 +717,19 @@ export async function maybeRepairCodexSessionRoutes(params: {
       repairedSessions += repairedSessionKeys.size;
     }
   }
+  const repairedScope = `${repairedSessions} session${repairedSessions === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}`;
   return {
     scannedStores: targets.length,
     repairedStores,
     repairedSessions,
-    warnings: [],
+    warnings,
     changes:
       repairedSessions > 0
         ? [
-            `Repaired Codex session routes: moved ${repairedSessions} session${
-              repairedSessions === 1 ? "" : "s"
-            } across ${repairedStores} store${repairedStores === 1 ? "" : "s"} to openai/* while preserving auth-profile pins.`,
+            authProfileOnly
+              ? `Updated auth-profile references in ${repairedScope}.`
+              : `Repaired legacy bindings or retired model routes in ${repairedScope} while preserving auth-profile pins.`,
           ]
         : [],
-  };
-}
-
-function emptyRepairSummary(): CodexSessionRouteRepairSummary {
-  return {
-    scannedStores: 0,
-    repairedStores: 0,
-    repairedSessions: 0,
-    warnings: [],
-    changes: [],
   };
 }

@@ -3,6 +3,7 @@ import {
   type DiagnosticArgumentChurnActivity,
   resolveArgumentChurnProgress,
 } from "./diagnostic-argument-churn-activity.js";
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
 import {
   type DiagnosticRepeatedRequestActivity,
   resolveRepeatedRequestNoProgressAgeMs,
@@ -19,6 +20,10 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
   activeModelCallRequestTimeoutMs?: number;
+  /** Absolute quiet deadline validated against the exact executing backend owner. */
+  activeBackendLivenessDeadlineAtMs?: number;
+  /** Absolute provider retry deadline validated against the live logical run. */
+  activeRetryWaitDeadlineAtMs?: number;
 };
 
 type SnapshotTool = {
@@ -69,11 +74,8 @@ export function buildDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
-  const churnProgress = resolveArgumentChurnProgress(
-    activity,
-    activity.activeEmbeddedRuns.values(),
-    now,
-  );
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(activity.activeEmbeddedRuns.values());
+  const churnProgress = resolveArgumentChurnProgress(activity, currentOwnerRunId, now);
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
@@ -85,7 +87,7 @@ export function buildDiagnosticSessionActivitySnapshot(
     lastProgressReason: churnProgress.lastProgressReason,
     repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(
       activity,
-      activity.activeEmbeddedRuns.values(),
+      currentOwnerRunId,
       now,
     ),
     activeModelCallRequestTimeoutMs,
@@ -106,16 +108,42 @@ export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
 export function resolveRunStaleThresholdMs(
   activity: Pick<
     DiagnosticSessionActivitySnapshot,
-    "activeWorkKind" | "activeToolDeadlineAtMs" | "lastProgressAgeMs"
+    | "activeWorkKind"
+    | "activeToolDeadlineAtMs"
+    | "lastProgressAgeMs"
+    | "activeModelCallRequestTimeoutMs"
+    | "activeBackendLivenessDeadlineAtMs"
+    | "activeRetryWaitDeadlineAtMs"
   >,
   evidenceAgeMs = activity.lastProgressAgeMs ?? 0,
+  minimumMs = RUN_STALE_TAKEOVER_MS,
 ): number {
+  const retryWaitThresholdMs =
+    activity.activeRetryWaitDeadlineAtMs === undefined
+      ? 0
+      : evidenceAgeMs + activity.activeRetryWaitDeadlineAtMs - Date.now();
   if (activity.activeToolDeadlineAtMs !== undefined) {
     // Use the same age the caller compares: subtracting it leaves only the
     // absolute deadline, even when reply activity and tool progress differ.
-    return Math.max(0, evidenceAgeMs + activity.activeToolDeadlineAtMs - Date.now());
+    return Math.max(
+      0,
+      evidenceAgeMs + activity.activeToolDeadlineAtMs - Date.now(),
+      retryWaitThresholdMs,
+    );
   }
-  return activity.activeWorkKind === "tool_call"
-    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
-    : RUN_STALE_TAKEOVER_MS;
+  if (activity.activeWorkKind === "tool_call") {
+    return Math.max(minimumMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS, retryWaitThresholdMs);
+  }
+  // The backend starts its quiet allowance at execution, not session admission.
+  // Translate its absolute deadline into the same evidence age the caller compares.
+  const backendThresholdMs =
+    activity.activeBackendLivenessDeadlineAtMs === undefined
+      ? 0
+      : evidenceAgeMs + activity.activeBackendLivenessDeadlineAtMs - Date.now();
+  return Math.max(
+    minimumMs,
+    activity.activeModelCallRequestTimeoutMs ?? 0,
+    backendThresholdMs,
+    retryWaitThresholdMs,
+  );
 }

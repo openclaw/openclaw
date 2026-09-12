@@ -1,8 +1,7 @@
 import { consume } from "@lit/context";
-import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
 import { markdownBlocks } from "../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -11,6 +10,7 @@ import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
 import "../../styles/chat/message-layout.css";
@@ -38,24 +38,19 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
-  private subscribedStore: CustodianSessionStore | null = null;
-  private storeCleanup: (() => void) | null = null;
-  private alertCleanup: (() => void) | null = null;
   private lastMessageId: number | null = null;
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.subscribeToStore();
-    this.alertCleanup = custodianAlertStore.subscribe(() => this.requestUpdate());
-  }
-
-  override disconnectedCallback(): void {
-    this.storeCleanup?.();
-    this.storeCleanup = null;
-    this.alertCleanup?.();
-    this.alertCleanup = null;
-    this.subscribedStore = null;
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .watch(
+        () => this.store,
+        (store, notify) => store.subscribe(notify),
+      )
+      .watch(
+        () => custodianAlertStore,
+        (alerts, notify) => alerts.subscribe(notify),
+      );
   }
 
   protected override async getUpdateComplete(): Promise<boolean> {
@@ -70,10 +65,7 @@ class CustodianSurface extends OpenClawLightDomElement {
     return complete;
   }
 
-  override willUpdate(changedProperties: PropertyValues): void {
-    if (changedProperties.has("store")) {
-      this.subscribeToStore();
-    }
+  override willUpdate(): void {
     this.store.connect(this.context, sessionVariant(this.onboarding, this.newAgentIntent));
   }
 
@@ -95,15 +87,6 @@ class CustodianSurface extends OpenClawLightDomElement {
     }
   }
 
-  private subscribeToStore(): void {
-    if (!this.isConnected || this.subscribedStore === this.store) {
-      return;
-    }
-    this.storeCleanup?.();
-    this.subscribedStore = this.store;
-    this.storeCleanup = this.store.subscribe(() => this.requestUpdate());
-  }
-
   private handleComposerKeydown(event: KeyboardEvent): void {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
       return;
@@ -114,7 +97,6 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override render() {
     const store = this.store;
-    const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.resourceBasePath);
     const alertCard = custodianAlertStore.alert
       ? renderCustodianAlertCard({
           alert: custodianAlertStore.alert,
@@ -198,7 +180,6 @@ class CustodianSurface extends OpenClawLightDomElement {
             return renderCustodianTranscriptEntry({
               message,
               boundaryAfterId: store.earlierBoundaryAfterId,
-              assistantAvatar,
               showQuestion,
               questionDisabled: !store.canSend || store.answeredQuestions.has(questionKey),
               onSelect: (label) => store.answerQuestion(message, label),
@@ -236,8 +217,6 @@ class CustodianSurface extends OpenClawLightDomElement {
           }
           ${renderPanelRefreshStatus({
             status: store.transcript.status,
-            onRetry: () => void store.refreshTranscriptIfIdle(),
-            retryDisabled: !store.canRefreshTranscript(),
             className: "custodian__transcript-status",
           })}
           ${

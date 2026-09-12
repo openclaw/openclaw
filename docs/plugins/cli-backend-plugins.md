@@ -219,8 +219,8 @@ backend intentionally needs its own watchdog policy.
   clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
   with a fresh session when the failure is eligible for recovery.
 - Set it to `"invalidated-only"` to suppress fresh replacement unless the
-  canonical invalidation predicate proves the old session is dead. Currently,
-  only `session_expired` does so.
+  canonical invalidation predicate proves the old session is dead. Only
+  `session_expired` does so.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
 or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
@@ -264,6 +264,13 @@ effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
 applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
+`resolveExecutionArgs(ctx)` also receives optional `ctx.fastMode`, the effective
+boolean for this invocation. Core resolves automatic mode after CLI and process
+scope admission and backend preparation, so elapsed waits count toward its cutoff. Explicit on
+and off remain unchanged. The field follows the session, agent, and model fast-mode
+settings; backends may map it to their native arguments or ignore it. A spawned
+process keeps that decision for the invocation; it does not receive raw `"auto"`.
+
 `prepareExecution(ctx)` may also return an optional `execute` transport when a
 backend owns the installed CLI's protocol or SDK integration. The transport
 receives the exact prepared command, arguments, optional `argv0`, environment,
@@ -271,7 +278,9 @@ prompt, session, and tool availability; it yields the backend's existing structu
 stream records. Preserve the prepared command, `argv0`, and interpreter or script
 prefix in `args` when constructing the CLI invocation. `argv0` preserves
 the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
-are private prompt-build additions, separate from the ordinary `prompt`. Transport
+are private prompt-build additions and bounded saved session notes, separate from
+the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
+resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
 complete logical prompt. Native tool actions must use the provided, run-bound
@@ -279,6 +288,14 @@ complete logical prompt. Native tool actions must use the provided, run-bound
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
+
+Reusable transports receive a run-bound `liveSession` capability. Before creating
+an initial or replacement process, await `liveSession.restart()` unless the
+current process is reusable. This joins the previous process exit and its
+host-owned resource cleanup; waiting for the child exit alone is insufficient.
+The host rejects restart when the caller is revoked or an exact live generation
+must be preserved. `register()` remains a synchronous admission check and refuses
+replacement while cleanup is unresolved.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
@@ -325,6 +342,20 @@ Declare how the backend enforces that contract:
 Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
+
+Rooted runs such as [Skill Workshop reviews](/tools/skill-workshop) also require
+`isolatesInstructionsWithExactTools: true` on the backend registration. Declare
+this optional capability only when exact-tool execution suppresses ambient
+instruction files, skills, hooks, and plugins for both fresh and resumed runs.
+The host-prepared instruction snapshot must remain authoritative. OpenClaw
+rejects rooted runs when this declaration is absent, even if the backend can
+enforce exact tools. Existing non-rooted runs do not require this field.
+
+The bundled Claude CLI backend declares this capability. Rooted execution
+disables its native tools and serves the selected OpenClaw tools through the
+host-owned MCP grant, which retains the root, filesystem policy, and configured
+sandbox. The declaration does not grant filesystem or approval authority to
+the backend.
 
 A backend whose native tools are model-callable may declare
 `projectNativeToolAuthority(nativeTools)` so that automations created from its
@@ -476,7 +507,7 @@ provider model's `agentRuntime.id`. Adapter mechanics remain in the plugin:
   agents: {
     defaults: {
       model: {
-        primary: "openai/gpt-5.6-sol",
+        primary: "openai/gpt-6-astra",
         fallbacks: ["acme-cli/large"],
       },
     },

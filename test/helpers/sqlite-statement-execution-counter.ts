@@ -5,7 +5,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../../src/infra/kysely-sy
 /**
  * Count SQLite query executions per caller-defined bucket. Prepared-statement
  * caching (src/infra/kysely-sync.ts) reuses statements across calls, so
- * counting `prepare` invocations undercounts; this wraps `iterate` and `run` on matching
+ * counting `prepare` invocations undercounts; this wraps `get`, `iterate`, and `run` on matching
  * statements and clears the statement cache at attach so statements cached
  * before the spy cannot bypass it.
  */
@@ -23,6 +23,14 @@ export function trackSqliteStatementExecutions<Key extends string>(
   const counts = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
   const rowCounts = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
   const textBytes = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
+  const observeRow = (key: Key, row: Record<string, unknown>) => {
+    rowCounts[key] += 1;
+    for (const value of Object.values(row)) {
+      if (typeof value === "string") {
+        textBytes[key] += Buffer.byteLength(value);
+      }
+    }
+  };
   const originalPrepare = db.prepare.bind(db);
   const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sqlText: string) => {
     const statement = originalPrepare(sqlText);
@@ -35,6 +43,16 @@ export function trackSqliteStatementExecutions<Key extends string>(
           return Reflect.apply(run, receiver, args);
         },
       });
+      statement.get = new Proxy(statement.get.bind(statement), {
+        apply(get, _receiver, args) {
+          counts[key] += 1;
+          const row = get(...args);
+          if (row) {
+            observeRow(key, row);
+          }
+          return row;
+        },
+      });
       const originalIterate = statement.iterate.bind(statement) as (
         ...args: unknown[]
       ) => ReturnType<StatementSync["iterate"]>;
@@ -44,12 +62,7 @@ export function trackSqliteStatementExecutions<Key extends string>(
         const rows = originalIterate(...args);
         return (function* () {
           for (const row of rows) {
-            rowCounts[key] += 1;
-            for (const value of Object.values(row)) {
-              if (typeof value === "string") {
-                textBytes[key] += Buffer.byteLength(value);
-              }
-            }
+            observeRow(key, row);
             yield row;
           }
         })();

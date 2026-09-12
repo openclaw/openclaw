@@ -15,6 +15,32 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
+    public static func decodeAgentsList(_ data: Data) throws -> OpenClawChatAgentsListResponse {
+        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        return OpenClawChatAgentsListResponse(
+            defaultId: result.defaultid,
+            agents: result.agents.filter(\.isSelectableAgent).map {
+                OpenClawChatAgentChoice(
+                    id: $0.id,
+                    name: $0.name,
+                    workspaceGit: $0.workspacegit)
+            })
+    }
+
+    public static func decodeProgressCard(_ data: Data, agentID: String?) throws -> ProgressCard? {
+        let result = try JSONDecoder().decode(ProgressCardGetResult.self, from: data)
+        guard !(result.card.value is NSNull) else { return nil }
+        let card = try GatewayPayloadDecoding.decode(result.card, as: ProgressCard.self)
+        if let agentID,
+           OpenClawChatSessionKey.agentID(from: card.sessionkey)?.lowercased() != agentID.lowercased()
+        {
+            throw NSError(domain: "OpenClawChatTransport", code: 0, userInfo: [
+                NSLocalizedDescriptionKey: "Progress card response belongs to another agent.",
+            ])
+        }
+        return card
+    }
+
     public static func decodeQuestionAnswer(_ data: Data) throws -> QuestionAnswers {
         struct AnsweredQuestion: Decodable {
             enum Status: String, Decodable { case answered }
@@ -54,15 +80,15 @@ public enum OpenClawChatGatewayPayloadCodec {
 
     public static func decodeModelChoices(_ data: Data) throws -> [OpenClawChatModelChoice] {
         let decoded = try JSONDecoder().decode(ModelsListResult.self, from: data)
-        return decoded.models.map(self.modelChoice)
+        return try decoded.models.map(self.modelChoice)
     }
 
-    public static func decodeChatMetadataModelChoices(_ data: Data) throws -> [OpenClawChatModelChoice] {
-        struct ChatMetadataModels: Decodable {
-            let models: [ModelChoice]?
-        }
-        let decoded = try JSONDecoder().decode(ChatMetadataModels.self, from: data)
-        return (decoded.models ?? []).map(self.modelChoice)
+    public static func decodeModelCatalog(_ data: Data) throws -> OpenClawChatModelCatalogSnapshot {
+        let decoded = try JSONDecoder().decode(ModelsListResult.self, from: data)
+        return try OpenClawChatModelCatalogSnapshot(
+            choices: decoded.models.map(self.modelChoice),
+            availabilityIsSessionScoped: true,
+            refreshFailed: decoded.refreshfailed == true)
     }
 
     public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
@@ -75,9 +101,9 @@ public enum OpenClawChatGatewayPayloadCodec {
         return identity
     }
 
-    public static func modelChoice(_ model: ModelChoice) -> OpenClawChatModelChoice {
+    public static func modelChoice(_ model: ModelChoice) throws -> OpenClawChatModelChoice {
         let name = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return OpenClawChatModelChoice(
+        return try OpenClawChatModelChoice(
             modelID: model.id,
             name: name.isEmpty ? model.id : model.name,
             provider: model.provider,
@@ -85,7 +111,13 @@ public enum OpenClawChatGatewayPayloadCodec {
             unavailableReason: model.unavailablereason?.value as? String,
             unavailableUntil: model.unavailableuntil,
             contextWindow: model.contextwindow,
-            reasoning: model.reasoning)
+            reasoning: model.reasoning,
+            supportsFastMode: model.supportsfastmode,
+            effectiveFastMode: model.effectivefastmode.map { try GatewayPayloadDecoding.decode($0) },
+            thinkingLevels: model.thinkinglevels.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
+            thinkingDefault: model.thinkingdefault,
+            input: model.input.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
+            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) })
     }
 
     public static func commandChoice(_ entry: CommandEntry) -> OpenClawChatCommandChoice {
@@ -123,7 +155,7 @@ public enum OpenClawChatGatewayPayloadCodec {
         switch frame.event {
         case "tick":
             return .tick
-        case "chat.metadata.changed":
+        case "chat.metadata.changed", "config.changed":
             return .chatMetadataChanged
         case "sessions.changed":
             guard let payload = frame.payload,

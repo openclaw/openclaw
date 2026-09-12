@@ -7,8 +7,11 @@ import {
   parseModelCatalogRef,
   type ModelCatalogRef,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { MODEL_APIS } from "../config/types.models.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -16,26 +19,37 @@ import {
   type PreparedProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
-import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveSubagentSpawnModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+} from "./agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import {
+  buildInlineProviderModels,
+  completeInlineProviderModel,
+  type InlineModelEntry,
+} from "./embedded-agent-runner/model.inline-provider.js";
 import type { StaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import { resolveConfiguredModelHarnessRuntime } from "./harness-runtimes.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
+import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
+import type {
+  PreparedConfiguredRuntimeModel,
+  PreparedRuntimeCapabilityModel,
+  PreparedModelRuntimeInput,
+} from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
-
-export type PreparedConfiguredRuntimeModel = Readonly<{
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel;
-}>;
-
-/**
- * A concrete runtime contract attached to the logical provider/model ref that
- * selects it. Prepared catalog rows retain this fact after runtime-only rows
- * are intentionally omitted from the configured view.
- */
-export type PreparedRuntimeCapabilityModel = PreparedConfiguredRuntimeModel;
 
 /** Collects defaults, global refs, and only the selected agent's overrides. */
 export function collectPreparedModelRuntimeConfiguredRefs(
@@ -53,36 +67,6 @@ export function collectPreparedModelRuntimeConfiguredRefs(
       list: entry ? [entry] : [],
     },
   });
-}
-
-function isCatalogModelApi(
-  value: string | undefined,
-): value is NonNullable<ModelCatalogEntry["api"]> {
-  return value !== undefined && (MODEL_APIS as readonly string[]).includes(value);
-}
-
-export function toStaticCatalogEntry(model: ProviderRuntimeModel): ModelCatalogEntry {
-  return {
-    id: model.id,
-    name: model.name ?? model.id,
-    provider: model.provider,
-    ...(isCatalogModelApi(model.api) ? { api: model.api } : {}),
-    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
-    ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-    ...(model.contextWindows
-      ? {
-          contextWindows: model.contextWindows.map((option) => ({ ...option })),
-        }
-      : {}),
-    ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
-    ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),
-    ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
-    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-    ...(model.input ? { input: model.input } : {}),
-    ...(model.params ? { params: model.params } : {}),
-    ...(model.compat ? { compat: model.compat } : {}),
-    ...(model.mediaInput ? { mediaInput: model.mediaInput } : {}),
-  };
 }
 
 export function collectPreparedModelRuntimeProviderIds(
@@ -174,6 +158,8 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
 }
 
 export function prepareConfiguredRuntimeModels(params: {
+  config: OpenClawConfig;
+  inlineProviderModels: readonly InlineModelEntry[];
   configuredModelRefs: readonly ModelCatalogRef[];
   metadataSnapshot: PluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
@@ -194,7 +180,7 @@ export function prepareConfiguredRuntimeModels(params: {
     seen.add(key);
     // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
     // and the provider-static catalog fills only models absent from that surface.
-    const model =
+    let model =
       params.resolveStaticCatalogModel({ provider, modelId }) ??
       findPreparedProviderStaticCatalogModel({
         prepared: params.preparedStaticProviderCatalog,
@@ -211,6 +197,24 @@ export function prepareConfiguredRuntimeModels(params: {
           modelId,
         }),
       );
+    if (!model) {
+      const inlineModel = params.inlineProviderModels.find((candidate) =>
+        params.matchesStaticModelId({
+          candidateId: candidate.id,
+          rowProvider: candidate.provider,
+          provider,
+          modelId,
+        }),
+      );
+      const providerConfig =
+        inlineModel &&
+        findNormalizedProviderValue(params.config.models?.providers, inlineModel.provider);
+      // Excluding an implicit catalog must not discard an authored transport definition.
+      // Missing authored API metadata remains unresolved, matching request-time inline lookup.
+      if (inlineModel?.api && providerConfig) {
+        model = completeInlineProviderModel(inlineModel, providerConfig);
+      }
+    }
     if (model) {
       prepared.push({ provider, modelId, model });
     }
@@ -296,4 +300,66 @@ function findPreparedProviderStaticCatalogModel(params: {
     }
   }
   return undefined;
+}
+
+export function listConfiguredOwnerInputs(
+  config: OpenClawConfig,
+  defaultWorkspaceDir?: string,
+  allowGatewaySubagentBinding?: boolean,
+): PreparedModelRuntimeInput[] {
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
+  const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
+  return listAgentIds(config)
+    .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
+    .map((agentId) => {
+      const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
+      const input: PreparedModelRuntimeInput = {
+        agentId,
+        agentDir: resolveAgentDir(config, agentId),
+        config,
+        inheritedAuthDir,
+        workspaceDir: preserveWorkspaceDirOnRefresh
+          ? defaultWorkspaceDir
+          : resolveAgentWorkspaceDir(config, agentId),
+        runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
+      };
+      if (allowGatewaySubagentBinding === true) {
+        input.allowGatewaySubagentBinding = true;
+      }
+      if (preserveWorkspaceDirOnRefresh) {
+        input.preserveWorkspaceDirOnRefresh = true;
+      }
+      return input;
+    });
+}
+
+function resolveConfiguredRuntimePluginSelections(
+  config: OpenClawConfig,
+  agentId: string,
+): PreparedModelRuntimeInput["runtimePluginSelections"] {
+  const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const subagentModel = resolveSubagentConfiguredModelSelection({
+    cfg: config,
+    agentId,
+    includeAgentPrimary: false,
+  });
+  return resolveModelCandidateChain({
+    cfg: config,
+    agentId,
+    manifestPlugins: [],
+    provider: configured.provider || DEFAULT_PROVIDER,
+    model: configured.model || DEFAULT_MODEL,
+    requestedRouteResolution: "resolved",
+    // Session policy can narrow either configured chain after admission waits. Prepare
+    // their owners once so nested execution never expands an already frozen generation.
+    fallbacksOverride: [
+      ...resolveConfiguredModelFallbacks({ cfg: config, agentId }),
+      ...(subagentModel ? [subagentModel] : []),
+      ...(resolveSubagentSpawnModelFallbacksOverride(config, agentId) ?? []),
+    ],
+  }).map((candidate) => ({
+    provider: candidate.provider,
+    modelId: candidate.model,
+    agentId,
+  }));
 }

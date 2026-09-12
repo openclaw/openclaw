@@ -194,6 +194,13 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         })
       : undefined;
   const explicitToken = trimToUndefined(opts?.gatewayToken);
+  const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+  const context =
+    cfg.gateway?.mode === "remote" && !validatedOverride && !explicitToken && resolveGatewayContext
+      ? resolveGatewayContext()
+      : undefined;
+  const localConfig =
+    context && context.localEmbedded !== true ? context.getRuntimeConfig() : undefined;
   const token = validatedOverride
     ? resolveGatewayOverrideToken({
         cfg,
@@ -206,13 +213,23 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
       ? Math.max(1, Math.floor(opts.timeoutMs))
       : 30_000;
   const envGatewayUrl = trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
-  const target =
-    validatedOverride?.target ??
-    resolveDefaultGatewayTarget({
-      cfg,
-      envGatewayUrl,
-    });
-  return { url: validatedOverride?.url, token, timeoutMs, target };
+  const target: GatewayOverrideTarget = localConfig
+    ? "local"
+    : (validatedOverride?.target ?? resolveDefaultGatewayTarget({ cfg, envGatewayUrl }));
+  return {
+    url: validatedOverride?.url,
+    token,
+    timeoutMs,
+    target,
+    ...(localConfig
+      ? {
+          config: localConfig,
+          localPortOverride: resolveGatewayPort(localConfig),
+          ignoreEnvUrlOverride: true,
+          tlsFingerprint: context?.gatewayTlsFingerprint,
+        }
+      : {}),
+  };
 }
 
 const APPROVAL_RUNTIME_METHODS = new Set<string>([
@@ -639,6 +656,14 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     approvalRuntimeToken,
   });
   const callOptions = {
+    ...(gateway.localPortOverride !== undefined
+      ? {
+          config: gateway.config,
+          localPortOverride: gateway.localPortOverride,
+          ignoreEnvUrlOverride: gateway.ignoreEnvUrlOverride,
+          tlsFingerprint: gateway.tlsFingerprint,
+        }
+      : {}),
     url: gateway.url,
     token: gateway.token,
     method,

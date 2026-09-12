@@ -6,6 +6,7 @@ import {
   createProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
+  formatProviderErrorPayload,
   ProviderHttpError,
   readProviderBinaryResponse,
   readProviderJsonResponse,
@@ -91,6 +92,134 @@ function createStreamingTextResponse(params: { chunkCount: number; chunkSize: nu
 }
 
 describe("provider error utils", () => {
+  it.each([
+    ["undefined", undefined, undefined],
+    ["null", null, undefined],
+    ["string", "provider failure", undefined],
+    ["number", 429, undefined],
+    ["boolean", false, undefined],
+    ["function", () => "provider failure", undefined],
+    ["array", [{ message: "ignored" }], undefined],
+    ["empty object", {}, undefined],
+    ["blank fields", { message: " ", detail: "\n", type: " ", code: " " }, undefined],
+    [
+      "nested error before detail and root",
+      {
+        error: { message: " nested ", type: " invalid ", code: " bad " },
+        detail: { message: "ignored detail" },
+        message: "ignored root",
+      },
+      "nested [type=invalid, code=bad]",
+    ],
+    [
+      "array error before object detail",
+      { error: [{ message: "ignored" }], detail: { message: " detail ", status: " retry " } },
+      "detail [code=retry]",
+    ],
+    ["array detail before root", { detail: ["ignored"], message: " root " }, "root"],
+    [
+      "blank nested message before root fallback",
+      { error: { message: " ", detail: 7 }, detail: { message: "ignored" }, message: " root " },
+      "root",
+    ],
+    [
+      "nested detail before OAuth description",
+      { error: { message: " ", detail: " nested detail ", error_description: "ignored" } },
+      "nested detail",
+    ],
+    ["root detail before flat error", { detail: " detail ", error: "ignored" }, "detail"],
+    [
+      "OAuth description and raw error code",
+      { error: " invalid_request ", error_description: " Needs configuration " },
+      "Needs configuration [code=invalid_request]",
+    ],
+    ["flat error without OAuth description", { error: " invalid_request " }, "invalid_request"],
+    [
+      "blank OAuth description without inferred code",
+      { error: " invalid_request ", error_description: " " },
+      "invalid_request",
+    ],
+    [
+      "explicit code before status and OAuth code",
+      {
+        message: "retry",
+        code: " limited ",
+        status: "ignored",
+        error: "ignored",
+        error_description: "ignored",
+      },
+      "retry [code=limited]",
+    ],
+    ["non-string code before status", { code: 3, status: " bad " }, "[code=bad]"],
+    ["type-only metadata", { type: " rate ", code: " " }, "[type=rate]"],
+    ["raw public text", { message: "api_key=not-a-real-key" }, "api_key=not-a-real-key"],
+  ] as const)("formats the public %s payload", (_name, payload, expected) => {
+    expect(formatProviderErrorPayload(payload)).toBe(expected);
+  });
+
+  it("preserves changing public getters and skips lower-priority fields", () => {
+    const reads: string[] = [];
+    let messageReads = 0;
+    const subject = {
+      get error_description() {
+        reads.push("subject.error_description");
+        return undefined;
+      },
+      get message() {
+        reads.push("subject.message");
+        return ++messageReads === 1 ? " first " : " second ";
+      },
+      get detail() {
+        throw new Error("lower-priority subject detail must stay unread");
+      },
+      get type() {
+        reads.push("subject.type");
+        return " rate ";
+      },
+      get code() {
+        reads.push("subject.code");
+        return " limited ";
+      },
+      get status() {
+        throw new Error("lower-priority status must stay unread");
+      },
+    };
+    const payload = {
+      get detail() {
+        reads.push("root.detail");
+        return { message: "ignored detail" };
+      },
+      get error() {
+        reads.push("root.error");
+        return subject;
+      },
+      get error_description() {
+        reads.push("root.error_description");
+        return undefined;
+      },
+      get message() {
+        throw new Error("lower-priority root message must stay unread");
+      },
+    };
+
+    for (const expected of [
+      "first [type=rate, code=limited]",
+      "second [type=rate, code=limited]",
+    ]) {
+      reads.length = 0;
+      expect(formatProviderErrorPayload(payload)).toBe(expected);
+      expect(reads).toEqual([
+        "root.detail",
+        "root.error",
+        "subject.error_description",
+        "root.error_description",
+        "subject.message",
+        "subject.type",
+        "subject.code",
+      ]);
+    }
+  });
+
   it("formats nested provider error details with request ids", async () => {
     const response = new Response(
       JSON.stringify({
@@ -204,6 +333,22 @@ describe("provider error utils", () => {
     }
   });
 
+  it("preserves the request timeout that interrupts an error body", async () => {
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(timeout);
+        },
+      }),
+      { status: 503 },
+    );
+
+    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toBe(
+      timeout,
+    );
+  });
+
   it("propagates an already-expired lazy error-body deadline", async () => {
     const cancel = vi.fn();
     const response = new Response(
@@ -302,6 +447,41 @@ describe("provider error utils", () => {
     expect(providerError.message).toContain("Quota exceeded");
     expect(providerError.errorBody).toContain("Quota exceeded");
     expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
+  });
+
+  it.each([
+    ["delta seconds", "12", 12_000],
+    ["HTTP date", "Fri, 01 May 2026 12:00:05 GMT", 5_000],
+    ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
+  ])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
+    const now = Date.UTC(2026, 4, 1, 12, 0, 0);
+    // Shared-worker runs (--isolate=false): restore Date.now even on assertion failure.
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const error = await createProviderHttpError(
+        new Response(null, { status: 429, headers: { "Retry-After": value } }),
+        "Provider API error",
+      );
+
+      expect(error).toMatchObject({ retryAfterMs: expected });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["negative header", { header: "-1" }],
+    ["unsafe header", { header: "9007199254741" }],
+  ])("ignores $name cooldown hints", async (_name, value) => {
+    const error = await createProviderHttpError(
+      new Response(null, {
+        status: 429,
+        headers: { "Retry-After": value.header },
+      }),
+      "Provider API error",
+    );
+
+    expect((error as ProviderHttpError).retryAfterMs).toBeUndefined();
   });
 
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {

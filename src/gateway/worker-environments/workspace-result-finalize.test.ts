@@ -10,6 +10,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { NodeWorkerWorkspaceRetainEntry } from "../../worker/node-workspace-retain-protocol.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -18,6 +19,7 @@ import {
   SESSION_ID,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
+  database,
   placements,
   root,
   seedActivePlacement,
@@ -91,7 +93,10 @@ describe("concurrent worker workspace results", () => {
       },
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
       reconcileWorkspace: async (request) => {
-        request.journal.commit(MANIFEST_REF);
+        if (request.source.kind !== "local") {
+          throw new Error("expected a local workspace source");
+        }
+        request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,
@@ -111,7 +116,7 @@ describe("concurrent worker workspace results", () => {
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
         turn: inputTurn,
         turnClaim,
-        localWorkspaceDir: root,
+        workspace: { kind: "local", path: root },
         runLocal: async () => ({ meta: { durationMs: 1 } }),
       }),
     ).rejects.toThrow("Skill resource cleanup failed");
@@ -136,7 +141,7 @@ describe("concurrent worker workspace results", () => {
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       turn: nextTurn,
       turnClaim: nextClaim,
-      localWorkspaceDir: root,
+      workspace: { kind: "local", path: root },
       runLocal: async () => {
         expect(await fs.readdir(remote)).toEqual([]);
         executed = true;
@@ -147,7 +152,8 @@ describe("concurrent worker workspace results", () => {
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
-  it.each([1, 50])(
+  // Two worktrees cover concurrent publication; the upload barrier orders stale retention.
+  it.each([1, 2])(
     "reconciles %i completed turns when an older retention snapshot arrives after upload",
     async (count) => {
       const repository = path.join(root, "repository");
@@ -218,6 +224,11 @@ describe("concurrent worker workspace results", () => {
         const identity = { sessionId, sessionKey: `agent:main:${sessionId}`, agentId: "main" };
         const transcriptTarget = { ...sessionTarget, ...identity };
         await upsertSessionEntryCore(transcriptTarget, { sessionId, updatedAt: Date.now() });
+        seedAttachedPlacementEnvironment(database, {
+          environmentId,
+          sessionId,
+          ownerEpoch: 1,
+        });
         let placement = placements.startDispatch(identity);
         for (const transition of [
           { from: "requested", to: "provisioning", patch: { environmentId } },
@@ -267,6 +278,9 @@ describe("concurrent worker workspace results", () => {
           stop: async () => {},
           quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
           reconcileWorkspace: async (request) => {
+            if (request.source.kind !== "local") {
+              throw new Error("expected a local workspace source");
+            }
             const uploaded = await node.exec(
               {
                 ...nodeIdentity,
@@ -275,6 +289,7 @@ describe("concurrent worker workspace results", () => {
                   direction: "upload",
                   token: "fixture-upload",
                   baseManifestRef: base.manifestRef,
+                  referenceManifestRef: base.manifestRef,
                 },
               },
               undefined,
@@ -319,7 +334,12 @@ describe("concurrent worker workspace results", () => {
             await verifyStable();
             return {
               ...(await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
-                request,
+                request: {
+                  ...request.source,
+                  localPath: request.source.path,
+                  remoteWorkspaceDir: request.remoteWorkspaceDir,
+                  baseManifestRef: request.baseManifestRef,
+                },
                 stagingRoot: payload,
                 currentManifestRef: current.manifestRef,
                 baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
@@ -331,7 +351,13 @@ describe("concurrent worker workspace results", () => {
             };
           },
         };
-        jobs.push({ placement, turnClaim, tunnel, localWorkspaceDir, transcriptTarget });
+        jobs.push({
+          placement,
+          turnClaim,
+          tunnel,
+          workspace: { kind: "local" as const, path: localWorkspaceDir },
+          transcriptTarget,
+        });
       }
       const outcomes = await Promise.allSettled(
         jobs.map((job) =>
@@ -345,7 +371,7 @@ describe("concurrent worker workspace results", () => {
       expect(outcomes.find((outcome) => outcome.status === "rejected")).toBeUndefined();
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       for (const job of jobs) {
-        expect(await fs.readFile(path.join(job.localWorkspaceDir, "result.bin"))).toEqual(bytes);
+        expect(await fs.readFile(path.join(job.workspace.path, "result.bin"))).toEqual(bytes);
         expect(placements.get(job.placement.sessionId)?.turnClaim).toBeNull();
       }
     },

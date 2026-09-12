@@ -384,7 +384,7 @@ describe("processDiscordMessage ack reactions", () => {
 
   it("falls back to plain ack when status reactions are disabled", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onReasoningStream?.({});
       return createNoQueuedDispatchResult();
     });
 
@@ -406,7 +406,7 @@ describe("processDiscordMessage ack reactions", () => {
   it("keeps one acknowledgement through reasoning, tools, compaction, silence, and success", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onReasoningStream?.({});
       await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);

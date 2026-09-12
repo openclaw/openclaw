@@ -1,6 +1,7 @@
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -8,9 +9,15 @@ import type { ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue.js";
+import type { DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+export type CompletedAgentAuthSelection = Pick<
+  FollowupRun["run"],
+  "authProfileId" | "authProfileIdSource"
+>;
 
 /** One attempted runtime fallback candidate and its failure reason. */
 export type RuntimeFallbackAttempt = {
@@ -39,6 +46,8 @@ export type AgentTurnInternalResult =
   | AbortedAgentTurn
   | {
       kind: "completed";
+      maintenanceAuthProfile?: CompletedAgentAuthSelection;
+      compactionRequestBudget?: CompactionRequestBudget;
       result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
@@ -48,8 +57,8 @@ export type AgentTurnInternalResult =
       autoCompactionCount: number;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
-      /** Payloads successfully sent directly during tool flush. */
-      directlySentBlockPayloads?: ReplyPayload[];
+      /** Delivery receipts for direct tool-flush payloads, including retry custody. */
+      directBlockDeliveries?: DirectBlockDelivery[];
       /** Prepared terminal failure, appended only after delivery evidence settles. */
       terminalFailurePayload?: ReplyPayload;
       postCompactionModelFailure?: true;
@@ -63,6 +72,8 @@ export type AgentTurnInternalResult =
 
 type SettledAgentTurnBase = {
   kind: "settled";
+  maintenanceAuthProfile?: CompletedAgentAuthSelection;
+  compactionRequestBudget?: CompactionRequestBudget;
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
@@ -70,7 +81,7 @@ type SettledAgentTurnBase = {
   compaction?: AgentTurnCompaction;
   didLogHeartbeatStrip: boolean;
   directlySentBlockKeys?: Set<string>;
-  directlySentBlockPayloads?: ReplyPayload[];
+  directBlockDeliveries?: DirectBlockDelivery[];
 };
 
 export type SettledAgentTurn = SettledAgentTurnBase &
@@ -104,6 +115,8 @@ export type AgentTurnExecutionResult = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = {
+  /** The admitted queued delivery owner settles every terminal outcome. */
+  completionSource?: "reply-dispatch";
   commandBody: string;
   transcriptCommandBody?: string;
   followupRun: FollowupRun;

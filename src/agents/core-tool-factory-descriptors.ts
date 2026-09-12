@@ -14,6 +14,7 @@ type CoreToolFactoryDescriptor = {
 const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "edit", family: "base-coding" },
   { name: "read", family: "base-coding" },
+  { name: "ls", family: "base-coding" },
   { name: "write", family: "base-coding" },
   { name: "apply_patch", family: "shell" },
   { name: "exec", family: "shell" },
@@ -32,6 +33,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "secrets", family: "openclaw" },
   { name: "dashboard", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
+  { name: "plugins", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
   { name: "github_identity_status", family: "openclaw" },
   { name: "github_publish", family: "openclaw" },

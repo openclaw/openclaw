@@ -1578,6 +1578,62 @@ describe("agentLoop tool termination", () => {
     expect(getSteeringMessages).toHaveBeenCalled();
   });
 
+  it("commits drained steering and settled tools before a host-requested model-step stop", async () => {
+    const steer = { role: "user" as const, content: "verify the new version", timestamp: 2 };
+    const queued: AgentMessage[] = [];
+    const requestMessages: Message[][] = [];
+    const execute = vi.fn(async () => {
+      queued.push(steer);
+      return { content: [{ type: "text" as const, text: "reload committed" }], details: {} };
+    });
+    let refresh = false;
+    const context: AgentContext = {
+      systemPrompt: "",
+      messages: [],
+      tools: [{ ...makeTool("reload", []), execute }],
+    };
+    const events: AgentEvent[] = [];
+    const result = await runAgentLoop(
+      [{ role: "user", content: "edit and reload", timestamp: 1 }],
+      context,
+      {
+        ...config,
+        getSteeringMessages: async () => queued.splice(0),
+        afterToolCall: async () => {
+          refresh = true;
+        },
+        prepareNextTurn: async () => (refresh ? { stop: true } : undefined),
+      },
+      (event) => {
+        events.push(event);
+      },
+      undefined,
+      createTurnSequenceStream(
+        [
+          [{ type: "toolCall", id: "reload-once", name: "reload", arguments: {} }],
+          [{ type: "text", text: "must not run on the old catalog" }],
+        ],
+        requestMessages,
+      ),
+    );
+
+    expect(requestMessages).toHaveLength(1);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.at(-1)).toBe(steer);
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "reload-once",
+        content: [{ type: "text", text: "reload committed" }],
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: "agent_end", messages: result });
+    expect(
+      events.filter((event) => event.type === "message_end" && event.message === steer),
+    ).toHaveLength(1);
+    expect(queued).toEqual([]);
+  });
+
   it("delivers steering admitted while the final follow-up drain is pending", async () => {
     const followUpDrainStarted = createDeferred();
     const releaseFollowUpDrain = createDeferred();
@@ -2663,6 +2719,73 @@ describe("agentLoop tool termination", () => {
         tainted ? { resultContentSource: "network" } : undefined,
       );
       expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
+    },
+  );
+
+  it.each(["execute", "prepare", "immediate", "after-call", "after-outcome"] as const)(
+    "preserves only operation-owned error provenance at %s",
+    async (phase) => {
+      const provenance = { source: "operation-effect-proof" };
+      const failure = attachInternalToolResultProvenance(
+        new Error("operation rejected"),
+        provenance,
+      );
+      const tool: AgentTool = {
+        ...makeTool("operation", []),
+        execute: async () => {
+          if (phase === "execute") {
+            throw failure;
+          }
+          return { content: [{ type: "text", text: "completed" }], details: {} };
+        },
+      };
+      if (phase === "prepare" || phase === "immediate") {
+        attachInternalToolExecutionPreparer(tool, async () => {
+          if (phase === "prepare") {
+            throw failure;
+          }
+          return { kind: "immediate", outcome: { kind: "error", error: failure }, dispose() {} };
+        });
+      }
+      const stream = agentLoop(
+        [{ role: "user", content: "perform operation", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          ...(phase === "after-call"
+            ? {
+                afterToolCall: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+          ...(phase === "after-outcome"
+            ? {
+                afterToolOutcome: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+        },
+        undefined,
+        createTurnSequenceStream([
+          [{ type: "toolCall", id: "operation-call", name: tool.name, arguments: {} }],
+          [{ type: "text", text: "recovered" }],
+        ]),
+      );
+      const events = await collectEvents(stream);
+      const end = events.find((event) => event.type === "tool_execution_end");
+      if (
+        end?.type !== "tool_execution_end" ||
+        typeof end.result !== "object" ||
+        end.result === null
+      ) {
+        throw new Error("Expected the operation's terminal result");
+      }
+      expect(end.isError).toBe(true);
+      expect(getInternalToolResultProvenance(end.result)).toBe(
+        phase === "after-call" || phase === "after-outcome" ? undefined : provenance,
+      );
     },
   );
 

@@ -405,6 +405,41 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         self.deleteSessionImpl = deleteSession
     }
 
+    /// The caller binds requests to its captured connection. Resolve targets at
+    /// invocation time because transport copies can share mutable agent routing.
+    public init(
+        sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
+        unreadAckContract: Bool?,
+        request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
+    {
+        self.init(
+            patchSession: { key, expectedID, expectedMarkedUnreadAt, label, category, color, pinned, archived, unread in
+                guard unread != false || unreadAckContract != nil else {
+                    throw OpenClawChatTransportSendError.notDispatched
+                }
+                let target = sessionTarget(key)
+                _ = try await request(OpenClawChatGatewayRequests.patchSession(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID,
+                    expectedSessionID: expectedID,
+                    label: label,
+                    category: category,
+                    color: color,
+                    pinned: pinned,
+                    archived: archived,
+                    unreadPatch: .routed(
+                        unread: unread,
+                        expectedMarkedUnreadAt: expectedMarkedUnreadAt,
+                        supportsReadContract: unreadAckContract == true)))
+            },
+            deleteSession: { key in
+                let target = sessionTarget(key)
+                _ = try await request(OpenClawChatGatewayRequests.deleteSession(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID))
+            })
+    }
+
     public func patchSession(
         key: String,
         expectedSessionID: String? = nil,
@@ -530,9 +565,19 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
     case notDispatched
 }
 
+public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
+    case ownerScopeUnavailable
+
+    public var errorDescription: String? {
+        OpenClawChatTransportUpgradeMessage.progressCardAgentScope
+    }
+}
+
 public enum OpenClawChatTransportUpgradeMessage {
-    public static let routingContract =
-        "Update the gateway before sending queued messages. This version requires safe delivery routing."
+    public static let progressCardAgentScope =
+        String(localized: "Update the gateway to load progress cards for this agent.")
+    public static let routingContract = String(
+        localized: "Update the gateway before sending queued messages. This version requires safe delivery routing.")
 }
 
 public enum OpenClawChatRunTerminalState: Sendable, Equatable {
@@ -647,13 +692,24 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
 public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
     public let choices: [OpenClawChatModelChoice]
     public let availabilityIsSessionScoped: Bool
+    public let refreshFailed: Bool
+
+    public var message: String? {
+        if !self.availabilityIsSessionScoped {
+            return String(
+                localized: "Update your Gateway to use session model choices. Slash commands are still available.")
+        }
+        return self.refreshFailed ? String(localized: "Model choices could not refresh. Reconnect and try again.") : nil
+    }
 
     public init(
         choices: [OpenClawChatModelChoice],
-        availabilityIsSessionScoped: Bool)
+        availabilityIsSessionScoped: Bool,
+        refreshFailed: Bool = false)
     {
         self.choices = choices
         self.availabilityIsSessionScoped = availabilityIsSessionScoped
+        self.refreshFailed = refreshFailed
     }
 }
 
@@ -750,9 +806,10 @@ public protocol OpenClawChatTransport: Sendable {
     /// gateway's advertised method set answers, nil when no catalog is known
     /// (disconnected, pre-catalog gateway, or non-gateway transport).
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
-    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
+    func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext?
     func loadModelCatalog(
         sessionKey: String,
         agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
@@ -883,7 +940,7 @@ extension OpenClawChatTransport {
         nil
     }
 
-    public func fetchProgressCard(sessionKey _: String) async throws -> ProgressCard? {
+    public func fetchProgressCard(sessionKey _: String, agentID _: String?) async throws -> ProgressCard? {
         nil
     }
 
@@ -1263,6 +1320,10 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "models.list not supported by this transport"])
+    }
+
+    public func acquireModelSignInContext(agentID _: String?) async -> OpenClawChatModelSignInContext? {
+        nil
     }
 
     public func loadModelCatalog(

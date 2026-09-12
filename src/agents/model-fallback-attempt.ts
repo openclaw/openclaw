@@ -25,7 +25,9 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  logModelFallbackChainStopped,
   logModelFallbackDecision,
+  type ModelFallbackChainStopReason,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type {
@@ -120,13 +122,18 @@ export type ModelFallbackResultClassification =
   | null
   | undefined;
 
+/** Internal fallback execution also accepts producer-owned terminal causes. */
+type ModelFallbackAttemptClassification =
+  | ModelFallbackResultClassification
+  | { stopReason: ModelFallbackChainStopReason };
+
 export type ModelFallbackResultClassifier<T> = (attempt: {
   result: T;
   provider: string;
   model: string;
   attempt: number;
   total: number;
-}) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
+}) => ModelFallbackAttemptClassification | Promise<ModelFallbackAttemptClassification>;
 
 export type ModelFallbackRunResult<T> = {
   outcome: "completed" | "exhausted";
@@ -192,6 +199,41 @@ function isAgentRunTerminalTimeout(err: unknown): boolean {
   return findAgentRunTerminalOutcome(err)?.status === "timeout";
 }
 
+/** Preserve stop precedence while naming the first matching condition. */
+function resolveChainStopReason(params: {
+  err: unknown;
+  harnessPreflight: boolean;
+  captureHarnessPreflight?: boolean;
+  callerSignalAborted: boolean;
+}): ModelFallbackChainStopReason | undefined {
+  const { err } = params;
+  if (isAgentRunTerminalTimeout(err)) {
+    return "agent_run_terminal_timeout";
+  }
+  if (isCommandLaneTaskTimeoutError(err)) {
+    return "command_lane_task_timeout";
+  }
+  if (params.harnessPreflight && !params.captureHarnessPreflight) {
+    return "agent_harness_preflight";
+  }
+  if (isSandboxProvisioningError(err)) {
+    return "sandbox_provisioning";
+  }
+  if (params.callerSignalAborted) {
+    return "caller_signal_aborted";
+  }
+  if (isAgentRunDirectAbortReason(err)) {
+    return "agent_run_direct_abort";
+  }
+  if (isAgentRunRestartAbortReason(err)) {
+    return "agent_run_restart_abort";
+  }
+  if (isTerminalAbortFromError(err)) {
+    return "terminal_abort_wrapper";
+  }
+  return undefined;
+}
+
 async function runFallbackCandidate<T>(params: {
   run: ModelFallbackRunFn<T>;
   provider: string;
@@ -214,16 +256,21 @@ async function runFallbackCandidate<T>(params: {
     return { ok: true, result };
   } catch (err) {
     const harnessPreflight = isAgentHarnessPreflightError(err);
-    if (
-      isAgentRunTerminalTimeout(err) ||
-      isCommandLaneTaskTimeoutError(err) ||
-      (harnessPreflight && !params.captureHarnessPreflight) ||
-      isSandboxProvisioningError(err) ||
-      params.abortSignal?.aborted ||
-      isAgentRunDirectAbortReason(err) ||
-      isAgentRunRestartAbortReason(err) ||
-      isTerminalAbortFromError(err)
-    ) {
+    const chainStopReason = resolveChainStopReason({
+      err,
+      harnessPreflight,
+      captureHarnessPreflight: params.captureHarnessPreflight,
+      callerSignalAborted: params.abortSignal?.aborted === true,
+    });
+    if (chainStopReason) {
+      logModelFallbackChainStopped({
+        reason: chainStopReason,
+        provider: params.provider,
+        model: params.model,
+        sessionId: params.attribution?.sessionId,
+        lane: params.attribution?.lane,
+        error: err,
+      });
       throw err;
     }
     // A harness-local failure can select another candidate only while the turn is live.
@@ -258,7 +305,7 @@ export async function runFallbackAttempt<T>(params: {
   attribution?: FailoverAttribution;
   abortSignal?: AbortSignal;
 }): Promise<
-  | { success: ModelFallbackRunResult<T> }
+  | { success: ModelFallbackRunResult<T>; stopped?: true }
   | {
       error: unknown;
       classifiedResult?: ModelFallbackClassifiedResult<T>;
@@ -295,7 +342,18 @@ export async function runFallbackAttempt<T>(params: {
     return { error: runResult.error };
   }
   if (!attemptError) {
+    const stopReason =
+      classification && "stopReason" in classification ? classification.stopReason : undefined;
+    if (stopReason && params.total > 1) {
+      logModelFallbackChainStopped({
+        reason: stopReason,
+        provider: params.provider,
+        model: params.model,
+        ...params.attribution,
+      });
+    }
     return {
+      ...(stopReason ? { stopped: true as const } : {}),
       success: {
         outcome: "completed",
         result: runResult.result,
@@ -334,10 +392,10 @@ export async function runFallbackAttempt<T>(params: {
 }
 
 function resolveResultClassificationError(
-  classification: ModelFallbackResultClassification,
+  classification: ModelFallbackAttemptClassification,
   params: { provider: string; model: string; attribution?: FailoverAttribution },
 ) {
-  if (!classification) {
+  if (!classification || "stopReason" in classification) {
     return null;
   }
   if ("error" in classification) {

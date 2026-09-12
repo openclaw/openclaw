@@ -88,7 +88,7 @@ on:
         default: ""
         type: string
       bypass_extended_stable_guard:
-        description: Testing only; relax the extended-stable patch and protected-main month policy on the canonical extended-stable branch
+        description: Testing only; relax the extended-stable patch and trailing-completed-month rule on the canonical extended-stable branch
         required: true
         default: false
         type: boolean

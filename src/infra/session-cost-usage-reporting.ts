@@ -3,11 +3,11 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import {
   isUsageCostRollupFresh,
   readUsageCostRollups,
@@ -49,7 +49,6 @@ export async function discoverAllSessions(params: {
   agentId: string;
   startMs?: number;
   endMs?: number;
-  includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
   const files = await listUsageCountedTranscriptStats(params.agentId, {
     minMtimeMs: params.startMs,
@@ -59,49 +58,12 @@ export async function discoverAllSessions(params: {
 
   for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
-    const { filePath, sourcePath: sessionFile, sessionId } = file;
+    const { sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
       continue;
     }
     const isPrimaryTranscript =
       file.kind === "sqlite" || isPrimarySessionTranscriptFileName(path.basename(sessionFile));
-
-    // Try to read first user message for label extraction
-    let firstUserMessage: string | undefined;
-    if (params.includeFirstUserMessage !== false) {
-      try {
-        for await (const parsed of readTranscriptRecords(filePath)) {
-          try {
-            const message = parsed.message as Record<string, unknown> | undefined;
-            if (message?.role === "user") {
-              const content = message.content;
-              if (typeof content === "string") {
-                firstUserMessage = truncateUtf16Safe(content, 100);
-              } else if (Array.isArray(content)) {
-                for (const block of content) {
-                  if (
-                    typeof block === "object" &&
-                    block &&
-                    (block as Record<string, unknown>).type === "text"
-                  ) {
-                    const text = (block as Record<string, unknown>).text;
-                    if (typeof text === "string") {
-                      firstUserMessage = truncateUtf16Safe(text, 100);
-                    }
-                    break;
-                  }
-                }
-              }
-              break; // Found first user message
-            }
-          } catch {
-            // Skip malformed lines
-          }
-        }
-      } catch {
-        // Ignore read errors
-      }
-    }
 
     const existing = discovered.get(sessionId);
     const existingIsPrimary = existing
@@ -117,19 +79,14 @@ export async function discoverAllSessions(params: {
         sessionId,
         sessionFile,
         mtime: file.mtimeMs,
-        firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
-      continue;
-    }
-
-    if (!existing.firstUserMessage && firstUserMessage) {
-      existing.firstUserMessage = firstUserMessage;
-      discovered.set(sessionId, existing);
     }
   }
 
   // Sort by mtime descending (most recent first)
-  return Array.from(discovered.values()).toSorted((a, b) => b.mtime - a.mtime);
+  const sessions = Array.from(discovered.values());
+  sessions.sort((a, b) => b.mtime - a.mtime);
+  return sessions;
 }
 
 export async function loadSessionCostSummary(params: {
@@ -219,7 +176,7 @@ export async function loadSessionUsageTimeSeries(params: {
     }
   }
 
-  const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
+  let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
@@ -243,65 +200,51 @@ export async function loadSessionUsageTimeSeries(params: {
     });
   }
 
-  // Sort by timestamp
+  points.sort((a, b) => a.timestamp - b.timestamp);
+
+  const maxPoints = params.maxPoints ?? 100;
+  if (points.length > maxPoints) {
+    const step = Math.ceil(points.length / maxPoints);
+    const downsampled: typeof points = [];
+    let bucket: (typeof points)[number] | undefined;
+    let bucketSize = 0;
+    for (const point of points) {
+      if (!bucket || bucketSize === step) {
+        bucket = {
+          timestamp: point.timestamp,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: 0,
+        };
+        downsampled.push(bucket);
+        bucketSize = 0;
+      }
+      bucket.timestamp = point.timestamp;
+      bucket.input += point.input;
+      bucket.output += point.output;
+      bucket.cacheRead += point.cacheRead;
+      bucket.cacheWrite += point.cacheWrite;
+      bucket.totalTokens += point.totalTokens;
+      bucket.cost += point.cost;
+      bucketSize += 1;
+    }
+    points = downsampled;
+  }
+
+  // Accumulate after sampling to preserve the bucket-based floating-point sums.
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
-  const sortedPoints: SessionUsageTimePoint[] = points
-    .toSorted((a, b) => a.timestamp - b.timestamp)
-    .map((point) => {
+  return {
+    sessionId: params.sessionId,
+    points: points.map((point) => {
       cumulativeTokens += point.totalTokens;
       cumulativeCost += point.cost;
       return Object.assign(point, { cumulativeTokens, cumulativeCost });
-    });
-
-  // Optionally downsample if too many points
-  const maxPoints = params.maxPoints ?? 100;
-  if (sortedPoints.length > maxPoints) {
-    const step = Math.ceil(sortedPoints.length / maxPoints);
-    const downsampled: SessionUsageTimePoint[] = [];
-    let downsampledCumulativeTokens = 0;
-    let downsampledCumulativeCost = 0;
-    for (let i = 0; i < sortedPoints.length; i += step) {
-      const bucket = sortedPoints.slice(i, i + step);
-      const bucketLast = bucket[bucket.length - 1];
-      if (!bucketLast) {
-        continue;
-      }
-
-      let bucketInput = 0;
-      let bucketOutput = 0;
-      let bucketCacheRead = 0;
-      let bucketCacheWrite = 0;
-      let bucketTotalTokens = 0;
-      let bucketCost = 0;
-      for (const point of bucket) {
-        bucketInput += point.input;
-        bucketOutput += point.output;
-        bucketCacheRead += point.cacheRead;
-        bucketCacheWrite += point.cacheWrite;
-        bucketTotalTokens += point.totalTokens;
-        bucketCost += point.cost;
-      }
-
-      downsampledCumulativeTokens += bucketTotalTokens;
-      downsampledCumulativeCost += bucketCost;
-
-      downsampled.push({
-        timestamp: bucketLast.timestamp,
-        input: bucketInput,
-        output: bucketOutput,
-        cacheRead: bucketCacheRead,
-        cacheWrite: bucketCacheWrite,
-        totalTokens: bucketTotalTokens,
-        cost: bucketCost,
-        cumulativeTokens: downsampledCumulativeTokens,
-        cumulativeCost: downsampledCumulativeCost,
-      });
-    }
-    return { sessionId: params.sessionId, points: downsampled };
-  }
-
-  return { sessionId: params.sessionId, points: sortedPoints };
+    }),
+  };
 }
 
 export async function loadSessionLogs(params: {
@@ -402,14 +345,11 @@ export async function loadSessionLogs(params: {
         }
       }
 
-      let content = contentParts.join("\n").trim();
-      if (!content) {
-        continue;
-      }
-      content = stripInboundMetadata(content);
-      if (role === "user") {
-        content = stripMessageIdHints(stripEnvelope(content)).trim();
-      }
+      const rawText = contentParts.join("\n");
+      let content =
+        role === "user"
+          ? stripUserEnvelopeForDisplay(rawText).trim()
+          : stripInboundMetadata(rawText.trim());
       if (!content) {
         continue;
       }

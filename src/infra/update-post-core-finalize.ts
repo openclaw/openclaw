@@ -13,12 +13,15 @@
 // binary's hidden `openclaw update finalize` entrypoint — the designed
 // "external core runtime change" finalizer that runs doctor plus
 // `updatePluginsAfterCoreUpdate` (which calls
-// `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true, disableOnFailure: true })`
+// `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true })`
 // and `runPostCorePluginConvergence`). Finalization never restarts, so the RPC
 // handler keeps ownership of the gateway restart.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -44,6 +47,21 @@ import type { UpdateRunResult } from "./update-runner.js";
 // above it rather than reusing the per-step value as the whole-process kill.
 const FINALIZE_PROCESS_TIMEOUT_FLOOR_MS = 30 * 60_000;
 const FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER = 6;
+
+export async function readPreUpdateConfigForPostCoreFinalize(): Promise<
+  PreUpdateConfigRestoreInput | undefined
+> {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  if (!snapshot.valid) {
+    return undefined;
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    authoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig) // SAFETY: the valid snapshot supplies a parsed config object.
+      : snapshot.sourceConfig,
+  };
+}
 
 // Strip the running gateway's service identity from the finalizer child so it is
 // not mistaken for the managed service process (matches the CLI post-core spawn).
@@ -230,11 +248,8 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   }
 }
 
-// Fold a finalize failure into the update result so the RPC handler's existing
-// `result.status === "ok"` restart gate skips the restart: restarting on the new
-// core after convergence failed would load the stale plugins we just failed to
-// reconcile. Mirrors the CLI, which exits non-zero before restarting on
-// post-core convergence failure.
+// Required core/config finalization failures keep the RPC's restart gate closed.
+// Individual plugin problems exit successfully and remain separate notices.
 export function foldPostCoreFinalizeIntoResult(
   result: UpdateRunResult,
   outcome: PostCoreFinalizeOutcome,

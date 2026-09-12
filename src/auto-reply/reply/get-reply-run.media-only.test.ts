@@ -6,6 +6,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
+  enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -15,6 +16,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import {
   loadAgentRunnerRuntime,
@@ -25,9 +27,11 @@ import { runPreparedReply } from "./get-reply-run.js";
 import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
 import {
+  buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, createReplyOperation } from "./reply-run-registry.js";
 import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
@@ -39,7 +43,7 @@ import {
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
-import { withReplySystemEventSessionKey } from "./system-event-session-key.js";
+import { withReplySystemEventContext } from "./system-event-session-key.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -62,7 +66,7 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
 }));
 
 // Harness selection and built-in execution are owned by their focused suites. These tests keep
-// the real visible-reply policy resolver while supplying its default OpenClaw harness leaf.
+// the real visible-reply policy resolver while supplying its default delivery metadata.
 const preparedReplyMockState = vi.hoisted(() => ({
   unexpectedCalls: [] as string[],
 }));
@@ -117,7 +121,7 @@ vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
   resolveSubagentCapabilityStore: vi.fn().mockReturnValue(undefined),
 }));
 
-const selectAgentHarnessMock = vi.hoisted(() =>
+const resolveAgentHarnessDeliveryDefaultsMock = vi.hoisted(() =>
   vi.fn(
     (params: {
       provider: string;
@@ -133,14 +137,14 @@ const selectAgentHarnessMock = vi.hoisted(() =>
         params.agentHarnessId ||
         params.agentHarnessRuntimeOverride
       ) {
-        preparedReplyMockState.unexpectedCalls.push("selectAgentHarness");
+        preparedReplyMockState.unexpectedCalls.push("resolveAgentHarnessDeliveryDefaults");
       }
-      return { id: "openclaw", deliveryDefaults: {} };
+      return {};
     },
   ),
 );
-vi.mock("../../agents/harness/selection.js", () => ({
-  selectAgentHarness: selectAgentHarnessMock,
+vi.mock("../../agents/harness/selection-decision.js", () => ({
+  resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
 }));
 
 vi.mock("../../agents/model-selection.js", () => ({
@@ -441,6 +445,15 @@ function baseParams(
   return {
     ...defaults,
     ...overrides,
+    conversation:
+      overrides.conversation ??
+      prepareReplyConversation({
+        ctx: sessionCtx,
+        sessionEntry:
+          overrides.sessionStore?.[overrides.sessionKey ?? defaults.sessionKey] ??
+          overrides.sessionEntry,
+        isHeartbeat: overrides.opts?.isHeartbeat,
+      }),
     ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
     sessionCtx: {
       ...sessionCtx,
@@ -537,7 +550,7 @@ describe("runPreparedReply media-only handling", () => {
       expect(ensureSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceDir: "/tmp/agent-workspace",
-          executionSkillsDir: "/tmp/project/packages/app/skills",
+          executionWorkspaceDir: "/tmp/project/packages/app",
         }),
       );
     } finally {
@@ -886,6 +899,29 @@ describe("runPreparedReply media-only handling", () => {
     expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
   });
 
+  it.each([
+    ["telegram", "direct", "automatic"],
+    ["telegram", "group", "automatic"],
+    ["slack", "direct", "automatic"],
+    ["slack", "group", "automatic"],
+    ["telegram", "direct", "message_tool_only"],
+    ["telegram", "group", "message_tool_only"],
+    ["slack", "direct", "message_tool_only"],
+    ["slack", "group", "message_tool_only"],
+  ] as const)("allows a silent heartbeat for %s %s %s", async (channel, chatType, deliveryMode) => {
+    await runPrepared({
+      opts: { isHeartbeat: true, sourceReplyDeliveryMode: deliveryMode },
+      ctx: { ...createInboundTurn("Heartbeat check-in", channel, chatType), WasMentioned: true },
+      sessionCtx: createSessionTurn("Heartbeat check-in", channel, chatType),
+    });
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run).toMatchObject({
+      allowEmptyAssistantReplyAsSilent: true,
+      terminalReplyExpectation: "optional",
+    });
+  });
+
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
     await runPrepared({
       ctx: {
@@ -1155,9 +1191,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call.followupRun.prompt).toContain("Earlier message in this thread");
-    expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread history - for context]");
+    expect(context?.text).toContain("Earlier message in this thread");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread history - for context]\nEarlier message in this thread",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("Earlier message in this thread");
   });
 
   it("carries source delivery provenance into the queue-owned run", async () => {
@@ -1238,6 +1280,7 @@ describe("runPreparedReply media-only handling", () => {
       OriginatingTo: `${channel}-target`,
       ChatType: "direct",
     } as never;
+    params.conversation = prepareReplyConversation({ ctx: params.sessionCtx });
     params.command = {
       ...(params.command as Record<string, unknown>),
       surface: channel,
@@ -1297,8 +1340,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call.followupRun.prompt).toContain("Earlier message in this thread");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread history - for context]");
+    expect(context?.text).toContain("Earlier message in this thread");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread history - for context]\nEarlier message in this thread",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("Earlier message in this thread");
   });
 
   it("falls back to thread starter context on follow-up turns when history is absent", async () => {
@@ -1326,8 +1376,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread starter - for context]");
-    expect(call.followupRun.prompt).toContain("starter message");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread starter - for context]");
+    expect(context?.text).toContain("starter message");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread starter - for context]\nstarter message",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("starter message");
   });
 
   it("prefers thread history over thread starter on follow-up turns", async () => {
@@ -1355,8 +1412,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread history - for context]");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread history - for context]\nEarlier message in this thread",
+    });
+    expect(context?.text).not.toContain("[Thread starter - for context]");
+    expect(JSON.stringify(context?.fragments)).not.toContain("[Thread starter - for context]");
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("Earlier message in this thread");
   });
 
   it("does not duplicate thread starter text with a plain-text prelude", async () => {
@@ -1480,15 +1546,16 @@ describe("runPreparedReply media-only handling", () => {
         allowTextCommands: enabled,
       });
       params.command = { ...params.command, isAuthorizedSender: authorized };
+      const inbound = finalizeInboundContext(params.ctx);
       const routed = resolveReplyDirectiveRouting({
-        commandText: body,
-        agentText: body,
+        commandText: inbound.commandText,
+        agentText: inbound.agentText,
         modelAliases: [],
         canInterpretTextDirectives: authorized && enabled,
         isAuthorizedSender: authorized,
         isGroup: false,
         wasMentioned: false,
-        ctx: finalizeInboundContext(params.ctx),
+        ctx: inbound,
         cfg: params.cfg,
         agentId: params.agentId,
         resetTriggered: false,
@@ -1497,7 +1564,7 @@ describe("runPreparedReply media-only handling", () => {
       params.sessionCtx.agentText = routed.cleanedBody;
       await runPreparedReply(params);
 
-      const expected = authorized && enabled ? code : body;
+      const expected = (authorized && enabled ? code : body).replaceAll("\r\n", "\n");
       const call = requireRunReplyAgentCall();
       expect(call.commandBody).toBe(expected);
       expect(call.followupRun.prompt).toBe(expected);
@@ -2234,6 +2301,68 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it.each([false, true])(
+    "keeps duplicate-path image positions after admission wait=%s",
+    async (wait) => {
+      const sharedPath = "/tmp/shared-media-index.png";
+      const sessionId = "prepared-media-index-session";
+      const queueSettings = await import("./queue/settings-runtime.js");
+      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+      const previousRun = wait
+        ? createReplyOperation({ sessionId, sessionKey: "session-key", resetTriggered: false })
+        : undefined;
+      previousRun?.setPhase("running");
+      resolveCurrentTurnImagesMock.mockResolvedValueOnce({
+        images: [{ type: "image", data: "c3ludGhldGlj", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        imageSourceIndexes: [1],
+        unresolvedSourceIndexes: [2],
+      });
+      const running = runPrepared({
+        isNewSession: false,
+        sessionId,
+        ctx: {
+          ...createInboundTurn("inspect both images", "webchat", "direct"),
+          media: [
+            { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
+            { path: sharedPath, contentType: "image/png" },
+            { path: sharedPath, contentType: "image/png" },
+          ],
+        },
+        sessionCtx: createSessionTurn("inspect both images", "webchat", "direct"),
+      });
+      try {
+        if (previousRun) {
+          await vi.waitFor(() => expect(previousRun.abortSignal.aborted).toBe(true));
+          previousRun.complete();
+        }
+        await expect(running).resolves.toEqual({ text: "ok" });
+      } finally {
+        previousRun?.complete();
+        await running.catch(() => undefined);
+      }
+
+      const { followupRun } = requireRunReplyAgentCall();
+      expect(followupRun.media).toHaveLength(2);
+      expect(followupRun.media?.[0]).not.toHaveProperty("hydrationSuppressed");
+      expect(followupRun).toMatchObject({
+        media: [{ path: sharedPath }, { path: sharedPath, hydrationSuppressed: true }],
+        mediaImageLayout: {
+          slots: [{ kind: "inline", factIndex: 0 }],
+          suppressedFactIndexes: [1],
+        },
+      });
+      expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+        __openclaw: {
+          mediaImageLayout: {
+            slots: [{ kind: "inline", factIndex: 1 }],
+            suppressedFactIndexes: [2],
+          },
+        },
+      });
+    },
+  );
+
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPrepared({
       ctx: {
@@ -2306,6 +2435,72 @@ describe("runPreparedReply media-only handling", () => {
     ).rejects.toThrow("auth failed");
 
     expect(getActiveReplyRunCount()).toBe(activeBefore);
+  });
+
+  it.each([false, true])(
+    "validates the configured heartbeat profile before dispatch (fast: %s)",
+    async (fast) => {
+      const { resolveSessionAuthSelection } =
+        await import("../../agents/auth-profiles/session-override.js");
+      vi.mocked(shouldUseReplyFastTestRuntime).mockReturnValueOnce(fast);
+      const sessionEntry: SessionEntry = {
+        sessionId: "heartbeat-profile-session",
+        updatedAt: 1,
+        authProfileOverride: "openai:subscription",
+        authProfileOverrideSource: "auto",
+      };
+      vi.mocked(resolveSessionAuthSelection).mockImplementationOnce(
+        async ({ configuredProfileId, sessionEntry: selectedSession }) => {
+          if (!configuredProfileId) {
+            return undefined;
+          }
+          if (selectedSession) {
+            selectedSession.authProfileOverride = configuredProfileId;
+          }
+          return { profileId: configuredProfileId, source: "user", routeRequirement: "api-key" };
+        },
+      );
+      const params = {
+        ...baseParams({
+          provider: "openai",
+          model: "gpt-5.5",
+          opts: { isHeartbeat: true },
+          sessionEntry,
+          sessionStore: { "session-key": sessionEntry },
+        }),
+        configuredProfileId: "openai:metered",
+      };
+      await runPreparedReply(params);
+      expect(resolveSessionAuthSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          configuredProfileId: "openai:metered",
+        }),
+      );
+      expect(requireRunReplyAgentCall().followupRun.run).toMatchObject({
+        authProfileId: "openai:metered",
+        authProfileIdSource: "user",
+      });
+      expect(sessionEntry.authProfileOverride).toBe("openai:subscription");
+    },
+  );
+
+  it("does not bypass heartbeat profile rejection on the fast reply path", async () => {
+    const { resolveSessionAuthSelection } =
+      await import("../../agents/auth-profiles/session-override.js");
+    vi.mocked(shouldUseReplyFastTestRuntime).mockReturnValueOnce(true);
+    vi.mocked(resolveSessionAuthSelection).mockRejectedValueOnce(
+      new Error("Auth profile is not configured for openai."),
+    );
+    const params = {
+      ...baseParams({ provider: "openai", model: "gpt-5.5", opts: { isHeartbeat: true } }),
+      configuredProfileId: "anthropic:other",
+    };
+    await expect(runPreparedReply(params)).rejects.toThrow(
+      "Auth profile is not configured for openai.",
+    );
+    expect(runReplyAgent).not.toHaveBeenCalled();
   });
   it("waits for the previous active run to clear before registering a new reply operation", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
@@ -2684,7 +2879,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(true);
     expect(call?.isActive).toBe(true);
-    expect(call?.followupRun.run.terminalReplyExpectation).toBeUndefined();
+    expect(call?.followupRun.run.terminalReplyExpectation).toBe("optional");
   });
 
   it.each([
@@ -3016,6 +3211,9 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthSelection)).toHaveBeenCalledTimes(1);
+    expect(resolveSessionAuthSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "default" }),
+    );
   });
 
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
@@ -3148,7 +3346,7 @@ describe("runPreparedReply media-only handling", () => {
       isNewSession: false,
       sessionId: "session-before-wait",
       sessionKey: dispatchSessionKey,
-      opts: withReplySystemEventSessionKey({}, routeSessionKey),
+      opts: withReplySystemEventContext({}, { sessionKey: routeSessionKey }),
       provider: "",
       model: "",
       resolvedThinkLevel: "off",
@@ -3212,9 +3410,15 @@ describe("runPreparedReply media-only handling", () => {
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
-    expect(call?.commandBody).toContain("System event after active run");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System event after active run");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: expect.stringContaining("System event after active run"),
+    });
+    expect(call.commandBody).toBe("[User sent media without caption]");
     expect(call?.transcriptCommandBody).not.toContain("System event after active run");
-    expect(call?.followupRun.prompt).toContain("System event after active run");
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
     expect(call?.followupRun.transcriptPrompt).not.toContain("System event after active run");
     expect(peekSystemEventEntries("session-key")).toStrictEqual([]);
   });
@@ -3655,9 +3859,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
-  it.each(["heartbeat", "cron", "exec"] as const)(
-    "keeps %s heartbeat metadata out of the model prompt",
-    async (source) => {
+  it.each([
+    ["heartbeat", undefined, "heartbeat", "[OpenClaw heartbeat poll]"],
+    ["cron", undefined, "cron", "[OpenClaw cron wake]"],
+    ["exec", undefined, "exec", "[OpenClaw exec completion]"],
+    ["heartbeat", "background-task", "background-task", "[OpenClaw session event]"],
+    ["heartbeat", "exec-event", "exec-event", "[OpenClaw exec completion]"],
+  ] as const)(
+    "keeps %s wake metadata private and preserves %s event provenance",
+    async (source, suppliedSourceTool, expectedSourceTool, transcriptPrompt) => {
       const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
       const syntheticConversationInfo =
         'Conversation info:\n```json\n{"chat_id":"discord:channel-123"}\n```';
@@ -3670,6 +3880,14 @@ describe("runPreparedReply media-only handling", () => {
           RawBody: heartbeatPrompt,
           CommandBody: heartbeatPrompt,
           InternalTurnSource: source,
+          ...(suppliedSourceTool
+            ? {
+                InputProvenance: {
+                  kind: "internal_system" as const,
+                  sourceTool: suppliedSourceTool,
+                },
+              }
+            : {}),
           ChatType: "direct",
           OriginatingChannel: "discord",
           OriginatingTo: "discord:channel-123",
@@ -3693,10 +3911,10 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingChannel: "discord",
         OriginatingTo: "discord:channel-123",
       });
-      expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
-      expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+      expect(call?.transcriptCommandBody).toBe(transcriptPrompt);
+      expect(call?.followupRun.transcriptPrompt).toBe(transcriptPrompt);
       expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
-        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        provenance: { kind: "internal_system", sourceTool: expectedSourceTool },
       });
     },
   );
@@ -3727,65 +3945,231 @@ describe("runPreparedReply media-only handling", () => {
     expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
   });
 
-  it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {
-    vi.mocked(buildGroupChatContext).mockImplementation(({ sessionCtx }) =>
-      [`group`, sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
-    );
-
-    await runPrepared({
-      opts: { isHeartbeat: true },
-      isNewSession: false,
-      systemSent: true,
-      ctx: {
-        ...createInboundBody("scheduled wake"),
-        InternalTurnSource: "cron",
-        SessionKey: "agent:main:discord:guild-1:channel-1",
-      },
-      sessionCtx: {
-        ...createSessionBody("scheduled wake"),
-        InternalTurnSource: "cron",
-      },
-      sessionEntry: {
-        sessionId: "session-1",
+  it.each([
+    {
+      name: "matching always-on room",
+      storedActivation: "always",
+      defaultActivation: "mention",
+      baseChannel: "discord",
+      baseTo: "channel-1",
+      liveChannel: "discord",
+      liveTo: "channel-1",
+      storedThreadId: undefined,
+      liveAccountId: "work",
+      liveThreadId: undefined,
+      expectedGroupChannel: "#ops",
+      usesBaseSession: true,
+    },
+    {
+      name: "matching mention-only room",
+      storedActivation: "mention",
+      defaultActivation: "always",
+      baseChannel: "discord",
+      baseTo: "channel-1",
+      liveChannel: "discord",
+      liveTo: "channel-1",
+      storedThreadId: undefined,
+      liveAccountId: "work",
+      liveThreadId: undefined,
+      expectedGroupChannel: "#ops",
+      usesBaseSession: true,
+    },
+    {
+      name: "different explicit target",
+      storedActivation: "always",
+      defaultActivation: "mention",
+      baseChannel: "discord",
+      baseTo: "channel-1",
+      liveChannel: "slack",
+      liveTo: "C999",
+      storedThreadId: undefined,
+      liveAccountId: "work",
+      liveThreadId: undefined,
+      expectedGroupChannel: undefined,
+      usesBaseSession: false,
+    },
+    {
+      name: "matching Telegram topic",
+      storedActivation: "always",
+      defaultActivation: "mention",
+      baseChannel: "telegram",
+      baseTo: "-100111",
+      liveChannel: "telegram",
+      liveTo: "-100111",
+      storedThreadId: 42,
+      liveAccountId: "work",
+      liveThreadId: 42,
+      expectedGroupChannel: "#ops",
+      usesBaseSession: true,
+    },
+    {
+      name: "different Telegram topic",
+      storedActivation: "always",
+      defaultActivation: "mention",
+      baseChannel: "telegram",
+      baseTo: "-100111",
+      liveChannel: "telegram",
+      liveTo: "-100111",
+      storedThreadId: 42,
+      liveAccountId: "work",
+      liveThreadId: 43,
+      expectedGroupChannel: undefined,
+      usesBaseSession: false,
+    },
+    {
+      name: "missing explicit account",
+      storedActivation: "always",
+      defaultActivation: "mention",
+      baseChannel: "discord",
+      baseTo: "channel-1",
+      liveChannel: "discord",
+      liveTo: "channel-1",
+      storedThreadId: undefined,
+      liveThreadId: undefined,
+      liveAccountId: undefined,
+      expectedGroupChannel: undefined,
+      usesBaseSession: false,
+    },
+    {
+      name: "missing explicit thread",
+      storedActivation: "always",
+      defaultActivation: "mention",
+      baseChannel: "telegram",
+      baseTo: "-100111",
+      liveChannel: "telegram",
+      liveTo: "-100111",
+      storedThreadId: 42,
+      liveThreadId: undefined,
+      liveAccountId: "work",
+      expectedGroupChannel: undefined,
+      usesBaseSession: false,
+    },
+  ] as const)(
+    "uses the live route and matching persisted identity for isolated system-event prompts: $name",
+    async ({
+      storedActivation,
+      defaultActivation,
+      baseChannel,
+      baseTo,
+      liveChannel,
+      liveTo,
+      storedThreadId,
+      liveThreadId,
+      liveAccountId,
+      expectedGroupChannel,
+      usesBaseSession,
+    }) => {
+      vi.mocked(buildGroupChatContext).mockImplementation(({ sessionCtx }) =>
+        [`group`, sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
+      );
+      const baseSessionKey = `agent:main:${baseChannel}:guild-1:${baseTo}`;
+      const baseSessionEntry: SessionEntry = {
+        sessionId: "base-session",
         updatedAt: 1,
-        systemSent: true,
+        groupActivation: storedActivation,
         chatType: "channel",
         groupId: "guild-1",
         groupChannel: "#ops",
         delivery: normalizeSessionDeliveryState({
-          context: { channel: "discord", to: "channel-1" },
+          context: {
+            channel: baseChannel,
+            to: baseTo,
+            accountId: "work",
+            threadId: storedThreadId,
+          },
           origin: {
-            provider: "discord",
-            surface: "discord",
+            provider: baseChannel,
+            surface: baseChannel,
             chatType: "channel",
-            to: "channel-1",
+            to: baseTo,
+            accountId: "work",
           },
         }),
-      },
-    });
-
-    const call = requireLastRunReplyAgentCall();
-    expect(buildGroupChatContext).toHaveBeenCalledTimes(2);
-    const groupContextParams = requireMockCallArg(
-      vi.mocked(buildGroupChatContext),
-      "group chat context",
-    ) as {
-      sessionCtx?: {
-        Provider?: string;
-        Surface?: string;
-        ChatType?: string;
-        GroupChannel?: string;
       };
-    };
-    expect(groupContextParams?.sessionCtx?.Provider).toBe("discord");
-    expect(groupContextParams?.sessionCtx?.Surface).toBe("discord");
-    expect(groupContextParams?.sessionCtx?.ChatType).toBe("channel");
-    expect(groupContextParams?.sessionCtx?.GroupChannel).toBe("#ops");
-    expect(call?.followupRun.run.chatType).toBe("channel");
-    expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
-    expect(call?.followupRun.originatingChannel).toBe("discord");
-    expect(call?.followupRun.originatingTo).toBe("channel-1");
-  });
+      const isolatedSessionEntry: SessionEntry = {
+        sessionId: "isolated-session",
+        updatedAt: 1,
+        systemSent: true,
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      };
+
+      const conversation = prepareReplyConversation({
+        ctx: {
+          OriginatingChannel: liveChannel,
+          OriginatingTo: liveTo,
+          MessageThreadId: liveThreadId,
+          AccountId: liveAccountId,
+          ChatType: "channel",
+          InternalTurnSource: "cron",
+        },
+        sessionEntry: baseSessionEntry,
+      });
+      await runPrepared({
+        conversation,
+        opts: { isHeartbeat: true },
+        defaultActivation,
+        isNewSession: false,
+        systemSent: true,
+        sessionStore: { [baseSessionKey]: baseSessionEntry },
+        ctx: {
+          ...createInboundBody("scheduled wake"),
+          OriginatingChannel: liveChannel,
+          OriginatingTo: liveTo,
+          MessageThreadId: liveThreadId,
+          AccountId: liveAccountId,
+          ChatType: "channel",
+          InternalTurnSource: "cron",
+          SessionKey: `${baseSessionKey}:heartbeat`,
+        },
+        sessionCtx: {
+          ...createSessionBody("scheduled wake"),
+          OriginatingChannel: liveChannel,
+          OriginatingTo: liveTo,
+          MessageThreadId: liveThreadId,
+          AccountId: liveAccountId,
+          ChatType: "channel",
+          InternalTurnSource: "cron",
+        },
+        sessionEntry: isolatedSessionEntry,
+      });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(buildGroupChatContext).toHaveBeenCalledTimes(2);
+      const groupContextParams = requireMockCallArg(
+        vi.mocked(buildGroupChatContext),
+        "group chat context",
+      ) as {
+        sessionCtx?: {
+          Provider?: string;
+          Surface?: string;
+          ChatType?: string;
+          GroupChannel?: string;
+        };
+      };
+      expect(groupContextParams?.sessionCtx?.Provider).toBe(liveChannel);
+      expect(groupContextParams?.sessionCtx?.Surface).toBe(liveChannel);
+      expect(groupContextParams?.sessionCtx?.ChatType).toBe("channel");
+      expect(groupContextParams?.sessionCtx?.GroupChannel).toBe(expectedGroupChannel);
+      expect(buildGroupIntro).toHaveBeenCalledWith({
+        activation: usesBaseSession ? storedActivation : undefined,
+        defaultActivation,
+      });
+      expect(
+        requireMockCallArg(vi.mocked(buildInboundMetaSystemPrompt), "inbound metadata"),
+      ).toMatchObject({
+        Provider: liveChannel,
+        Surface: liveChannel,
+        ChatType: "channel",
+        AccountId: liveAccountId,
+      });
+      expect(call?.followupRun.run.chatType).toBe("channel");
+      expect(call?.followupRun.run.extraSystemPromptStatic).toBe(
+        ["group", liveChannel, "channel", expectedGroupChannel].join(":"),
+      );
+      expect(call?.followupRun.originatingChannel).toBe(liveChannel);
+      expect(call?.followupRun.originatingTo).toBe(liveTo);
+    },
+  );
 
   it.each([
     {
@@ -3968,7 +4352,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("resolves origin-less sessions as internal for synthetic stable facts", async () => {
     vi.mocked(buildDirectChatContext).mockReturnValue("direct-context");
-    selectAgentHarnessMock.mockClear();
+    resolveAgentHarnessDeliveryDefaultsMock.mockClear();
     // An entry with no persisted delivery origin has only ever been driven
     // internally; its wake source must not leak into the
     // stable context as a non-internal surface or the fact diverges from
@@ -4001,7 +4385,7 @@ describe("runPreparedReply media-only handling", () => {
     const run = requireRunReplyAgentCall(0).followupRun.run;
     expect(run.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
     expect(
-      selectAgentHarnessMock.mock.calls.map(([params]) => ({
+      resolveAgentHarnessDeliveryDefaultsMock.mock.calls.map(([params]) => ({
         provider: params.provider,
         modelId: params.modelId,
       })),
@@ -4418,12 +4802,16 @@ describe("runPreparedReply media-only handling", () => {
         SessionKey: "agent:main:slack:direct:U1",
         OriginatingChannel: "slack",
         OriginatingTo: "user:U1",
+        AccountId: "work",
+        ChatType: "direct",
       },
       sessionCtx: {
         ...createSessionBody("scheduled wake"),
         InternalTurnSource: "cron",
         OriginatingChannel: "slack",
         OriginatingTo: "user:U1",
+        AccountId: "work",
+        ChatType: "direct",
       },
       sessionEntry: {
         sessionId: "session-1",
@@ -4456,6 +4844,50 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.agentAccountId).toBe("work");
     expect(call?.followupRun.run.chatType).toBe("direct");
   });
+
+  it.each(["heartbeat", "cron", "exec"] as const)(
+    "keeps cross-channel %s reply policy independent of remembered chat type",
+    async (source) => {
+      for (const liveChatType of [undefined, "direct"] as const) {
+        vi.mocked(runReplyAgent).mockClear();
+        const route = {
+          InternalTurnSource: source,
+          OriginatingChannel: "slack" as const,
+          OriginatingTo: "user:U1",
+          ChatType: liveChatType,
+        };
+        await runPrepared({
+          cfg: {
+            session: {},
+            channels: {
+              slack: {
+                replyToMode: "all",
+                replyToModeByChatType: { channel: "off", direct: "first" },
+              },
+            },
+            agents: { defaults: {} },
+          },
+          opts: { isHeartbeat: true },
+          ctx: { ...createInboundBody("scheduled wake"), ...route },
+          sessionCtx: { ...createSessionBody("scheduled wake"), ...route },
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: 1,
+            chatType: "channel",
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "discord", to: "channel:remembered" },
+            }),
+          },
+        });
+
+        const call = requireRunReplyAgentCall();
+        expect(call.followupRun.originatingChannel).toBe("slack");
+        expect(call.followupRun.originatingChatType).toBe(liveChatType);
+        expect(call.followupRun.run.chatType).toBe(liveChatType);
+        expect(call.followupRun.originatingReplyToMode).toBe(liveChatType ? "first" : "all");
+      }
+    },
+  );
 
   it("uses transport thread metadata for followup originatingThreadId", async () => {
     await runPrepared({
@@ -4497,15 +4929,99 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.suppressTyping).toBe(true);
   });
 
-  it("routes queued system events into user prompt text, not system prompt context", async () => {
+  it("routes queued system events as conversation data without changing system context", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
 
     await runPrepared();
 
     const call = requireRunReplyAgentCall();
-    expect(call.commandBody).toContain("System: [t] Model switched.");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System: [t] Model switched.");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "System: [t] Model switched.",
+    });
+    expect(call.commandBody).toBe("[User sent media without caption]");
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.transcriptCommandBody).not.toContain("System: [t] Model switched.");
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
+
+  it.each(["live", "replaced", "absent"] as const)(
+    "respects the heartbeat admission selection when it is %s",
+    async (selection) => {
+      const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+        "./session-system-events.js",
+      );
+      vi.mocked(drainFormattedSystemEvents).mockImplementation(
+        actualSystemEvents.drainFormattedSystemEvents,
+      );
+      const queueKey = "agent:main:main:heartbeat:heartbeat";
+      const runKey = "agent:main:main:heartbeat";
+      const generic = expectDefined(
+        enqueueSystemEventEntry("Gateway restart completed", {
+          sessionKey: queueKey,
+          contextKey: "gateway:restart",
+        }),
+        "selected generic event",
+      );
+      enqueueSystemEvent("Reminder: dedicated cron work", { sessionKey: queueKey });
+      if (selection === "replaced") {
+        enqueueSystemEvent("Gateway replacement notification", {
+          sessionKey: queueKey,
+          contextKey: "gateway:restart",
+          replace: true,
+        });
+      }
+      enqueueSystemEvent("Notification queued after selection", { sessionKey: queueKey });
+      enqueueSystemEvent("Separate canonical queue notification", { sessionKey: runKey });
+      const before = peekSystemEventEntries(queueKey).map((event) => event.text);
+
+      await runPrepared({
+        agentId: "main",
+        ctx: createInboundBody("Dedicated heartbeat task"),
+        opts:
+          selection === "absent"
+            ? { isHeartbeat: true }
+            : withReplySystemEventContext(
+                { isHeartbeat: true },
+                { sessionKey: queueKey, events: [generic] },
+              ),
+        provider: "",
+        model: "",
+        resolvedThinkLevel: "off",
+        sessionKey: runKey,
+      });
+
+      const followupRun = requireRunReplyAgentCall().followupRun;
+      const context = followupRun.currentInboundContext;
+      expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
+      expect((context?.text ?? "").includes(generic.text)).toBe(selection === "live");
+      expect(
+        context?.fragments?.some(
+          (fragment) =>
+            fragment.kind === "conversation-data" && fragment.text.includes(generic.text),
+        ) ?? false,
+      ).toBe(selection === "live");
+      for (const text of [
+        followupRun.prompt,
+        context?.text ?? "",
+        ...(context?.fragments ?? []).map((fragment) => fragment.text),
+      ]) {
+        expect(text).not.toContain("Reminder: dedicated cron work");
+        expect(text).not.toContain("Gateway replacement notification");
+        expect(text).not.toContain("Notification queued after selection");
+        expect(text).not.toContain("Separate canonical queue notification");
+      }
+      expect(followupRun.transcriptPrompt).not.toContain(generic.text);
+      expect(peekSystemEventEntries(queueKey).map((event) => event.text)).toEqual(
+        selection === "live" ? before.filter((text) => text !== generic.text) : before,
+      );
+      expect(peekSystemEventEntries(runKey).map((event) => event.text)).toEqual([
+        "Separate canonical queue notification",
+      ]);
+    },
+  );
 
   it("includes route system events in a thread-scoped turn", async () => {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
@@ -4524,16 +5040,27 @@ describe("runPreparedReply media-only handling", () => {
     await runPrepared({
       agentId: "main",
       ctx: createInboundBody("report queued reactions"),
-      opts: withReplySystemEventSessionKey({}, "agent:main:slack:channel:c123"),
+      opts: withReplySystemEventContext({}, { sessionKey: "agent:main:slack:channel:c123" }),
       provider: "",
       model: "",
       resolvedThinkLevel: "off",
       sessionKey: "agent:main:slack:channel:c123:thread:123.456",
     });
 
-    const prompt = requireRunReplyAgentCall().followupRun.prompt;
-    expect(prompt).toContain("Slack reaction added: :eyes:");
-    expect(prompt).toContain("Slack message in #claw-test from Alice");
+    const followupRun = requireRunReplyAgentCall().followupRun;
+    const context = followupRun.currentInboundContext;
+    expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
+    for (const event of [
+      "Slack reaction added: :eyes:",
+      "Slack message in #claw-test from Alice",
+    ]) {
+      expect(context?.text).toContain(event);
+      expect(context?.fragments).toContainEqual({
+        kind: "conversation-data",
+        text: expect.stringContaining(event),
+      });
+      expect(followupRun.transcriptPrompt).not.toContain(event);
+    }
     expect(peekSystemEventEntries("agent:main:slack:channel:c123")).toStrictEqual([]);
     expect(peekSystemEventEntries("agent:main:slack:channel:c123:thread:123.456")).toStrictEqual(
       [],
@@ -4581,10 +5108,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(params.command.ownerList).toHaveLength(24);
   });
 
-  it("preserves first-token think hint when system events are prepended", async () => {
-    // drainFormattedSystemEvents returns the events block; the caller prepends it.
-    // The hint must be extracted from the user body BEFORE prepending, so "System:"
-    // does not shadow the low|medium|high shorthand.
+  it("preserves first-token think hint with separate system event context", async () => {
+    // Event context must not shadow the user's low|medium|high shorthand.
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     const code = "Run  this:\r\n    if True:\r\n        print('a  b')";
@@ -4598,11 +5123,16 @@ describe("runPreparedReply media-only handling", () => {
     // Think hint extracted before events arrived — level must be "low", not the model default.
     expect(call.followupRun.run.thinkLevel).toBe("low");
     expect(call.followupRun.run.thinkLevelOverride).toBe("low");
-    // The stripped user text (no "low" token) must still appear after the event block.
-    expect(call.commandBody).toBe(`System: [t] Node connected.\n\n${code}`);
+    // Removing the think hint preserves every remaining user byte.
+    expect(call.commandBody).toBe(code);
     expect(call.commandBody).not.toMatch(/^low\b/);
-    // System events are still present in the body.
-    expect(call.commandBody).toContain("System: [t] Node connected.");
+    expect(call.followupRun.prompt).toBe(`low ${code}`);
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System: [t] Node connected.");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "System: [t] Node connected.",
+    });
   });
 
   it.each([
@@ -4684,15 +5214,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
   });
 
-  it("carries system events into followupRun.prompt for deferred turns", async () => {
-    // drainFormattedSystemEvents returns the events block; the caller prepends it to
-    // effectiveBaseBody for the queue path so deferred turns see events.
+  it("carries system events as typed context for deferred turns", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     await runPrepared();
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("System: [t] Node connected.");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System: [t] Node connected.");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "System: [t] Node connected.",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("System: [t] Node connected.");
   });
 
   it("admits only system events visible to the prepared agent", async () => {
@@ -4716,14 +5251,27 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         agentId: "alpha",
         sessionKey: "global",
-        opts: { isHeartbeat: true },
+        opts: withReplySystemEventContext(
+          { isHeartbeat: true },
+          { sessionKey: "global", events: peekSystemEventEntries("global") },
+        ),
       }),
     );
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("Alpha hook finished");
-    expect(call.followupRun.prompt).toContain("Legacy unowned event");
+    const context = call.followupRun.currentInboundContext;
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    for (const event of ["Alpha hook finished", "Legacy unowned event"]) {
+      expect(context?.text).toContain(event);
+      expect(context?.fragments).toContainEqual({
+        kind: "conversation-data",
+        text: expect.stringContaining(event),
+      });
+      expect(call.followupRun.transcriptPrompt).not.toContain(event);
+    }
     expect(call.followupRun.prompt).not.toContain("Beta hook finished");
+    expect(context?.text).not.toContain("Beta hook finished");
+    expect(JSON.stringify(context?.fragments)).not.toContain("Beta hook finished");
     expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
       "Beta hook finished",
     ]);

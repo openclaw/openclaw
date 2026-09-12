@@ -111,6 +111,11 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       response: { marketplaces: [], marketplaceLoadErrors: [] },
     },
     {
+      method: "experimentalFeature/list" as const,
+      requestParams: {},
+      response: { data: [], nextCursor: null },
+    },
+    {
       method: "config/batchWrite" as const,
       requestParams: {
         edits: [
@@ -343,13 +348,12 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const request = vi.fn(async () => ({ ok: true }));
     type TestClient = { request: typeof request };
     const client: TestClient = { request };
-    let resolveAcquire: ((client: TestClient) => void) | undefined;
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(
-      () =>
-        new Promise<TestClient>((resolve) => {
-          resolveAcquire = resolve;
-        }),
-    );
+    const acquisition = createDeferred<TestClient>();
+    const acquisitionStarted = createDeferred<void>();
+    sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(() => {
+      acquisitionStarted.resolve();
+      return acquisition.promise;
+    });
 
     const result = requestCodexAppServerJson({
       method: "thread/list",
@@ -357,6 +361,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       timeoutMs: 50,
     });
     const rejection = expect(result).rejects.toThrow("codex app-server thread/list timed out");
+    await acquisitionStarted.promise;
     const acquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0] as
       | { abandonSignal?: AbortSignal; timeoutMs?: number }
       | undefined;
@@ -367,10 +372,33 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     await rejection;
     expect(acquireOptions?.abandonSignal?.aborted).toBe(true);
 
-    resolveAcquire?.(client);
+    acquisition.resolve(client);
     await Promise.resolve();
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not let an expired attempt abort its replacement", async () => {
+    const firstClient = {
+      request: vi.fn(async () => {
+        throw new sharedClientMocks.CodexAppServerStartSelectionChangedError();
+      }),
+    };
+    const secondClient = { request: vi.fn(async () => ({ ok: true })) };
+    sharedClientMocks.getSharedCodexAppServerClient
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(secondClient);
+    let abortPrevious: ((reason: Error) => void) | undefined;
+
+    const result = await withCodexAppServerJsonClient({}, async (request, _client, scope) => {
+      abortPrevious?.(new Error("old account changed"));
+      abortPrevious = scope.abort;
+      return await request({ method: "account/read" });
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(secondClient.request).toHaveBeenCalledOnce();
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
   });
 
   it("shares one deadline across a selection retry and suppresses a late request", async () => {
@@ -654,5 +682,21 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     );
     expect(request).toHaveBeenNthCalledWith(2, "account/read", {}, expectDeadlineOptions());
     expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 300, forceKillDelayMs: 200 });
+  });
+
+  it("guards isolated usage startup before login when request authority is revoked", async () => {
+    const login = vi.fn();
+    const assertCurrent = () => {
+      throw new Error("Account removed");
+    };
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(async (options) => {
+      options.assertCurrent?.();
+      login();
+      throw new Error("unguarded login");
+    });
+    await expect(readCodexAppServerUsage({ timeoutMs: 1_000, assertCurrent })).rejects.toThrow(
+      "Account removed",
+    );
+    expect(login).not.toHaveBeenCalled();
   });
 });

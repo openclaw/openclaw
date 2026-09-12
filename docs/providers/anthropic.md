@@ -116,6 +116,9 @@ OpenClaw release:
         through OpenClaw's direct CLI transport. OpenClaw uses a non-secret route
         marker and never reads, persists, refreshes, selects, or forwards the
         native login tokens. Claude owns the login and token refresh lifecycle.
+        Gateway startup shares the native login availability check across agent
+        workspaces using the same config and environment. Explicit catalog/auth
+        captures recheck availability for their own generation.
         Explicitly selected API-key or token credentials still use protected
         file-descriptor forwarding. Native-tool approvals remain under OpenClaw
         control. Schema-valid native calls pass through OpenClaw's canonical
@@ -238,8 +241,8 @@ For Claude CLI authentication, keep that same ref and select the CLI runtime:
 ```
 
 The API and Claude CLI catalogs expose a 1,000,000-token context window and
-128,000-token output limit. Fable 5.1 always uses adaptive thinking, defaults to
-`high`, and supports native `low`, `medium`, `high`, `xhigh`, and `max` effort.
+128,000-token output limit. Fable 5.1 always uses adaptive thinking. OpenClaw defaults to
+`medium`, with native `low`, `medium`, `high`, `xhigh`, and `max` effort available.
 For API-key billing, input and output remain `$10/$50` per million tokens;
 cache reads cost `$0.25` per million tokens, one quarter of Fable 5's rate.
 See Anthropic's [Fable 5.1 specifications](https://platform.claude.com/docs/en/models/fable-5-1/overview).
@@ -415,7 +418,7 @@ while continuation uses `operator.write`. Paired-node command advertisement and
 Gateway node policy remain additional requirements for node-backed rows.
 </Note>
 
-See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
+See [Nodes: Claude sessions and transcripts](/nodes/session-catalogs#claude-sessions-and-transcripts)
 for the node command and security boundary.
 
 ## Live model discovery
@@ -450,20 +453,33 @@ publishes its 1,000,000-token context window, 128,000-token output limit, image
 input, and `$5/$25` input/output pricing.
 
 `anthropic/claude-sonnet-5` uses the same adaptive-thinking defaults and request
-restrictions. The catalog uses Anthropic's introductory `$2/$10` input/output
-pricing through August 31, 2026; standard `$3/$15` pricing begins September 1, 2026.
+restrictions. The catalog uses Anthropic's standard `$2/$10` input/output pricing
+per million tokens. Anthropic canceled the previously scheduled September 2026
+increase; see [current model pricing](https://platform.claude.com/docs/en/about-claude/pricing#model-pricing).
 
 `anthropic/claude-fable-5-1` and `anthropic/claude-fable-5` always use adaptive
-thinking and default to `high` effort. Anthropic does not allow thinking to be
-disabled for these models, so `/think off` and `/think minimal` map to `low`
+thinking. OpenClaw defaults both versions to `medium` effort. Anthropic does not allow thinking to be
+disabled for these models, so stored `off` and `minimal` settings map to `low`
 effort instead. OpenClaw also omits caller-selected sampling parameters for
 both Fable versions.
 
+Fable effort controls offer `low`, `medium`, `high`, `xhigh`, and `max`, matching
+[Anthropic's effort levels](https://platform.claude.com/docs/en/build-with-claude/effort).
+Adaptive thinking is always on; it is not a separate effort choice. Existing
+stored `adaptive` selections resolve to OpenClaw's `medium` default. Custom
+`anthropic-messages` providers use the same profile, including model IDs with
+routing namespaces such as `Claude Gateway/claude-fable-5-1`.
+
 `anthropic/claude-mythos-5` is a limited-access model with the same always-on
-adaptive-thinking contract. OpenClaw defaults to `high`, maps `/think off` and
-`/think minimal` to `low`, and omits caller-selected sampling parameters.
+adaptive-thinking and five-effort contract. OpenClaw defaults to `high`, maps
+stored `off` and `minimal` settings to `low`, and omits caller-selected sampling parameters.
 The catalog publishes its 1,000,000-token context window, 128,000-token output
 limit, image input, and `$10/$50` input/output pricing.
+
+For Fable and Mythos, new `/think minimal` and `/think adaptive` directives are
+rejected with the supported choices. Use `/think low` in place of `minimal`,
+and `/think default` to use the model's default effort. The remapping above
+applies to previously stored settings.
 
 Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly
 enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends
@@ -492,6 +508,8 @@ Related Anthropic docs:
 - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 
 </Note>
+
+<a id="safety-refusal-fallback-claude-fable-5" />
 
 ## Safety refusal fallback (Claude Opus 5 and Fable 5)
 
@@ -613,7 +631,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   <Accordion title="Bedrock Claude notes">
     - Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
-    - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
+    - Supported Nova models offer opt-in explicit caching: set `cacheRetention` explicitly to `short` or `long` for system/message checkpoints with a five-minute TTL. Unset retention adds no checkpoints. Nova explicit caching has not been live-verified against AWS by OpenClaw maintainers yet. Other non-Claude models remain at `cacheRetention: "none"`; see [Bedrock prompt caching](/reference/prompt-caching#amazon-bedrock) for model IDs, AWS limits, and the live acceptance proof gap.
     - API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock refs when no explicit value is set.
 
   </Accordion>
@@ -652,6 +670,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - Claude Sonnet 5 supports neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
+    - The Control UI disables confirmed no-op Fast choices, including Sonnet 5 and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 
@@ -803,7 +822,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title='No API key found for provider "anthropic"'>
-    Anthropic auth is **per agent**; new agents do not inherit the main agent's keys. Re-run onboarding for that agent (or configure an API key on the gateway host), then verify with `openclaw models status`.
+    Agents read shared auth profiles at runtime, with agent-local profiles overriding shared profiles with the same ID. A new agent does not need a separate API key when a usable shared Anthropic profile exists.
+
+    Check the affected agent with `openclaw models status --agent <agentId>`. If no usable credential is available, configure an Anthropic API key on the Gateway host or set up auth for that agent.
+
+    Read-through is separate from copying: non-portable profiles can still be used from the shared store. Explicit copy flows follow the [agent copy portability policy](/auth-credential-semantics#agent-copy-portability).
+
+    Native Claude CLI logins remain owned by Claude Code, not the shared OpenClaw auth store. For that route, use the [Claude CLI setup](/providers/anthropic#getting-started); do not copy native OAuth tokens into OpenClaw.
+
   </Accordion>
 
   <Accordion title='No credentials found for profile "anthropic:default"'>
@@ -833,5 +859,11 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
   </Card>
   <Card title="OAuth and auth" href="/gateway/authentication" icon="key">
     Auth details and credential reuse rules.
+  </Card>
+  <Card title="Claude Max API proxy" href="/providers/claude-max-api-proxy" icon="shuffle">
+    Community proxy exposing Claude subscription credentials as an OpenAI-compatible endpoint.
+  </Card>
+  <Card title="Anthropic plugin reference" href="/plugins/reference/anthropic" icon="plug">
+    Anthropic models, Claude CLI, and the native Claude session catalog.
   </Card>
 </CardGroup>

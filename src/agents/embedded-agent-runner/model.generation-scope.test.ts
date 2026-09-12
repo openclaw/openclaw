@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,7 +10,9 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "../auth-profiles/store-runtime.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
   createModelGenerationFixture,
@@ -20,13 +24,15 @@ import { resolveModelAsync } from "./model.js";
 let state: OpenClawTestState;
 let auth: ReturnType<typeof guardModelFixtureAuth>;
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "model-generation" });
+  state = await createOpenClawTestState({
+    label: "model-generation",
+    env: { CODEX_HOME: undefined },
+  });
   auth = guardModelFixtureAuth(state.root);
 });
 afterEach(async () => {
   try {
     auth.verify();
-    expect(auth.spy).toHaveBeenCalled();
   } finally {
     auth.spy.mockRestore();
     await state.cleanup();
@@ -55,6 +61,41 @@ async function resolveGeneration(
   );
 }
 
+async function createExternalCodexGeneration() {
+  const codexDir = path.join(state.home, ".codex");
+  const payload = Buffer.from(
+    JSON.stringify({ exp: Math.floor(Date.now() / 1_000) + 86_400 }),
+  ).toString("base64url");
+  await fs.mkdir(codexDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(
+    path.join(codexDir, "auth.json"),
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        id_token: `synthetic.${payload}.signature`,
+        access_token: `synthetic.${payload}.signature`,
+        refresh_token: "synthetic-refresh-never-sent",
+        account_id: "synthetic-account",
+      },
+    }),
+    { mode: 0o600 },
+  );
+  vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+    throw new Error("Model auth discovery must not contact a provider");
+  });
+  const generation = createModelGenerationFixture({
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    provider: "openai",
+    requestProvider: "openai",
+    config: {},
+    label: "external-codex",
+  });
+  publishCurrentModelGeneration(generation);
+  await state.writeAuthProfiles({ version: 1, profiles: {} });
+  return generation;
+}
+
 describe("model runtime generation scope", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
@@ -63,6 +104,103 @@ describe("model runtime generation scope", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetModelGenerationFixtureState();
+  });
+
+  it.each([
+    { selection: "explicit", profileId: "openai:default" },
+    { selection: "automatic", profileId: undefined },
+  ])("keeps $selection host auth separate from native Codex credentials", async ({ profileId }) => {
+    const generation = await createExternalCodexGeneration();
+
+    if (profileId) {
+      await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
+        code: "selected_auth_profile_unavailable",
+      });
+    } else {
+      const result = await resolveGeneration(generation);
+      expect(result.model?.id).toBe(generation.modelId);
+      expect(result.authStorage.get("openai")).toBeUndefined();
+    }
+    expect(
+      ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles["openai:default"],
+    ).toBeUndefined();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a missing managed profile with an external Codex account", async () => {
+    const generation = await createExternalCodexGeneration();
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:managed": {
+          provider: "openai",
+          type: "oauth",
+          access: "synthetic-managed-access",
+          refresh: "synthetic-managed-refresh",
+          expires: Date.now() + 86_400_000,
+          accountId: "managed-account",
+        },
+      },
+    });
+
+    await expect(resolveGeneration(generation, "openai:missing")).rejects.toMatchObject({
+      code: "selected_auth_profile_unavailable",
+      reason: "auth",
+      status: 401,
+    });
+    expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports a removed selected credential before reusing dynamic model metadata", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "revoked",
+    });
+    const profileId = `${generation.provider}:selected`;
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: generation.provider, key: "synthetic-key" },
+      },
+    });
+    expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
+    await state.writeAuthProfiles({ version: 1, profiles: {} });
+    generation.resolveDynamicModel.mockClear();
+
+    await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
+      code: "selected_auth_profile_unavailable",
+      reason: "auth",
+      status: 401,
+    });
+    expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("resolves a config-only AWS SDK profile without requiring a stored credential", async () => {
+    const provider = "amazon-bedrock";
+    const profileId = `${provider}:default`;
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      provider,
+      requestProvider: provider,
+      config: {
+        auth: { profiles: { [profileId]: { provider, mode: "aws-sdk" } } },
+        models: {
+          providers: {
+            [provider]: { auth: "aws-sdk", baseUrl: "https://example.test", models: [] },
+          },
+        },
+      },
+      label: "aws",
+    });
+
+    expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
+    expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: profileId, authProfileMode: "aws-sdk" }),
+    );
   });
 
   it("passes the selected personal auth mode into dynamic model discovery", async () => {
@@ -105,45 +243,85 @@ describe("model runtime generation scope", () => {
     { auth: true, registry: false },
     { auth: false, registry: true },
     { auth: false, registry: false },
-  ])("fills only missing discovery stores (auth=$auth, registry=$registry)", async (supplied) => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
-      label: "stores",
-    });
-    const { preparedModelRuntime } = generation;
-    const stores = preparedModelRuntime.createStores();
-    stores.authStorage.setRuntimeApiKey(generation.provider, "fixture-runtime-key");
-    const preparedStores = vi.spyOn(preparedModelRuntime, "createStores");
-    const emptyAuth = vi.spyOn(AuthStorage, "inMemory");
-    const emptyRegistry = vi.spyOn(ModelRegistry, "inMemory");
+  ])(
+    "fills missing stores from the prepared runtime (auth=$auth, registry=$registry)",
+    async (supplied) => {
+      const provider = "generation-stores";
+      const modelId = "literal-store-model";
+      const createStores = (label: string) => {
+        const authStorage = AuthStorage.inMemory({});
+        authStorage.setRuntimeApiKey(provider, `fixture-${label}-key`);
+        const modelRegistry = ModelRegistry.inMemory(authStorage);
+        modelRegistry.registerProvider(provider, {
+          api: "openai-completions",
+          baseUrl: "https://stores.example.test/v1",
+          models: [
+            {
+              id: modelId,
+              name: label,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32_768,
+              maxTokens: 4_096,
+            },
+          ],
+        });
+        return { authStorage, modelRegistry };
+      };
+      const preparedStores = createStores("prepared");
+      const callerStores = createStores("caller");
+      const generation = createModelGenerationFixture({
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        config: {},
+        label: "stores",
+        provider,
+        requestProvider: provider,
+        modelId,
+        createStores: () => preparedStores,
+      });
+      const { preparedModelRuntime } = generation;
 
-    const result = await resolveModelAsync(
-      generation.provider,
-      generation.modelId,
-      preparedModelRuntime.agentDir,
-      preparedModelRuntime.config,
-      {
-        ...(supplied.auth ? { authStorage: stores.authStorage } : {}),
-        ...(supplied.registry ? { modelRegistry: stores.modelRegistry } : {}),
-        preparedModelRuntime,
-        skipAgentDiscovery: true,
-        workspaceDir: preparedModelRuntime.workspaceDir,
-      },
-    );
+      const result = await resolveModelAsync(
+        provider,
+        modelId,
+        preparedModelRuntime.agentDir,
+        preparedModelRuntime.config,
+        {
+          ...(supplied.auth ? { authStorage: callerStores.authStorage } : {}),
+          ...(supplied.registry ? { modelRegistry: callerStores.modelRegistry } : {}),
+          preparedModelRuntime,
+          skipAgentDiscovery: true,
+          workspaceDir: preparedModelRuntime.workspaceDir,
+        },
+      );
 
-    expect(preparedStores).not.toHaveBeenCalled();
-    const allocations = supplied.auth && supplied.registry ? 0 : 1;
-    expect(emptyAuth).toHaveBeenCalledTimes(allocations);
-    expect(emptyRegistry).toHaveBeenCalledTimes(allocations);
-    expect(result.authStorage === stores.authStorage).toBe(supplied.auth);
-    expect(result.modelRegistry === stores.modelRegistry).toBe(supplied.registry);
-    const model = expectDefined(result.model, "resolved fixture model");
-    expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
-      apiKey: supplied.auth || supplied.registry ? "fixture-runtime-key" : undefined,
-    });
-  });
+      if (supplied.auth) {
+        expect(result.authStorage).toBe(callerStores.authStorage);
+      }
+      if (supplied.registry) {
+        expect(result.modelRegistry).toBe(callerStores.modelRegistry);
+      }
+      const model = expectDefined(result.model, "resolved fixture model");
+      expect(model).toMatchObject({
+        provider,
+        id: modelId,
+        name: supplied.registry ? "caller" : "prepared",
+        contextWindow: 32_768,
+        maxTokens: 4_096,
+      });
+      expect(await result.authStorage.getApiKey(provider)).toBe(
+        supplied.auth ? "fixture-caller-key" : "fixture-prepared-key",
+      );
+      expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
+        apiKey: supplied.auth || supplied.registry ? "fixture-caller-key" : "fixture-prepared-key",
+      });
+      expect(await preparedStores.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
+        apiKey: "fixture-prepared-key",
+      });
+    },
+  );
 
   it("keeps alias, suppression, static metadata, and runtime hooks on the prepared generation", async () => {
     const config = {} satisfies OpenClawConfig;
@@ -158,7 +336,7 @@ describe("model runtime generation scope", () => {
       workspaceDir: state.workspaceDir,
       config,
       label: "b",
-      suppress: true,
+      suppression: {},
     });
     publishCurrentModelGeneration(generationB);
 
@@ -172,6 +350,69 @@ describe("model runtime generation scope", () => {
     });
     expect(generationA.resolveDynamicModel).toHaveBeenCalled();
     expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("preserves the retirement remedy when the selected route has no discoverable model", async () => {
+    const provider = "generation-retirement-miss";
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-completions",
+              baseUrl: "https://subscription.example/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      label: "retirement-miss",
+      provider,
+      suppression: {
+        retirement: { replacedBy: "current-model" },
+        when: { baseUrlHosts: ["subscription.example"] },
+      },
+    });
+    generation.pluginRegistry.providers[0]!.provider.resolveDynamicModel = () => undefined;
+
+    const result = await resolveGeneration(generation);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("openclaw doctor --fix");
+    expect(result.error).toContain("current-model");
+  });
+
+  it("keeps the retirement failure discovered by the prepared catalog tier", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "tiered-retirement",
+      runtimeBaseUrl: "https://subscription.example/v1",
+      withRegistry: false,
+      suppression: {
+        retirement: { replacedBy: "current-model" },
+        when: { baseUrlHosts: ["subscription.example"] },
+      },
+    });
+    const stores = generation.preparedModelRuntime.createStores();
+    vi.spyOn(stores.modelRegistry, "find").mockReturnValue(generation.resolveDynamicModel());
+    generation.preparedModelRuntime.createStores = () => stores;
+
+    const { resolution } = await resolveTieredModel({
+      provider: generation.provider,
+      modelId: generation.modelId,
+      agentDir: state.agentDir(),
+      config: generation.preparedModelRuntime.config,
+      workspaceDir: state.workspaceDir,
+      preparedModelRuntime: generation.preparedModelRuntime,
+    });
+
+    expect(resolution.model).toBeUndefined();
+    expect(resolution.error).toContain("openclaw doctor --fix");
+    expect(resolution.error).toContain("current-model");
   });
 
   it("keeps concurrent prepared generations isolated across awaited runtime hooks", async () => {

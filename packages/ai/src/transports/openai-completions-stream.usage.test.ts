@@ -148,23 +148,7 @@ describe("openai completions stream", () => {
       contextWindow: 128000,
       maxTokens: 4096,
     });
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
     const stream: { push(event: unknown): void } = { push() {} };
 
     async function* mockStream() {
@@ -299,6 +283,42 @@ describe("openai completions stream", () => {
     expect(stream.push.mock.calls.length).toBeLessThan(512);
   });
 
+  it("does not finalize tool calls when cancellation ends the iterator normally", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    const events: CapturedStreamEvent[] = [];
+
+    async function* silentlyAbortedStream() {
+      yield makeCompletionsChunk(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_aborted",
+              type: "function",
+              function: { name: "read", arguments: '{"path":"example.txt"}' },
+            },
+          ],
+        },
+        "stop",
+      );
+      abort.abort();
+    }
+
+    await expect(
+      processCompletionsStream(
+        silentlyAbortedStream(),
+        output,
+        model,
+        { push: (event) => events.push(event as CapturedStreamEvent) },
+        { signal: abort.signal },
+      ),
+    ).rejects.toThrow("Request was aborted");
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
+    expect(output.stopReason).not.toBe("toolUse");
+  });
+
   it("omits accumulated partial snapshots from OpenAI-compatible text deltas", async () => {
     const model = makeCompletionsModel({
       id: "dense-local",
@@ -338,23 +358,7 @@ describe("openai completions stream", () => {
       contextWindow: 128000,
       maxTokens: 4096,
     });
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
     const stream: { push(event: unknown): void } = { push() {} };
 
     async function* mockStream() {

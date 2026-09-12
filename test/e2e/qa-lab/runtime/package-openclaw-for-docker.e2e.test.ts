@@ -10,6 +10,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH } from "../../../../scripts/lib/package-dist-inventory-contract.mts";
 import { writePackageDistInventoryForPublish } from "../../../../scripts/lib/package-dist-inventory.ts";
 import {
   preparePackageDocsMap,
@@ -288,6 +289,7 @@ describe("package-openclaw-for-docker", () => {
         files["package.json"],
       );
       expect(JSON.parse(fs.readFileSync(inventoryPath, "utf8"))).toEqual([
+        PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
         "dist/shared-runtime.js",
       ]);
       expect(fs.existsSync(path.join(sourceDir, ".openclaw-lifecycle-pending"))).toBe(false);
@@ -609,7 +611,7 @@ describe("package-openclaw-for-docker", () => {
         JSON.parse(
           fs.readFileSync(path.join(sourceDir, "dist/postinstall-inventory.json"), "utf8"),
         ),
-      ).toEqual(["dist/shared-runtime.js"]);
+      ).toEqual([PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH, "dist/shared-runtime.js"]);
     },
   );
 
@@ -633,7 +635,7 @@ describe("package-openclaw-for-docker", () => {
     );
     expect(
       JSON.parse(fs.readFileSync(path.join(sourceDir, "dist/postinstall-inventory.json"), "utf8")),
-    ).toEqual(["dist/shared-runtime.js"]);
+    ).toEqual([PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH, "dist/shared-runtime.js"]);
     expect(fs.existsSync(path.join(sourceDir, "dist/openclaw-install-guard"))).toBe(false);
     expect(fs.existsSync(path.join(sourceDir, ".openclaw-lifecycle-pending"))).toBe(false);
   });
@@ -679,9 +681,9 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/output-root-guard.mjs",
       "scripts/lib/package-lifecycle-marker.mjs",
       "scripts/lib/record-shared.mjs",
+      "scripts/lib/release-changelog.mjs",
       "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
-      "scripts/lib/windows-cmd-helpers-runtime.mts",
       "scripts/lib/windows-taskkill.mjs",
     ];
     try {
@@ -876,6 +878,52 @@ describe("package-openclaw-for-docker", () => {
         timeoutMs: 1234,
       },
     ]);
+  });
+
+  it("keeps root package exclusions in parity with reused private QA build inventory", async () => {
+    const sourceDir = createPackageSourceFixture("openclaw-package-qa-exclusions-source-");
+    const outputDir = tempDirs.make("openclaw-package-qa-exclusions-output-");
+    const { files, version } = JSON.parse(
+      fs.readFileSync(new URL("../../../../package.json", import.meta.url), "utf8"),
+    ) as { files: string[]; version: string };
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version, files }),
+    );
+    const publicFiles = ["dist/index.js", "dist/runtime-PUBLIC.mjs"];
+    const privateFiles = ["dist/qa-runtime-PRIVATE.js", "dist/qa-runtime-PRIVATE.mjs"];
+    fs.mkdirSync(path.join(sourceDir, "dist"));
+    for (const file of [...publicFiles, ...privateFiles]) {
+      fs.writeFileSync(path.join(sourceDir, file), "export {};\n");
+    }
+
+    // Reuse prepared outputs, as --skip-build does; npm owns the root files policy.
+    const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+      ...skipDocsMapLifecycle,
+      prepareChangelog: async () => {},
+      restoreChangelog: async () => {},
+    });
+    const extractDir = tempDirs.make("openclaw-package-qa-exclusions-extract-");
+    await tar.x({ file: tarball, cwd: extractDir });
+    const packedDist = path.join(extractDir, "package/dist");
+    const inventory = JSON.parse(
+      fs.readFileSync(path.join(packedDist, "postinstall-inventory.json"), "utf8"),
+    ) as string[];
+    const packagedFiles = fs
+      .readdirSync(packedDist)
+      .map((file) => `dist/${file}`)
+      .toSorted();
+
+    expect(inventory).toEqual(
+      [...publicFiles, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH].toSorted(),
+    );
+    expect(packagedFiles).toEqual(
+      [
+        ...publicFiles,
+        PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+        "dist/postinstall-inventory.json",
+      ].toSorted(),
+    );
   });
 
   it("omits stale hashed dist output when frozen sources expose only their own build", async () => {

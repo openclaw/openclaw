@@ -1,6 +1,9 @@
 /** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
+} from "../../../config/agent-limits.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 
@@ -15,8 +18,27 @@ const COMPLETION_NOTES = {
   announce: "The final reply returns to the requester as a completion event.",
 } satisfies Record<SubagentCompletionMode, string>;
 
+const PERSISTENT_SESSION_NOTE =
+  "This subagent session is persistent and remains available for thread follow-up messages.";
+
+export function buildSubagentTaskMessage(params: {
+  task: string;
+  spawnMode: "run" | "session";
+  childDepth: number;
+  maxSpawnDepth: number;
+}): string {
+  return [
+    `[Subagent Context] You are running as a subagent (depth ${params.childDepth}/${params.maxSpawnDepth}). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.`,
+    ...(params.spawnMode === "session" ? [`[Subagent Context] ${PERSISTENT_SESSION_NOTE}`] : []),
+    "[Subagent Task]",
+    params.task.trim(),
+    "Begin. Execute the assigned task to completion.",
+  ].join("\n\n");
+}
+
 export function buildSubagentSpawnEnvelope(params: {
   completionMode: SubagentCompletionMode;
+  soleCollectorChild?: boolean;
   spawnMode: "run" | "session";
   task: string;
   requesterSessionKey?: string;
@@ -31,13 +53,10 @@ export function buildSubagentSpawnEnvelope(params: {
 }) {
   const childDepth = params.childDepth ?? 1;
   const maxSpawnDepth = params.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  const canSpawn = childDepth < maxSpawnDepth;
+  const canSpawn = isSubagentSpawnDepthAllowed(childDepth, maxSpawnDepth);
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
   const completionNote = COMPLETION_NOTES[params.completionMode];
-  const persistentNote =
-    params.spawnMode === "session"
-      ? "This subagent session is persistent and remains available for thread follow-up messages."
-      : undefined;
+  const persistentNote = params.spawnMode === "session" ? PERSISTENT_SESSION_NOTE : undefined;
   const lines = [
     "# Subagent Context",
     "",
@@ -114,17 +133,14 @@ export function buildSubagentSpawnEnvelope(params: {
     isCronSessionKey(params.requesterSessionKey);
   return {
     systemPrompt: lines.join("\n"),
-    message: [
-      `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}).`,
-      ...(persistentNote ? [`[Subagent Context] ${persistentNote}`] : []),
-      "[Subagent Task]",
-      params.task.trim(),
-      "Begin. Execute the assigned task to completion.",
-    ].join("\n\n"),
+    message: buildSubagentTaskMessage({ ...params, childDepth, maxSpawnDepth }),
     acceptedNote: omitAcceptedNote
       ? undefined
       : [
           completionNote,
+          params.completionMode === "collector" && params.soleCollectorChild
+            ? "This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered."
+            : undefined,
           params.completionMode === "announce"
             ? "Continue any independent work. Wait for completion events for ALL required children before your final answer; never busy-poll. If a completion arrives after your final answer, reply ONLY with NO_REPLY."
             : undefined,

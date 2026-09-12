@@ -1,5 +1,6 @@
 import type { Model, StreamOptions } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   copyProviderAcceptanceObserver,
   notifyProviderHttpMetadata,
@@ -139,5 +140,94 @@ describe("private provider acceptance", () => {
     ).rejects.toBe(hookError);
 
     expect(cancelStream).toHaveBeenCalledWith(hookError);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "observes actual callback and cancellation work when a callback later %ss",
+    async (outcome) => {
+      const host = getAiTransportHost();
+      const observed: Promise<unknown>[] = [];
+      const events: string[] = [];
+      const controller = new AbortController();
+      let callbackStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        callbackStarted = resolve;
+      });
+      const lateCallbackError = new Error("late response failure");
+      const cleanupError = new Error("cancellation failure");
+      let finishCallback!: () => void;
+      const callback = new Promise<void>((resolve, reject) => {
+        finishCallback = () => (outcome === "resolve" ? resolve() : reject(lateCallbackError));
+      });
+      let finishCleanup!: () => void;
+      const cleanup = new Promise<void>((_resolve, reject) => {
+        finishCleanup = () => reject(cleanupError);
+      });
+      configureAiTransportHost({
+        ...host,
+        observePendingProviderWork: (pending) => {
+          events.push("observed");
+          observed.push(pending);
+        },
+      });
+      const cancelStream = vi.fn(() => {
+        events.push("cancel");
+        return cleanup;
+      });
+      const onResponse = vi.fn(() => {
+        events.push("callback");
+        callbackStarted();
+        return callback;
+      });
+      const notification = notifyProviderHttpMetadata({
+        options: { signal: controller.signal, onResponse },
+        response: { status: 200, headers: {} },
+        model,
+        cancelStream,
+      });
+      try {
+        expect(onResponse).not.toHaveBeenCalled();
+        await started;
+        controller.abort();
+        await expect(notification).rejects.toThrow("Request was aborted");
+        expect(events).toEqual(["observed", "callback", "cancel", "observed"]);
+        expect(cancelStream).toHaveBeenCalledOnce();
+        expect(observed[1]).toBe(cleanup);
+        finishCallback();
+        if (outcome === "resolve") {
+          await expect(observed[0]).resolves.toBeUndefined();
+        } else {
+          await expect(observed[0]).rejects.toBe(lateCallbackError);
+        }
+        finishCleanup();
+        await expect(observed[1]).rejects.toBe(cleanupError);
+      } finally {
+        controller.abort();
+        finishCallback();
+        finishCleanup();
+        await Promise.allSettled([notification, callback, cleanup, ...observed]);
+        configureAiTransportHost(host);
+      }
+    },
+  );
+
+  it("preserves the lifecycle failure when cancellation throws synchronously", async () => {
+    const callbackError = new Error("response failure");
+    const cancelStream = vi.fn(() => {
+      throw new Error("cancel failure");
+    });
+    await expect(
+      notifyProviderHttpMetadata({
+        options: {
+          onResponse: () => {
+            throw callbackError;
+          },
+        },
+        response: { status: 200, headers: {} },
+        model,
+        cancelStream,
+      }),
+    ).rejects.toBe(callbackError);
+    expect(cancelStream).toHaveBeenCalledOnce();
   });
 });

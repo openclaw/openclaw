@@ -10,6 +10,7 @@ import {
   type CodexAttemptTimeout,
 } from "./attempt-deadlines.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
+import type { AttemptSettlementWarning } from "./attempt-terminal.js";
 import {
   resolveCodexNativeHookRelayTtlMs,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
@@ -25,6 +26,43 @@ import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 
+class CodexAttemptState {
+  latestStartupErrorNotification?: CodexServerNotification;
+  rateLimitsRevisionBeforeLastTurnStart?: number;
+  completed = false;
+  abortCleanup = Promise.resolve();
+  pluginRuntimeRefreshStop?: Promise<void>;
+  // Only completed native cleanup can advance this state to confirmed.
+  permissionChangeRestart?: "requested" | "confirmed";
+  localCompletionRequested = false;
+  terminalTurnNotificationQueued = false;
+  // App-server collapses user interrupts and replacements to "interrupted";
+  // this marker remains the user-interrupt hint until Codex exposes abortReason.
+  sawCodexInterruptMarker = false;
+  timeout?: CodexAttemptTimeout;
+  // Only the correlated completed-answer deadline fills this slot.
+  settlementWarning?: AttemptSettlementWarning;
+  // Finalization fills this slot while its transcript mirror is pending.
+  pendingSettlementStage?: string;
+  clientClosedPromptError?: string;
+  clientClosedDiagnostic?: string;
+  clientClosedAbort = false;
+  shouldDelayNativeHookRelayUnregister = false;
+  lifecycleStarted = false;
+  lifecycleTerminalEmitted = false;
+  nativeHookRelayLastRenewedAt = 0;
+  activeAppServerTurnRequests = 0;
+  activeLocalProjections = 0;
+  projectionClosed = false;
+  pendingTerminalDynamicToolRelease?: {
+    call: CodexDynamicToolCallParams;
+    response: CodexDynamicToolCallResponse;
+    durationMs: number;
+  };
+  terminalDynamicToolReleaseCheckScheduled = false;
+  currentTurnHadNonTerminalDynamicToolResult = false;
+}
+
 export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const {
     prompt,
@@ -35,40 +73,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   } = resources;
   const { connection } = prompt.context.runtime;
   const { params, options, runAbortController } = connection;
-  const state = {
-    latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
-    rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
-    completed: false,
-    abortCleanup: Promise.resolve(),
-    // SAFETY: Unset is valid; only completed native cleanup can advance this closed state to confirmed.
-    permissionChangeRestart: undefined as "requested" | "confirmed" | undefined,
-    localCompletionRequested: false,
-    terminalTurnNotificationQueued: false,
-    // App-server collapses user interrupts and replacements to "interrupted";
-    // this marker remains the user-interrupt hint until Codex exposes abortReason.
-    sawCodexInterruptMarker: false,
-    timeout: undefined as CodexAttemptTimeout | undefined,
-    clientClosedPromptError: undefined as string | undefined,
-    clientClosedDiagnostic: undefined as string | undefined,
-    clientClosedAbort: false,
-    shouldDelayNativeHookRelayUnregister: false,
-    lifecycleStarted: false,
-    lifecycleTerminalEmitted: false,
-    nativeHookRelayLastRenewedAt: 0,
-    activeAppServerTurnRequests: 0,
-    activeLocalProjections: 0,
-    projectionClosed: false,
-    pendingTerminalDynamicToolRelease: undefined as
-      | {
-          call: CodexDynamicToolCallParams;
-          response: CodexDynamicToolCallResponse;
-          durationMs: number;
-        }
-      | undefined,
-    terminalDynamicToolReleaseCheckScheduled: false,
-    currentTurnHadNonTerminalDynamicToolResult: false,
-  };
+  const state = new CodexAttemptState();
   const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
+  const settlementExpired = createDeferred<void>();
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   // One execution promise per call id prevents duplicate delivery from
   // repeating non-idempotent computer input while the attempt remains active.
@@ -103,8 +110,13 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     }
     return completed;
   };
+  let pendingNativeHookRenewal: Promise<void> | undefined;
   const renewNativeHookRelayForTurnProgress = () => {
-    if (!resourceState.nativeHookRelay || options.nativeHookRelay?.ttlMs !== undefined) {
+    if (
+      !resourceState.nativeHookRelay ||
+      options.nativeHookRelay?.ttlMs !== undefined ||
+      pendingNativeHookRenewal
+    ) {
       return;
     }
     const now = Date.now();
@@ -115,14 +127,27 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     if (renewsRecently && !expiresSoon) {
       return;
     }
-    state.nativeHookRelayLastRenewedAt = now;
-    resourceState.nativeHookRelay.renew(
+    const relay = resourceState.nativeHookRelay;
+    relay.renew(
       resolveCodexNativeHookRelayTtlMs({
         explicitTtlMs: undefined,
         attemptTimeoutMs: params.timeoutMs,
         startupTimeoutMs,
         turnStartTimeoutMs: params.timeoutMs,
       }),
+    );
+    pendingNativeHookRenewal = relay.drain();
+    void pendingNativeHookRenewal.then(
+      () => {
+        pendingNativeHookRenewal = undefined;
+        if (resourceState.nativeHookRelay === relay) {
+          state.nativeHookRelayLastRenewedAt = now;
+        }
+      },
+      (error: unknown) => {
+        pendingNativeHookRenewal = undefined;
+        embeddedAgentLog.debug("native hook relay renewal did not drain", { error });
+      },
     );
   };
   const noteProgress = (reason: string) => {
@@ -150,6 +175,30 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     signal: runAbortController.signal,
     onDeadlineChanged: params.onAttemptDeadlineChanged,
     onTimeout: (timeout) => {
+      const pendingStage =
+        state.pendingSettlementStage ??
+        projectorRef.current?.settlement.pendingStage ??
+        "notification_queue";
+      if (timeout.kind === "settlement" && projectorRef.current?.recoverCompletedAnswer()) {
+        state.settlementWarning = {
+          pendingStage,
+          elapsedMs: timeout.elapsedMs,
+          timeoutMs: timeout.timeoutMs,
+        };
+        state.projectionClosed = true;
+        trajectoryRecorder?.recordEvent("turn.settlement_warning", {
+          threadId: resourceState.thread.threadId,
+          turnId: turnIdRef.current,
+          ...state.settlementWarning,
+        });
+        embeddedAgentLog.warn(
+          "codex app-server retaining completed answer after settlement expiry",
+          state.settlementWarning,
+        );
+        completeTurn();
+        settlementExpired.resolve();
+        return;
+      }
       state.timeout = timeout;
       projectorRef.current?.markTimedOut();
       const error = new Error(
@@ -161,6 +210,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         threadId: resourceState.thread.threadId,
         turnId: turnIdRef.current,
         ...timeout,
+        pendingStage,
       };
       trajectoryRecorder?.recordEvent(`turn.${timeout.kind}_timeout`, fields);
       embeddedAgentLog.warn(error.message, fields);
@@ -171,6 +221,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   return {
     state,
     completion,
+    settlementExpired: settlementExpired.promise,
     pendingOpenClawDynamicToolCompletionIds,
     openClawDynamicToolExecutions,
     activeTurnItemIds,

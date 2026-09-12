@@ -9,6 +9,8 @@ import {
   readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
+import * as sessionModelRef from "../agents/session-model-ref.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -19,12 +21,15 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 import * as titleReader from "./session-transcript-title-reader.js";
 import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
-import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
+import {
+  projectSessionPatchResult,
+  resolveGatewaySessionThinkingProjectionInternal,
+} from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
-import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -38,12 +43,236 @@ import { listSessionsFromStoreAsync } from "./session-utils.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test.each([undefined, "unmatched-model-search"])(
+    "resolves configured defaults once per agent for search %s",
+    async (search) => {
+      await withStateDirEnv("openclaw-perf-default-model-", async ({ stateDir }) => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: {
+              main: { model: "openai/gpt-5" },
+              work: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            defaults: { thinkingDefault: "off" },
+          },
+        };
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const store: Record<string, SessionEntry> = Object.fromEntries(
+          Array.from({ length: 40 }, (_, index) => {
+            const agentId = index % 2 === 0 ? "main" : "work";
+            return [
+              `agent:${agentId}:default-${index}`,
+              {
+                sessionId: `default-${index}`,
+                updatedAt: index + 1,
+                modelProvider: "openai",
+                model: "previous-run-model",
+              },
+            ];
+          }),
+        );
+        const resolver = vi.spyOn(sessionModelRef, "resolveSessionModelRef");
+        try {
+          const result = await listSessionFixture({
+            cfg,
+            store,
+            storePath: path.join(stateDir, "sessions.json"),
+            opts: { limit: 40, ...(search ? { search } : {}) },
+          });
+          expect(result.count).toBe(search ? 0 : 40);
+          for (const row of result.sessions) {
+            expect([row.modelProvider, row.model]).toEqual(
+              row.agentId === "main" ? ["openai", "gpt-5"] : ["anthropic", "claude-sonnet-4-6"],
+            );
+          }
+          expect(resolver).toHaveBeenCalledTimes(2);
+        } finally {
+          resolver.mockRestore();
+        }
+      });
+    },
+  );
+
+  test("bounds catalog lookups per response while preserving each agent's model metadata", async () => {
+    await withStateDirEnv("openclaw-perf-catalog-", async ({ stateDir }) => {
+      resetPluginRuntimeStateForTest();
+      const pluginRegistry = createEmptyPluginRegistry();
+      setActivePluginRegistry(pluginRegistry);
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {}, research: {} },
+          defaults: { model: { primary: "example/model-hit" } },
+        },
+      };
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      const modelCatalog = new Map(
+        ["main", "research"].map((agentId, index) => [
+          agentId,
+          {
+            entries: ["model-hit", "Model-Hit"].map((id, modelIndex) => {
+              const contextTokens = (index + 1) * (modelIndex + 1) * 10_000;
+              return {
+                provider: "example",
+                id,
+                name: "Example model",
+                contextTokens,
+                contextWindows: [{ id: "full", label: "Full", contextWindow: contextTokens }],
+                contextWindowDefault: "full",
+              };
+            }),
+            pluginRegistry,
+          },
+        ]),
+      );
+      const store = Object.fromEntries(
+        Array.from({ length: 80 }, (_, index) => {
+          const agentId = index % 2 ? "research" : "main";
+          return [
+            `agent:${agentId}:dashboard:catalog-${index}`,
+            {
+              sessionId: `catalog-${index}`,
+              updatedAt: index,
+              providerOverride: "example",
+              modelOverride:
+                index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
+              ...(index % 8 < 2
+                ? {
+                    acp: {
+                      backend: "acpx",
+                      agent: agentId,
+                      runtimeSessionName: `catalog-${index}`,
+                      mode: "persistent" as const,
+                      state: "idle" as const,
+                      lastActivityAt: index,
+                    },
+                  }
+                : {}),
+            } satisfies SessionEntry,
+          ];
+        }),
+      );
+      const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
+      try {
+        for (const revision of [1, 2]) {
+          for (const [agentId, catalog] of modelCatalog) {
+            catalog.entries.forEach((entry, index) => {
+              const contextTokens = revision * (index + 1) * (agentId === "main" ? 10_000 : 20_000);
+              catalog.entries[index] = {
+                ...entry,
+                contextTokens,
+                contextWindows: [{ id: "full", label: "Full", contextWindow: contextTokens }],
+              };
+            });
+          }
+          catalogSpy.mockClear();
+          const result = await listSessionFixture({
+            cfg,
+            store,
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+            modelCatalog,
+            opts: { limit: 80 },
+          });
+          expect(result.count).toBe(80);
+          const catalogRows = result.sessions.filter(
+            (row) => row.model?.toLowerCase() === "model-hit",
+          );
+          expect(catalogRows).toHaveLength(40);
+          for (const row of catalogRows) {
+            expect(row.contextTokens).toBe(
+              revision *
+                (row.model === "Model-Hit" ? 2 : 1) *
+                (row.agentId === "main" ? 10_000 : 20_000),
+            );
+            expect(row).not.toHaveProperty("catalogEntry");
+          }
+          // Hits and misses are shared within a response, including runtime/context projection.
+          // Defaults can make a few additional lookups outside the row context.
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
+          catalogSpy.mockClear();
+          const key = "agent:main:dashboard:catalog-0";
+          const patch = projectSessionPatchResult({
+            cfg,
+            canonicalKey: key,
+            targetAgentId: "main",
+            entry: store[key]!,
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+            modelCatalog: modelCatalog.get("main")!.entries,
+          });
+          expect(patch.resolved).toMatchObject({
+            contextWindow: "full",
+            contextWindows: [{ id: "full", label: "Full", contextWindow: revision * 10_000 }],
+          });
+          expect(patch.resolved).not.toHaveProperty("catalogEntry");
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(2);
+        }
+      } finally {
+        catalogSpy.mockRestore();
+      }
+    });
+  });
+
   test.each([
-    { rowWorkMs: 0, shouldYield: false },
-    { rowWorkMs: 20, shouldYield: true },
+    {
+      name: "cheap rows",
+      rowWorkMs: 0,
+      storeWorkMs: 0,
+      preparationWorkMs: 0,
+      keepRows: true,
+      limit: 100,
+      shouldYield: false,
+    },
+    {
+      name: "expensive rows",
+      rowWorkMs: 20,
+      storeWorkMs: 0,
+      preparationWorkMs: 0,
+      keepRows: true,
+      limit: 100,
+      shouldYield: true,
+    },
+    {
+      name: "one row after expensive preparation",
+      rowWorkMs: 0,
+      storeWorkMs: 0,
+      preparationWorkMs: 1,
+      keepRows: true,
+      limit: 1,
+      shouldYield: true,
+    },
+    {
+      name: "an empty page after expensive preparation",
+      rowWorkMs: 0,
+      storeWorkMs: 0,
+      preparationWorkMs: 1,
+      keepRows: false,
+      limit: 1,
+      shouldYield: true,
+    },
+    {
+      name: "one row after combined loading and preparation",
+      rowWorkMs: 0,
+      storeWorkMs: 8,
+      preparationWorkMs: 0.25,
+      keepRows: true,
+      limit: 1,
+      shouldYield: true,
+    },
+    {
+      name: "one row after expensive store loading",
+      rowWorkMs: 0,
+      storeWorkMs: 20,
+      preparationWorkMs: 0,
+      keepRows: true,
+      limit: 1,
+      shouldYield: true,
+    },
   ])(
-    "yields for row work rather than row count ($rowWorkMs ms)",
-    async ({ rowWorkMs, shouldYield }) => {
+    "shares the event loop for $name",
+    async ({ rowWorkMs, storeWorkMs, preparationWorkMs, keepRows, limit, shouldYield }) => {
       await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
@@ -56,7 +285,8 @@ describe("session list resolver cache", () => {
             { sessionId: `budget-${index}`, updatedAt: index + 1 },
           ]),
         );
-        let workMs = 0;
+        let workMs = storeWorkMs;
+        let controlBeforePreparation: boolean | undefined;
         const buildRow = rowProjection.buildGatewaySessionRow;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
         const rows = vi
@@ -74,14 +304,23 @@ describe("session list resolver cache", () => {
           });
         });
         try {
-          const result = await listSessionsFromStoreAsync({
+          const result = await listSessionFixture({
             cfg,
+            workStartedAt: 0,
             storePath: path.join(stateDir, "sessions.json"),
             store,
-            opts: {},
+            entryFilter: () => {
+              controlBeforePreparation ??= controlRan;
+              workMs += preparationWorkMs;
+              return keepRows;
+            },
+            opts: { limit },
           });
-          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+          expect(result.sessions.map((row) => row.key)).toEqual(
+            keepRows ? Object.keys(store).toReversed().slice(0, limit) : [],
+          );
           expect(controlRan).toBe(shouldYield);
+          expect(controlBeforePreparation).toBe(false);
         } finally {
           rows.mockRestore();
           clock.mockRestore();
@@ -114,7 +353,14 @@ describe("session list resolver cache", () => {
     ];
     const now = Date.now();
     const rowCount = 30;
+    const catalog = tuples.map(({ modelProvider, model }) => ({
+      provider: modelProvider,
+      id: model,
+      name: model,
+      reasoning: true,
+    }));
     const rowContext = buildSessionListRowMetadataContext({ now });
+    const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
     const thinkingSpy = vi
       .spyOn(thinking, "resolveThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off", label: "Off", rank: 0 }], defaultLevel: "off" });
@@ -169,6 +415,7 @@ describe("session list resolver cache", () => {
             model: tuple.model,
             sessionKey,
             entry,
+            modelCatalog: catalog,
             rowContext,
           }).thinkingOptions,
         ).toEqual(["Off"]);
@@ -188,9 +435,11 @@ describe("session list resolver cache", () => {
 
       // Recorded prices bypass lookup; legacy fallback still scales by model, not row.
       expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
+      expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(tuples.length);
       expect(costSpy).toHaveBeenCalledTimes(recorded !== undefined ? 0 : tuples.length);
     } finally {
       thinkingSpy.mockRestore();
+      catalogSpy.mockRestore();
       costSpy.mockRestore();
     }
   });
@@ -310,7 +559,7 @@ describe("session list resolver cache", () => {
         expect(acpSelects).toBe(3);
 
         acpSelects = 0;
-        const result = await listSessionsFromStoreAsync({
+        const result = await listSessionFixture({
           cfg,
           storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
           store: {
@@ -326,7 +575,7 @@ describe("session list resolver cache", () => {
           acpSelects = 0;
           const rows = vi.spyOn(rowProjection, "buildGatewaySessionRow");
           try {
-            const searched = await listSessionsFromStoreAsync({
+            const searched = await listSessionFixture({
               cfg,
               storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
               store: Object.fromEntries(
@@ -397,7 +646,7 @@ describe("session list resolver cache", () => {
           })),
         );
       try {
-        const result = await listSessionsFromStoreAsync({
+        const result = await listSessionFixture({
           cfg,
           storePath,
           store,
@@ -410,16 +659,16 @@ describe("session list resolver cache", () => {
         expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(scenario.enriched);
         const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
         expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
-          derivedTitle: "title 0",
+          derivedTitle: "Title 0",
           lastMessagePreview: "last 0",
         });
         expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({
-          derivedTitle: `title ${scenario.sharedTail}`,
+          derivedTitle: `Title ${scenario.sharedTail}`,
           lastMessagePreview: `last ${scenario.sharedTail}`,
         });
 
         titleBatchSpy.mockClear();
-        await listSessionsFromStoreAsync({
+        await listSessionFixture({
           cfg,
           storePath,
           store,

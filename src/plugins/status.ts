@@ -21,10 +21,18 @@ import {
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandle,
+  resolveCompatibleRuntimePluginRegistry,
+} from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
-import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  tracePluginLifecyclePhase,
+  tracePluginLifecyclePhaseAsync,
+} from "./plugin-lifecycle-trace.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -199,10 +207,7 @@ type PluginReportParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
-function buildPluginReport(
-  params: PluginReportParams | undefined,
-  loadModules: boolean,
-): PluginStatusReport {
+function preparePluginReport(params: PluginReportParams | undefined) {
   const rawConfig = params?.config ?? getRuntimeConfig();
   const workspace = resolvePluginControlPlaneWorkspace({
     config: rawConfig,
@@ -242,7 +247,7 @@ function buildPluginReport(
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
-  // report the same loaded/disabled status the gateway uses at runtime.  Without
+  // report the same loaded/disabled status the gateway uses at runtime.
   const bundledProviderIds = resolveBundledProviderCompatPluginIds({
     config,
     workspaceDir,
@@ -267,22 +272,40 @@ function buildPluginReport(
         ? undefined
         : [...params.onlyPluginIds];
 
+  return {
+    rawConfig,
+    workspace,
+    workspaceDir,
+    metadataSnapshot,
+    context,
+    manifestByPluginId,
+    packageBuildByPluginId,
+    runtimeCompatConfig,
+    onlyPluginIds,
+    runtimeLoadOptions: buildPluginRuntimeLoadOptions(context, {
+      config: runtimeCompatConfig,
+      activationSourceConfig: rawConfig,
+      workspaceDir,
+      env: params?.env,
+      loadModules: true,
+      cache: true,
+      onlyPluginIds,
+      toolDiscovery: params?.runtimeInspection,
+    }),
+  };
+}
+
+function buildPluginReport(
+  params: PluginReportParams | undefined,
+  loadModules: boolean,
+): PluginStatusReport {
+  const prepared = preparePluginReport(params);
+  const { rawConfig, workspaceDir, metadataSnapshot, context, runtimeCompatConfig, onlyPluginIds } =
+    prepared;
   const registry = loadModules
     ? tracePluginLifecyclePhase(
         "runtime plugin registry load",
-        () =>
-          loadPluginRegistryHandle(
-            buildPluginRuntimeLoadOptions(context, {
-              config: runtimeCompatConfig,
-              activationSourceConfig: rawConfig,
-              workspaceDir,
-              env: params?.env,
-              loadModules,
-              cache: false,
-              onlyPluginIds,
-              toolDiscovery: params?.runtimeInspection,
-            }),
-          ),
+        () => loadPluginRegistryHandle(prepared.runtimeLoadOptions),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
       )
     : tracePluginLifecyclePhase(
@@ -301,6 +324,17 @@ function buildPluginReport(
           }),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
       );
+  return projectPluginReport(registry, prepared, params, loadModules);
+}
+
+function projectPluginReport(
+  registry: PluginRegistry,
+  prepared: ReturnType<typeof preparePluginReport>,
+  params: PluginReportParams | undefined,
+  loadModules: boolean,
+): PluginStatusReport {
+  const { workspace, workspaceDir, metadataSnapshot, manifestByPluginId, packageBuildByPluginId } =
+    prepared;
   const importedPluginIds = new Set([
     ...(loadModules
       ? registry.plugins
@@ -353,21 +387,56 @@ export function buildPluginSnapshotReport(params?: PluginReportParams): PluginSt
   return buildPluginReport(params, false);
 }
 
-export function buildPluginDiagnosticsReport(params?: PluginReportParams): PluginStatusReport {
-  return buildPluginReport(params, true);
+/** Complete diagnostics projection before retiring its imported plugin generation. */
+export async function withPluginDiagnosticsReport<T>(
+  params: PluginReportParams | undefined,
+  consume: (report: PluginStatusReport) => T | Promise<T>,
+): Promise<T> {
+  await using cache = createPluginCache();
+  return await withPluginCache(cache, () => consume(buildPluginReport(params, true)));
+}
+
+/** Serializes an owned inspection before disposing its registration resources. */
+export async function withPluginDiagnosticsReportForInspection<Result extends string | undefined>(
+  params: PluginReportParams,
+  formatReport: (report: PluginStatusReport) => Result,
+): Promise<Result> {
+  const prepared = preparePluginReport(params);
+  const inspection = await tracePluginLifecyclePhaseAsync(
+    "runtime plugin registry load",
+    () => acquirePluginRegistryForInspection(prepared.runtimeLoadOptions),
+    { surface: "status", onlyPluginCount: prepared.onlyPluginIds?.length },
+  );
+  let output: Result;
+  try {
+    output = formatReport(projectPluginReport(inspection.registry, prepared, params, true));
+  } catch (error) {
+    try {
+      await inspection.release();
+    } catch (disposalError) {
+      throw new AggregateError(
+        [error, disposalError],
+        "Plugin inspection report and disposal failed",
+        { cause: disposalError },
+      );
+    }
+    throw error;
+  }
+  await inspection.release();
+  return output;
 }
 
 type PluginInspectParams = Pick<
   PluginReportParams,
   "config" | "workspaceDir" | "env" | "logger"
 > & {
-  report?: PluginStatusReportLike;
+  report: PluginStatusReportLike;
 };
 
 function resolvePluginInspectContext({ report, ...params }: PluginInspectParams) {
-  const { rawConfig, config } = resolvePluginRuntimeLoadContext(params);
+  const { config } = resolvePluginRuntimeLoadContext(params);
   return {
-    report: report ?? buildPluginDiagnosticsReport({ ...params, config: rawConfig }),
+    report,
     entries: normalizePluginsConfig(config.plugins).entries,
   };
 }
@@ -509,21 +578,26 @@ function buildPluginInspectRecord(
   };
 }
 
-export function buildAllPluginInspectReports(
-  params: PluginInspectParams = {},
-): PluginInspectReport[] {
+export function buildAllPluginInspectReports(params: PluginInspectParams): PluginInspectReport[] {
   const context = resolvePluginInspectContext(params);
   return context.report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
 }
 
-export function buildPluginCompatibilityWarnings(params?: PluginInspectParams): string[] {
+export function buildPluginCompatibilityWarnings(params: PluginInspectParams): string[] {
   return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
 }
 
 export function buildPluginCompatibilityNotices(
-  params?: PluginInspectParams,
+  params: PluginInspectParams,
 ): PluginCompatibilityNotice[] {
-  return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+  const registry = params.report;
+  return registry.plugins.flatMap((plugin) =>
+    buildCompatibilityNoticesForInspect({
+      plugin,
+      shape: buildPluginShapeSummary({ plugin, report: registry }).shape,
+      diagnostics: registry.diagnostics.filter((entry) => entry.pluginId === plugin.id),
+    }),
+  );
 }
 
 export function buildPluginCompatibilitySnapshotNotices(params?: {

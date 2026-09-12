@@ -17,7 +17,20 @@ const SYSTEM_SYSTEMD_UNIT_DIRS = [
 ] as const;
 
 /** Proves service absence without interpreting failed manager commands as absence. */
-export async function isSystemdServiceAbsent(env: GatewayServiceEnv): Promise<boolean> {
+export async function isSystemdServiceAbsent(
+  env: GatewayServiceEnv,
+  opts?: { timeoutMs?: number; strictCommandAbsent?: true },
+): Promise<boolean> {
+  if (opts?.strictCommandAbsent) {
+    // The caller just proved user-unit absence without loading it. System
+    // ownership needs its own live manager and complete unit-path inspection.
+    await assertNoSystemSystemdOwnership(
+      `${resolveSystemdServiceName(env)}.service`,
+      opts.timeoutMs,
+      { requireLoaded: true },
+    );
+    return (await findInstalledSystemdGatewayScope(env)) === null;
+  }
   if (
     env.DBUS_SESSION_BUS_ADDRESS ||
     env.DBUS_SYSTEM_BUS_ADDRESS ||

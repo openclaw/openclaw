@@ -10,6 +10,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
@@ -30,7 +31,7 @@ export async function requestChatSend(
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
-  const sessionId = params.intent ? params.sessionId : routing.sessionId;
+  const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
@@ -59,9 +60,10 @@ export async function requestChatSend(
   return normalizeChatSendAck(payload, params.runId);
 }
 
-export function resolveDisplayedLeafEntryId(
-  state: Pick<ChatState, "chatDisplayedLeafEntryId">,
-): string | null | undefined {
+export function resolveDisplayedLeafEntryId(state: ChatState): string | null | undefined {
+  if (state.chatLoading || isInitialChatHistoryUnavailable(state)) {
+    return undefined;
+  }
   if (state.chatDisplayedLeafEntryId === null) {
     return null;
   }

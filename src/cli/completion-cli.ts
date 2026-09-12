@@ -6,11 +6,13 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { generateBashCompletion } from "./completion-bash.js";
 import {
   collectShellCompletionCommandTree,
   commandNameVariants,
   completionFlags,
   visibleCompletionCommands,
+  type ShellCompletionCommandTree,
   type ShellCompletionContext,
 } from "./completion-command-tree.js";
 import {
@@ -27,22 +29,30 @@ import {
   type CompletionShell,
 } from "./completion-runtime.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
-import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry-core.js";
+import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
-import { getSubCliEntries, registerSubCliByNameCore } from "./program/register.subclis-core.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
+import { removeCommandGroupNames } from "./program/register-command-groups.js";
+import { getSubCliCompletionGroups } from "./program/register.subclis-core.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
-  if (shell === "zsh") {
-    return generateZshCompletion(program);
-  }
-  if (shell === "bash") {
-    return generateBashCompletion(program);
-  }
-  if (shell === "powershell") {
-    return generatePowerShellCompletion(program);
-  }
-  return generateFishCompletion(program);
+  return createCompletionScriptGenerator(program)(shell);
+}
+
+function createCompletionScriptGenerator(program: Command): (shell: CompletionShell) => string {
+  let tree: ShellCompletionCommandTree | undefined;
+  return (shell) => {
+    if (shell === "zsh") {
+      return generateZshCompletion(program);
+    }
+    tree ??= collectShellCompletionCommandTree(program);
+    if (shell === "bash") {
+      return generateBashCompletion(tree);
+    }
+    if (shell === "powershell") {
+      return generatePowerShellCompletion(tree);
+    }
+    return generateFishCompletion(tree);
+  };
 }
 
 function preferredCompletionFlag(option: Option): string {
@@ -134,8 +144,9 @@ async function writeCompletionCache(params: {
   shells: CompletionShell[];
   binName: string;
 }): Promise<void> {
+  const generateScript = createCompletionScriptGenerator(params.program);
   for (const shell of params.shells) {
-    const script = getCompletionScript(shell, params.program);
+    const script = generateScript(shell);
     await publishOutputFileAtomically({
       filePath: resolveCompletionCachePath(shell, params.binName),
       tempPrefix: ".openclaw-completion-cache",
@@ -152,16 +163,13 @@ function writeCompletionRegistrationWarning(message: string): void {
 }
 
 async function registerSubcommandsForCompletion(program: Command): Promise<void> {
-  const entries = getSubCliEntries();
-  for (const entry of entries) {
-    if (entry.name === "completion") {
-      continue;
-    }
+  for (const { name, entry } of getSubCliCompletionGroups()) {
     try {
-      await registerSubCliByNameCore(program, entry.name, process.argv, { purpose: "completion" });
+      removeCommandGroupNames(program, entry);
+      await entry.register(program);
     } catch (error) {
       writeCompletionRegistrationWarning(
-        `skipping subcommand \`${entry.name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
+        `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -207,8 +215,9 @@ export function registerCompletionCli(program: Command) {
       // Our CLI defaults to lazy registration for perf; force-register core commands here.
       const ctx = getProgramContext(program);
       if (ctx) {
-        for (const name of getCoreCliCommandNames()) {
-          await registerCoreCliByName(program, ctx, name);
+        for (const entry of getCoreCliCompletionGroups(ctx)) {
+          removeCommandGroupNames(program, entry);
+          await entry.register(program);
         }
       }
 
@@ -397,153 +406,14 @@ ${funcName}() {
   return segments.join("");
 }
 
-function generateBashCompletion(program: Command): string {
-  const rootCmd = program.name();
-  const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
-  const commandPathUpdate = generateBashCommandPathUpdate(contexts);
-  const choiceCompletion = generateBashOptionChoiceCompletion([root, ...contexts]);
-  return `
-_${rootCmd}_completion() {
-    local cur opts command_path candidate_path value_options word flag i cword remaining_line word_prefix
-    local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
-    local -a words=()
-    # Before Bash 4.3, COMP_POINT is a byte offset; string spans must use the same units.
-    if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
-        local LC_ALL=C
-    fi
-    COMPREPLY=()
-    remaining_line="\${COMP_LINE}"
-    # Rejoin '=' and ':' wordbreaks, preserving redirections and whitespace boundaries.
-    # Bash versions split '=' differently; $2 remains the fragment Readline will replace.
-    for ((i = 0; i <= COMP_CWORD; i++)); do
-        word="\${COMP_WORDS[i]}"
-        if ((i > 0)) && [[ -n "\${word}" && "\${remaining_line}" == "\${word}"* &&
-            ( "\${word}" =~ ^[=:]+$ || "\${COMP_WORDS[i-1]}" =~ ^[=:]+$ ) ]]; then
-            words[\${#words[@]}-1]+="\${word}"
-        else
-            words+=("\${word}")
-        fi
-        remaining_line="\${remaining_line#*"\${word}"}"
-    done
-    cword=$((\${#words[@]} - 1))
-    cur="\${words[cword]}"
-    # COMP_WORDS includes text after the cursor; only the prefix participates in completion.
-    cur="\${cur:0:\${#cur} + COMP_POINT - \${#COMP_LINE} + \${#remaining_line}}"
-    word_prefix="\${cur%"$2"}"
-    opts="${root.completions.join(" ")}"
-    value_options="${root.valueOptions.join(" ")}"
-    command_path=""
-
-    for ((i = 1; i < cword; i++)); do
-        word="\${words[i]}"
-        if [[ \${word} == -* ]]; then
-            flag="\${word%%=*}"
-            if [[ \${word} != *=* && " \${value_options} " == *" \${flag} "* ]]; then
-                i=$((i + 1))
-            fi
-            continue
-        fi
-
-        candidate_path="\${command_path:+\${command_path} }\${word}"
-${commandPathUpdate}
-    done
-
-    choice_flag="\${words[cword-1]}"
-    choice_prefix="\${cur}"
-    choice_completion_prefix=""
-    if [[ "\${cur}" == --*=* ]]; then
-        choice_flag="\${cur%%=*}"
-        choice_prefix="\${cur#*=}"
-        choice_completion_prefix="\${choice_flag}="
-    fi
-    for short_group in "\${choice_flag}" "\${cur}"; do
-        [[ "\${short_group}" == -??* && "\${short_group}" != --* ]] || continue
-        short_group="\${short_group#-}"
-        for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
-            short_flag="-\${short_group:short_index:1}"
-            if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
-                if [[ "\${cur}" == "-\${short_group}" ]]; then
-                    choice_flag="\${short_flag}"
-                    choice_prefix="\${short_group:short_index+1}"
-                    choice_completion_prefix="-\${short_group:0:short_index+1}"
-                elif ((short_index == \${#short_group} - 1)); then
-                    choice_flag="\${short_flag}"
-                fi
-                break
-            fi
-        done
-    done
-
-${choiceCompletion}
-    COMPREPLY=( $(compgen -W "\${opts}" -- "\${cur}") )
-    COMPREPLY=("\${COMPREPLY[@]#"\${word_prefix}"}")
-}
-
-complete -F _${rootCmd}_completion ${rootCmd}
-`;
-}
-
-function generateBashOptionChoiceCompletion(contexts: ShellCompletionContext[]): string {
-  const cases = contexts
-    .filter(({ valueChoices }) => valueChoices.length > 0)
-    .map(({ pathVariants, valueChoices }) => {
-      const commandPaths = pathVariants.map((segments) => `"${segments.join(" ")}"`).join("|");
-      const optionCases = valueChoices
-        .map(({ flags, choices, requiresValue }) => {
-          const optionFlags = flags.map((flag) => `"${flag}"`).join("|");
-          const escapedChoices = choices.map(quoteCliArg).join(" ");
-          const shouldReturn = requiresValue
-            ? "true"
-            : `[[ \${#COMPREPLY[@]} -gt 0 || -n "\${choice_completion_prefix}" || "\${choice_prefix}" != -* ]]`;
-          return `            ${optionFlags})
-                local -a choice_values=(${escapedChoices})
-                local choice completion
-                for choice in "\${choice_values[@]}"; do
-                    if [[ "\${choice}" == "\${choice_prefix}"* ]]; then
-                        completion="\${choice_completion_prefix}\${choice}"
-                        COMPREPLY+=("\${completion#"\${word_prefix}"}")
-                    fi
-                done
-                if ${shouldReturn}; then
-                    return
-                fi
-                ;;`;
-        })
-        .join("\n");
-      return `        ${commandPaths})
-            case "\${choice_flag}" in
-${optionCases}
-            esac
-            ;;`;
-    })
-    .join("\n");
-  return cases ? `    case "\${command_path}" in\n${cases}\n    esac\n` : "";
-}
-
-function generateBashCommandPathUpdate(contexts: ShellCompletionContext[]): string {
-  const cases = contexts.map((context) => {
-    const patterns = context.pathVariants
-      .map((commandPath) => `"${commandPath.join(" ")}"`)
-      .join("|");
-    return `          ${patterns})
-            command_path="\${candidate_path}"
-            opts="${context.completions.join(" ")}"
-            value_options="${context.valueOptions.join(" ")}"
-            ;;`;
-  });
-  return cases.length
-    ? `        case "\${candidate_path}" in\n${cases.join("\n")}\n        esac`
-    : "";
-}
-
-function generatePowerShellCompletion(program: Command): string {
-  const rootCmd = program.name();
+function generatePowerShellCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants: contexts } = tree;
+  const rootCmd = root.command.name();
   const completionBodies: string[] = [];
   const formatPowerShellArray = (entries: string[]) =>
     entries.length > 0
       ? `@(${entries.map((entry) => `'${entry.replaceAll("'", "''")}'`).join(",")})`
       : "@()";
-  const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
   const rootValueOptions = root.valueOptions;
   const commandPathCases = contexts
     .flatMap((context) =>
@@ -692,9 +562,9 @@ ${choiceCompletion}
 `;
 }
 
-function generateFishCompletion(program: Command): string {
-  const rootCmd = program.name();
-  const { root, descendants } = collectShellCompletionCommandTree(program);
+function generateFishCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants } = tree;
+  const rootCmd = root.command.name();
   const segments: string[] = [generateFishPathHelper(rootCmd, descendants)];
 
   for (const context of [root, ...descendants]) {

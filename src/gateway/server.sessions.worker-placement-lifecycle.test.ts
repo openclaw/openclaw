@@ -1,7 +1,10 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
@@ -298,18 +301,26 @@ test.each(["generation", "environment", "session key"] as const)(
   },
 );
 
-test("sessions.delete drains an active local claim before placement retirement", async () => {
+test.each([
+  ["discord:group:active-local-delete", "discord:group:active-local-delete"],
+  ["agent:main:cron:placed-job", "agent:main:cron:placed-job:run:sess-active-local-delete"],
+  ["agent:main:cron:adopted-job", "agent:main:cron:adopted-job:run:original-session-id"],
+])("sessions.delete drains %s before placement retirement", async (sessionKey, placementKey) => {
   const { storePath } = await createSessionStoreDir();
-  const sessionKey = "discord:group:active-local-delete";
   const sessionId = "sess-active-local-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry(sessionId),
+      [placementKey]: sessionStoreEntry(sessionId),
+    },
+  });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
   const events: string[] = [];
   const cleanupAdmission = await beginClaimedTurn({
     events,
     placementStore,
     sessionId,
-    sessionKey,
+    sessionKey: placementKey,
     storePath,
   });
 
@@ -335,12 +346,15 @@ test("sessions.delete drains an active local claim before placement retirement",
     expect(events).toEqual(["admission:interrupt", "claim:released", "placement:retire"]);
     expect(placementStore.get(sessionId)).toBeUndefined();
     expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+    if (placementKey !== sessionKey) {
+      expect(loadSessionEntry(placementKey).entry?.sessionId).toBe(sessionId);
+    }
   } finally {
     cleanupAdmission();
   }
 });
 
-test("sessions.delete rejects failed placement while its worker lease remains", async () => {
+test("sessions.delete retains failed placement when worker cleanup is unavailable", async () => {
   await createSessionStoreDir();
   const sessionKey = "discord:group:failed-worker-session";
   const sessionId = "sess-failed-worker-delete";
@@ -356,6 +370,8 @@ test("sessions.delete rejects failed placement while its worker lease remains", 
       context: {
         workerEnvironmentService: {
           get: () => ({ state: "failed", leaseId: "lease-1" }),
+          hasInferenceForSession: () => false,
+          cancelInferenceForSession: () => [],
           resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
@@ -364,9 +380,9 @@ test("sessions.delete rejects failed placement while its worker lease remains", 
   );
 
   expect(deleted.ok).toBe(false);
-  expect(deleted.error?.message).toContain("cloud worker placement is failed");
+  expect(deleted.error?.message).toContain("cloud worker reclaim is unavailable");
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
 });
 
@@ -846,7 +862,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     const release = vi.fn();
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       afterReconcile: () => {
@@ -912,7 +928,9 @@ test.each(["worker-turn", "remote-exec"] as const)(
       entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-    const harness = createHarness(placementStore, { verifyFails: true });
+    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+      verifyFails: true,
+    });
     await harness.service.dispatch({ ...REQUEST, executionMode });
     const forceDestroyEnvironment = vi.spyOn(harness.service, "forceDestroyEnvironment");
     const deleted = await directSessionReq(
@@ -952,7 +970,7 @@ test("sessions.delete retains reclaimed placement when runtime cleanup fails bef
     entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
   });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const harness = createHarness(placementStore, {
+  const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
     reconcileChanged: false,
     reconcileCommitsManifest: false,
   });

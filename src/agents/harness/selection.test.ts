@@ -20,6 +20,10 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import {
+  claimHeartbeatOutcomeForRun,
+  persistHeartbeatOutcome,
+} from "../../infra/heartbeat-outcome-store.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -63,6 +67,7 @@ import {
   setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
@@ -71,9 +76,11 @@ import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-tur
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
+import { resolveAgentHarnessDeliveryDefaults } from "./selection-decision.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
+  resolveAgentHarnessNativeToolPolicyRestricted,
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
@@ -117,6 +124,7 @@ const privateHarnessParamCases = [
   { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
   { field: "compactionCountOwner", value: "caller" },
   { field: "onContextAccountingEvent", value: () => undefined },
+  { field: "onCompactionRequestBudget", value: () => undefined },
 ] as const;
 
 function createTranscriptRecorder(
@@ -355,14 +363,7 @@ function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssis
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
   };
@@ -579,6 +580,120 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it.each(["openclaw", "codex"])(
+    "carries silent heartbeat outcome into the %s host boundary exactly once per retry",
+    async (harnessId) => {
+      const root = trajectoryTempDirs.make("harness-heartbeat-outcome-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: path.join(root, "agent.sqlite"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await persistHeartbeatOutcome({
+        ...target,
+        runSessionKey: "agent:main:main:heartbeat",
+        occurredAt: 1,
+        response: { outcome: "done", notify: false, summary: "ISOLATED_OUTCOME_731" },
+      });
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        createAttemptResult("native"),
+      );
+      if (harnessId === "codex") {
+        registerAgentHarness(
+          {
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true, priority: 100 }),
+            runAttempt,
+          },
+          { ownerPluginId: "codex" },
+        );
+      }
+      const currentInboundContext = {
+        text: "Current quoted reply",
+        resumableText: "Current room delta",
+        promptJoiner: "\n" as const,
+        fragments: [{ kind: "conversation-data" as const, text: "Current quoted reply" }],
+      };
+      const params = {
+        ...createAttemptParams(),
+        ...target,
+        sessionTarget: target,
+        trigger: "user" as const,
+        agentHarnessId: harnessId,
+        currentInboundContext,
+      };
+      const captured = harnessId === "openclaw" ? agentRunAttempt : runAttempt;
+      for (let retry = 0; retry < 2; retry++) {
+        await runAgentHarnessAttempt(params);
+        const received = captured.mock.calls.at(-1)?.[0];
+        expect(received?.currentInboundContext?.text.match(/ISOLATED_OUTCOME_731/g)).toHaveLength(
+          1,
+        );
+        expect(
+          received?.currentInboundContext?.resumableText?.match(/ISOLATED_OUTCOME_731/g),
+        ).toHaveLength(1);
+        expect(received?.currentInboundContext?.promptJoiner).toBe("\n");
+        const fragments = received?.currentInboundContext?.fragments;
+        expect(fragments).toEqual([
+          ...currentInboundContext.fragments,
+          { kind: "heartbeat-outcome", text: expect.stringContaining("ISOLATED_OUTCOME_731") },
+        ]);
+        expect(JSON.stringify(fragments)).toContain("ISOLATED_OUTCOME_731");
+        expect(received?.prompt).toBe("hello");
+        expect(params.currentInboundContext).toEqual(currentInboundContext);
+        expect(currentInboundContext.text).toBe("Current quoted reply");
+      }
+      expect(JSON.stringify(await loadTranscriptEvents(target))).not.toContain(
+        "ISOLATED_OUTCOME_731",
+      );
+      expect(
+        await claimHeartbeatOutcomeForRun({ ...target, runId: "later-user-run" }),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["heartbeat", "cron", "detached", "aborted"] as const)(
+    "does not consume silent heartbeat context for a %s host attempt",
+    async (kind) => {
+      const root = trajectoryTempDirs.make("harness-heartbeat-control-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: path.join(root, "agent.sqlite"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await persistHeartbeatOutcome({
+        ...target,
+        runSessionKey: "agent:main:main:heartbeat",
+        occurredAt: 1,
+        response: { outcome: "done", notify: false, summary: "Retained outcome" },
+      });
+      const params = {
+        ...createAttemptParams(),
+        ...target,
+        sessionTarget: target,
+        trigger: kind === "heartbeat" || kind === "cron" ? kind : ("user" as const),
+        ...(kind === "detached" ? { sessionPersistence: "detached" as const } : {}),
+        ...(kind === "aborted" ? { abortSignal: AbortSignal.abort() } : {}),
+      };
+      if (kind === "aborted") {
+        await expect(runAgentHarnessAttempt(params)).rejects.toThrow();
+      } else {
+        await runAgentHarnessAttempt(params);
+        expect(agentRunAttempt.mock.calls.at(-1)?.[0].currentInboundContext).toBeUndefined();
+      }
+      expect((await claimHeartbeatOutcomeForRun({ ...target, runId: "next-user" }))?.summary).toBe(
+        "Retained outcome",
+      );
+    },
+  );
+
   it.each(["openclaw", "codex"])(
     "prepares direct tool authority before the %s harness executes",
     async (harnessId) => {
@@ -1055,6 +1170,9 @@ describe("runAgentHarnessAttempt", () => {
         storePath: admission.storePath,
       };
       params.bootstrapContextRunKind = "heartbeat";
+      params.model = { ...params.model, contextWindow: 180_000 };
+      params.modelContextWindow = 200_000;
+      params.contextTokenBudget = 180_000;
       params.userTurnTranscriptRecorder =
         boundary === "missing admission" ? undefined : createTranscriptRecorder(admission);
       params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
@@ -1069,6 +1187,12 @@ describe("runAgentHarnessAttempt", () => {
             promptError: false,
             aborted: false,
             yieldAborted: false,
+            runtimeContext: {
+              provider: params.provider,
+              modelId: params.modelId,
+              modelContextWindow: 200_000,
+              tokenBudget: 180_000,
+            },
           }),
         );
       } else {
@@ -1287,13 +1411,22 @@ describe("runAgentHarnessAttempt", () => {
     params.toolsAllow = ["openclaw"];
     params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
     const onContextAccountingEvent = vi.fn();
-    Object.assign(params, { compactionCountOwner: "caller", onContextAccountingEvent });
+    const onCompactionRequestBudget = vi.fn();
+    Object.assign(params, {
+      compactionCountOwner: "caller",
+      onContextAccountingEvent,
+      onCompactionRequestBudget,
+    });
 
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
     expect(agentRunAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({ compactionCountOwner: "caller", onContextAccountingEvent }),
+      expect.objectContaining({
+        compactionCountOwner: "caller",
+        onContextAccountingEvent,
+        onCompactionRequestBudget,
+      }),
     );
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
@@ -1749,23 +1882,29 @@ describe("runAgentHarnessAttempt", () => {
     expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
-  it("isolates collector runs and explicit restrictive policy layers for plugin harnesses", async () => {
+  it("isolates native capabilities restricted by effective profiles or explicit policy", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push(attempt.pluginHarnessToolPolicyRestricted === true);
       return createAttemptResult("codex");
     });
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        conversationToolPolicySupport: "exact",
-        supports: (ctx) =>
-          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt,
-      },
-      { ownerPluginId: "codex" },
-    );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      conversationToolPolicySupport: "exact",
+      conversationToolPolicyNativeTools: [
+        "exec",
+        "process",
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+      ],
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
 
     const cases: Array<{
       config?: OpenClawConfig;
@@ -1776,6 +1915,38 @@ describe("runAgentHarnessAttempt", () => {
     }> = [
       {},
       { config: { tools: { profile: "coding" } } as OpenClawConfig },
+      { config: { tools: { profile: "full" } } },
+      { config: { tools: { profile: "messaging" } } },
+      { config: { tools: { profile: "minimal" } } },
+      {
+        config: {
+          tools: { profile: "coding" },
+          agents: { entries: { worker: { tools: { profile: "messaging" } } } },
+        },
+        agentId: "worker",
+        sessionKey: "agent:worker:session-1",
+      },
+      {
+        config: {
+          tools: { profile: "messaging" },
+          agents: { entries: { worker: { tools: { profile: "coding" } } } },
+        },
+        agentId: "worker",
+        sessionKey: "agent:worker:session-1",
+      },
+      { config: { tools: { profile: "coding", byProvider: { codex: { profile: "messaging" } } } } },
+      {
+        config: {
+          tools: { profile: "full" },
+          agents: {
+            entries: { worker: { tools: { byProvider: { codex: { profile: "minimal" } } } } },
+          },
+        },
+        agentId: "worker",
+        sessionKey: "agent:worker:session-1",
+      },
+      { config: { tools: { profile: "messaging", alsoAllow: ["group:fs", "group:runtime"] } } },
+      { config: { tools: { profile: "minimal", alsoAllow: ["exec"] } } },
       { conversationToolPolicy: {} },
       { conversationToolPolicy: { allow: ["*"] } },
       { swarmCollector: false },
@@ -1794,21 +1965,49 @@ describe("runAgentHarnessAttempt", () => {
         conversationToolPolicy: {},
       },
     ];
+    const nativeRestrictions: boolean[] = [];
 
     for (const testCase of cases) {
-      await runAgentHarnessAttempt({
+      const params = {
         ...createAttemptParams(testCase.config),
         conversationToolPolicy: testCase.conversationToolPolicy,
         agentId: testCase.agentId,
         sessionKey: testCase.sessionKey,
         swarmCollector: testCase.swarmCollector,
-      });
+      };
+      nativeRestrictions.push(resolveAgentHarnessNativeToolPolicyRestricted(params, harness));
+      await runAgentHarnessAttempt(params);
     }
 
-    expect(received).toEqual([false, false, false, false, false, true, true, true, true, true]);
+    expect(received).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(nativeRestrictions).toEqual(received);
   });
 
-  it("rejects restrictive policy before an unsupported plugin harness runs", async () => {
+  it.each([
+    { conversationToolPolicy: { deny: ["exec"] } },
+    { toolsAllow: [] },
+    { disableTools: true },
+  ])("rejects restrictive policy %j before an unsupported plugin harness runs", async (policy) => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("other"));
     registerAgentHarness(
       {
@@ -1824,13 +2023,105 @@ describe("runAgentHarnessAttempt", () => {
     await expect(
       runAgentHarnessAttempt({
         ...createAttemptParams(),
-        conversationToolPolicy: { deny: ["exec"] },
+        ...policy,
       }),
     ).rejects.toThrow(
       "Other runtime cannot enforce this conversation's tool policy. Use the embedded runtime",
     );
     expect(runAttempt).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "omitted runtime allowlist",
+      policy: {},
+      restricted: false,
+      tools: undefined,
+      denyAll: false,
+    },
+    {
+      name: "empty config allowlist",
+      policy: { config: { tools: { allow: [] } } },
+      restricted: false,
+      tools: undefined,
+      denyAll: false,
+    },
+    {
+      name: "empty runtime allowlist",
+      policy: { toolsAllow: [] },
+      restricted: true,
+      tools: [],
+      denyAll: true,
+    },
+    {
+      name: "disabled tools",
+      policy: { disableTools: true },
+      restricted: true,
+      tools: [],
+      denyAll: true,
+    },
+    {
+      name: "disabled tools with wildcard",
+      policy: { disableTools: true, toolsAllow: ["*"] },
+      restricted: true,
+      tools: [],
+      denyAll: true,
+    },
+    {
+      name: "narrow runtime allowlist",
+      policy: { toolsAllow: ["read"] },
+      restricted: true,
+      tools: ["read"],
+      denyAll: false,
+    },
+    {
+      name: "wildcard runtime allowlist",
+      policy: { toolsAllow: ["*"] },
+      restricted: false,
+      tools: ["*"],
+      denyAll: false,
+    },
+  ])(
+    "preserves $name semantics at plugin handoff",
+    async ({ policy, restricted, tools, denyAll }) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        createAttemptResult("codex"),
+      );
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          conversationToolPolicySupport: "exact",
+          conversationToolPolicySafeDenyTools: ["image_generate"],
+          supports: (ctx) =>
+            ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+          runAttempt,
+        },
+        { ownerPluginId: "codex" },
+      );
+
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        ...policy,
+        extraSystemPrompt: "Existing operator note.",
+      });
+
+      expect(runAttempt).toHaveBeenCalledTimes(1);
+      const attempt = runAttempt.mock.calls[0]?.[0];
+      expect(attempt?.pluginHarnessToolPolicyRestricted).toBe(restricted);
+      expect(attempt?.toolsAllow).toEqual(tools);
+      expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
+      if (denyAll) {
+        expect(attempt?.extraSystemPrompt).toContain(
+          "Tool and file actions are disabled by runtime policy.",
+        );
+      } else {
+        expect(attempt?.extraSystemPrompt).not.toContain(
+          "Tool and file actions are disabled by runtime policy.",
+        );
+      }
+    },
+  );
 
   it("adds chat policy wording for plugin harness group deny-all", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
@@ -1952,29 +2243,34 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
-  it("rejects a harness replaced during its support probe", () => {
-    const replacement: AgentHarness = {
-      id: "codex",
-      label: "Replacement",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult("replacement"),
-    };
-    registerAgentHarness({
-      ...replacement,
-      supports: () => {
-        registerAgentHarness(replacement);
-        return { supported: true };
-      },
-    });
+  it.each(["runtime", "delivery"] as const)(
+    "rejects a harness replaced during its %s support probe",
+    (surface) => {
+      const replacement: AgentHarness = {
+        id: "codex",
+        label: "Replacement",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => createAttemptResult("replacement"),
+      };
+      registerAgentHarness({
+        ...replacement,
+        supports: () => {
+          registerAgentHarness(replacement);
+          return { supported: true };
+        },
+      });
 
-    expect(() =>
-      selectAgentHarness({
-        provider: "openai",
-        modelId: "gpt-5.6-sol",
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).toThrow("changed during owner resolution");
-  });
+      const select =
+        surface === "runtime" ? selectAgentHarness : resolveAgentHarnessDeliveryDefaults;
+      expect(() =>
+        select({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          agentHarnessRuntimeOverride: "codex",
+        }),
+      ).toThrow("changed during owner resolution");
+    },
+  );
 
   it("does not select Codex from a non-OpenAI model name", () => {
     registerSuccessfulCodexHarness();

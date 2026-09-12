@@ -18,6 +18,8 @@ import {
   createBoardDeclaredSummary,
   resolveBoardWidgetPutParams,
   type BoardWidgetHtmlViewMetadata,
+  type BoardWidgetHtmlDocument,
+  type BoardWidgetDocument,
   type BoardWidgetNameIdentityMarker,
   type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
@@ -357,7 +359,7 @@ export function updateManifestHeightMode(
   return JSON.stringify({ ...parsed, heightMode });
 }
 
-export function effectiveGrantState(
+function effectiveGrantState(
   storedGrantState: string,
   manifest: ParsedBoardManifest,
 ): BoardWidget["grantState"] {
@@ -401,7 +403,65 @@ export function parsePluginContent(value: string): ParsedPluginContent {
       };
 }
 
-export function rowToRegisteredDocument(
+function rowToHtmlDocument(
+  row: Pick<
+    SelectedBoardWidgetRow,
+    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
+  >,
+): BoardWidgetHtmlDocument | undefined {
+  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
+    return undefined;
+  }
+  const manifest = parseManifest(row.manifest);
+  const declared = manifest.declared;
+  return {
+    html: Buffer.from(row.html).toString("utf8"),
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: row.view_generation,
+    grantState: effectiveGrantState(row.grant_state, manifest),
+    ...(declared ? { declared } : {}),
+  };
+}
+
+export function rowToBoardWidgetDocument(
+  row: Pick<
+    SelectedBoardWidgetRow,
+    | "content_kind"
+    | "html"
+    | "descriptor_json"
+    | "title"
+    | "revision"
+    | "sha256"
+    | "view_generation"
+    | "grant_state"
+    | "manifest"
+  >,
+): BoardWidgetDocument | undefined {
+  if (row.content_kind === "html") {
+    return rowToHtmlDocument(row);
+  }
+  if (row.content_kind === "plugin") {
+    return rowToRegisteredDocument(row);
+  }
+  if (row.descriptor_json === null) {
+    return undefined;
+  }
+  const manifest = parseManifest(row.manifest);
+  if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
+    return undefined;
+  }
+  return {
+    descriptor: parseDescriptor(row.descriptor_json),
+    revision: row.revision,
+    instanceId: manifest.mcpAppInstanceId,
+    grantState: effectiveGrantState(row.grant_state, manifest),
+    declaredTools: manifest.declared?.tools ?? [],
+    interactive: manifest.mcpAppInteractive,
+  };
+}
+
+function rowToRegisteredDocument(
   row: Pick<
     SelectedBoardWidgetRow,
     | "content_kind"

@@ -384,7 +384,7 @@ describe("authenticated operator request starts", () => {
     },
   );
 
-  it("compresses large frames for peers that offer permessage-deflate and accepts compressed post-auth frames above the preauth cap", async () => {
+  it("keeps small frames raw, compresses large frames, and accepts compressed post-auth frames above the preauth cap", async () => {
     // Regression: the deflate extension keeps its own copy of the preauth maxPayload,
     // so without the extension-aware handoff an authenticated compressed request above
     // 64 KiB closed the socket with 1009 even though the receiver limit was raised.
@@ -395,6 +395,7 @@ describe("authenticated operator request starts", () => {
     setTestPluginRegistry(registry);
     const token = "gateway-compression-test-token";
     const port = await getGatewayTestPort();
+    const capture = captureGatewayConnection(port);
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let ws: WebSocket | undefined;
     try {
@@ -405,6 +406,27 @@ describe("authenticated operator request starts", () => {
       });
       ws = await openOperatorSocket(port, token);
       expect(ws.extensions).toContain("permessage-deflate");
+      const { stream } = capture.get();
+      // Cover both live session/tool events and ordinary final agent results.
+      for (const sizeKiB of [6, 20]) {
+        const id = `small-${sizeKiB}`;
+        const smallText = "x".repeat(sizeKiB * 1024);
+        const smallResponse = onceMessage<{
+          type: "res";
+          id: string;
+          ok: boolean;
+          payload: { echoed: string };
+        }>(ws, (value) => value.type === "res" && value.id === id);
+        const beforeSmall = stream.bytesWritten;
+        ws.send(
+          JSON.stringify({ type: "req", id, method: "test.echo", params: { text: smallText } }),
+        );
+        await expect(smallResponse).resolves.toMatchObject({
+          ok: true,
+          payload: { echoed: smallText },
+        });
+        expect(stream.bytesWritten - beforeSmall).toBeGreaterThan(smallText.length);
+      }
       const text = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
       const response = onceMessage<{
         type: "res";
@@ -412,13 +434,16 @@ describe("authenticated operator request starts", () => {
         ok: boolean;
         payload: { echoed: string };
       }>(ws, (value) => value.type === "res" && value.id === "big");
+      const beforeBig = stream.bytesWritten;
       ws.send(JSON.stringify({ type: "req", id: "big", method: "test.echo", params: { text } }));
       await expect(response).resolves.toMatchObject({ ok: true, payload: { echoed: text } });
+      expect(stream.bytesWritten - beforeBig).toBeLessThan(text.length / 4);
     } finally {
       ws?.terminate();
       try {
         await server?.close();
       } finally {
+        capture.restore();
         resetTestPluginRegistry();
       }
     }

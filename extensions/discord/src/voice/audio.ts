@@ -1,6 +1,4 @@
-// Discord plugin module implements audio behavior.
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -12,7 +10,6 @@ import {
 } from "libopus-wasm";
 import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
-import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -144,7 +141,8 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
 }
 
 class DiscordOpusEncodeStream extends Transform {
-  #buffer = Buffer.alloc(0);
+  #buffer: Buffer = Buffer.alloc(0);
+  #partialFrame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
   #encoder!: LibopusEncoder;
   readonly #packetPcmBytes = new WeakMap<Buffer, number>();
 
@@ -170,12 +168,35 @@ class DiscordOpusEncodeStream extends Transform {
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, done: TransformCallback): void {
     try {
-      this.#buffer =
-        this.#buffer.length > 0 ? Buffer.concat([this.#buffer, chunk]) : Buffer.from(chunk);
+      if (this.#buffer.length > 0) {
+        const bufferedBytes = this.#buffer.length;
+        const copiedBytes = chunk.copy(
+          this.#partialFrame,
+          bufferedBytes,
+          0,
+          DISCORD_OPUS_FRAME_BYTES - bufferedBytes,
+        );
+        if (bufferedBytes + copiedBytes < DISCORD_OPUS_FRAME_BYTES) {
+          this.#buffer = this.#partialFrame.subarray(0, bufferedBytes + copiedBytes);
+          done();
+          return;
+        }
+        this.#buffer = chunk.subarray(copiedBytes);
+        this.#encodeFrame(this.#partialFrame);
+      } else {
+        this.#buffer = chunk;
+      }
       while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
         const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
         this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
         this.#encodeFrame(frame);
+      }
+      // Complete frames are consumed synchronously; own the tail before the write callback.
+      if (this.#buffer.length > 0) {
+        this.#buffer.copy(this.#partialFrame);
+        this.#buffer = this.#partialFrame.subarray(0, this.#buffer.length);
+      } else {
+        this.#buffer = Buffer.alloc(0);
       }
       done();
     } catch (err) {
@@ -213,6 +234,7 @@ class DiscordOpusEncodeStream extends Transform {
   override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
     this.#encoder?.free();
     this.#buffer = Buffer.alloc(0);
+    this.#partialFrame = Buffer.alloc(0);
     done(err);
   }
 
@@ -227,28 +249,15 @@ function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
   return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
 }
 
-export async function decodeOpusStream(
-  stream: Readable,
-  params: OpusDecodeCallbacks & { maxBytes: number },
-): Promise<Buffer> {
-  return await readByteStreamWithLimit(decodeOpusFrames(stream, params), {
-    maxBytes: params.maxBytes,
-    onOverflow: () =>
-      new Error(
-        `Discord voice capture exceeds the transcription PCM limit (${params.maxBytes} bytes); speak a shorter segment.`,
-      ),
-  });
-}
-
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
-    onChunk: (pcm48kStereo: Buffer) => void;
+    onChunk: (pcm48kStereo: Buffer, packet: Buffer) => void | Promise<void>;
   },
 ): Promise<void> {
   try {
-    for await (const pcm of decodeOpusFrames(stream, params)) {
-      params.onChunk(pcm);
+    for await (const { pcm, packet } of decodeOpusFrames(stream, params)) {
+      await params.onChunk(pcm, packet);
     }
   } catch (err) {
     params.onError?.(err);
@@ -258,7 +267,7 @@ export async function decodeOpusStreamChunks(
 async function* decodeOpusFrames(
   stream: Readable,
   params: OpusDecodeCallbacks,
-): AsyncGenerator<Buffer> {
+): AsyncGenerator<{ pcm: Buffer; packet: Buffer }> {
   let decoder: LibopusDecoder;
   try {
     decoder = await createLibopusDecoder({ channels: CHANNELS, sampleRate: SAMPLE_RATE });
@@ -279,7 +288,7 @@ async function* decodeOpusFrames(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_FRAME_SIZE });
       if (decoded.length > 0) {
-        yield pcmInt16ToBuffer(decoded);
+        yield { pcm: pcmInt16ToBuffer(decoded), packet: chunk };
       }
     }
   } catch (err) {
@@ -333,24 +342,20 @@ function estimateDurationSeconds(pcm: Buffer): number {
 
 export async function writeVoiceWavFile(
   pcm: Buffer,
-): Promise<{ path: string; durationSeconds: number }> {
+): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });
-  scheduleTempCleanup(workspace.dir);
-  const wav = buildWavBuffer(pcm);
-  const filePath = await workspace.write("segment.wav", wav);
-  return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
-}
-
-function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
-  const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err: unknown) => {
-      if (shouldLogVerbose()) {
-        logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
-      }
-    });
-  }, delayMs);
-  timer.unref();
+  try {
+    const filePath = await workspace.write("segment.wav", buildWavBuffer(pcm));
+    return {
+      path: filePath,
+      durationSeconds: estimateDurationSeconds(pcm),
+      cleanup: () => workspace[Symbol.asyncDispose](),
+    };
+  } catch (error) {
+    await workspace.cleanup();
+    throw error;
+  }
 }

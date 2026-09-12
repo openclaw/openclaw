@@ -25,6 +25,7 @@ import {
   buildSlackDataTableBlock,
   countSlackDataTableBlocksCellCharacters,
   countSlackDataTableCellCharacters,
+  resolveSlackDataTableCellCharacterCount,
   SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
 import {
@@ -232,15 +233,20 @@ function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | 
 }
 
 /** Resolve existing Block Kit indexes and native-data budgets before appending portable blocks. */
-export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackBlockRenderOptions {
+export function resolveSlackBlockOffsets(
+  blocks?: readonly SlackBlock[],
+  mode: "all" | "controls" = "all",
+): SlackBlockRenderOptions {
   let buttonIndexOffset = 0;
   const dataTableCellCharacterCountOffset =
-    countSlackDataTableBlocksCellCharacters(blocks) ??
-    SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX + 1;
+    mode === "all"
+      ? (countSlackDataTableBlocksCellCharacters(blocks) ??
+        SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX + 1)
+      : 0;
   let dataVisualizationCountOffset = 0;
   let selectIndexOffset = 0;
   for (const block of blocks ?? []) {
-    if (hasSlackDataVisualizationBlock([block])) {
+    if (mode === "all" && hasSlackDataVisualizationBlock([block])) {
       dataVisualizationCountOffset += 1;
     }
     const blockId = readSlackBlockId(block);
@@ -442,13 +448,13 @@ function canRenderSlackPresentationTables(
     if (block.type !== "table") {
       continue;
     }
-    const rendered = buildSlackDataTableBlock(block, {
+    const tableCellCharacterCount = resolveSlackDataTableCellCharacterCount(block, {
       cellCharacterCountOffset: cellCharacterCount,
     });
-    if (!rendered) {
+    if (tableCellCharacterCount === undefined) {
       return false;
     }
-    cellCharacterCount += countSlackDataTableCellCharacters(rendered);
+    cellCharacterCount += tableCellCharacterCount;
   }
   return true;
 }

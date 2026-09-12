@@ -588,7 +588,7 @@ describe("web monitor inbox socket lifecycle", () => {
         );
         expect(loggedTimeoutFailure).toBe(true);
       });
-      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
       await listener.close();

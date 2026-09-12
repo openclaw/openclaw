@@ -1202,6 +1202,7 @@ describe("Claude session catalog", () => {
       kind: "node",
       nodeId: "node-a",
       command: CLAUDE_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       cwd: "/work/on-node",
     });
     await expect(provider?.continueSession?.({ hostId: "node:node-a", threadId })).resolves.toEqual(
@@ -1683,6 +1684,16 @@ describe("Claude session catalog", () => {
         "sidechain-session": [message("sidechain-session", "user", "sidechain", 1)],
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
         "cli-session": [
+          {
+            ...message(
+              "cli-session",
+              "user",
+              "<local-command-caveat>CLI metadata</local-command-caveat>",
+              1,
+            ),
+            entrypoint: "cli",
+            isMeta: true,
+          },
           {
             ...message("cli-session", "user", "Interactive CLI prompt", 1),
             entrypoint: "cli",
@@ -3098,6 +3109,7 @@ describe("Claude session catalog", () => {
       kind: "node",
       nodeId: "paired-node",
       command: CLAUDE_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ cwd: "/work/new-session" }),
       cwd: "/work/new-session",
       title: "claude",

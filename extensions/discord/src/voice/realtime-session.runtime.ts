@@ -1,6 +1,7 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
+import type { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
 import {
   DiscordRealtimeSpeakerSession,
   type DiscordRealtimeSessionParams,
@@ -31,6 +32,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private warmSession: DiscordRealtimeSpeakerSession | undefined;
   private nextSessionId = 0;
   private closed = false;
+  private readonly closingSpeakers = new Set<Promise<void>>();
+  private closeCompletion: Promise<void> | undefined;
   private idleTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly params: DiscordRealtimeSessionParams) {
@@ -45,32 +48,42 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.warmSession = session;
     await session.connect();
     if (this.closed) {
-      session.close();
+      await this.closeSpeaker(session);
       return;
     }
     this.idleTimer = setInterval(() => this.releaseIdleSpeakers(), REALTIME_SPEAKER_IDLE_MS);
     this.idleTimer.unref?.();
   }
 
-  close(): void {
+  close(): void | Promise<void> {
     if (this.closed) {
-      return;
+      return this.closeCompletion;
     }
     this.closed = true;
     clearInterval(this.idleTimer);
     this.idleTimer = undefined;
     // Retire the physical player first: lane teardown must not start the next queued response.
     this.player.close();
-    this.warmSession?.close();
-    this.warmSession = undefined;
+    if (this.warmSession) {
+      void this.closeSpeaker(this.warmSession);
+      this.warmSession = undefined;
+    }
     for (const { session } of this.sessions) {
-      session.close();
+      void this.closeSpeaker(session);
     }
     this.speakers.clear();
     this.sessions.clear();
+    if (this.closingSpeakers.size > 0) {
+      this.closeCompletion = Promise.allSettled(this.closingSpeakers).then(() => undefined);
+    }
+    return this.closeCompletion;
   }
 
-  beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
+  beginSpeakerTurn(
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+    recordingInput?: DiscordRealtimeRecordingInput,
+  ): VoiceRealtimeSpeakerTurn {
     if (this.closed) {
       throw new Error("Discord realtime voice session is closed");
     }
@@ -80,7 +93,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       }
     }
     let speaker = this.speakers.get(userId);
-    if (speaker && speaker.transcripts !== this.params.entry.transcripts) {
+    const transcripts = recordingInput?.initialReceipt
+      ? recordingInput.initialReceipt.capture
+      : this.params.entry.transcripts;
+    if (speaker && speaker.transcripts !== transcripts) {
       // Subscription replacement fences transcript delivery, but must not cut a valid spoken
       // answer short. The old connection drains with its original source and receives no new input.
       this.speakers.delete(userId);
@@ -100,7 +116,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       speaker = {
         userId,
         senderIsOwner: context.senderIsOwner,
-        transcripts: this.params.entry.transcripts,
+        transcripts,
         session,
       };
       this.speakers.set(userId, speaker);
@@ -111,7 +127,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         void session.connect().catch((error: unknown) => this.handleSpeakerFailure(session, error));
       }
     }
-    return speaker.session.beginSpeakerTurn(context, userId);
+    return speaker.session.beginSpeakerTurn(context, userId, recordingInput);
   }
 
   handleBargeIn(reason = "barge-in"): void {
@@ -169,13 +185,35 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     }
   }
 
+  private closeSpeaker(session: DiscordRealtimeSpeakerSession): void | Promise<void> {
+    let completion: void | Promise<void>;
+    try {
+      completion = session.close();
+    } catch (error) {
+      logger.warn(`discord voice: realtime speaker close failed: ${formatErrorMessage(error)}`);
+      return;
+    }
+    if (completion) {
+      const pending = completion;
+      this.closingSpeakers.add(pending);
+      const forget = () => {
+        this.closingSpeakers.delete(pending);
+      };
+      void pending.then(forget, (error: unknown) => {
+        forget();
+        logger.warn(`discord voice: realtime speaker close failed: ${formatErrorMessage(error)}`);
+      });
+    }
+    return completion;
+  }
+
   private retireSpeaker(speaker: SpeakerSession, reason: string): void {
     // A draining generation can finish after this user's replacement has started.
     if (this.speakers.get(speaker.userId) === speaker) {
       this.speakers.delete(speaker.userId);
     }
     this.sessions.delete(speaker);
-    speaker.session.close();
+    void this.closeSpeaker(speaker.session);
     logger.info(
       `discord voice: realtime speaker retired user=${speaker.userId} reason=${reason}${reason === "input-timeout" ? "; idle speaker input expired; speak again to reconnect" : ""}`,
     );

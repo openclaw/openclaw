@@ -63,7 +63,9 @@ openclaw fleet create acme \
   --env OPENCLAW_DISABLE_BONJOUR=1
 ```
 
-Environment keys use letters, digits, and underscores and cannot start with a digit. Values must be single-line because Fleet passes them through a protected runtime environment file. Fleet rejects attempts to override the managed container-path and Gateway-token variables listed under [Storage and container layout](#storage-and-container-layout).
+Environment keys use letters, digits, and underscores and cannot start with a digit. Values must be single-line because Fleet passes them through a protected runtime environment file. Fleet rejects attempts to override the managed container-path and Gateway-token variables listed under [Storage and container layout](/cli/fleet#storage-and-container-layout).
+
+Fleet defaults `XDG_CACHE_HOME` to `/home/node/.openclaw/cache` on the tenant state mount. An explicit `--env XDG_CACHE_HOME=...` value survives upgrade and restore, including a value equal to the current default.
 
 ### Create options
 
@@ -162,11 +164,14 @@ Stream a cell's container logs directly to the terminal:
 ```bash
 openclaw fleet logs acme
 openclaw fleet logs acme --follow
+openclaw fleet logs acme --timestamps
 openclaw fleet logs acme --tail 200
 openclaw fleet logs acme --since 10m
 ```
 
 Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. The stream is pinned to that inspected container ID, so a concurrent replacement cannot redirect it to a newer generation. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure. Log output is piped through a redaction filter that replaces the cell's current Gateway token with `<redacted>` before anything reaches the terminal.
+
+Use `--timestamps` to include Docker or Podman timestamps in the raw stream. It can be combined with `--follow`, `--tail`, and `--since`.
 
 `fleet logs` has no `--json` mode because container logs are a raw stdout/stderr stream. For scripts, bound the output with `--tail` and use ordinary shell redirection or pipelines.
 
@@ -284,7 +289,10 @@ Fleet pins the official image's container paths with these environment values:
 | `OPENCLAW_STATE_DIR`     | `/home/node/.openclaw`               |
 | `OPENCLAW_CONFIG_PATH`   | `/home/node/.openclaw/openclaw.json` |
 | `OPENCLAW_WORKSPACE_DIR` | `/home/node/.openclaw/workspace`     |
+| `XDG_CACHE_HOME`         | `/home/node/.openclaw/cache`         |
 | `OPENCLAW_GATEWAY_TOKEN` | Generated or supplied cell token     |
+
+`XDG_CACHE_HOME` is the one overrideable generated default in this table. The other listed container-path variables and `OPENCLAW_GATEWAY_TOKEN` remain Fleet-managed.
 
 The official image defaults to the non-root `node` user with UID 1000. Fleet keeps the private `0700` bind mounts writable without making them world-accessible. Rootful Docker runs the cell with the invoking non-root UID and GID; rootless Docker uses container UID 0, which maps to the invoking unprivileged host user inside the daemon's user namespace. Podman uses `keep-id` with the invoking UID and GID. When Fleet itself runs as root against a rootful runtime, it retains the image user and assigns the initial mount files to UID/GID 1000.
 

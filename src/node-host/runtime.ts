@@ -67,6 +67,7 @@ export type NodeHostInventory = {
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
   workerHostingEnabled: boolean;
+  preparedWorkspacesEnabled: boolean;
   workerHostingDisabledReason?: string;
   initialInventory: NodeHostInventory;
   start(params: {
@@ -191,6 +192,7 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
 class SkillBinsCache implements SkillBinsProvider {
   private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
+  private refreshInFlight: Promise<void> | undefined;
   private readonly ttlMs = 90_000;
 
   constructor(
@@ -200,7 +202,16 @@ class SkillBinsCache implements SkillBinsProvider {
 
   async current(force = false): Promise<SkillBinTrustEntry[]> {
     if (force || Date.now() - this.lastRefresh > this.ttlMs) {
-      await this.refresh();
+      const refresh = this.refreshInFlight ?? this.refresh();
+      this.refreshInFlight = refresh;
+      try {
+        await refresh;
+      } finally {
+        // An older waiter must not clear a newer retry's in-flight promise.
+        if (this.refreshInFlight === refresh) {
+          this.refreshInFlight = undefined;
+        }
+      }
     }
     return this.bins;
   }
@@ -303,6 +314,7 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     params?.enableWorkerRuns === true &&
     (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
+  const workspaceOptions = { env, ephemeral: params?.ephemeral };
   let preparedContainerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
@@ -332,7 +344,7 @@ export async function prepareNodeHostRuntime(params?: {
         );
       }
       const containerEngine = await resolveNodeWorkerContainerEngine({ env });
-      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime({ env });
+      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime(workspaceOptions);
       preparedContainerSupervisor = createNodeWorkerSupervisor({
         env,
         capacity: config.nodeHost?.workerRuns?.capacity,
@@ -404,6 +416,7 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
     start({
@@ -420,7 +433,7 @@ export async function prepareNodeHostRuntime(params?: {
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
       const workerWorkspace =
         preparedContainerWorkspace ??
-        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime({ env }) : undefined);
+        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime(workspaceOptions) : undefined);
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
@@ -580,7 +593,7 @@ export async function prepareNodeHostRuntime(params?: {
             input && progress
               ? createNodeDuplexEndpoint({
                   ...(claudeSkills ? { maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES } : {}),
-                  sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
+                  sendFrame: async (payload) => await progress.write(JSON.stringify(payload)),
                   onError: (error) => {
                     active.framedFailure = error;
                     controller.abort(error);

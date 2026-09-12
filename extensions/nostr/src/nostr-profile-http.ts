@@ -326,6 +326,9 @@ export function createNostrProfileHttpHandler(
       sendJson(res, 405, { ok: false, error: "Method not allowed" });
       return true;
     } catch (err) {
+      if (res.writableEnded) {
+        return true;
+      }
       ctx.log?.error(`Profile HTTP error: ${String(err)}`);
       sendJson(res, 500, { ok: false, error: "Internal server error" });
       return true;
@@ -432,11 +435,13 @@ async function handleUpdateProfile(
   // Publish with mutex to prevent concurrent publishes
   try {
     const result = await withPublishLock(accountId, async () => {
+      await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       return await publishNostrProfile(accountId, mergedProfile);
     });
 
     // Only persist if at least one relay succeeded
     if (result.successes.length > 0) {
+      await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       await ctx.updateConfigProfile(accountId, mergedProfile);
       ctx.log?.info(`[${accountId}] Profile published to ${result.successes.length} relay(s)`);
     } else {
@@ -452,6 +457,9 @@ async function handleUpdateProfile(
       persisted: result.successes.length > 0,
     });
   } catch (err) {
+    if (res.writableEnded) {
+      return true;
+    }
     ctx.log?.error(`[${accountId}] Profile publish error: ${String(err)}`);
     sendJson(res, 500, { ok: false, error: `Publish failed: ${String(err)}` });
   }
@@ -501,6 +509,7 @@ async function handleImportProfile(
     // Ignore body parse errors - use defaults
   }
 
+  await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
   ctx.log?.info(`[${accountId}] Importing profile for ${pubkey.slice(0, 8)}...`);
 
   // Import from relays
@@ -521,6 +530,7 @@ async function handleImportProfile(
 
   // If autoMerge is requested, merge and save
   if (autoMerge && result.profile) {
+    await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
     const localProfile = ctx.getConfigProfile(accountId);
     const merged = mergeProfiles(localProfile, result.profile);
     await ctx.updateConfigProfile(accountId, merged);

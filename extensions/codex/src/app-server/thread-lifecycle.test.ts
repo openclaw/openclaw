@@ -19,6 +19,7 @@ import { CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
+import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
@@ -63,6 +64,43 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
 
 const PROGRESS_CARD_SYSTEM_PROMPT =
   "During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.";
+
+describe("Codex usage attribution", () => {
+  it("labels new OpenClaw threads without rewriting resumed thread attribution", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, { appServer, cwd: "/repo", dynamicTools: [] });
+    const resume = buildThreadResumeParams(params, { appServer, threadId: "thread-1" });
+
+    expect(start.threadSource).toBe("openclaw");
+    expect(resume).not.toHaveProperty("threadSource");
+  });
+
+  it.each(["user", "cron", "heartbeat", "manual", "memory", "overflow"] as const)(
+    "preserves the %s run trigger on each new turn",
+    (trigger) => {
+      const params = { ...createAttemptParams({ provider: "openai" }), trigger };
+      const request = buildTurnStartParams(params, {
+        appServer: createAppServerOptions() as never,
+        threadId: "existing-thread",
+        cwd: "/repo",
+      });
+
+      expect(request.turnTrigger).toBe(trigger);
+    },
+  );
+
+  it("does not guess a human trigger when the caller supplied none", () => {
+    const params = { ...createAttemptParams({ provider: "openai" }), trigger: undefined };
+    const request = buildTurnStartParams(params, {
+      appServer: createAppServerOptions() as never,
+      threadId: "existing-thread",
+      cwd: "/repo",
+    });
+
+    expect(request).not.toHaveProperty("turnTrigger");
+  });
+});
 
 describe("Codex incognito thread persistence", () => {
   it("marks only incognito-shaped harness sessions ephemeral", () => {
@@ -452,7 +490,7 @@ describe("Codex ring-zero thread config", () => {
       developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
     const resume = buildThreadResumeParams(params, {
       appServer,
@@ -461,7 +499,7 @@ describe("Codex ring-zero thread config", () => {
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
 
     expect(start.environments).toEqual([]);
@@ -514,11 +552,11 @@ describe("Codex ring-zero thread config", () => {
       hostSystemAgentActive: false,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
 
     expect(start.config?.project_doc_max_bytes).toBe(131_072);
-    expect(resume.config?.project_doc_max_bytes).toBe(64_000);
+    expect(resume.config?.project_doc_max_bytes).toBe(200_000);
     for (const threadConfig of [start.config, resume.config]) {
       expect(threadConfig?.["features.multi_agent"]).toBe(false);
       expect(threadConfig?.["orchestrator.mcp.enabled"]).toBe(false);
@@ -533,7 +571,7 @@ describe("Codex ring-zero thread config", () => {
       dynamicTools: [],
       hostSystemAgentActive: false,
       nativeCodeModeEnabled: false,
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
     expect(disabled.config?.project_doc_max_bytes).toBe(0);
   });
@@ -660,6 +698,7 @@ describe("Codex delegation capability", () => {
     };
     const appServer = createAppServerOptions() as never;
     const config = {
+      ...authoredProjectDocConfig(200_000),
       "features.apps": true,
       "features.context_management": { experimental_mode: true },
       "features.current_time_reminder": true,
@@ -703,6 +742,7 @@ describe("Codex delegation capability", () => {
     });
 
     for (const request of [start, resume]) {
+      expect(request.config?.project_doc_max_bytes).toBe(0);
       for (const disabledFeature of [
         "agents.enabled",
         "features.apps",
@@ -732,7 +772,7 @@ describe("Codex delegation capability", () => {
           enabled: false,
         },
       });
-      expect(request.developerInstructions).toContain("`message(action=send)`");
+      expect(request.developerInstructions).not.toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
     }
@@ -772,6 +812,19 @@ describe("Codex delegation capability", () => {
     }
   });
 });
+
+function authoredProjectDocConfig(projectDocMaxBytes: number) {
+  return buildCodexProjectDocThreadConfig(undefined, {
+    config: { project_doc_max_bytes: projectDocMaxBytes },
+    origins: {
+      project_doc_max_bytes: {
+        name: { type: "user", file: "/codex/config.toml", profile: null },
+        version: "sha256:authored-budget",
+      },
+    },
+    layers: [],
+  });
+}
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -1151,6 +1204,34 @@ function disabledMcpServerStatus(name: string) {
   };
 }
 
+function createSupervisedCommitRequest(params: {
+  sourceThreadId: string;
+  probeThreadId: string;
+  finalThreadId: string;
+}) {
+  return vi.fn(async (method: string, _requestParams?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/read") {
+      return { thread: sourceThread({ threadId: params.sourceThreadId }) };
+    }
+    if (method === "thread/fork") {
+      return nativeThreadResult(params.probeThreadId, "native-effective", "native-provider");
+    }
+    if (method === "thread/start") {
+      return nativeThreadResult(params.finalThreadId, "native-effective", "native-provider");
+    }
+    if (method === "thread/archive" || method === "thread/unsubscribe") {
+      return {};
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+}
+
 function sourceThread(params: {
   threadId: string;
   status?: "idle" | "active" | "notLoaded";
@@ -1183,63 +1264,6 @@ function expectSingleLogMessage(
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("keeps credential collection out of transcript-bearing developer instructions", () => {
-    const instructions = buildDeveloperInstructions({
-      provider: "codex",
-      modelId: "gpt-5.6-luna",
-      disableTools: true,
-      disableMessageTool: true,
-    } as EmbeddedRunAttemptParams);
-    const credentialGuidance = instructions
-      .split("\n")
-      .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
-
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:ask for|request)/iu.test(line) &&
-          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:echo|repeat)/iu.test(line) &&
-          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:place|put|include)/iu.test(line) &&
-          /(?:recommend|suggest)/iu.test(line) &&
-          /(?:command(?:-line)?|arguments?)/iu.test(line) &&
-          /urls?/iu.test(line) &&
-          /shell/iu.test(line) &&
-          /(?:variable|interpolat)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:ask|request)/iu.test(line) &&
-          /(?:report|share|provide)/iu.test(line) &&
-          /(?:authentication|pairing)/iu.test(line) &&
-          /codes?/iu.test(line) &&
-          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
-      ),
-    ).toBe(true);
-  });
-
   it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
@@ -1483,8 +1507,7 @@ describe("Codex app-server native code mode config", () => {
       "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
     );
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Visible source replies are not automatically delivered");
-    expect(instructions).toContain("Use `message(action=send)`");
+    expect(instructions).not.toContain("Visible source replies are not automatically delivered");
     expect(instructions).not.toContain("`openclaw_direct.sessions_yield`");
   });
 
@@ -1533,25 +1556,6 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
-  });
-
-  it("instructs Codex to mark only completed message-tool-only source replies final", () => {
-    const params = createAttemptParams({ provider: "openai" });
-    params.sourceReplyDeliveryMode = "message_tool_only";
-
-    const instructions = buildDeveloperInstructions(params, {
-      dynamicTools: [
-        {
-          type: "function",
-          name: "message",
-          description: "Send a message",
-          inputSchema: { type: "object" },
-        },
-      ],
-    });
-
-    expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -1907,6 +1911,10 @@ describe("Codex app-server native code mode config", () => {
       expect(request).not.toHaveProperty("collaborationMode");
       expect(request).not.toHaveProperty("personality");
       expect(request.additionalContext).toEqual({
+        openclaw_source_delivery: {
+          kind: "application",
+          value: expect.stringContaining("reply normally in your final assistant message"),
+        },
         openclaw_temporal_context: {
           kind: "application",
           value: expect.stringContaining("## Temporal Context"),
@@ -2170,7 +2178,7 @@ describe("Codex app-server native code mode config", () => {
         appServer: createAppServerOptions() as never,
         developerInstructions: "test instructions",
         config: {
-          project_doc_max_bytes: 64_000,
+          ...authoredProjectDocConfig(200_000),
           "features.hooks": true,
         },
       },
@@ -2226,6 +2234,68 @@ describe("Codex app-server native code mode config", () => {
       "features.standalone_web_search": false,
       web_search: "cached",
     });
+  });
+
+  it.each([0, 200_000])(
+    "prefers request budgets over authored native budget %s",
+    (nativeBudget) => {
+      const effectiveNativeConfig = {
+        config: { project_doc_max_bytes: nativeBudget },
+        origins: {
+          project_doc_max_bytes: {
+            name: { type: "user" as const, file: "/codex/config.toml", profile: null },
+            version: "sha256:authored-budget",
+          },
+        },
+        layers: [],
+      };
+      expect(buildCodexProjectDocThreadConfig(undefined, effectiveNativeConfig)).toEqual({
+        project_doc_max_bytes: nativeBudget,
+      });
+      expect(
+        buildCodexProjectDocThreadConfig({ project_doc_max_bytes: 64_000 }, effectiveNativeConfig),
+      ).toEqual({ project_doc_max_bytes: 64_000 });
+      expect(
+        buildCodexProjectDocThreadConfig({ project_doc_max_bytes: 0 }, effectiveNativeConfig),
+      ).toEqual({ project_doc_max_bytes: 0 });
+    },
+  );
+
+  it.each([
+    { label: "missing", value: undefined },
+    { label: "null", value: null },
+    { label: "string", value: "200000" },
+    { label: "boolean", value: true },
+    { label: "negative", value: -1 },
+    { label: "fractional", value: 1.5 },
+    { label: "unsafe integer", value: Number.MAX_SAFE_INTEGER + 1 },
+    { label: "NaN", value: Number.NaN },
+    { label: "positive infinity", value: Number.POSITIVE_INFINITY },
+    { label: "negative infinity", value: Number.NEGATIVE_INFINITY },
+  ])("rejects an authored $label project-document budget", ({ value }) => {
+    expect(() =>
+      buildCodexProjectDocThreadConfig(undefined, {
+        config: value === undefined ? {} : { project_doc_max_bytes: value },
+        origins: {
+          project_doc_max_bytes: {
+            name: { type: "user", file: "/codex/config.toml", profile: null },
+            version: "sha256:authored-budget",
+          },
+        },
+        layers: [],
+      }),
+    ).toThrow("Codex config/read returned an invalid project_doc_max_bytes value");
+  });
+
+  it("preserves the OpenClaw default for Codex's materialized unauthored default", () => {
+    expect(buildCodexProjectDocThreadConfig()).toEqual({ project_doc_max_bytes: 131_072 });
+    expect(
+      buildCodexProjectDocThreadConfig(undefined, {
+        config: { project_doc_max_bytes: 32_768 },
+        origins: {},
+        layers: [],
+      }),
+    ).toEqual({ project_doc_max_bytes: 131_072 });
   });
 });
 
@@ -5688,27 +5758,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     const abandonClient = vi.fn(async () => undefined);
 
     await expect(
@@ -5754,27 +5804,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
       mutate: vi.fn(async (storeIdentity, mutation) => {
@@ -5820,27 +5850,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
       read: vi.fn((storeIdentity) => {
@@ -5893,27 +5903,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     let commitFailed = false;
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
@@ -5970,27 +5960,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       cwd: workspaceDir,
       pending: { sourceThreadId },
     });
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        return { thread: sourceThread({ threadId: sourceThreadId }) };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createSupervisedCommitRequest({ sourceThreadId, probeThreadId, finalThreadId });
     let commitFailed = false;
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,

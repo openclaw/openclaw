@@ -9,6 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { parse as parseYaml } from "yaml";
+import { validatePluginCategories } from "../../packages/plugin-package-contract/src/categories.ts";
 import {
   generateNpmPackageLock,
   packageJsonForNpmLock,
@@ -36,6 +37,7 @@ type JsonRecord = Record<string, unknown>;
 type PluginPackageParams = Parameters<typeof resolvePluginNpmRuntimeBuildPlan>[0] & {
   bundleDependencies?: unknown;
   patchedDependencies?: WorkspacePatchedDependency[];
+  clawhubMetadataDir?: string;
 };
 type GeneratedChannelConfig = {
   description?: string;
@@ -346,32 +348,51 @@ export function generatePluginNpmPackageLockWithRetry(
   throw new Error(`package-lock generation retry loop exhausted for ${pluginDir}`);
 }
 
-function resolveInstalledPackageDir(packageDir: string, packageName: string) {
-  return path.join(packageDir, "node_modules", ...packageName.split("/"));
+function resolveInstalledPackageDir(
+  packageDir: string,
+  packageName: string,
+  fromDir = packageDir,
+): string | undefined {
+  const root = fs.realpathSync(packageDir);
+  let current = fs.realpathSync(fromDir);
+  while (true) {
+    const relative = path.relative(root, current);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return undefined;
+    }
+    const candidate = path.join(current, "node_modules", ...packageName.split("/"));
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
+      const resolved = fs.realpathSync(candidate);
+      const resolvedRelative = path.relative(root, resolved);
+      if (
+        resolvedRelative === ".." ||
+        resolvedRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(resolvedRelative)
+      ) {
+        return undefined;
+      }
+      return resolved;
+    }
+    if (current === root) {
+      return undefined;
+    }
+    current = path.dirname(current);
+  }
 }
 
-function readInstalledPackageJson(packageDir: string, packageName: string) {
-  const packageJsonPath = path.join(
-    resolveInstalledPackageDir(packageDir, packageName),
-    "package.json",
-  );
-  if (!fs.existsSync(packageJsonPath)) {
+function readInstalledPackageJson(packageDir: string, packageName: string, fromDir = packageDir) {
+  const installedDir = resolveInstalledPackageDir(packageDir, packageName, fromDir);
+  if (!installedDir) {
     return undefined;
   }
   try {
     return {
-      packageDir: path.dirname(packageJsonPath),
-      packageJson: readJsonFile(packageJsonPath),
+      packageDir: installedDir,
+      packageJson: readJsonFile(path.join(installedDir, "package.json")),
     };
   } catch {
     return undefined;
   }
-}
-
-function hasInstalledPackage(packageDir: string, packageName: string) {
-  return fs.existsSync(
-    path.join(resolveInstalledPackageDir(packageDir, packageName), "package.json"),
-  );
 }
 
 function normalizeOptionalDependencySpec(
@@ -399,31 +420,33 @@ function collectMissingOptionalBundledDependencySpecs(
   packageDir: string,
   packageJson: PluginPackageJson,
 ) {
-  const queue = listConfiguredBundledDependencyNames(packageJson);
+  const queue = listConfiguredBundledDependencyNames(packageJson).map((name) => ({
+    name,
+    fromDir: fs.realpathSync(packageDir),
+  }));
   const visited = new Set<string>();
   const missing = new Map<string, string>();
 
   while (queue.length > 0) {
-    const packageName = queue.shift();
-    if (!packageName || visited.has(packageName)) {
+    const dependency = queue.shift();
+    if (!dependency) {
       continue;
     }
-    visited.add(packageName);
-
-    const installed = readInstalledPackageJson(packageDir, packageName);
-    if (!installed) {
+    const installed = readInstalledPackageJson(packageDir, dependency.name, dependency.fromDir);
+    if (!installed || visited.has(installed.packageDir)) {
       continue;
     }
+    visited.add(installed.packageDir);
     const dependencyNames = [
       ...Object.keys(installed.packageJson.dependencies ?? {}),
       ...Object.keys(installed.packageJson.optionalDependencies ?? {}),
     ].toSorted((left, right) => left.localeCompare(right));
-    queue.push(...dependencyNames);
+    queue.push(...dependencyNames.map((name) => ({ name, fromDir: installed.packageDir })));
 
     for (const [optionalName, optionalSpec] of Object.entries(
       installed.packageJson.optionalDependencies ?? {},
     ).toSorted(([left], [right]) => left.localeCompare(right))) {
-      if (hasInstalledPackage(packageDir, optionalName)) {
+      if (resolveInstalledPackageDir(packageDir, optionalName, installed.packageDir)) {
         continue;
       }
       const normalizedSpec = normalizeOptionalDependencySpec(
@@ -1041,6 +1064,9 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const manifestPath = path.join(packageDir, "openclaw.plugin.json");
   if (!fs.existsSync(manifestPath)) {
+    if (params.clawhubMetadataDir) {
+      throw new Error("ClawHub metadata requires a candidate plugin manifest");
+    }
     return {
       manifestPath,
       pluginId: path.basename(packageDir),
@@ -1051,19 +1077,53 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   }
 
   const manifest = readJsonFile(manifestPath);
+  let publicationManifest = manifest;
+  if (params.clawhubMetadataDir) {
+    const metadataDir = path.resolve(params.clawhubMetadataDir);
+    const metadata = readJsonFile(path.join(metadataDir, "openclaw.plugin.json"));
+    const sourcePackage = readJsonFile(resolvePackageJsonPath(packageDir));
+    const toolingPackage = readJsonFile(resolvePackageJsonPath(metadataDir));
+    if (
+      typeof manifest.id !== "string" ||
+      !manifest.id ||
+      metadata.id !== manifest.id ||
+      typeof sourcePackage.name !== "string" ||
+      !sourcePackage.name ||
+      toolingPackage.name !== sourcePackage.name
+    ) {
+      throw new Error("ClawHub metadata must match the candidate package name and plugin ID");
+    }
+    const result = validatePluginCategories(metadata.categories);
+    if (!result.ok || result.categories?.length !== 1) {
+      throw new Error("ClawHub metadata must declare exactly one supported plugin category");
+    }
+    // The published 2026.9.4 reader rejects the renamed agent-runtimes slug.
+    // Remove this pack-only encoding when recovery no longer packs 2026.9.4.
+    if (sourcePackage.version === "2026.9.4" && result.categories[0] === "agent-runtimes") {
+      if (!Array.isArray(manifest.categories) || !manifest.categories.includes("runtime")) {
+        throw new Error("ClawHub 2026.9.4 metadata requires the candidate to declare runtime");
+      }
+      result.categories = ["runtime"];
+    }
+    // Tooling owns reviewed catalog metadata; the candidate owns every runtime
+    // field and version. These revisions intentionally need not share a version.
+    publicationManifest = { ...manifest, categories: result.categories };
+  }
   const pluginId =
     typeof manifest.id === "string" && manifest.id ? manifest.id : path.basename(packageDir);
   const generatedChannelConfigs = readGeneratedBundledChannelConfigs(repoRoot).get(pluginId);
+  // Manifest-only overlays have no package runtime to rewrite.
   const runtimePlan =
-    manifest.providerCatalogEntry || manifest.capabilityCatalogEntry
+    (manifest.providerCatalogEntry || manifest.capabilityCatalogEntry) &&
+    fs.existsSync(resolvePackageJsonPath(packageDir))
       ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir })
       : null;
   const augmentedManifest = mergeGeneratedChannelConfigs(
     runtimePlan
-      ? mapPluginCatalogEntries(manifest, (entry: string) =>
+      ? mapPluginCatalogEntries(publicationManifest, (entry: string) =>
           toPackageRuntimeEntry(entry, runtimePlan.runtimeFormat),
         )
-      : manifest,
+      : publicationManifest,
     generatedChannelConfigs,
   );
   const changed = JSON.stringify(augmentedManifest) !== JSON.stringify(manifest);
@@ -1100,15 +1160,17 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
     : [];
   const resolvedParams = { ...params, patchedDependencies };
   if (
-    !packageJson ||
-    !shouldBundleDependencies(params.bundleDependencies, packageJson, patchedDependencies) ||
-    !hasPackageRuntimeDependencies(packageJson)
+    !params.clawhubMetadataDir &&
+    (!packageJson ||
+      !shouldBundleDependencies(params.bundleDependencies, packageJson, patchedDependencies) ||
+      !hasPackageRuntimeDependencies(packageJson))
   ) {
     return withPluginNpmManifestOverlay(resolvedParams, callback);
   }
 
   // pnpm owns the source install. npm bundling needs a separate tree so its
   // production-only install and cleanup cannot replace source versions or links.
+  // ClawHub metadata overlays likewise never write into the frozen candidate.
   const stagingRoot = fs.mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-pack-"));
   const stagedPackageDir = path.join(stagingRoot, path.basename(packageDir));
   try {
@@ -1143,6 +1205,7 @@ function withPluginNpmManifestOverlay<T>(
   const resolvedManifest = resolveAugmentedPluginNpmManifest({
     repoRoot,
     packageDir,
+    clawhubMetadataDir: params.clawhubMetadataDir,
   });
   const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
@@ -1161,7 +1224,7 @@ function withPluginNpmManifestOverlay<T>(
       : undefined;
   if (resolvedManifest.changed && resolvedManifest.manifest) {
     console.error(
-      `[plugin-npm-publish] overlaying generated channel config metadata for ${resolvedManifest.pluginId}`,
+      `[plugin-npm-publish] overlaying plugin manifest metadata for ${resolvedManifest.pluginId}`,
     );
     writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
   }
@@ -1198,7 +1261,7 @@ function withPluginNpmManifestOverlay<T>(
 }
 
 const RUN_USAGE =
-  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]";
+  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> [--clawhub-metadata <package-dir>] -- <command> [args...]";
 
 function readRunPackageDir(argv: string[]) {
   const packageDir = argv[1];
@@ -1209,11 +1272,15 @@ function readRunPackageDir(argv: string[]) {
 }
 
 /** @internal Directly tested script implementation detail. */
-export function parseRunArgs(
-  argv: string[],
-):
+export function parseRunArgs(argv: string[]):
   | { help: true; packageDir: string; command: string; args: string[] }
-  | { packageDir: string; command: string; args: string[]; help?: undefined } {
+  | {
+      packageDir: string;
+      command: string;
+      args: string[];
+      clawhubMetadataDir?: string;
+      help?: undefined;
+    } {
   if (argv[0] === "--help" || argv[0] === "-h") {
     return { help: true, packageDir: "", command: "", args: [] };
   }
@@ -1225,7 +1292,11 @@ export function parseRunArgs(
   if (!packageDir || separatorIndex === -1 || separatorIndex === argv.length - 1) {
     throw new Error(RUN_USAGE);
   }
-  if (separatorIndex !== 2) {
+  const clawhubMetadataDir = argv[2] === "--clawhub-metadata" ? argv[3] : undefined;
+  if (
+    separatorIndex !== 2 &&
+    (separatorIndex !== 4 || !clawhubMetadataDir || clawhubMetadataDir.startsWith("--"))
+  ) {
     throw new Error(`unexpected plugin npm package manifest run argument: ${argv[2]}`);
   }
   const command = argv[separatorIndex + 1];
@@ -1234,6 +1305,7 @@ export function parseRunArgs(
   }
   return {
     packageDir,
+    ...(clawhubMetadataDir ? { clawhubMetadataDir: path.resolve(clawhubMetadataDir) } : {}),
     command,
     args: argv.slice(separatorIndex + 2),
   };
@@ -1250,6 +1322,7 @@ function main(argv: string[] = process.argv.slice(2)) {
     {
       packageDir,
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
+      clawhubMetadataDir: parsedArgs.clawhubMetadataDir,
     },
     ({ packageDir: cwd }) => {
       const commandArgs = [...args];

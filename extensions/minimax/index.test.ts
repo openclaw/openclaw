@@ -6,9 +6,11 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
+  runProviderCatalog,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMinimaxModelDiscovery } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
@@ -32,9 +34,17 @@ const minimaxProviderPlugin = {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  clearLiveCatalogCacheForTests();
 });
 
 describe("minimax provider hooks", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: [{ id: "MiniMax-M3" }] })),
+    );
+  });
+
   it("uses the Anthropic model-list route and X-Api-Key auth", () => {
     const discovery = buildMinimaxModelDiscovery();
     const headers = new Headers(
@@ -56,7 +66,128 @@ describe("minimax provider hooks", () => {
     expect(headers.get("x-api-key")).toBeNull();
   });
 
+  it.each([
+    {
+      name: "CN configuration",
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      expectedEndpoint: "https://api.minimaxi.com/anthropic/v1/models",
+    },
+    {
+      name: "Global configuration ahead of the CN environment",
+      baseUrl: "https://api.minimax.io/anthropic",
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimax.io/anthropic/v1/models",
+    },
+    {
+      name: "custom proxy configuration",
+      baseUrl: " https://minimax-proxy.example.com/prefix/anthropic/ ",
+      expectedEndpoint: "https://minimax-proxy.example.com/prefix/anthropic/v1/models",
+    },
+    {
+      name: "default Global endpoint",
+      baseUrl: undefined,
+      expectedEndpoint: "https://api.minimax.io/anthropic/v1/models",
+    },
+    {
+      name: "environment endpoint without configuration",
+      baseUrl: undefined,
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimaxi.com/anthropic/v1/models",
+    },
+    {
+      name: "environment endpoint with blank configuration",
+      baseUrl: " ",
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimaxi.com/anthropic/v1/models",
+    },
+    {
+      name: "OpenAI-compatible Global configuration ahead of the CN environment",
+      baseUrl: "https://api.minimax.io/v1",
+      api: "openai-completions" as const,
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimax.io/v1/models",
+    },
+    {
+      name: "OpenAI-compatible CN configuration",
+      baseUrl: "https://api.minimaxi.com/v1/",
+      api: "openai-completions" as const,
+      expectedEndpoint: "https://api.minimaxi.com/v1/models",
+    },
+    {
+      name: "OpenAI-compatible proxy configuration",
+      baseUrl: " https://minimax-proxy.example.com/prefix/v1/ ",
+      api: "openai-completions" as const,
+      expectedEndpoint: "https://minimax-proxy.example.com/prefix/v1/models",
+    },
+    {
+      name: "OpenAI-compatible proxy with a custom base path",
+      baseUrl: "https://minimax-proxy.example.com/gateway",
+      api: "openai-completions" as const,
+      expectedEndpoint: "https://minimax-proxy.example.com/gateway/models",
+    },
+  ])(
+    "keeps API catalog discovery on the $name",
+    async ({ baseUrl, host, api, expectedEndpoint }) => {
+      const expectedBaseUrl = baseUrl?.trim() || `${host ?? "https://api.minimax.io"}/anthropic`;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+        input === expectedEndpoint
+          ? Response.json({ data: [{ id: "MiniMax-M3" }] })
+          : new Response(null, { status: 401 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { providers } = await registerProviderPlugin({
+        plugin: minimaxProviderPlugin,
+        id: "minimax",
+        name: "MiniMax Provider",
+      });
+      const result = await runProviderCatalog({
+        provider: requireRegisteredProvider(providers, "minimax"),
+        config: {
+          models: {
+            providers: {
+              ...(baseUrl !== undefined
+                ? { minimax: { baseUrl, ...(api ? { api } : {}), models: [] } }
+                : {}),
+              "minimax-portal": {
+                baseUrl: "https://other-account.example.com/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+        env: host ? { MINIMAX_API_HOST: host } : {},
+        resolveProviderApiKey: () => ({
+          apiKey: "MINIMAX_API_KEY",
+          discoveryApiKey: "selected-api-key",
+          profileId: "minimax:selected",
+        }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedEndpoint);
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("x-api-key")).toBe(api ? null : "selected-api-key");
+      expect(headers.get("authorization")).toBe(api ? "Bearer selected-api-key" : null);
+      expect(result).toMatchObject({
+        provider: {
+          baseUrl: expectedBaseUrl,
+          api: api ?? "anthropic-messages",
+          authHeader: true,
+          apiKey: "MINIMAX_API_KEY",
+          models: [expect.objectContaining({ id: "MiniMax-M3" })],
+        },
+        outcomes: [{ provider: "minimax", profileId: "minimax:selected", status: "ready" }],
+      });
+    },
+  );
+
   it("keeps explicit portal API keys ahead of stored OAuth profiles", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ data: [{ id: "MiniMax-M3", object: "model" }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,
       id: "minimax",
@@ -77,10 +208,7 @@ describe("minimax provider hooks", () => {
           },
         },
       },
-      resolveProviderApiKey: () => ({
-        apiKey: "explicit-key",
-        discoveryApiKey: "explicit-key",
-      }),
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
       resolveProviderAuth: () => ({
         apiKey: MINIMAX_OAUTH_MARKER,
         discoveryApiKey: "oauth-token",
@@ -91,6 +219,144 @@ describe("minimax provider hooks", () => {
 
     const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
     expect(provider?.apiKey).toBe("explicit-key");
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("x-api-key")).toBe("explicit-key");
+    expect(headers.get("authorization")).toBeNull();
+  });
+
+  it.each(
+    (
+      [
+        { name: "API-key profile without mode metadata", mode: undefined, bearer: false },
+        { name: "token profile without mode metadata", mode: undefined, bearer: true },
+        { name: "API-key profile", mode: "api_key", bearer: false },
+        { name: "token profile", mode: "token", bearer: true },
+        { name: "OAuth profile", mode: "oauth", bearer: true },
+      ] as const
+    ).flatMap((entry) => [
+      { ...entry, available: true },
+      { ...entry, available: false },
+    ]),
+  )(
+    "keeps the selected $name coherent through the shared catalog wrapper (available: $available)",
+    async ({ mode, bearer, available }) => {
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(JSON.stringify({ data: [{ id: "MiniMax-M3", object: "model" }] })),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { providers } = await registerProviderPlugin({
+        plugin: minimaxProviderPlugin,
+        id: "minimax",
+        name: "MiniMax Provider",
+      });
+      const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+      const legacyToken = mode === undefined && bearer;
+      const apiKey =
+        mode === "oauth"
+          ? MINIMAX_OAUTH_MARKER
+          : available
+            ? "selected-profile-credential"
+            : mode === "token"
+              ? "MINIMAX_OAUTH_TOKEN"
+              : "MINIMAX_API_KEY";
+
+      const result = await runProviderCatalog({
+        provider: portalProvider,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({
+          apiKey,
+          discoveryApiKey: available ? "selected-profile-credential" : undefined,
+          profileId: "minimax-portal:selected",
+          ...(mode ? { mode } : {}),
+        }),
+        resolveProviderAuth: () => ({
+          apiKey: legacyToken ? apiKey : MINIMAX_OAUTH_MARKER,
+          discoveryApiKey: legacyToken ? "selected-profile-credential" : "other-oauth-credential",
+          mode: legacyToken ? "token" : "oauth",
+          profileId: legacyToken ? "minimax-portal:selected" : "minimax-portal:other-oauth",
+          source: "profile",
+        }),
+      });
+
+      const canDiscover = available || legacyToken;
+      expect(result?.outcomes).toEqual([
+        {
+          provider: "minimax-portal",
+          profileId: "minimax-portal:selected",
+          status: canDiscover ? "ready" : "unavailable",
+        },
+      ]);
+      if (!canDiscover) {
+        expect(result).toMatchObject({ providers: {} });
+        expect(fetchMock).not.toHaveBeenCalled();
+        return;
+      }
+      const provider = result && "provider" in result ? result.provider : undefined;
+      expect(provider?.apiKey).toBe(apiKey);
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("x-api-key")).toBe(bearer ? null : "selected-profile-credential");
+      expect(headers.get("authorization")).toBe(
+        bearer ? "Bearer selected-profile-credential" : null,
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "different profiles",
+      selectedProfileId: "minimax-portal:selected",
+      resolvedProfileId: "minimax-portal:other",
+      mode: "token",
+    },
+    {
+      name: "unknown profiles",
+      selectedProfileId: undefined,
+      resolvedProfileId: undefined,
+      mode: undefined,
+    },
+    {
+      name: "different credential modes",
+      selectedProfileId: "minimax-portal:selected",
+      resolvedProfileId: "minimax-portal:selected",
+      mode: "api_key",
+    },
+  ] as const)("does not complete matching markers with $name", async (entry) => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const result = await runProviderCatalog({
+      provider: requireRegisteredProvider(providers, "minimax-portal"),
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "MINIMAX_OAUTH_TOKEN",
+        profileId: entry.selectedProfileId,
+        mode: entry.mode,
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "MINIMAX_OAUTH_TOKEN",
+        discoveryApiKey: "other-profile-token",
+        mode: "token",
+        source: "profile",
+        profileId: entry.resolvedProfileId,
+      }),
+    });
+
+    expect(result).toEqual({
+      providers: {},
+      outcomes: [
+        {
+          provider: "minimax-portal",
+          profileId: entry.selectedProfileId,
+          status: "unavailable",
+        },
+      ],
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("uses Bearer discovery auth for MINIMAX_OAUTH_TOKEN", async () => {
@@ -112,12 +378,14 @@ describe("minimax provider hooks", () => {
       resolveProviderApiKey: () => ({
         apiKey: "MINIMAX_OAUTH_TOKEN",
         discoveryApiKey: "oauth-token",
+        mode: "api_key",
       }),
       resolveProviderAuth: () => ({
-        apiKey: "MINIMAX_OAUTH_TOKEN",
-        discoveryApiKey: "oauth-token",
-        mode: "api_key",
-        source: "env",
+        apiKey: MINIMAX_OAUTH_MARKER,
+        discoveryApiKey: "other-oauth-token",
+        mode: "oauth",
+        source: "profile",
+        profileId: "minimax-portal:other-oauth",
       }),
     } as never);
 
@@ -599,6 +867,11 @@ describe("minimax provider hooks", () => {
       api: "anthropic-messages",
       authHeader: true,
       models: [],
+    });
+    expect(result?.profiles[0]?.credential).toMatchObject({
+      type: "oauth",
+      provider: "minimax-portal",
+      authFlow: "device-code",
     });
   });
 });

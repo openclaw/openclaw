@@ -5,7 +5,6 @@ import android.net.ConnectivityManager
 import android.net.DnsResolver
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -144,9 +143,9 @@ class GatewayDiscovery(
     val cm = connectivity ?: return
     cm.activeNetwork?.let(availableNetworks::add)
     try {
-      // Track all networks so wide-area DNS can prefer VPN/split-DNS answers
-      // even when Android's active network is not the VPN.
-      cm.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
+      // Track app-visible networks, including VPNs, so wide-area DNS can prefer split-DNS
+      // answers even when Android's active network is not the VPN.
+      cm.registerNetworkCallback(gatewayNetworkRequest(), networkCallback)
     } catch (_: Throwable) {
       // ignore (best-effort)
     }
@@ -283,7 +282,7 @@ class GatewayDiscovery(
     val lanHost = txt(resolved, "lanHost")
     val tailnetDns = txt(resolved, "tailnetDns")
     val gatewayPort = txtInt(resolved, "gatewayPort")
-    val tlsEnabled = txtBool(resolved, "gatewayTls")
+    val tlsEnabled = parseTxtBool(txt(resolved, "gatewayTls"))
     val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
     val id = stableId(serviceName, "local.")
     // Local NSD gives the socket host/port; TXT ports are retained as gateway metadata only.
@@ -347,11 +346,8 @@ class GatewayDiscovery(
     key: String,
   ): Int? = txt(info, key)?.toIntOrNull()
 
-  private fun txtBool(
-    info: NsdServiceInfo,
-    key: String,
-  ): Boolean {
-    val raw = txt(info, key)?.trim()?.lowercase() ?: return false
+  private fun parseTxtBool(value: String?): Boolean {
+    val raw = value?.trim()?.lowercase() ?: return false
     return raw == "1" || raw == "true" || raw == "yes"
   }
 
@@ -397,7 +393,7 @@ class GatewayDiscovery(
       val lanHost = txtValue(txt, "lanHost")
       val tailnetDns = txtValue(txt, "tailnetDns")
       val gatewayPort = txtIntValue(txt, "gatewayPort")
-      val tlsEnabled = txtBoolValue(txt, "gatewayTls")
+      val tlsEnabled = parseTxtBool(txtValue(txt, "gatewayTls"))
       val tlsFingerprint = txtValue(txt, "gatewayTlsSha256")
       val id = stableId(instanceName, domain)
       next[id] =
@@ -649,14 +645,6 @@ class GatewayDiscovery(
     records: List<TXTRecord>,
     key: String,
   ): Int? = txtValue(records, key)?.toIntOrNull()
-
-  private fun txtBoolValue(
-    records: List<TXTRecord>,
-    key: String,
-  ): Boolean {
-    val raw = txtValue(records, key)?.trim()?.lowercase() ?: return false
-    return raw == "1" || raw == "true" || raw == "yes"
-  }
 
   private fun decodeDnsTxtString(raw: String): String {
     // dnsjava treats TXT as opaque bytes and decodes as ISO-8859-1 to preserve bytes.

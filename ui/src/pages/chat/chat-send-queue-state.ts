@@ -1,6 +1,7 @@
 import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
@@ -9,6 +10,8 @@ import {
 import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import type {
   QueuedChatSendOptions,
   QueuedChatSendResult,
@@ -21,6 +24,7 @@ import {
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
   chatSendHoldReason,
   surfaceChatDeliveryFailure,
@@ -128,6 +132,66 @@ export function captureChatConnectionOwner(
     host.connectionEpoch === connectionEpoch;
 }
 
+export function resolveQueuedChatLeaf(
+  host: ChatHost,
+  item: ChatQueueItem,
+  options?: QueuedChatSendOptions,
+): string | null | undefined {
+  if (options?.expectedLeafEntryId !== undefined) {
+    return options.expectedLeafEntryId;
+  }
+  return options?.routingSessionKey &&
+    visibleSessionMatches(host, item.sessionKey ?? host.sessionKey, item.agentId)
+    ? resolveDisplayedLeafEntryId(host)
+    : undefined;
+}
+
+export function waitForQueuedChatHistory(
+  host: ChatHost,
+  item: ChatQueueItem,
+  queuedSessionKey: string,
+  options?: QueuedChatSendOptions,
+):
+  | Promise<{ item: ChatQueueItem; expectedLeafEntryId: string | null | undefined } | null>
+  | undefined {
+  const sessionKey = item.sessionKey ?? queuedSessionKey;
+  if (
+    !host.connected ||
+    !host.client ||
+    !visibleSessionMatches(host, sessionKey, item.agentId) ||
+    (!host.chatLoading && !isInitialChatHistoryUnavailable(host))
+  ) {
+    return undefined;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(host);
+  const sessions = host.sessions;
+  const history = getChatHistoryLoadState(host);
+  // The outbox already owns the draft. Join startup before reusing cached
+  // session/branch identity, without issuing a competing history request.
+  const loading =
+    history.phase === "in-flight"
+      ? history.promise
+      : loadChatHistory(host, {
+          startup: isInitialChatHistoryUnavailable(host),
+          deferBranches: true,
+        });
+  return loading.then((loaded) => {
+    const current = readQueuedMessageById(host, item.id);
+    if (
+      !loaded ||
+      !connectionIsCurrent() ||
+      host.sessions !== sessions ||
+      !visibleSessionMatches(host, sessionKey, item.agentId) ||
+      !current ||
+      !sameQueuedDeliveryVersion(current, item) ||
+      isQueuedMessageBeingEdited(host, item.id)
+    ) {
+      return null;
+    }
+    return { item: current, expectedLeafEntryId: resolveQueuedChatLeaf(host, current, options) };
+  });
+}
+
 export function updateQueuedSendItem(
   host: ChatHost,
   storageMode: QueuedChatStorageMode,
@@ -174,7 +238,7 @@ export function finishChatDeliveryAdmission(
       routeVisible(current.agentId) &&
       (isChatBusy(host) || hasDirectSessionRun(host)))
   ) {
-    const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
+    const parked = setState(reconnectSafeQueuedSendState(host));
     if (!parked) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return "failed";
@@ -192,6 +256,8 @@ export function canSendVolatileQueueItem(
   return (
     host.connected &&
     Boolean(host.client) &&
+    !host.chatLoading &&
+    !isInitialChatHistoryUnavailable(host) &&
     !isChatBusy(host) &&
     !getPendingChatPickerPatch(host, routingSessionKey, item.agentId) &&
     visibleSessionMatches(host, routingSessionKey, item.agentId) &&

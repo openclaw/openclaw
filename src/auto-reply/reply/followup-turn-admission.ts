@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -9,6 +8,7 @@ import type { GatewayContextResolver } from "../../gateway/server-methods/types.
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -79,7 +79,6 @@ export type AdmittedFollowupTurn = {
   config: OpenClawConfig;
   session: FollowupSessionOwner;
   sessionStore?: Record<string, SessionEntry>;
-  currentInboundContext?: CurrentInboundPromptContext;
   sendPolicy: "allow" | "deny";
   preflightCompactionApplied: boolean;
   preflightFailurePayload?: ReplyPayload;
@@ -114,7 +113,7 @@ function isSameSessionGeneration(
   );
 }
 
-/** Resolves one queued item into an immutable admitted turn. */
+/** Resolves one queued item into an admitted turn. */
 export async function admitFollowupTurn(params: {
   queued: FollowupRun;
   defaults: FollowupRunnerParams;
@@ -143,6 +142,7 @@ export async function admitFollowupTurn(params: {
       storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
+    agentId: run.agentId,
     resolveGatewayContext: params.defaults.resolveGatewayContext,
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
@@ -297,7 +297,6 @@ export async function admitFollowupTurn(params: {
       config,
       session,
       sessionStore,
-      currentInboundContext,
       sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
     };
@@ -307,7 +306,6 @@ export async function admitFollowupTurn(params: {
           ? params.queued.currentInboundContext
           : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
       turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
-      turn.currentInboundContext = refreshedInboundContext;
       turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
     };
     const readTurnSessionEntry = () =>
@@ -382,6 +380,9 @@ export async function admitFollowupTurn(params: {
       activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
+        pendingUserEntryId: readPendingUserTurnTranscriptAdmission(
+          turn.queued.userTurnTranscriptRecorder,
+        )?.entryId,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
         sessionEntry: activeEntry,

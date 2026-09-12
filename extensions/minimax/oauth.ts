@@ -6,6 +6,7 @@ import {
   resolveExpiresAtMsFromDurationOrEpoch,
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderJsonResponse,
@@ -254,6 +255,7 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
 export async function loginMiniMaxPortalOAuth(params: {
   openUrl: (url: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
+  deviceCode?: ProviderAuthContext["prompter"]["deviceCode"];
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;
   signal?: AbortSignal;
@@ -281,7 +283,16 @@ export async function loginMiniMaxPortalOAuth(params: {
   } catch {
     // Fall back to manual copy/paste if browser open fails.
   }
-  await params.note(noteLines.join("\n"), "MiniMax OAuth");
+  if (params.deviceCode) {
+    await params.deviceCode({
+      title: "MiniMax OAuth",
+      code: oauth.user_code,
+      expiresInMinutes: Math.ceil((oauth.expired_in - Date.now()) / 60_000),
+      message: `Open ${verificationUrl} to approve access.`,
+    });
+  } else {
+    await params.note(noteLines.join("\n"), "MiniMax OAuth");
+  }
 
   let pollIntervalMs = resolvePositiveTimerTimeoutMs(oauth.interval, 2000);
   // The authorization endpoint returns an absolute millisecond deadline.

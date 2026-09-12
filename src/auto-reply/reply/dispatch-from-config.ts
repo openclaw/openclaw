@@ -1,5 +1,6 @@
 /** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
 import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
@@ -15,7 +16,6 @@ import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
-import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import "./dispatch-from-config.events.js";
 
@@ -32,7 +32,8 @@ export async function dispatchReplyFromConfig(
 export async function dispatchLowLevelChannelReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
-  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
+  // A group coordinator must retain this turn until execution, not just queue publication.
+  return await dispatchReplyFromConfigWithQueuePolicy(params, !getGroupThreadTurn());
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(
@@ -138,9 +139,9 @@ async function dispatchReplyFromConfigInner(
       }
       if (inboundDedupeClaim.status === "claimed") {
         if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
-          commitInboundDedupe(inboundDedupeClaim.key);
+          inboundDedupeClaim.commit();
         } else {
-          releaseInboundDedupe(inboundDedupeClaim.key);
+          inboundDedupeClaim.release();
         }
       }
       if (err instanceof DispatchSessionRefreshRequiredError) {

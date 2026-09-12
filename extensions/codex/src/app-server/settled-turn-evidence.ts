@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
-import { projectSettledCodexMessages } from "./settled-turn-projection.js";
+import { projectSettledCodexMessages, SettledTurnPriorContext } from "./settled-turn-projection.js";
 import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -11,7 +12,7 @@ export type SettledTurnMessages = {
 };
 
 function rejectEvidence(): never {
-  throw new Error("Codex settled-turn transcript does not match the settled turn");
+  throw new CodexHistoryRejection("provenance_rejected");
 }
 
 /** The worker consumes this verifier lazily; rejection never acquires the remaining payloads. */
@@ -19,13 +20,21 @@ export function projectVerifiedSettledCodexMessages(
   history: Iterable<AgentMessage>,
   params: SettledTurnMessages,
 ): JsonValue[] {
-  return projectSettledCodexMessages(verifiedSettledMessages(history, params));
+  // Omitted history still participates in call-ID uniqueness for the complete prefix.
+  const seenCallIds = new Set<string>();
+  const prior = new SettledTurnPriorContext(seenCallIds);
+  const current = projectSettledCodexMessages(
+    verifiedSettledMessages(history, params, prior),
+    seenCallIds,
+  );
+  return prior.prependTo(current);
 }
 
 /** Yields only the settled prefix, but exhausts suffix identity checks before accepting it. */
 function* verifiedSettledMessages(
   history: Iterable<AgentMessage>,
   params: SettledTurnMessages,
+  prior: SettledTurnPriorContext,
 ): Generator<AgentMessage> {
   const promptIdentity = `${params.turnId}:prompt`;
   const boundaryIndex = params.settledMessages.findLastIndex(
@@ -60,6 +69,7 @@ function* verifiedSettledMessages(
   const seen = new Set<string>();
   let matched = 0;
   let throughBoundary = false;
+  let currentStarted = false;
   for (const message of history) {
     const identity = readMirrorIdentity(message);
     if (identity) {
@@ -79,7 +89,10 @@ function* verifiedSettledMessages(
         matched += 1;
       }
     }
-    if (!throughBoundary) {
+    currentStarted ||= identity === promptIdentity;
+    if (!currentStarted) {
+      prior.append(message);
+    } else if (!throughBoundary) {
       yield message;
     }
     throughBoundary ||= identity === boundaryIdentity;

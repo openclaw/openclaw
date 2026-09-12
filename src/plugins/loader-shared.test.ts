@@ -5,10 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
+import { createPluginActivationSource } from "./config-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
-  createManifestPluginRecord,
   createPluginCandidatesFromManifestRegistry,
+  preparePluginLoadRecord,
   validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
@@ -59,23 +60,31 @@ function createRecordWithBuildVersion(openclawVersion: unknown) {
     } as unknown as NonNullable<PluginCandidate["packageManifest"]>,
   } satisfies PluginCandidate;
 
-  return createManifestPluginRecord({
+  const cfg = { plugins: { entries: { example: { enabled: true } } } };
+  const activationSource = createPluginActivationSource({ config: cfg });
+  return preparePluginLoadRecord({
     candidate,
     manifestRecord,
-    enabled: true,
-    activationState: {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: true,
-      source: "explicit",
+    context: {
+      cfg,
+      normalized: activationSource.plugins,
+      activationSource,
+      autoEnabledReasons: {},
     },
-  });
+    onlyPluginIdSet: null,
+    dreamingSidecar: null,
+    registry: { plugins: [] },
+    seenIds: new Map(),
+  })?.record;
 }
 
-describe("createManifestPluginRecord", () => {
+describe("preparePluginLoadRecord", () => {
   it("ignores malformed package build version metadata", () => {
-    expect(createRecordWithBuildVersion(" 2026.7.2 ").builtWithOpenClawVersion).toBe("2026.7.2");
-    expect(createRecordWithBuildVersion(42).builtWithOpenClawVersion).toBeUndefined();
+    expect(createRecordWithBuildVersion(" 2026.7.2 ")).toHaveProperty(
+      "builtWithOpenClawVersion",
+      "2026.7.2",
+    );
+    expect(createRecordWithBuildVersion(42)).toHaveProperty("builtWithOpenClawVersion", undefined);
   });
 });
 
@@ -441,6 +450,67 @@ module.exports = { id: "source-fixture", register(api) {
                       activationSourceConfig: structuredClone(alternateSource),
                     }) === alternate,
                   ).toBe(true);
+
+                  const replacement = loadOpenClawPlugins({
+                    ...alternateOptions,
+                    cache: false,
+                    previousRegistry: registry,
+                  });
+                  expect(
+                    replacement.cliRegistrars.flatMap((registrar) => registrar.descriptors),
+                  ).toEqual([{ ...descriptor, description: "Alternate command" }]);
+                  for (const change of ["source-invalid", "resolved-secret", "disabled"] as const) {
+                    const nextRuntime: OpenClawConfig = {
+                      ...runtime,
+                      plugins: {
+                        ...runtime.plugins,
+                        entries: {
+                          [id]: {
+                            enabled: change !== "disabled",
+                            config: {
+                              credential:
+                                change === "resolved-secret"
+                                  ? "rotated-fixture-key"
+                                  : "resolved-fixture-key",
+                            },
+                          },
+                        },
+                      },
+                    };
+                    const nextSource =
+                      change === "resolved-secret"
+                        ? source
+                        : {
+                            ...source,
+                            plugins: {
+                              ...source.plugins,
+                              entries: {
+                                [id]: {
+                                  enabled: change !== "disabled",
+                                  config: { credential: null },
+                                },
+                              },
+                            },
+                          };
+                    const rejected = loadOpenClawPlugins({
+                      ...options,
+                      config: nextRuntime,
+                      activationSourceConfig: nextSource,
+                      cache: false,
+                      previousRegistry: registry,
+                    });
+                    expect(rejected.cliRegistrars).toHaveLength(0);
+                    expect(rejected.plugins.find((plugin) => plugin.id === id)).toMatchObject({
+                      status: change === "disabled" ? "disabled" : "error",
+                      error: expect.stringContaining(
+                        change === "resolved-secret"
+                          ? "paired runtime config was not hydrated"
+                          : change === "disabled"
+                            ? "disabled"
+                            : "invalid config",
+                      ),
+                    });
+                  }
 
                   setRuntimeConfigSnapshot(candidate, structuredClone(source));
                   expect(loadOpenClawPlugins({ ...options, config: candidate }) === registry).toBe(

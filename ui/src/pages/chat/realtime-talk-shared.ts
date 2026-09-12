@@ -8,6 +8,7 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
 } from "../../../../src/talk/agent-run-control-shared.js";
 import type { RealtimeVoiceAgentControlMode } from "../../../../src/talk/agent-run-control-shared.js";
+import type { RealtimeVoiceBrowserSession } from "../../../../src/talk/provider-types.js";
 import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 // Control UI chat module implements realtime talk shared behavior.
@@ -21,6 +22,8 @@ export type RealtimeTalkTranscript = {
   role: "user" | "assistant";
   text: string;
   final: boolean;
+  /** Literal caption fragments bypass ASR correction and inferred turn boundaries. */
+  textMode?: "verbatim";
   itemId?: string;
   order?: number;
 };
@@ -57,75 +60,26 @@ export type RealtimeTalkEventInput<TPayload = unknown> = {
   parentId?: string;
 };
 
-type RealtimeTalkAudioContract = {
-  inputEncoding: "pcm16" | "g711_ulaw";
-  inputSampleRateHz: number;
-  outputEncoding: "pcm16" | "g711_ulaw";
-  outputSampleRateHz: number;
-};
-
-export type RealtimeTalkWebRtcSdpSessionResult = {
-  provider: string;
-  transport: "webrtc";
+export type RealtimeTalkSessionResult = RealtimeVoiceBrowserSession & {
   voiceSessionId?: string;
-  clientSecret: string;
-  offerUrl?: string;
-  offerHeaders?: Record<string, string>;
-  offerResponseMaxBytes?: number;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
 };
 
-export type RealtimeTalkJsonPcmWebSocketSessionResult = {
-  provider: string;
-  transport: "provider-websocket";
-  voiceSessionId?: string;
-  protocol: string;
-  clientSecret: string;
-  websocketUrl: string;
-  audio: RealtimeTalkAudioContract;
-  initialMessage?: unknown;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-  consultThinkingLevel?: string;
-  consultFastMode?: boolean;
-};
+export type RealtimeTalkWebRtcSdpSessionResult = Extract<
+  RealtimeTalkSessionResult,
+  { transport: "webrtc" }
+>;
 
-export type RealtimeTalkGatewayRelaySessionResult = {
-  provider: string;
-  transport: "gateway-relay";
-  voiceSessionId?: string;
-  relaySessionId: string;
-  audio: RealtimeTalkAudioContract;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-  consultThinkingLevel?: string;
-  consultFastMode?: boolean;
-};
+export type RealtimeTalkJsonPcmWebSocketSessionResult = Extract<
+  RealtimeTalkSessionResult,
+  { transport: "provider-websocket" }
+>;
 
-type RealtimeTalkManagedRoomSessionResult = {
-  provider: string;
-  transport: "managed-room";
-  voiceSessionId?: string;
-  roomUrl: string;
-  token?: string;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-  consultThinkingLevel?: string;
-  consultFastMode?: boolean;
-};
-
-export type RealtimeTalkSessionResult =
-  | RealtimeTalkWebRtcSdpSessionResult
-  | RealtimeTalkJsonPcmWebSocketSessionResult
-  | RealtimeTalkGatewayRelaySessionResult
-  | RealtimeTalkManagedRoomSessionResult;
+export type RealtimeTalkGatewayRelaySessionResult = Extract<
+  RealtimeTalkSessionResult,
+  { transport: "gateway-relay" }
+>;
 
 export type RealtimeTalkTransportStartResult = "ready" | "cancelled";
 

@@ -1,4 +1,5 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { startGatewayClientWhenEventLoopReady } from "../../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -14,7 +15,6 @@ import { resolveGatewayAuthOptions } from "../../cli/gateway-secret-options.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { readGatewayDispatchConfigWithShellEnvFallback } from "../../config/gateway-dispatch-config.js";
 import { resolveGatewayClientBootstrap } from "../../gateway/client-bootstrap.js";
-import { startGatewayClientWhenEventLoopReady } from "../../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import {

@@ -9,6 +9,7 @@ import {
   createAgent,
   validateAgentIdInput,
 } from "../agents/agent-create.js";
+import { loadAgentRole } from "../agents/agent-roles.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -16,7 +17,6 @@ import {
 } from "../agents/agent-scope.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
-  ensureAuthProfileStore,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
@@ -26,18 +26,18 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { createChannelSetupTransaction } from "../flows/channel-setup.js";
+import { createChannelSetupHooks } from "../flows/channel-setup.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { persistProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
+import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -48,7 +48,7 @@ import { applyAgentBindings, buildChannelBindings, describeBinding } from "./age
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -59,6 +59,7 @@ import type { ChannelChoice } from "./onboard-types.js";
 type AgentsAddOptions = {
   name?: string;
   workspace?: string;
+  role?: string;
   model?: string;
   agentDir?: string;
   bind?: string[];
@@ -103,6 +104,13 @@ export async function agentsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasAutomationFlags?: boolean },
 ) {
+  if (opts.role !== undefined) {
+    try {
+      await loadAgentRole(opts.role);
+    } catch (error) {
+      failAgentsAdd(error instanceof Error ? error.message : String(error));
+    }
+  }
   const hasAutomationFlags = params?.hasAutomationFlags === true;
   const nonInteractive = opts.nonInteractive === true || hasAutomationFlags;
   const wizardOutput = opts.json ? process.stderr : process.stdout;
@@ -112,18 +120,17 @@ export async function agentsAddCommand(
     );
   }
 
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
-  const baseHash = configSnapshot.hash;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
 
   if (nonInteractive) {
-    if (!workspaceFlag) {
+    if (!workspaceFlag && !opts.role) {
       failAgentsAdd(
         `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
       );
@@ -142,7 +149,7 @@ export async function agentsAddCommand(
       );
     }
     const agentId = validation.agentId;
-    if (agentId !== nameInput) {
+    if (!opts.json && agentId !== nameInput) {
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
@@ -150,6 +157,7 @@ export async function agentsAddCommand(
       return await createAgent({
         name: nameInput,
         workspace: workspaceFlag,
+        ...(opts.role ? { role: opts.role } : {}),
         ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
@@ -253,6 +261,11 @@ export async function agentsAddCommand(
       (agent) => normalizeAgentId(agent.id) === agentId,
     );
     if (existingAgent) {
+      if (opts.role) {
+        failAgentsAdd(
+          `Agent "${agentId}" already exists. Choose a new id to create an agent from a role.`,
+        );
+      }
       const shouldUpdate = await prompter.confirm({
         message: `Agent "${agentId}" already exists. Update it?`,
         initialValue: false,
@@ -384,15 +397,9 @@ export async function agentsAddCommand(
       initialValue: false,
     });
     if (wantsAuth) {
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-        readOnly: true,
-        syncExternalCli: false,
-      });
       while (true) {
         const authChoice = await promptAuthChoiceGrouped({
           prompter,
-          store: authStore,
           includeSkip: true,
           config: nextConfig,
         });
@@ -428,10 +435,9 @@ export async function agentsAddCommand(
         profileId,
         credential,
       })),
-      validateCatalog: false,
     });
 
-    const channelSetup = createChannelSetupTransaction({ runtime: wizardRuntime });
+    const channelSetup = createChannelSetupHooks({ runtime: wizardRuntime });
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
@@ -509,20 +515,21 @@ export async function agentsAddCommand(
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
       const authPersistence = stagedAuthBatch
-        ? await persistProviderAuthProfileBatch(stagedAuthBatch)
+        ? await stageProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
-        nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
-          const committed = await commitConfigWithPendingPluginInstalls({
-            nextConfig: configToCommit,
-            ...(baseHash !== undefined ? { baseHash } : {}),
-          });
-          return committed.config;
+        const committed = await commitConfigWithPendingPluginInstalls({
+          sourceConfig: nextConfig,
+          writeOptions: writeSnapshot.writeOptions,
+          baseHash: writeSnapshot.snapshot.hash,
         });
+        await channelSetup.runPostWriteHooks(committed.path);
+        nextConfig = committed.nextConfig;
       } catch (error) {
-        authPersistence?.rollback();
+        await authPersistence?.rollback();
         throw error;
       }
+      await authPersistence?.commit();
       payload = {
         agentId: target.agentId,
         name: agentName,
@@ -536,13 +543,13 @@ export async function agentsAddCommand(
       const created = await withPluginLifecycleLease({}, async () => {
         return await createAgent({
           entry: { ...stagedEntry, id: agentId },
-          expectedConfigHash: baseHash ?? null,
-          stagedConfig: nextConfig,
+          ...(opts.role ? { role: opts.role } : {}),
+          stagedConfig: { config: nextConfig, writeSnapshot },
           transformConfig: transformConfigWithPendingPluginInstalls,
           ...(stagedAuthBatch
             ? {
                 prepareConfigCommit: async () =>
-                  (await persistProviderAuthProfileBatch(stagedAuthBatch)).rollback,
+                  await stageProviderAuthProfileBatch(stagedAuthBatch),
               }
             : {}),
         });
@@ -558,7 +565,7 @@ export async function agentsAddCommand(
         workspace: created.workspace,
         agentDir: created.agentDir,
       };
-      await channelSetup.runPostWriteHooks(nextConfig);
+      await channelSetup.runPostWriteHooks(created.configPath);
     }
     await reportPortableAuthCopy?.();
     if (!opts.json) {

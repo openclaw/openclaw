@@ -165,12 +165,17 @@ class NodeWorkerSupervisor {
       return await admission.done;
     }
     const abort = new AbortController();
+    const workspace = this.workspace.acquirePreparedWorkspace({
+      ...binding,
+      sessionKey: input.sessionKey,
+    });
     const done = this.launchAdmitted(
       input,
       descriptor,
       planHash,
       signal ? AbortSignal.any([signal, abort.signal]) : abort.signal,
-    );
+      workspace?.homeDir,
+    ).finally(() => workspace?.release());
     const pending = { binding, launchId: input.launchId, planHash, abort, done };
     this.admissions.set(key, pending);
     try {
@@ -187,6 +192,7 @@ class NodeWorkerSupervisor {
     descriptor: WorkerLaunchDescriptor,
     planHash: string,
     signal: AbortSignal,
+    homeDir?: string,
   ): Promise<NodeWorkerLaunchReceipt> {
     await this.initialize();
     const supervisor = (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
@@ -290,7 +296,7 @@ class NodeWorkerSupervisor {
     const startup = startNodeWorkerChild(
       {
         bundleRoot: this.bundleRoot,
-        workerEnv: this.workerEnv,
+        workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
         engineEnv: this.engineEnv,
         store: this.store,
         turns: this.turns,
@@ -603,8 +609,7 @@ class NodeWorkerSupervisor {
         this.closePromise = undefined;
       }
     });
-    this.closePromise = closePromise;
-    return closePromise;
+    return (this.closePromise = closePromise);
   }
 
   private reconcileActiveTerminal(active: NodeWorkerObservedTerminal): NodeWorkerLaunchReceipt {
@@ -640,9 +645,7 @@ class NodeWorkerSupervisor {
   private async observeChild(active: NodeWorkerRunningChild): Promise<void> {
     const outcome = await observeNodeWorkerChildOutput(
       active,
-      (frame) => {
-        settleNodeWorkerTurn(active, frame, this.turns);
-      },
+      (frame) => settleNodeWorkerTurn(active, frame, this.turns),
       () => active.turn?.claim.launchId,
     );
     if (active.container) {
@@ -690,17 +693,14 @@ class NodeWorkerSupervisor {
     if (!active.container) {
       return;
     }
-    if (!active.containerCleanup) {
-      const cleanup = this.requireContainerLifecycle()
-        .remove(active.container, active)
-        .finally(() => {
-          if (active.containerCleanup === cleanup) {
-            active.containerCleanup = undefined;
-          }
-        });
-      active.containerCleanup = cleanup;
-    }
-    await active.containerCleanup;
+    const cleanup = (active.containerCleanup ??= this.requireContainerLifecycle()
+      .remove(active.container, active)
+      .finally(() => {
+        if (active.containerCleanup === cleanup) {
+          active.containerCleanup = undefined;
+        }
+      }));
+    await cleanup;
   }
 
   private async stopChild(

@@ -27,6 +27,7 @@ async function stopMaintenanceTimers(
   clearInterval(timers.dedupeCleanup);
   clearInterval(timers.worktreeCleanup);
   await timers.stopMediaCleanup();
+  await timers.stopSessionColdStorageMaintenance();
 }
 
 describe("gateway telemetry maintenance", () => {

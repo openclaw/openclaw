@@ -1,14 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
-  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
 } from "../state/openclaw-state-db.js";
@@ -20,11 +21,12 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
+  pluginStateEntriesInKeyRange,
 } from "./plugin-state-store.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 
 let testState: OpenClawTestState | undefined;
 beforeAll(async () => {
@@ -35,6 +37,155 @@ afterEach(() => resetPluginStateStoreForTests());
 afterAll(async () => testState?.cleanup());
 
 describe("plugin state open errors", () => {
+  it.each(["decode", "sqlite-step"] as const)(
+    "preserves %s failures and releases the listing cursor",
+    async (failure) => {
+      await withOpenClawTestState({ label: "plugin-state-entry-cursor" }, async () => {
+        const store = createPluginStateSyncKeyedStore("discord", {
+          namespace: "cursor",
+          maxEntries: 10,
+        });
+        store.register("a", { value: 1 });
+        store.register("b", { value: 2 });
+        const { db, path } = openOpenClawStateDatabase();
+        db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+          "invalid first JSON",
+          "a",
+        );
+        if (failure === "sqlite-step") {
+          // The listing index lets SQLite return the corrupt first row before
+          // evaluating the second row's native JSON expression.
+          db.exec(`
+            ALTER TABLE plugin_state_entries RENAME TO plugin_state_source;
+            CREATE VIEW plugin_state_entries AS
+              SELECT plugin_id, namespace, entry_key,
+                CASE WHEN entry_key = 'b' THEN json_extract('invalid SQL JSON', '$')
+                  ELSE value_json END AS value_json,
+                created_at, expires_at
+              FROM plugin_state_source;
+          `);
+        }
+        for (const connection of ["warm", "readonly"]) {
+          if (connection === "readonly") {
+            closePluginStateDatabase();
+          }
+          expect(() => store.entries()).toThrowError(
+            expect.objectContaining({
+              code: failure === "decode" ? "PLUGIN_STATE_CORRUPT" : "PLUGIN_STATE_READ_FAILED",
+              operation: "entries",
+              path,
+              cause:
+                failure === "decode"
+                  ? expect.any(SyntaxError)
+                  : expect.objectContaining({
+                      code: "ERR_SQLITE_ERROR",
+                      message: "malformed JSON",
+                    }),
+            }),
+          );
+          const writer = new DatabaseSync(path);
+          try {
+            writer.exec("PRAGMA busy_timeout = 0");
+            const table = failure === "decode" ? "plugin_state_entries" : "plugin_state_source";
+            writer.exec(`UPDATE ${table} SET created_at = created_at + 1`);
+            // A leaked reader would pin this committed WAL and make TRUNCATE busy.
+            expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+              busy: 0,
+              log: 0,
+              checkpointed: 0,
+            });
+          } finally {
+            writer.close();
+          }
+        }
+      });
+    },
+  );
+
+  it("reports the opened database path for corrupt values with an explicit env", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-corrupt-explicit-env", applyEnv: false },
+      async (state) => {
+        const options = { namespace: "corrupt-env", maxEntries: 10, env: state.env };
+        const sync = createPluginStateSyncKeyedStore<{ owner: string }>("discord", options);
+        const store = createPluginStateKeyedStore<{ owner: string }>("discord", options);
+        sync.register("key", { owner: "custom" });
+        const database = openOpenClawStateDatabase({ env: state.env });
+        expect(database.path).not.toBe(resolveOpenClawStateSqlitePath());
+        database.db
+          .prepare("UPDATE plugin_state_entries SET value_json = ? WHERE namespace = ?")
+          .run("invalid JSON", options.namespace);
+        const expected = {
+          code: "PLUGIN_STATE_CORRUPT",
+          path: database.path,
+          message: "Plugin state entry contains corrupt JSON.",
+        };
+        for (const connection of ["warm", "readonly"]) {
+          if (connection === "readonly") {
+            closePluginStateDatabase();
+          }
+          for (const read of [
+            () => sync.lookup("key"),
+            () => store.lookup("key"),
+            () => sync.entries(),
+            () => store.entries(),
+            () =>
+              pluginStateEntriesInKeyRange({
+                pluginId: "discord",
+                namespace: options.namespace,
+                keyStartInclusive: "key",
+                keyEndExclusive: "kez",
+                limit: 1,
+                env: state.env,
+              }),
+          ]) {
+            await expect((async () => await read())()).rejects.toMatchObject(expected);
+          }
+          expect(sync.lookupMany(["key"])).toEqual([
+            { ok: false, error: expect.objectContaining({ ...expected, operation: "lookup" }) },
+          ]);
+          await expect(store.lookupMany(["key"])).resolves.toEqual([
+            { ok: false, error: expect.objectContaining({ ...expected, operation: "lookup" }) },
+          ]);
+        }
+        let callbackCalled = false;
+        for (const stateStore of [sync, store]) {
+          const readers = [
+            { operation: "consume", read: () => stateStore.consume("key") },
+            {
+              operation: "lookup",
+              read: () =>
+                stateStore.update("key", () => {
+                  callbackCalled = true;
+                  return { owner: "changed" };
+                }),
+            },
+            {
+              operation: "delete",
+              read: () =>
+                stateStore.deleteIf("key", () => {
+                  callbackCalled = true;
+                  return true;
+                }),
+            },
+          ];
+          for (const { read, operation } of readers) {
+            await expect((async () => await read())()).rejects.toMatchObject({
+              ...expected,
+              operation,
+            });
+          }
+        }
+        expect(callbackCalled).toBe(false);
+        expect(
+          openOpenClawStateDatabase({ env: state.env })
+            .db.prepare("SELECT value_json FROM plugin_state_entries WHERE namespace = ?")
+            .get(options.namespace),
+        ).toEqual({ value_json: "invalid JSON" });
+      },
+    );
+  });
+
   it("keeps warm ownership denials distinct from acquisition failures for the same path", async () => {
     // A different open database must not make this fixture's closed path look warm.
     openOpenClawStateDatabase();
@@ -114,7 +265,11 @@ describe("plugin state open errors", () => {
       }),
     ).toBe(true);
     try {
-      for (const operation of [() => store.lookup("k"), () => store.register("k", { ok: true })]) {
+      for (const operation of [
+        () => store.lookup("k"),
+        () => store.lookupMany(["k"]),
+        () => store.register("k", { ok: true }),
+      ]) {
         await expect(operation()).rejects.toMatchObject({
           code: "PLUGIN_STATE_OPEN_FAILED",
           path: databasePath,
@@ -141,7 +296,11 @@ describe("plugin state open errors", () => {
     closePluginStateDatabase();
 
     try {
-      for (const operation of [() => store.lookup("k"), () => store.register("k", { ok: true })]) {
+      for (const operation of [
+        () => store.lookup("k"),
+        () => store.lookupMany(["k"]),
+        () => store.register("k", { ok: true }),
+      ]) {
         await expect(operation()).rejects.toMatchObject({
           code: "PLUGIN_STATE_OPEN_FAILED",
           path: databasePath,
@@ -159,4 +318,47 @@ describe("plugin state open errors", () => {
       }
     }
   });
+});
+
+describe("plugin state JSON input", () => {
+  it.each([
+    ["class instance", "new (class Entry { value = 1; })()"],
+    ["custom prototype", "Object.create({ inherited: true })"],
+    ["null prototype", "Object.create(null)"],
+    [
+      "forged root constructor",
+      "Object.create(Object.create(null, { constructor: { value: Object } }))",
+    ],
+    [
+      "constructor accessor",
+      "Object.create(Object.create(null, { constructor: { get() { onAccess(); return Object; } } }))",
+    ],
+    ["accessor", "({ get value() { onAccess(); return 1; } })"],
+    ["symbol key", "({ [Symbol('hidden')]: 1 })"],
+    ["non-enumerable key", "Object.defineProperty({}, 'hidden', { value: 1 })"],
+  ])(
+    "rejects nested VM realm %s without replacing keyed state or invoking getters",
+    async (_shape, expression) => {
+      await withOpenClawTestState({ label: "plugin-state-json-input" }, async () => {
+        try {
+          const store = createPluginStateKeyedStore("discord", {
+            namespace: "realm-shapes",
+            maxEntries: 1,
+          });
+          await store.register("retained", "original");
+          const onAccess = vi.fn();
+          const value: unknown = runInNewContext(`({ nested: [${expression}] })`, { onAccess });
+
+          await expect(store.register("retained", value)).rejects.toMatchObject({
+            code: "PLUGIN_STATE_INVALID_INPUT",
+            operation: "register",
+          });
+          expect(onAccess).not.toHaveBeenCalled();
+          await expect(store.lookup("retained")).resolves.toBe("original");
+        } finally {
+          resetPluginStateStoreForTests();
+        }
+      });
+    },
+  );
 });

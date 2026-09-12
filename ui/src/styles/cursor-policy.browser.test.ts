@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import postcss from "postcss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
+import { controlUiHoverGuardPlugin } from "../../config/control-ui-hover-guard.ts";
 import { dockPanelStyles } from "../components/dock-layout-controller.ts";
 import {
   canRunPlaywrightChromium,
@@ -57,6 +59,7 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "pointer", selector: "#new-tab-button" },
   { expected: "pointer", selector: "#shadow-new-tab-button", shadow: true },
   { expected: "pointer", selector: ".markdown-file-link" },
+  { expected: "pointer", selector: ".markdown-github-item" },
   // Semantic cursors remain owned by their components.
   { expected: "text", selector: "#plain-text-input" },
   { expected: "text", selector: ".chat-pane__session-title-button" },
@@ -72,12 +75,13 @@ const CURSOR_CASES: readonly CursorCase[] = [
 ];
 
 function readUiCss(): string {
-  return [
+  const css = [
     "ui/src/styles/base.css",
     "ui/src/styles/components.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/sidebar-update-card.css",
     "ui/src/styles/sidebar-issues.css",
+    "ui/src/styles/sidebar-markdown.css",
     "ui/src/styles/sessions.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
@@ -90,6 +94,7 @@ function readUiCss(): string {
   ]
     .map((file) => readStyleSheet(file))
     .join("\n");
+  return postcss([controlUiHoverGuardPlugin()]).process(css, { from: undefined }).css;
 }
 
 function fixtureDocument(): string {
@@ -103,10 +108,37 @@ function fixtureDocument(): string {
       <input id="plain-text-input" type="text" value="text" />
       <div id="role-button" role="button" tabindex="0">Role button</div>
       <a id="real-link" href="https://example.com">Real link</a>
+      <a id="primary-button-link" class="btn primary" href="/new">Primary action</a>
+      <a id="ghost-button-link" class="btn btn--ghost" href="/new">Secondary action</a>
+      <a id="role-button-link" role="button" href="/new">Action</a>
+      <div class="callout"><a id="docs-link" href="https://example.com/docs">Documentation</a></div>
+      <div class="chat-text">
+        <a id="chat-content-link" href="https://example.com">Chat link</a>
+        <a id="chat-button-link" class="btn" href="/new">Chat action</a>
+      </div>
+      <div class="sidebar-markdown"><a id="sidebar-content-link" href="https://example.com">Sidebar link</a></div>
+      <div class="markdown"><a class="markdown-bare-url" href="https://example.com">Transcript link</a></div>
+      <div class="chat-thinking"><a class="markdown-bare-url" href="https://example.com">Reasoning link</a></div>
+      <div class="markdown-body"><a class="markdown-bare-url" href="https://example.com">Logbook link</a></div>
+      <div class="chat-session-rail__answer"><a class="markdown-bare-url" href="https://example.com">Answer link</a></div>
+      <div class="chat-position-rail__preview-copy" inert>
+        <a class="markdown-bare-url" href="https://example.com">Preview URL</a>
+        <a id="preview-github-link" class="markdown-github-link" href="https://github.com/example/project">Preview repository</a>
+      </div>
+      <div class="dreams-diary__para"><a class="markdown-bare-url" href="https://example.com">Diary link</a></div>
+      <a class="activity-entry__run-link" href="/activity">Run</a>
+      <a class="settings-row__value" href="https://example.com/docs">Setup documentation</a>
+      <a class="memory-page__link" href="/settings/memory">Memory settings</a>
+      <a class="portals-preview__notice-url" href="https://example.com">Portal address</a>
+      <a class="settings-account" href="https://github.com/example">Account</a>
+      <a class="transcripts-back" href="/meetings">Transcripts</a>
+      <a id="person-link" class="person-activity-link" href="/activity">Person</a>
+      <a id="participant-link" class="session-menu__item learn-more-link session-hovercard__participant-link person-activity-link" href="/activity">Participant</a>
       <aside class="sidebar">
         <a class="nav-item" href="/chat"><span class="nav-item__text">Home</span></a>
         <a class="sidebar-recent-session__link" href="/chat/test"><span class="sidebar-recent-session__name">Session</span></a>
-        <a class="sidebar-online__person" href="/activity">Person</a>
+        <a class="sidebar-online__person" href="/activity"><span class="sidebar-online__person-name">Person</span></a>
+        <button class="sidebar-online__person" type="button"><span class="sidebar-online__person-name">Viewer</span></button>
         <a class="sidebar-brand__new-thread" href="/new">New session</a>
         <a class="sidebar-new-session" href="/new">New group session</a>
         <a class="sidebar-session-catalog-new" href="/new">New catalog session</a>
@@ -135,6 +167,7 @@ function fixtureDocument(): string {
       <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>
       <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>
+      <div class="chat-text"><a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/3434" target="_blank">#3434</a></div>
       <div id="shadow-policy-host"><template shadowrootmode="open">
         <style>${dockPanelStyles.cssText}</style>
         <button id="shadow-new-tab-button" class="rail-header__action" type="button" data-new-tab-action>New tab</button>
@@ -213,6 +246,122 @@ afterAll(async () => {
 });
 
 describeCursorPolicy("Control UI cursor policy", () => {
+  it.each([
+    { theme: "light", hasTouch: false },
+    { theme: "dark", hasTouch: false },
+    { theme: "light", hasTouch: true },
+    { theme: "dark", hasTouch: true },
+  ])("underlines content, not controls ($theme, touch=$hasTouch)", async ({ theme, hasTouch }) => {
+    const page = await tabBrowser.newPage({ hasTouch });
+    try {
+      await page.goto(`file://${fixtureFile}`);
+      await page.evaluate((mode) => {
+        document.documentElement.dataset.themeMode = mode;
+      }, theme);
+      expect(
+        await page.locator("#new-tab-link").evaluate((element) => getComputedStyle(element).color),
+      ).toBe(
+        await page
+          .locator("#new-tab-button")
+          .evaluate((element) => getComputedStyle(element).color),
+      );
+      const people = await page.locator(".sidebar-online__person").all();
+      expect(people).toHaveLength(2);
+      for (const person of people) {
+        // Ancestor decorations propagate visually without inheriting the computed value.
+        expect(
+          await person.evaluate((element) => getComputedStyle(element).textDecorationLine),
+        ).toBe("none");
+        expect(
+          await person
+            .locator(".sidebar-online__person-name")
+            .evaluate((element) => getComputedStyle(element).textDecorationLine),
+        ).toBe("none");
+      }
+      for (const [expected, selectors] of [
+        [
+          "none",
+          [
+            "#new-tab-link",
+            "#primary-button-link",
+            "#ghost-button-link",
+            "#role-button-link",
+            "#chat-button-link",
+            ".person-activity-link",
+            ".markdown-github-item",
+            ".markdown-file-link",
+            ".chat-position-rail__preview-copy a",
+          ],
+        ],
+        [
+          "underline",
+          [
+            "#real-link",
+            "#docs-link",
+            "#chat-content-link",
+            "#sidebar-content-link",
+            ".markdown-bare-url:not(.chat-position-rail__preview-copy a)",
+            ".activity-entry__run-link",
+            ".settings-row__value",
+            ".memory-page__link",
+            ".portals-preview__notice-url",
+            ".settings-account",
+            ".transcripts-back",
+          ],
+        ],
+      ] as const) {
+        for (const selector of selectors) {
+          const links = await page.locator(selector).all();
+          expect(links.length, selector).toBeGreaterThan(0);
+          for (const link of links) {
+            expect(
+              await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
+              selector,
+            ).toBe(expected);
+          }
+        }
+      }
+      const personLink = page.locator("#person-link");
+      for (const link of await page.locator(".chat-position-rail__preview-copy a").all()) {
+        expect(await link.evaluate((element) => getComputedStyle(element).color)).toBe(
+          await page
+            .locator(".chat-position-rail__preview-copy")
+            .evaluate((element) => getComputedStyle(element).color),
+        );
+      }
+      if (!hasTouch) {
+        await personLink.hover();
+        expect(
+          await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
+        ).toBe("underline");
+        expect(
+          await personLink.evaluate((element) => getComputedStyle(element).textDecorationThickness),
+        ).toBe("2px");
+      }
+      await page.mouse.move(0, 0);
+      await page.keyboard.press("Tab");
+      await personLink.focus();
+      expect(
+        await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
+      ).toBe("underline");
+      const participantLink = page.locator("#participant-link");
+      if (!hasTouch) {
+        await participantLink.hover();
+        expect(
+          await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
+        ).toBe("none");
+      }
+      await page.mouse.move(0, 0);
+      await page.keyboard.press("Tab");
+      await participantLink.focus();
+      expect(
+        await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
+      ).toBe("none");
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+
   it("uses semantic cursors in a browser tab", async () => {
     const page = await tabBrowser.newPage();
     try {

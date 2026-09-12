@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginAcceptedDeclaredSurface,
@@ -105,7 +106,10 @@ function acceptManagedPluginDeclaredSurface<T extends PluginInstallRecord>(
   return accepted;
 }
 
-function throwManagedPluginCapabilityConsentRequired(review: PluginCapabilityConsentReview): never {
+function throwManagedPluginCapabilityConsentRequired(
+  review: PluginCapabilityConsentReview,
+  recovery = "Rerun the openclaw plugins install, enable, update, or reload command with --accept-capabilities after reviewing the plugin.",
+): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
   if (pendingPluginCapabilityReviews.size > 32) {
@@ -115,7 +119,7 @@ function throwManagedPluginCapabilityConsentRequired(review: PluginCapabilityCon
     }
   }
   throw new ManagedPluginLifecycleError(
-    `Plugin "${review.pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`,
+    `Plugin "${review.pluginId}" requires capability consent. ${recovery}`,
     {
       capabilityConsent: {
         pluginId: review.pluginId,
@@ -135,6 +139,7 @@ export async function resolvePluginCapabilityConsent(params: {
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -192,6 +197,8 @@ export async function resolvePluginCapabilityConsent(params: {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
+    // Pure reload needs no write permission; newly accepted capabilities do.
+    assertConfigWriteAllowedInCurrentMode({ env });
     const acknowledgment = params.acknowledge ?? (await params.onCapabilityConsent?.(review));
     if (!acknowledgment) {
       throwManagedPluginCapabilityConsentRequired(review);
@@ -218,6 +225,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (acknowledgment.reviewToken !== currentReview.reviewToken) {
       throwManagedPluginCapabilityConsentRequired(currentReview);
     }
+    params.beforePersistentApply?.();
     await writePersistedInstalledPluginIndexInstallRecordsWithLease(
       {
         ...records,
@@ -312,10 +320,14 @@ async function resolvePluginArtifactCapabilityConsent(params: {
             declared: finalDeclared,
             ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
           });
-    return throwManagedPluginCapabilityConsentRequired(finalReview);
+    const outcome = params.currentArtifactDir ? "updated" : "installed";
+    return throwManagedPluginCapabilityConsentRequired(
+      finalReview,
+      `The plugin was not ${outcome}. Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities, keeping its source and other options. For Doctor or setup, complete the plugin command first, then retry Doctor or setup.`,
+    );
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
-  // First-party provenance authorizes the artifact; it is not operator acceptance.
+  // Provenance alone is not operator acceptance; an explicit review is.
   return !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
 }
 

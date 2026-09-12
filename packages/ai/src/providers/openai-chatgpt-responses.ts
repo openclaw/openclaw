@@ -1,7 +1,10 @@
 // OpenAI ChatGPT Responses provider handles ChatGPT-authenticated response streams.
 import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  extractErrorCodeOrErrno,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   Tool as OpenAITool,
@@ -20,6 +23,7 @@ import {
 } from "../transports/openai-responses-compaction-replay.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
+import { resolveOpenAIResponsesTextFormat } from "../transports/openai-responses-params-internal.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
   commitResponsesEncryptedContentAttempt,
@@ -31,6 +35,7 @@ import { processResponsesStream } from "../transports/openai-responses-stream-in
 import {
   createOpenAIProviderAcceptanceHook,
   createOpenAIResponseHook,
+  createResponseModelTracker,
 } from "../transports/openai-transport-shared.js";
 import {
   assignTransportErrorDetails,
@@ -57,6 +62,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
+import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "../utils/retryable-network-errors.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -105,6 +111,10 @@ const os = loadNodeOs();
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
+const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
+// Only registered server/transport-unavailability closes may authorize retry or
+// settled-turn finalization; peer policy/protocol rejections must fail closed.
+const RETRYABLE_WEBSOCKET_CLOSE_CODES = new Set([1001, 1005, 1006, 1011, 1012, 1013, 1014, 1015]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
@@ -150,7 +160,7 @@ interface RequestBody {
   temperature?: number;
   reasoning?: { effort?: string; summary?: string };
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  text?: { verbosity?: string };
+  text?: ResponseCreateParamsStreaming["text"];
   include?: string[];
   prompt_cache_key?: string;
   [key: string]: unknown;
@@ -354,6 +364,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               () => {
                 websocketRequestSent = true;
               },
+              options?.signal,
             );
 
             if (activeSignal?.aborted) {
@@ -528,7 +539,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       }
 
       const hookedResponseStream = withProviderResponseHook({
-        stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response)),
+        stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response), response.headers),
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
         hook: createOpenAIProviderAcceptanceHook(options, response, model),
@@ -651,6 +662,13 @@ function buildRequestBody(
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
   };
 
+  if (options?.responseFormat !== undefined) {
+    body.text = {
+      ...body.text,
+      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
+    };
+  }
+
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     body.temperature = options.temperature;
   }
@@ -660,9 +678,9 @@ function buildRequestBody(
   }
 
   if (context.tools) {
-    const converted = convertResponsesToolPayload(context.tools, { strict: null });
-    if (converted.tools.length > 0) {
-      body.tools = converted.tools;
+    const tools = convertResponsesToolPayload(context.tools, { strict: null });
+    if (tools.length > 0) {
+      body.tools = tools;
       body.tool_choice = "auto";
       body.parallel_tool_calls = true;
     }
@@ -783,8 +801,12 @@ function extractCodexEventError(event: Record<string, unknown>): {
 
 async function* mapCodexEvents(
   events: AsyncIterable<Record<string, unknown>>,
+  initialResponseHeaders?: Headers,
 ): AsyncGenerator<ResponseStreamEvent> {
+  const responseModelTracker = createResponseModelTracker();
+  responseModelTracker.begin(initialResponseHeaders);
   for await (const event of events) {
+    responseModelTracker.observeEvent(event);
     const type = typeof event.type === "string" ? event.type : undefined;
     if (!type) {
       continue;
@@ -805,7 +827,11 @@ async function* mapCodexEvents(
     ) {
       const response = (event as { response?: { status?: unknown } }).response;
       const normalizedResponse = response
-        ? { ...response, status: normalizeCodexStatus(response.status) }
+        ? {
+            ...response,
+            status: normalizeCodexStatus(response.status),
+            model: responseModelTracker.resolve(),
+          }
         : response;
       yield {
         ...event,
@@ -948,18 +974,12 @@ async function getWebSocketConstructor(): Promise<WebSocketConstructor | null> {
   return ctor as unknown as WebSocketConstructor;
 }
 
-class WebSocketCloseError extends Error {
-  readonly code?: number;
-  readonly reason?: string;
-  readonly wasClean?: boolean;
-
-  constructor(message: string, options?: { code?: number; reason?: string; wasClean?: boolean }) {
-    super(message);
-    this.name = "WebSocketCloseError";
-    this.code = options?.code;
-    this.reason = options?.reason;
-    this.wasClean = options?.wasClean;
-  }
+function createWebSocketTransportError(message: string, cause?: Error): Error {
+  // ErrorEvents can flatten the underlying socket failure. Preserve its code
+  // when available and retain a stable producer fact when it is opaque.
+  return Object.assign(new Error(message, cause ? { cause } : undefined), {
+    code: extractErrorCodeOrErrno(cause) ?? WEBSOCKET_TRANSPORT_ERROR_CODE,
+  });
 }
 
 function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
@@ -1200,22 +1220,20 @@ async function acquireWebSocket(
 function extractWebSocketError(event: unknown): Error {
   if (event && typeof event === "object") {
     const message = "message" in event ? (event as { message?: unknown }).message : undefined;
-    if (typeof message === "string" && message.length > 0) {
-      return new Error(message);
-    }
-
     const nestedError = "error" in event ? (event as { error?: unknown }).error : undefined;
-    if (nestedError instanceof Error && nestedError.message.length > 0) {
-      return nestedError;
+    const eventMessage = typeof message === "string" && message.length > 0 ? message : undefined;
+    if (nestedError !== undefined) {
+      const cause = toErrorObject(nestedError, eventMessage ?? "WebSocket error");
+      return createWebSocketTransportError(
+        eventMessage ?? (cause.message || "WebSocket error"),
+        cause,
+      );
     }
-    if (nestedError && typeof nestedError === "object" && "message" in nestedError) {
-      const nestedMessage = (nestedError as { message?: unknown }).message;
-      if (typeof nestedMessage === "string" && nestedMessage.length > 0) {
-        return new Error(nestedMessage);
-      }
+    if (eventMessage) {
+      return createWebSocketTransportError(eventMessage);
     }
   }
-  return new Error("WebSocket error");
+  return createWebSocketTransportError("WebSocket error");
 }
 
 function extractWebSocketCloseError(event: unknown): Error {
@@ -1228,13 +1246,19 @@ function extractWebSocketCloseError(event: unknown): Error {
     if (!reasonText && code === WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE) {
       reasonText = " message too big";
     }
-    return new WebSocketCloseError(`WebSocket closed${codeText}${reasonText}`.trim(), {
-      code: typeof code === "number" ? code : undefined,
+    const message = `WebSocket closed${codeText}${reasonText}`;
+    const error =
+      typeof code === "number" && RETRYABLE_WEBSOCKET_CLOSE_CODES.has(code)
+        ? createWebSocketTransportError(message)
+        : Object.assign(new Error(message), { code: WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE });
+    return Object.assign(error, {
+      name: "WebSocketCloseError",
+      closeCode: typeof code === "number" ? code : undefined,
       reason: typeof reason === "string" && reason.length > 0 ? reason : undefined,
       wasClean: typeof wasClean === "boolean" ? wasClean : undefined,
     });
   }
-  return new Error("WebSocket closed");
+  return createWebSocketTransportError("WebSocket closed");
 }
 
 async function* parseWebSocket(
@@ -1452,6 +1476,10 @@ async function processWebSocketStream(
   observePromptEgress?: ObserveResponsesPromptEgress,
   payloadVariant: ResponsesEncryptedContentAttempt<RequestBody>["kind"] = "initial",
   onRequestSent?: () => void,
+  // Stream progress must be reported on the caller's signal: the runner idle
+  // watchdog listens there, while `options.signal` here is the request-scoped
+  // abort composite that nothing outside this provider observes.
+  activitySignal?: AbortSignal,
 ): Promise<void> {
   const { socket, entry, release } = await acquireWebSocket(
     url,
@@ -1501,7 +1529,7 @@ async function processWebSocketStream(
         firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
         abortFirstEventStream,
         onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
-        signal: options?.signal,
+        signal: activitySignal ?? options?.signal,
         reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
           sessionId: options?.sessionId,
           authProfileId: options?.authProfileId,
@@ -1652,7 +1680,7 @@ function parseErrorResponse(raw: string, response: Response): CodexApiError {
 
   const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
   // The canonical projection retains HTTP status; retry owners read its bounded
-  // terminal text for pacing, matching formatAnthropicMessagesHttpError.
+  // terminal text for pacing, matching Anthropic HTTP error projection.
   const retryAfterSuffix = Number.isFinite(retryAfterSeconds)
     ? `; Retry-After: ${Math.ceil(retryAfterSeconds ?? 0)} seconds`
     : "";

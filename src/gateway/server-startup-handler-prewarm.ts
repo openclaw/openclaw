@@ -2,6 +2,7 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../shared/session-list-limits.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
 const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
@@ -22,15 +23,13 @@ async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: strin
       import("../config/sessions/combined-store-gateway.js"),
       import("./session-utils-list.js"),
     ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
+  const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId,
     projection: "list",
   });
   await listSessionsFromStoreAsync({
     cfg,
-    durableStorePath,
-    storePath,
-    store,
+    ...loaded,
     opts: {
       agentId,
       configuredAgentsOnly: true,
@@ -46,7 +45,9 @@ function dashboardDataPrewarmItems(
   cfg: OpenClawConfig,
   log: { info?: (msg: string) => void },
 ): GatewayHandlerPrewarmItem[] {
-  const agentIds = listAgentIds(cfg);
+  const agentIds = listAgentIds(cfg).filter(
+    (agentId) => !readAgentDatabaseAdmissionRefusal(agentId),
+  );
   let sessionDataPrewarmChecked = false;
   let sessionDataPrewarmAllowed = false;
   const shouldPrewarmSessionData = async () => {

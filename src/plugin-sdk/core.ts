@@ -526,21 +526,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount>,
-      | "setupWizard"
-      | "setup"
-      | "setupContract"
-      | "capabilities"
-      | "commands"
-      | "doctor"
-      | "agentPrompt"
-      | "streaming"
-      | "reload"
-      | "gatewayMethods"
-      | "gatewayMethodDescriptors"
-      | "configSchema"
-      | "config"
-      | "security"
-      | "groups"
+      Exclude<keyof CreateChannelPluginBaseOptions<TResolvedAccount>, "id" | "meta">
     >
   >;
 

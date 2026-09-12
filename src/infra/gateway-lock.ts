@@ -23,8 +23,8 @@ import {
   isOpenClawCommandArgv,
   parseProcCmdline,
 } from "./gateway-process-argv.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
@@ -64,7 +64,6 @@ const LockPayloadSchema = z.object({
 type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
-  configPath: string;
   stateDir: string;
   releaseInTree: () => Promise<void>;
   release: () => Promise<void>;
@@ -603,7 +602,6 @@ async function acquireLockFile(
         });
         return {
           lockPath,
-          configPath,
           release: async () => {
             let releaseError: unknown;
             try {
