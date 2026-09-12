@@ -60,21 +60,24 @@ import {
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
 
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
 });
 
-function createWizardContext(
-  wizardRunner: NonNullable<GatewayRequestHandlerOptions["context"]>["wizardRunner"],
-) {
-  const wizardSessions = new Map();
+type WizardTestContext = Pick<
+  GatewayRequestContext,
+  "wizardSessions" | "wizardRunner" | "findRunningWizard" | "purgeWizardSession"
+>;
+
+function createWizardContext(wizardRunner: WizardTestContext["wizardRunner"]): WizardTestContext {
+  const wizardSessions: WizardTestContext["wizardSessions"] = new Map();
   return {
     wizardSessions,
     wizardRunner,
-    findRunningWizard: () => undefined,
+    findRunningWizard: () => null,
     purgeWizardSession: (sessionId: string) => wizardSessions.delete(sessionId),
   };
 }
@@ -90,7 +93,7 @@ function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Record<strin
 async function invokeWizard(
   method: "wizard.start" | "wizard.next",
   params: Record<string, unknown>,
-  context: ReturnType<typeof createWizardContext>,
+  context: WizardTestContext,
 ): Promise<Record<string, unknown>> {
   const respond = vi.fn();
   const handler = expectDefined(wizardHandlers[method], `wizardHandlers[${method}] test invariant`);

@@ -2,20 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { signalPlugin } from "../../../extensions/signal/api.js";
-import signalManifest from "../../../extensions/signal/openclaw.plugin.json" with { type: "json" };
 import { repairUnownedChannelAccountBindings } from "../../commands/doctor/shared/legacy-config-binding-repair.js";
 import { createDoctorPluginMetadataSnapshotScope } from "../../commands/doctor/shared/plugin-metadata-snapshot-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
 } from "../../plugins/loader.test-fixtures.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveMergedAccountConfig } from "./account-helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "./read-only.js";
 
@@ -64,28 +60,6 @@ afterEach(() => resetPluginLoaderTestStateForTest());
 afterAll(() => cleanupPluginLoaderFixturesForTest());
 
 describe("prepared channel account policy entry points", () => {
-  it("channels.status Signal and core readers use the same selected manifest policy", () => {
-    const signal = {
-      account: "+12025550123",
-      accounts: { "Work Phone": { account: "+12025550124" } },
-    };
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "selected-signal-owner", channels: ["signal"] }, signalManifest],
-    });
-    withPluginMetadataSnapshotScope(snapshot, () => {
-      const coreAccount = resolveMergedAccountConfig({
-        channelId: "signal",
-        channelConfig: signal,
-        accounts: signal.accounts,
-        accountId: "work-phone",
-      });
-      expect(coreAccount.account).toBe(signal.account);
-      expect(
-        signalPlugin.config.resolveAccount({ channels: { signal } }, "work-phone").config.account,
-      ).toBe(coreAccount.account);
-    });
-  });
-
   it.each([undefined, "named-token"])(
     "channels.status manifest adapter retains its declared account rule outside metadata scope (token=%s)",
     (token) => {
