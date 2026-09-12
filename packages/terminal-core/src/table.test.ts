@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sanitizeForLog, stripAnsi, visibleWidth } from "./ansi.js";
@@ -151,7 +150,7 @@ describe("renderTable", () => {
         process.execPath,
         [
           "--import",
-          fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+          new URL("../../../scripts/tsx.mjs", import.meta.url).href,
           "--input-type=module",
           "-e",
           `import { renderTable } from ${JSON.stringify(new URL("./table.ts", import.meta.url).href)};
