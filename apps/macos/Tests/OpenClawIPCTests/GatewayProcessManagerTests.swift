@@ -1457,9 +1457,11 @@ struct GatewayProcessManagerTests {
 
     @Test func `transport cancellation does not publish readiness failure`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let cancellationThrows = Mutex(0)
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
             GatewayTestWebSocketTask(
                 receiveHook: { _, _ in
+                    cancellationThrows.withLock { $0 += 1 }
                     throw URLError(.cancelled)
                 })
         }
@@ -1474,9 +1476,8 @@ struct GatewayProcessManagerTests {
             manager._testClearLaunchAgentReadinessFailure()
         }
 
-        let startedAt = Date()
         #expect(await manager.waitForGatewayReady(timeout: 0.5) == false)
-        #expect(Date().timeIntervalSince(startedAt) < 1.5)
+        #expect(cancellationThrows.withLock { $0 } > 0)
         #expect(manager.status == .running(details: "pid 4242"))
         #expect(manager.lastFailureReason == "keep current state")
         #expect(manager._testHasLaunchAgentReadinessCandidate())
@@ -1643,14 +1644,18 @@ struct GatewayProcessManagerTests {
 
     @Test func `readiness timeout includes a stalled socket connect`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let receiveGate = AsyncTestGate()
+        defer { receiveGate.open() }
+        let socket = GatewayTestWebSocketTask(
+            receiveHook: { _, receiveIndex in
+                if receiveIndex == 0 {
+                    await receiveGate.wait()
+                    try Task.checkCancellation()
+                }
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            })
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                    }
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                })
+            socket
         }
         manager.setTestingDesiredActive(true)
         manager.setTestingStatus(.attachedExisting(details: "pid 3131"))
@@ -1663,13 +1668,16 @@ struct GatewayProcessManagerTests {
             manager._testClearLaunchAgentReadinessFailure()
         }
 
-        let startedAt = Date()
         let ready = await manager.waitForGatewayReady(timeout: 0.1)
-        let elapsed = Date().timeIntervalSince(startedAt)
+        // The readiness deadline must return before the shared handshake's own timeout.
+        // Capture its state before shutdown supplies cancellation during cleanup.
+        let socketState = socket.state
+        let socketCancelCount = socket.snapshotCancelCount()
         await connection.shutdown()
 
         #expect(!ready)
-        #expect(elapsed < 1)
+        #expect(socketState == .running)
+        #expect(socketCancelCount == 0)
         #expect(session.snapshotMakeCount() == 1)
         #expect(manager.status == .failed("Gateway did not start in time"))
         #expect(manager.lastFailureReason == "gateway readiness timeout")
