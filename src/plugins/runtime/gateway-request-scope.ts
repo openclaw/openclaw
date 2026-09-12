@@ -81,6 +81,21 @@ const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayCo
   () => new WeakMap(),
 );
 
+// A closed resolver stays closed even if a late scoped loader borrows it again.
+const gatewayContextLifetimes = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayContextLifetimes"),
+  () => new WeakMap<GatewayContextResolver, AbortController>(),
+);
+
+export function getGatewayContextLifetime(resolver: GatewayContextResolver): AbortController {
+  let lifetime = gatewayContextLifetimes.get(resolver);
+  if (!lifetime) {
+    lifetime = new AbortController();
+    gatewayContextLifetimes.set(resolver, lifetime);
+  }
+  return lifetime;
+}
+
 export function bindGatewayContextResolver(
   owner: object,
   resolver: GatewayContextResolver | undefined,
@@ -218,6 +233,8 @@ export function withPluginRuntimeRegistryScope<T>(
       pluginRegistry: registry,
       declaredProviderOwners:
         declaredProviderOwners ??
+        // Nested calls keep this prepared registry's facts, never a different registry's index.
+        (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
         getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
     },
     run,
@@ -253,11 +270,17 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
   return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }
 
-/**
- * Runs work under the current gateway request scope while attaching plugin identity.
- */
-export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
-  return withPluginRuntimePluginScope({ pluginId }, run);
+/** Drops only generation selection; authenticated Gateway caller and authority stay attached. */
+export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  if (!current) {
+    return run();
+  }
+  // Registry selection and its declared provider index belong to the same generation.
+  return pluginRuntimeGatewayRequestScope.run(
+    { ...current, pluginRegistry: undefined, declaredProviderOwners: undefined },
+    run,
+  );
 }
 
 /**

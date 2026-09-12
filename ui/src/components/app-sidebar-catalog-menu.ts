@@ -4,12 +4,12 @@ import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
 import "./catalog-session-menu.ts";
 import type { CatalogSessionMenuAction } from "./catalog-session-menu.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 type SidebarCatalogSessionMenuState = CatalogSessionMenuRequest & { x: number; y: number };
@@ -23,6 +23,7 @@ export class SidebarCatalogMenuController {
       beforeOpen: () => void;
       requestUpdate: () => void;
       terminalAvailable: () => boolean;
+      openTerminal: (key: CatalogSessionKey, agentId: string) => void;
       beginMutation: () => SidebarSessionMutationScope | null;
       isMutationCurrent: (scope: SidebarSessionMutationScope) => boolean;
       archive: (
@@ -90,7 +91,7 @@ export class SidebarCatalogMenuController {
   ): void {
     if (action === "terminal") {
       if (menu.canOpenTerminal && this.hooks.terminalAvailable()) {
-        openCatalogSessionInTerminal(menu.key, menu.agentId);
+        this.hooks.openTerminal(menu.key, menu.agentId);
       }
       return;
     }
@@ -109,7 +110,6 @@ export class SidebarCatalogMenuController {
       return;
     }
     try {
-      const { showConfirmDialog } = await import("./confirm-dialog.ts");
       const confirmed = await showConfirmDialog({
         message: t("chat.catalog.deleteSessionConfirm"),
         details: menu.name,

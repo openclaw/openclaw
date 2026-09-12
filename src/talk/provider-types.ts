@@ -224,6 +224,14 @@ export type RealtimeVoiceProviderCapabilities = {
 export type RealtimeVoiceProviderResolveConfigContext = {
   cfg: OpenClawConfig;
   rawConfig: RealtimeVoiceProviderConfig;
+  /** Host-selected agent scope for account-aware defaults. */
+  agentId?: string;
+  /** Runtime surface whose defaults are being resolved; omission retains bridge behavior. */
+  surface?: "browser-session" | "gateway-relay" | "bridge";
+  /** False when the host needs to control when audio input receives a response. */
+  autoRespondToAudio?: boolean;
+  /** Session requirements used to choose a compatible default model. */
+  requiredCapabilities?: Pick<RealtimeVoiceProviderCapabilities, "supportsVideoFrames">;
 };
 
 export type RealtimeVoiceProviderConfiguredContext = {
@@ -372,7 +380,8 @@ export type RealtimeVoiceBridge = {
     options?: RealtimeVoiceToolResultOptions,
   ): void | Promise<void>;
   acknowledgeMark(markName?: string): void;
-  close(options?: RealtimeVoiceCloseOptions): void;
+  /** Stops admission immediately; an optional promise completes after final transcripts and cleanup. */
+  close(options?: RealtimeVoiceCloseOptions): void | Promise<void>;
   isConnected(): boolean;
 };
 

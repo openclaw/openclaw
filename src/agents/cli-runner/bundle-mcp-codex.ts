@@ -152,47 +152,6 @@ export function injectCodexMcpConfigArgs(
   return [...(args ?? []), "-c", `mcp_servers=${overrides}`];
 }
 
-/**
- * Codex app-server runtime (extensions/codex) receives its thread config as a
- * JSON object through JSON-RPC `thread/start`/`thread/resume`, not as `-c` CLI
- * args. This returns a thread-config patch projecting user-configured
- * `cfg.mcp.servers` entries into Codex's `mcp_servers` table using the same
- * per-server normalization the CLI path uses, so app-server agents see the
- * same user MCP servers the CLI runtime exposes via `injectCodexMcpConfigArgs`.
- *
- * Only user-configured servers (`cfg.mcp.servers`) are projected. Plugin-
- * curated app-server apps are already attached separately through the codex
- * plugin thread-config `apps` patch, so they must not be re-projected here.
- */
-export function buildCodexUserMcpServersThreadConfigPatch(
-  cfg: OpenClawConfig | undefined,
-  options?: CodexUserMcpServersProjectionOptions,
-): { mcp_servers: CodexThreadConfigObject } | undefined {
-  const entries = Object.entries(selectCodexProjectableMcpServers(cfg, options));
-  if (entries.length === 0) {
-    return undefined;
-  }
-  const grants = options?.agentId ? loadMcpToolGrants(options.agentId) : [];
-  // Collected as entries: a server literally named `__proto__` would hit the
-  // prototype setter under plain assignment and vanish from the patch.
-  const projected: [string, CodexThreadConfigObject][] = [];
-  for (const [name, server] of entries) {
-    projected.push([
-      name,
-      normalizeCodexMcpServerConfig(
-        name,
-        applyCodexSessionMcpToolDenials(name, server, options?.toolOverrides),
-        grants,
-      ) as CodexThreadConfigObject,
-    ]);
-  }
-  const mcp_servers: CodexThreadConfigObject = Object.fromEntries(projected);
-  if (Object.keys(mcp_servers).length === 0) {
-    return undefined;
-  }
-  return { mcp_servers };
-}
-
 /** Async runtime projection that resolves OpenClaw-managed MCP bearer tokens. */
 export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   cfg: OpenClawConfig | undefined,
@@ -213,7 +172,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   if (Object.keys(allowedServers).length === 0) {
     return undefined;
   }
-  const grants = options?.agentId ? loadMcpToolGrants(options.agentId) : [];
+  const grants = options?.agentId ? await loadMcpToolGrants(options.agentId) : [];
   const resolvedConfig = await resolveMcpBearerBundleConfig({
     config: { mcpServers: allowedServers },
     cfg,

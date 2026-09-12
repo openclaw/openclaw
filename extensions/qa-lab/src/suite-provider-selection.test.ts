@@ -171,7 +171,7 @@ describe("qa suite provider selection", () => {
       };
       expect(summary.run).toMatchObject({
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6",
+        primaryModel: "openai/gpt-5.6-sol",
         alternateModel: "openai/gpt-5.6-luna",
       });
       expect(summary.run.primaryModel).not.toBe(summary.run.alternateModel);

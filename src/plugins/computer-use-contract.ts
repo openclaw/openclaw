@@ -169,6 +169,7 @@ export const ComputerActParamsSchema = Type.Union([
   }),
   actionObject(["get_window_state"], {
     windowRef: Type.String({ minLength: 1 }),
+    includeScreenshot: Type.Optional(Type.Boolean()),
     query: Type.Optional(Type.String()),
     depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 64 })),
     maxElements: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),

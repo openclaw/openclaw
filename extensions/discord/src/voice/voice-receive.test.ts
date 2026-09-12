@@ -458,7 +458,9 @@ defineDiscordVoiceTests(
 
       await manager.join({ guildId: "g1", channelId: "1001" });
       const entry = getSessionEntry(manager);
-      stopEntry.current = () => entry.stop();
+      stopEntry.current = () => {
+        void entry.stop();
+      };
       connection.daveSetPassthroughMode.mockClear();
 
       emitDecryptFailure(manager);

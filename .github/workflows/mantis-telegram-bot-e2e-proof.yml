@@ -151,19 +151,11 @@ jobs:
           git archive "$GITHUB_WORKFLOW_SHA" |
             podman build --memory 16g --cpu-period 100000 --cpu-quota 200000 --file scripts/mantis/telegram-test-server-proof.Dockerfile \
               --tag localhost/mantis-telegram-proof -
-      - name: Install pinned Crabbox for disposable candidate lifecycle
+      - name: Install Crabbox for disposable candidate lifecycle
         if: ${{ inputs.scenario == 'telegram-bot-e2e-proof' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_dir="$RUNNER_TEMP/mantis-crabbox"
-          mkdir -p "$install_dir/bin"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            https://github.com/openclaw/crabbox/releases/download/v0.50.0/crabbox_0.50.0_linux_amd64.tar.gz \
-            --output "$install_dir/crabbox.tar.gz"
-          printf '%s  %s\n' 8ab55a0302e7119a45e7522c2fff2d4e295496c33766c87cf619f342824cab75 "$install_dir/crabbox.tar.gz" | sha256sum --check
-          tar -xzf "$install_dir/crabbox.tar.gz" -C "$install_dir/bin" crabbox
-          echo "$install_dir/bin" >> "$GITHUB_PATH"
+        env:
+          OPENCLAW_STATE_DIR: ${{ runner.temp }}/openclaw-crabbox-setup
+        run: node scripts/crabbox-setup.mjs
       - name: Build exact candidate without credentials or network
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_ref }}

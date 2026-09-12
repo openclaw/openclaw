@@ -11,6 +11,10 @@ import type {
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+} from "./embedding-provider-runtime-types.js";
+import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
@@ -58,25 +62,17 @@ export type RegisteredCompactionProvider = {
   ownerPluginId?: string;
 };
 
-export type MemoryEmbeddingBatchChunk = {
-  text: string;
+export type MemoryEmbeddingBatchChunk = EmbeddingBatchChunk & {
   embeddingInput?: EmbeddingInput;
 };
 
-export type MemoryEmbeddingBatchOptions = {
-  agentId: string;
+export type MemoryEmbeddingBatchOptions = Omit<EmbeddingBatchOptions, "chunks"> & {
   chunks: MemoryEmbeddingBatchChunk[];
-  wait: boolean;
-  concurrency: number;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  debug: (message: string, data?: Record<string, unknown>) => void;
 };
 
 export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptions, "signal">;
 
-export type MemoryEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
-  sourceWideBatchEmbed?: boolean;
+export type MemoryEmbeddingProviderRuntime = Omit<EmbeddingProviderRuntime, "batchEmbed"> & {
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
@@ -254,6 +250,14 @@ export type MemoryPluginRuntime = {
     workspaceDir: string;
     relativePaths: string[];
   }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
+  /** Fence and drain managers consuming these exact retiring capability objects. */
+  prepareReload?(change: {
+    retireRuntime: boolean;
+    retiringEmbeddingProviders: readonly MemoryEmbeddingProviderAdapter[];
+  }): {
+    drain(): Promise<void | { errors: readonly unknown[] }>;
+    resume(): void;
+  };
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };

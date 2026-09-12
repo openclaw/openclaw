@@ -329,25 +329,8 @@ function buildAuditIndex(
 
   for (const abs of markdownFiles) {
     const rel = normalizeSlashes(path.relative(docsDir, abs));
-    const text = fs.readFileSync(abs, "utf8");
     const slug = rel.replace(/\.(md|mdx)$/i, "");
     addRoute(routes, slug);
-
-    if (!text.startsWith("---")) {
-      continue;
-    }
-
-    const end = text.indexOf("\n---", 3);
-    if (end === -1) {
-      continue;
-    }
-    const frontMatter = text.slice(3, end);
-    const match = frontMatter.match(/^permalink:\s*(.+)\s*$/m);
-    if (!match) {
-      continue;
-    }
-    const permalink = (match[1] ?? "").trim().replace(/^['"]|['"]$/g, "");
-    routes.add(normalizeRoute(permalink));
   }
 
   // Without a ClawHub checkout the mirrored tree is absent, so its pages cannot be
@@ -373,33 +356,24 @@ function buildAuditIndex(
   };
 }
 
-let defaultAuditIndex: ReturnType<typeof buildAuditIndex> | undefined;
-
-function getDefaultAuditIndex() {
-  defaultAuditIndex ??= buildAuditIndex(DOCS_DIR);
-  return defaultAuditIndex;
-}
-
 export function resolveRoute(
   route: string,
-  options: { redirects?: Map<string, string>; routes?: Set<string> } = {},
+  { redirects, routes }: { redirects: Map<string, string>; routes: Set<string> },
 ) {
-  const redirectMap = options.redirects ?? getDefaultAuditIndex().redirects;
-  const publishedRoutes = options.routes ?? getDefaultAuditIndex().routes;
   let current = normalizeRoute(route);
   if (current === "/") {
     return { ok: true, terminal: "/" };
   }
 
   const seen = new Set([current]);
-  while (redirectMap.has(current)) {
-    current = normalizeRoute(redirectMap.get(current) ?? "");
+  while (redirects.has(current)) {
+    current = normalizeRoute(redirects.get(current) ?? "");
     if (seen.has(current)) {
       return { ok: false, terminal: current, loop: true };
     }
     seen.add(current);
   }
-  return { ok: publishedRoutes.has(current), terminal: current };
+  return { ok: routes.has(current), terminal: current };
 }
 
 /** Prepares a docs directory, mirroring ClawHub docs when available. */

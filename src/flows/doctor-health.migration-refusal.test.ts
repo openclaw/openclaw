@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { SQLITE_READONLY_CHILD_ARG } from "../infra/sqlite-readonly-worker.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import * as coordinators from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import {
@@ -124,6 +124,39 @@ describe("Doctor maintenance admission", () => {
 });
 
 describe("Doctor agent lease admission", () => {
+  it("admits the exact dangling Workshop index without mutating state", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const opened = openOpenClawStateDatabase({ env: state.env });
+      const pathname = opened.path;
+      closeOpenClawStateDatabaseByPath(pathname);
+      const db = openNodeSqliteDatabase(pathname);
+      try {
+        db.exec(
+          "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+        );
+        db.enableDefensive?.(false);
+        db.exec("PRAGMA writable_schema = ON;");
+        db.prepare(
+          `UPDATE sqlite_schema
+              SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
+                           ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
+            WHERE type = 'index'
+              AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
+        ).run();
+        const schema = db.prepare("PRAGMA schema_version").get() as { schema_version: number };
+        db.exec(
+          `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema.schema_version + 1};`,
+        );
+      } finally {
+        db.close();
+      }
+      const before = fs.readFileSync(pathname);
+
+      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
+      expect(fs.readFileSync(pathname)).toEqual(before);
+    });
+  });
+
   it("admits a restored primary database without opening or clearing its quarantine store", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const pathname = state.statePath("state/openclaw.sqlite");

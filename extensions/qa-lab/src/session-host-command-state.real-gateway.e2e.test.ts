@@ -7,7 +7,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.ts";
-import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  tooltipTitleText,
+} from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { createQaGatewayChild } from "../api.ts";
 
 const COMMAND = "codex.exec-server.stdio.v1";
@@ -180,15 +183,14 @@ suite.define(() => {
             await page.locator("#new-session-where-trigger").click();
             const place = page.locator("wa-popover.new-session-page__where-popover");
             const row = (deviceId: string) => place.locator(`[data-value="device:${deviceId}"]`);
-            const facts = async (deviceId: string) =>
-              await row(deviceId).locator(".new-session-page__menu-fact").allTextContents();
+            const disabledReason = async (deviceId: string) => tooltipTitleText(row(deviceId));
 
             await row(undeclaredIdentity.deviceId).waitFor();
-            expect(await facts(undeclaredIdentity.deviceId)).toContain(
+            expect(await disabledReason(undeclaredIdentity.deviceId)).toContain(
               `Make ${COMMAND} available on this device, then reconnect, or pick another device.`,
             );
             await expect
-              .poll(() => facts(pendingIdentity.deviceId))
+              .poll(() => disabledReason(pendingIdentity.deviceId))
               .toContain(
                 `Ask an administrator to approve the pending ${COMMAND} request, or pick another device.`,
               );
@@ -230,7 +232,7 @@ suite.define(() => {
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
             await expect
-              .poll(() => facts(unauthorizedIdentity.deviceId))
+              .poll(() => disabledReason(unauthorizedIdentity.deviceId))
               .toContain(
                 `Authorize ${COMMAND} in the Gateway node command policy, or pick another device.`,
               );

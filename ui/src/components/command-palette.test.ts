@@ -65,7 +65,7 @@ describe("CommandPalette lifecycle", () => {
       ),
     );
     const changes = vi.fn();
-    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
     try {
       palette.openPalette();
       await palette.updateComplete;
@@ -307,58 +307,74 @@ describe("CommandPalette lifecycle", () => {
   });
 
   it.each([
-    { state: "indexing", response: { indexing: true } },
-    { state: "truncated", response: { truncated: true } },
-  ])("shows a partial-search notice when transcript results are $state", async ({ response }) => {
-    const metadata = createSessionResult("agent:main:metadata", "Needle planning");
-    const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
-    const roster = {
-      ...metadata,
-      count: 2,
-      totalCount: 2,
-      sessions: [...metadata.sessions, ...contextOnly.sessions],
-    } as SessionsListResult;
-    const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
-      options?.search ? metadata : roster,
-    );
-    const request = vi.fn(async (method: string) =>
-      method === "models.list"
-        ? { models: [] }
-        : {
-            results: [
-              {
-                sessionKey: "agent:main:context",
-                sessionId: "context",
-                messageId: "message-context",
-                role: "assistant" as const,
-                timestamp: 42,
-                snippet: "The needle also appears in this transcript.",
-                score: 10,
-              },
-            ],
-            ...response,
-          },
-    );
-    const { gateway } = createGateway(true, {
-      methods: ["sessions.search"],
-      request,
-    });
-    const { palette } = await mountPalette(createContext(gateway, list));
+    {
+      state: "indexing",
+      response: { indexing: true },
+      notice: "Transcript matches may be incomplete — indexing or search limits apply",
+    },
+    {
+      state: "truncated",
+      response: { truncated: true },
+      notice: "Transcript matches may be incomplete — indexing or search limits apply",
+    },
+    {
+      state: "archived",
+      response: { archivedTranscriptsExcluded: 3 },
+      notice: "3 archived transcripts excluded; open a session to restore its searchable history.",
+    },
+  ])(
+    "shows a partial-search notice when transcript results are $state",
+    async ({ response, notice }) => {
+      const metadata = createSessionResult("agent:main:metadata", "Needle planning");
+      const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
+      const roster = {
+        ...metadata,
+        count: 2,
+        totalCount: 2,
+        sessions: [...metadata.sessions, ...contextOnly.sessions],
+      } as SessionsListResult;
+      const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
+        options?.search ? metadata : roster,
+      );
+      const request = vi.fn(async (method: string) =>
+        method === "models.list"
+          ? { models: [] }
+          : {
+              results: [
+                {
+                  sessionKey: "agent:main:context",
+                  sessionId: "context",
+                  messageId: "message-context",
+                  role: "assistant" as const,
+                  timestamp: 42,
+                  snippet: "The needle also appears in this transcript.",
+                  score: 10,
+                },
+              ],
+              ...response,
+            },
+      );
+      const { gateway } = createGateway(true, {
+        methods: ["sessions.search"],
+        request,
+      });
+      const { palette } = await mountPalette(createContext(gateway, list));
 
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1),
-    );
-    await palette.updateComplete;
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() =>
+        expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
+          1,
+        ),
+      );
+      await palette.updateComplete;
 
-    expect(palette.textContent).toContain(
-      "Transcript matches may be incomplete — indexing or search limits apply",
-    );
-    expect(palette.textContent).toContain("Needle planning");
-    expect(palette.textContent).toContain("Unrelated title");
-    expect(palette.textContent).toContain("needle also appears in this transcript");
-  });
+      expect(palette.textContent).toContain(notice);
+      expect(palette.textContent).toContain("Needle planning");
+      expect(palette.textContent).toContain("Unrelated title");
+      expect(palette.textContent).toContain("needle also appears in this transcript");
+    },
+  );
 
   it("lazily searches automation names and descriptions once per connection", async () => {
     const request = vi.fn(async (method: string) => {
@@ -539,6 +555,7 @@ describe("CommandPalette lifecycle", () => {
         harness.setConnected(false);
       } else if (replacement === "detach") {
         palette.remove();
+        harness.emit("chat.metadata.changed");
       } else if (replacement === "closed") {
         palette.togglePalette();
         harness.emit("chat.metadata.changed");

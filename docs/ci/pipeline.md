@@ -74,6 +74,13 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                          |
 
+Full canonical `main` pushes run the operator config and prior-release state
+startup corpora once through the Node `runtime-config` owner. Other runs that
+select baseline-ratchets retain its explicit **Check startup corpus** step:
+pull requests may select only changed tests, and release-gate dispatches
+also validate a separate merge tree. Both state repair passes and the static
+baseline ratchets remain unchanged.
+
 Ordinary pull requests that change only independent Control UI unit-test entries
 keep all three UI unit rows, performance checks, and existing type/lint gates,
 without repeating dedicated UI E2E jobs. Browser and Node test entries, shared
@@ -154,6 +161,17 @@ Run the timing helper locally; there is no in-workflow timing-summary job (a per
 
 The `Run Node test shard` step prints Bash `time -p` totals: elapsed (`real`), user CPU (`user`), and system CPU (`sys`) seconds, including waited-for child processes. Compare CPU totals with elapsed time across equivalent runs to distinguish extra CPU work from slower execution with similar CPU work. These totals alone do not establish runner contention.
 
+Android test rows retain their existing Gradle JUnit XML for 14 days in
+`android-test-reports-<task>-<checkout-revision>-<run-attempt>` artifacts, including
+failed runs unless canceled. Reports identify test cases and durations; compilation,
+lint, setup, and queue time remain separate in the job log. Read the XML alongside
+that attempt's Gradle task outcomes: reports restored by `FROM-CACHE` or reused by
+`UP-TO-DATE` describe an earlier execution, so their times are historical. They do
+not show fresh test execution or a speedup in the current run. A failure before
+Gradle writes XML can leave no artifact; the upload warns without replacing the
+original failure. The artifact contains only phone and Wear unit-test XML, not
+dependency caches or application build outputs.
+
 Node test shards that need a built CLI run `pnpm build qaRuntime` before starting
 Vitest. This profile builds runtime JavaScript, plugin assets, and freshness and
 provenance metadata. Private QA shards select their private runtime entries. The
@@ -187,6 +205,16 @@ CSS file fails the comparison. The existing largest-file, JavaScript, request-co
 and isolated-renderer ceilings still apply independently. Reports include exact
 bytes, base deltas, and remaining headroom, with an early warning when the largest
 CSS file has less than 1 KiB of headroom.
+
+JavaScript accounting separates ordinary chunks, deferred special-purpose
+chunks, startup assets, and the full bundle total. The 215 KiB ordinary-chunk
+ceiling excludes the isolated Mermaid renderer and configured locale catalogs.
+A locale catalog must match `assets/<locale>-<nonempty-suffix>.js`; each
+configured locale may produce one deferred chunk, with at most 20 locale chunks
+overall and a 300 KiB ceiling per chunk. Locale chunks remain forbidden in the
+startup asset set. Total JavaScript accounting includes ordinary, deferred, and
+startup assets for reporting while enforcement stays on the category-specific
+limits.
 
 CI builds the selected checkout and the exact preflight base with the same
 installed Node, Vite, and dependencies. The temporary base's CSS sidecars are

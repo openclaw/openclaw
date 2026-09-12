@@ -13,7 +13,8 @@ import type {
 } from "../../lib/sessions/index.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
+import type { SessionsRouteData } from "./route.ts";
 import "./sessions-page.ts";
 
 export type TestSessionsPage = HTMLElement & {
@@ -25,6 +26,7 @@ export type TestSessionsPage = HTMLElement & {
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
   selectedKeys: Set<string>;
   sessionMenu: { key: string; x: number; y: number } | null;
@@ -226,7 +228,7 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
-  const query = sessionsPageListQuery(context, {
+  const query = buildSessionsListQuery(context, {
     limit: 50,
     includeGlobal: true,
     includeUnknown: false,

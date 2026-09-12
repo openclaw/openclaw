@@ -2,8 +2,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { closeMemoryDatabase } from "./manager-db.js";
+import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
 
 export class MemoryIndexDatabase {
+  readonly sourceIndex: MemorySourceIndexKernel;
   readonly vector: {
     enabled: boolean;
     available: boolean | null;
@@ -26,7 +28,9 @@ export class MemoryIndexDatabase {
     readonly db: DatabaseSync,
     readonly release: () => void = () => closeMemoryDatabase(db),
     readonly readOnly = false,
-  ) {}
+  ) {
+    this.sourceIndex = new MemorySourceIndexKernel(db, this);
+  }
 }
 
 // One process-lifetime container; stores belong only to their awaited rebuild.

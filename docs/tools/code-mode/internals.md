@@ -9,7 +9,7 @@ read_when:
 
 ## Runtime status
 
-|                     |                                                                                             |
+| Aspect              | Value                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------- |
 | Runtime             | [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi)                               |
 | Default state       | disabled                                                                                    |

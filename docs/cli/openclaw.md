@@ -25,7 +25,7 @@ Running `openclaw` with no subcommand routes based on config state:
   without onboarding or OpenClaw. Use `/openclaw` inside the TUI, or run
   `openclaw setup` directly, to reach OpenClaw later.
 
-Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run `openclaw onboard` when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
+Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run [`openclaw onboard`](/cli/onboard) when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
 
 If inference plugin loading or owner verification fails, the error includes the underlying cause after applying OpenClaw's error redaction. One-shot text and JSON output retain that detail alongside onboarding guidance.
 
@@ -101,6 +101,10 @@ quit
 ## Operations and approval
 
 OpenClaw uses typed operations instead of editing config ad hoc.
+
+For `config get`, quote record keys that contain dots or brackets, such as
+`config get channels.modelByChannel.telegram["team.ops[west]"]`.
+Config reads redact sensitive values before selecting the requested path.
 
 Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
 
@@ -423,6 +427,8 @@ pnpm openclaw qa suite --scenario system-agent-ring-zero-setup
 ## Related
 
 - [CLI reference](/cli)
+- [Setup CLI](/cli/setup)
+- [Onboard](/cli/onboard)
 - [Doctor](/cli/doctor)
 - [TUI](/cli/tui)
 - [Sandbox](/cli/sandbox)

@@ -9,6 +9,7 @@ import {
   type ChannelMessageActionName,
 } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
+import { parseAccountSelector } from "../../../commands/channels/account-selector.js";
 import { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
@@ -64,6 +65,13 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
     ...rest,
     accountId: typeof account === "string" ? account : rest.accountId,
   };
+}
+
+function parseMessageChannelSelector(channel: string): string {
+  if (!channel.trim()) {
+    throw new Error("--channel must not be blank");
+  }
+  return channel;
 }
 
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
@@ -149,8 +157,12 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
   return {
     withMessageBase: (command) =>
       command
-        .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
-        .option("--account <id>", "Channel account id (accountId)")
+        .option(
+          "--channel <channel>",
+          `Channel: ${messageChannelOptions}`,
+          parseMessageChannelSelector,
+        )
+        .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
         .option("--json", "Output result as JSON", false)
         .option("--dry-run", "Print payload and skip sending", false)
         .option("--verbose", "Verbose logging", false),

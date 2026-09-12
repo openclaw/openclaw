@@ -5,8 +5,12 @@ import type { CapabilityProviderFor } from "../../plugins/capability-provider-ru
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 
-type MediaProviderKey = "imageGenerationProviders" | "musicGenerationProviders";
+type MediaProviderKey =
+  | "imageGenerationProviders"
+  | "musicGenerationProviders"
+  | "videoGenerationProviders";
 type MediaProviderOptions = { cfg: OpenClawConfig; prepared?: PreparedModelRuntimeSnapshot };
 
 export function acquireImageGenerationToolProviders(params: MediaProviderOptions) {
@@ -17,11 +21,19 @@ export function acquireMusicGenerationToolProviders(params: MediaProviderOptions
   return acquireMediaGenerationToolProviders("musicGenerationProviders", params);
 }
 
+export function acquireVideoGenerationToolProviders(params: MediaProviderOptions) {
+  return acquireMediaGenerationToolProviders("videoGenerationProviders", params);
+}
+
 async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
   key: K,
   params: MediaProviderOptions,
 ) {
-  const label = key === "imageGenerationProviders" ? "Image" : "Music";
+  const label = {
+    imageGenerationProviders: "Image",
+    musicGenerationProviders: "Music",
+    videoGenerationProviders: "Video",
+  }[key];
   const work = new AsyncWorkScope();
   const prepared = params.prepared;
   const inGeneration = <T>(run: () => T): T =>
@@ -88,21 +100,10 @@ async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
       release,
     };
   } catch (error) {
-    let cleanupFailure: { error: unknown } | undefined;
-    try {
-      await release();
-    } catch (cleanupError) {
-      cleanupFailure = { error: cleanupError };
-    }
-    if (cleanupFailure) {
-      throw new AggregateError(
-        [error, cleanupFailure.error],
-        `${label} provider acquisition and cleanup failed`,
-        {
-          cause: error,
-        },
-      );
-    }
-    throw error;
+    return rethrowAfterMediaCleanup(
+      error,
+      release,
+      `${label} provider acquisition and cleanup failed`,
+    );
   }
 }

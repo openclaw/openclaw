@@ -453,7 +453,7 @@ async function command() {
     }
     return;
   }
-  if (["gh", "node", "npm", "pnpm", "go", "crabbox"].includes(mode)) {
+  if (["gh", "node", "npm", "pnpm"].includes(mode)) {
     const cwd = insideOwnedPath(process.cwd());
     recordCommand(mode, cwd, args);
     if (options.performance && mode === "node") {
@@ -509,31 +509,6 @@ async function command() {
       }
       const result = spawnSync(process.execPath, args, { stdio: "inherit" });
       process.exit(result.status ?? 1);
-    }
-    if (mode === "go") {
-      const [build, changeDirectory, source, outputFlag, output, target] = args;
-      if (
-        build !== "build" ||
-        changeDirectory !== "-C" ||
-        outputFlag !== "-o" ||
-        target !== "./cmd/crabbox" ||
-        args.length !== 6
-      ) {
-        throw new Error("Unexpected fixture Go build arguments");
-      }
-      if (!fs.statSync(path.join(insideOwnedPath(source), ".git")).isDirectory()) {
-        throw new Error("Go build source is not a checkout");
-      }
-      writeConsumer(insideOwnedPath(output), "crabbox");
-    }
-    if (mode === "crabbox") {
-      if (args.join(" ") === "--version") {
-        fs.writeSync(1, "crabbox fixture\n");
-      } else if (args.join(" ") === "warmup --help") {
-        fs.writeSync(1, "-desktop\n");
-      } else if (args.join(" ") !== "media preview --help") {
-        throw new Error("Unexpected fixture Crabbox probe");
-      }
     }
     if (mode === "gh" && options.publisher) {
       const result = spawnSync("bash", [options.publisher.gh, ...args], { stdio: "inherit" });
@@ -940,7 +915,7 @@ async function command() {
     operation === "diff" &&
     ((options.docsPublish &&
       args.join(" ") === "--quiet -- docs .openclaw-sync package.json package-lock.json") ||
-      (options.docsAgent && args.join(" ") === "--quiet") ||
+      (options.docsAgent && args.join(" ") === "HEAD --quiet") ||
       options.maturity)
   ) {
     await boundary("diff");
@@ -1044,7 +1019,7 @@ async function supervise() {
     ...(options.docsPublish ? ["rm", "npm"] : []),
     ...(options.performance ? ["curl", "tar", "sha256sum", "npm"] : []),
     ...(options.docsAgent ? ["date"] : []),
-    ...(options.consumers ? ["gh", "node", "pnpm", "go"] : []),
+    ...(options.consumers ? ["gh", "node", "pnpm"] : []),
   ];
   for (const tool of extraTools) {
     writeConsumer(path.join(bin, tool), tool);

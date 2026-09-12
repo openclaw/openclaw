@@ -11,6 +11,7 @@ import {
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
 import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
@@ -49,7 +50,7 @@ export function createProgressCardHandlers(
   store: ProgressCardStore = progressCardStore,
 ): GatewayRequestHandlers {
   return {
-    "progressCard.get": ({ params, respond, context, sessionMutationAuthorization }) => {
+    "progressCard.get": async ({ params, respond, context, sessionMutationAuthorization }) => {
       if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {
         return;
       }
@@ -60,13 +61,17 @@ export function createProgressCardHandlers(
       // Lazy handler preparation can outlive the session authorized by the router.
       sessionMutationAuthorization?.assertCurrent();
       try {
-        const card = store.get(session.sessionKey, session.agentId);
+        const card = await store.get(session.sessionKey, session.agentId);
+        sessionMutationAuthorization?.assertCurrent();
         respond(true, { card: projectProgressCard(card, session.scopeKey) }, undefined);
       } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },
-    "progressCard.put": ({ params, respond, context, sessionMutationAuthorization }) => {
+    "progressCard.put": async ({ params, respond, context, sessionMutationAuthorization }) => {
       if (!assertValidParams(params, validateProgressCardPutParams, "progressCard.put", respond)) {
         return;
       }
@@ -97,7 +102,7 @@ export function createProgressCardHandlers(
       }
       sessionMutationAuthorization?.assertCurrent();
       try {
-        const result = store.put(
+        const result = await store.put(
           session.sessionKey,
           {
             ...input,
@@ -108,6 +113,7 @@ export function createProgressCardHandlers(
           },
           session.agentId,
         );
+        sessionMutationAuthorization?.assertCurrent();
         if (params.expectedRevision === undefined || result.card === null) {
           context.broadcast(
             "progressCard.changed",
@@ -120,6 +126,9 @@ export function createProgressCardHandlers(
         }
         respond(true, { card: projectProgressCard(result.card, session.scopeKey) }, undefined);
       } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },

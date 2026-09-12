@@ -34,14 +34,15 @@ const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
 function resolveNodesTransportTimeoutMs(
   opts: NodesRpcOpts,
-  overrideMs?: number,
   invokeTimeoutMs?: unknown,
 ): number | null {
-  const transportTimeoutMs =
-    overrideMs ??
-    parseTimeoutMsWithFallback(opts.timeout, DEFAULT_NODES_RPC_TIMEOUT_MS, {
+  const transportTimeoutMs = parseTimeoutMsWithFallback(
+    opts.timeout,
+    DEFAULT_NODES_RPC_TIMEOUT_MS,
+    {
       invalidType: "error",
-    });
+    },
+  );
   if (invokeTimeoutMs === 0) {
     // Zero disables the node deadline; null keeps Gateway startup bounded but the request unbounded.
     return null;
@@ -106,7 +107,6 @@ export const callNodesGatewayCli = async (
   params?: unknown,
   callOpts?: {
     scopes?: OperatorScope[];
-    transportTimeoutMs?: number;
     useStoredDeviceAuth?: boolean;
     requiredStoredDeviceAuthScopes?: OperatorScope[];
     useLocalBackendSharedAuth?: boolean;
@@ -122,7 +122,7 @@ export const callNodesGatewayCli = async (
   const useLocalBackendSharedAuth = callOpts?.useLocalBackendSharedAuth === true;
   return await callGatewayFromCliWithTransport(method, opts, params, {
     label: `Nodes ${method}`,
-    timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts?.transportTimeoutMs, invokeTimeoutMs),
+    timeoutMs: resolveNodesTransportTimeoutMs(opts, invokeTimeoutMs),
     scopes: callOpts?.scopes,
     useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
     requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
@@ -169,14 +169,14 @@ export const callNodePairApprovalGatewayCli = async (
   method: "node.pair.list" | "node.pair.approve",
   opts: NodesRpcOpts,
   params: unknown,
-  callOpts: { scopes: OperatorScope[]; transportTimeoutMs?: number },
+  callOpts: { scopes: OperatorScope[] },
 ) => {
   if (!NODE_PAIR_APPROVAL_GATEWAY_METHODS.has(method)) {
     throw new Error(`unsupported node pair approval gateway method: ${method}`);
   }
   return await callGatewayFromCliWithTransport(method, opts, params, {
     label: `Nodes ${method}`,
-    timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts.transportTimeoutMs),
+    timeoutMs: resolveNodesTransportTimeoutMs(opts),
     scopes: callOpts.scopes,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     mode: GATEWAY_CLIENT_MODES.BACKEND,

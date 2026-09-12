@@ -32,6 +32,52 @@ describe("createChatRunState", () => {
     },
   );
 
+  it("expires idle recipients while activity extends another run's lifetime", () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const state = createChatRunState();
+      state.toolEventRecipients.add("idle", "conn-idle");
+      state.toolEventRecipients.add("active", "conn-active");
+      now = 301_000;
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+      now = 600_999;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(true);
+      now += 1;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(false);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "expires new recipients after clock rollback (clear previous state: %s)",
+    (clear) => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const state = createChatRunState();
+        state.toolEventRecipients.add("previous", "conn-previous");
+        if (clear) {
+          state.clear();
+        }
+        now = 1_000;
+        state.toolEventRecipients.add("early", "conn-early");
+        now = 500_000;
+        state.toolEventRecipients.add("active", "conn-active");
+        now = 601_000;
+        expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+        expect(state.runs.has("early")).toBe(false);
+        expect(state.runs.has("previous")).toBe(!clear);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("clears transient projection state without dropping run ownership or abort tombstones", () => {
     const state = createChatRunState();
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
@@ -341,6 +387,45 @@ describe("createChatRunState", () => {
       toolCallId: "tool-78",
     });
   });
+
+  it.each(["tool", "notice"])(
+    "recounts changed payloads before %s activity evicts multiple reconnect owners",
+    (stream) => {
+      const state = createChatRunState();
+      const args = { text: "x".repeat(1_024) };
+      for (let seq = 1; seq <= 50; seq += 1) {
+        state.recordProgressEvent("run-1", {
+          runId: "run-1",
+          seq,
+          stream: "tool",
+          ts: seq,
+          data: { phase: "start", toolCallId: `tool-${seq}`, args },
+        });
+      }
+      // Tool producers can retain and update nested payload objects between events.
+      args.text = "é".repeat(2_048);
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq: 51,
+        stream,
+        ts: 51,
+        data:
+          stream === "tool"
+            ? { phase: "start", toolCallId: "latest" }
+            : { phase: "warning", message: "Still running" },
+      });
+      const snapshot = state.runs.get("run-1")?.progressSnapshot;
+      expect(snapshot?.events.at(-1)?.seq).toBe(51);
+      expect(snapshot?.events.length).toBeLessThan(49);
+      expect(snapshot?.byteLength).toBe(
+        snapshot?.events.reduce(
+          (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
+          0,
+        ),
+      );
+      expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
+    },
+  );
 
   it("keeps a review-heavy reconnect bounded, adverse, and attached to its owner", () => {
     const state = createChatRunState();

@@ -354,8 +354,11 @@ export const TalkSessionCloseParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
-/** Empty request payload for reading configured Talk provider capabilities. */
-export const TalkCatalogParamsSchema = closedObject({});
+/** Reads Talk provider capabilities with optional realtime launch overrides. */
+export const TalkCatalogParamsSchema = closedObject({
+  provider: Type.Optional(NonEmptyString),
+  model: Type.Optional(NonEmptyString),
+});
 
 /** One provider entry in the Talk capability catalog. */
 const TalkCatalogProviderSchema = closedObject({

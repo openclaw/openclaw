@@ -275,7 +275,8 @@ Slack-only:
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, and approval or failure lines. The same default applies on
+  plan milestones, and approval requests. Intermediate tool failures and nonzero
+  command exits are hidden. The same default applies on
   every progress-draft channel; `streaming.progress.toolProgress: true` adds
   the rolling tool log with its icons.
 - `progress` mode deletes the status draft once the final answer is delivered,
@@ -462,6 +463,7 @@ the same policy under `streaming.progress`:
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop) - the turn lifecycle that emits these stream events
 - [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery

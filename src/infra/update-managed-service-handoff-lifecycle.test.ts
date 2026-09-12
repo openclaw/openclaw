@@ -2,9 +2,11 @@
  * Tests managed-service update handoff behavior exposed by gateway methods.
  */
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -139,6 +141,191 @@ describe("managed service update handoff", () => {
   const itUnix = it.runIf(process.platform !== "win32");
 
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
+
+  itUnix("routes the CLI helper failure to its original ledger destination", async () => {
+    const origin = {
+      sessionKey: "agent:ops:telegram:group:room",
+      deliveryContext: { channel: "telegram", to: "room", accountId: "bot", threadId: "topic-7" },
+    };
+    const result = await runManagedServiceManagerBoundary("systemd", {
+      trigger: "cli",
+      origin,
+      ledger: true,
+      controlDisconnect: "transferred",
+      updaterExitCode: 79,
+      helperExitCode: 79,
+      updaterResult: {
+        status: "error",
+        mode: "npm",
+        reason: "restart-unhealthy",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      },
+    });
+    expect(result.state.parked).toBe(true);
+    expect(result.state.restored).toBeUndefined();
+    expect(result.run).toMatchObject({ status: "failed", phase: "finished" });
+    expect(result.sentinel).toMatchObject({
+      payload: {
+        sessionKey: origin.sessionKey,
+        deliveryContext: { channel: "telegram", to: "room", accountId: "bot" },
+        threadId: "topic-7",
+        stats: { runId: result.run?.runId, handoffId: "systemd-boundary" },
+      },
+    });
+  });
+
+  itUnix.each(["rollback", "unsafe", "validation"] as const)(
+    "keeps targetless CLI %s coordination without a restart notice",
+    async (outcome) => {
+      const rollback = outcome === "rollback";
+      const result = await runManagedServiceManagerBoundary("systemd", {
+        trigger: "cli",
+        ledger: true,
+        controlDisconnect: "transferred",
+        ...(outcome === "validation"
+          ? { validationResult: "failed", helperExitCode: 1 }
+          : {
+              rollbackRestoration: rollback,
+              updaterExitCode: 79,
+              helperExitCode: rollback ? 1 : 79,
+              updaterResult: {
+                status: "error",
+                mode: "npm",
+                reason: "restart-unhealthy",
+                before: { version: "1.0.0" },
+                after: { version: "1.0.0" },
+                recovery: rollback
+                  ? { serviceRestartSafe: true, packageRollbackVerified: true, version: "1.0.0" }
+                  : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+              },
+            }),
+      });
+      expect(result.run, result.log).toMatchObject({
+        status: rollback ? "rolled-back" : "failed",
+        phase: "finished",
+      });
+      if (rollback) {
+        expect(result.state).toMatchObject({
+          restored: true,
+          healthProbeCount: 1,
+          expectedVersion: "1.0.0",
+          recoveryAllowance: "1",
+        });
+        expect(result.run?.verification).toMatchObject({
+          runningVersion: "1.0.0",
+          versionMatch: true,
+          settled: true,
+        });
+      } else {
+        expect(result.state.restored).toBeUndefined();
+        expect(
+          result.commands.some((command) =>
+            /(?:^| )(?:start|enable|bootstrap|kickstart) /.test(command),
+          ),
+        ).toBe(false);
+      }
+      if (outcome === "unsafe") {
+        expect(result.log).toContain("keep the gateway stopped");
+      }
+      if (outcome === "validation") {
+        expect(result.commands).toEqual([]);
+      }
+      expect(result.sentinel).toBeNull();
+    },
+  );
+
+  itUnix("finishes the run when negotiated startup fails before recovery persistence", async () => {
+    const result = await runManagedServiceManagerBoundary("systemd", {
+      controlDisconnect: "transferred",
+      nativePreparation: "fail-preparation",
+      ledger: true,
+      helperExitCode: 18,
+    });
+    expect(result.run?.status).toBe("failed");
+    expect(result.state.parked).toBeUndefined();
+    expect(result.state.restored).toBeUndefined();
+    expect(result.commands.some((command) => /^(stop|start) /.test(command))).toBe(false);
+  });
+
+  itUnix.each(["fail-persistence-ack", "fail-commit-ack"] as const)(
+    "retains recovery ownership when startup fails at %s",
+    async (nativePreparation) => {
+      const result = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        nativePreparation,
+        ledger: true,
+        helperExitCode: 18,
+      });
+      expect(result.run?.status).toBe("running");
+      expect(result.state.parked).toBeUndefined();
+      expect(result.state.restored).toBeUndefined();
+      expect(result.sentinel).toBeNull();
+      expect(result.savedFailure).toBeNull();
+      expect(result.commands.some((command) => /^(stop|start) /.test(command))).toBe(false);
+    },
+  );
+
+  itUnix("joins a timed-out native request before releasing its source interval", async () => {
+    const result = await runManagedServiceManagerBoundary("launchd", {
+      controlDisconnect: "transferred",
+      nativePreparation: "timeout-stop",
+      launchdTeardown: { bootoutDelayMs: 2_500 },
+      ledger: true,
+      helperExitCode: 18,
+    });
+    expect(result.state.nativeRelease).toMatchObject({ bootoutCompleted: true });
+    expect(result.state.disabled).toBe(true);
+    expect(result.state.restored).toBeUndefined();
+    expect(result.run?.status).toBe("running");
+    expect(result.sentinel).toBeNull();
+    expect(result.savedFailure).toBeNull();
+  });
+
+  itUnix(
+    "leaves failed durable suppression pending without helper restoration or history writes",
+    async () => {
+      const result = await runManagedServiceManagerBoundary("launchd", {
+        controlDisconnect: "transferred",
+        nativePreparation: "refuse-stop",
+        ledger: true,
+        helperExitCode: 18,
+      });
+      expect(result.state.nativeActions).toEqual([
+        "suppress:intent",
+        "suppress:observed",
+        "stop:intent",
+      ]);
+      expect(result.state.disabled).toBe(true);
+      expect(
+        result.commands.some((command) => /^(bootout|enable|bootstrap|kickstart) /.test(command)),
+      ).toBe(false);
+      expect(result.state.restored).toBeUndefined();
+      expect(result.run?.status).toBe("running");
+      expect(result.sentinel).toBeNull();
+      expect(result.savedFailure).toBeNull();
+    },
+  );
+
+  itUnix.each(["systemd", "launchd"] as const)(
+    "retains durable native preparation around the real %s helper effects",
+    async (kind) => {
+      const result = await runManagedServiceManagerBoundary(kind, {
+        controlDisconnect: "transferred",
+        nativePreparation: "complete",
+        ledger: true,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      expect(result.state.nativeActions).toEqual(
+        kind === "launchd"
+          ? ["suppress:intent", "suppress:observed", "stop:intent", "stop:observed"]
+          : ["stop:intent", "stop:observed"],
+      );
+      expect(result.state.restored).toBeUndefined();
+      expect(result.run?.status).toBe("running");
+      expect(result.sentinel).toBeNull();
+    },
+  );
 
   itUnix.each(["acknowledged", "stalled", "rejected"] as const)(
     "parks after the transferred pre-park notice is %s, within its bounded attempt",
@@ -512,6 +699,20 @@ describe("managed service update handoff", () => {
     const { startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
     const { env, systemdRunPath } = await createUserSystemdFixture();
+    const spawnNormally = spawnMock.getMockImplementation()!;
+    spawnMock.mockImplementationOnce((command: string, args: string[], options: unknown) => {
+      const params = JSON.parse(readFileSync(args.at(-1)!, "utf8"));
+      const db = new DatabaseSync(params.updateLeaseDatabasePath, { readOnly: true });
+      try {
+        expect(db.prepare("SELECT COUNT(*) AS count FROM managed_update_handoffs").get()).toEqual({
+          count: 0,
+        });
+      } finally {
+        db.close();
+      }
+      expect(params.updateLeaseDatabaseIdentity.databasePath).toBe(params.updateLeaseDatabasePath);
+      return spawnNormally(command, args, options);
+    });
 
     const result = await startManagedServiceUpdateHandoff({
       root: MOCK_INSTALL_ROOT,

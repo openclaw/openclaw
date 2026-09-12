@@ -34,6 +34,7 @@ class ChatControllerSessionActionsTest {
       cacheScope = { ChatCacheScope("gateway-test", 1L) },
       json = json,
       requestGateway = gateway::request,
+      gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" },
     ).also { it.outboxPresentationRestored.first { restored -> restored } }
 
   private fun ScriptedGateway.respondWithBranchHistory() {
@@ -72,6 +73,7 @@ class ChatControllerSessionActionsTest {
         cacheScope = { gatewayScope },
         currentDefaultAgentId = { defaultAgentId },
         currentDefaultAgentRevision = { defaultAgentRevision },
+        gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" },
       )
     private val archiveResponse = CompletableDeferred<String>()
 

@@ -7,6 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 afterEach(() => {
   setLoggerOverride(null);
@@ -29,6 +30,88 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it.each(["activation", "rollback", "changed identity", "changed version"] as const)(
+    "handles %s after the baseline fingerprint times out",
+    async (outcome) => {
+      await withTestDir({ prefix: "openclaw-fingerprint-advisory-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const original = await fs.stat(packageRoot);
+        const open = fs.open.bind(fs);
+        const blocked = createDeferredCore();
+        let entered = false;
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
+            entered = true;
+            await blocked.promise;
+          }
+          return open(...args);
+        });
+        let transaction: PackageUpdateTransaction | undefined;
+        const beforeActivate = vi.fn();
+        try {
+          const result = await swapStagedPackageInstall({
+            ...params,
+            timeoutMs: 200,
+            beforeActivate,
+            onTransaction: (value) => {
+              transaction = value;
+            },
+          });
+          expect(entered).toBe(true);
+          expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+          expect(beforeActivate).toHaveBeenCalledOnce();
+          expect(result.step.advisory?.message).toContain(
+            "baseline package fingerprint incomplete",
+          );
+          expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
+            expect.objectContaining({ step: "warning:global install swap", status: "completed" }),
+          );
+          expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+          if (!transaction) {
+            throw new Error("Missing package transaction");
+          }
+          if (outcome === "changed identity" || outcome === "changed version") {
+            if (outcome === "changed identity") {
+              await fs.rename(transaction.backupRoot, `${transaction.backupRoot}.original`);
+              await fs.cp(`${transaction.backupRoot}.original`, transaction.backupRoot, {
+                recursive: true,
+              });
+            } else {
+              await fs.writeFile(
+                path.join(transaction.backupRoot, "package.json"),
+                '{"version":"3.0.0"}',
+              );
+            }
+            const refused = await transaction.rollback(() => {});
+            expect(refused.exitCode).toBe(1);
+            expect(refused.advisory).toBeUndefined();
+            expect(refused.stderrTail).toContain("retained package tree changed");
+            expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+            await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
+            return;
+          }
+          if (outcome === "rollback") {
+            const restored = await transaction.rollback(() => {});
+            expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
+            expect(restored.advisory?.message).toContain("fingerprint verification unavailable");
+            expect(restored.stderrTail ?? "").not.toMatch(/unverified|verification failed/);
+            expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+            expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+              '"version":"1.0.0"',
+            );
+            const actual = await fs.stat(packageRoot);
+            expect([actual.dev, actual.ino]).toEqual([original.dev, original.ino]);
+          }
+          expect(
+            await transaction.complete({ activationVerified: outcome === "activation" }, () => {}),
+          ).toBeUndefined();
+        } finally {
+          blocked.resolve();
+        }
+      });
+    },
+  );
+
   it.each([1024 * 1024 + 1, 1024 * 1024 * 1024 + 1])(
     "rejects manifest growth to %i bytes without attempting an oversized metadata allocation",
     async (size) => {
@@ -92,11 +175,16 @@ describe("package verification bounds", () => {
       });
       expect(result.status).toBe("committed");
       expect(transactions).toHaveLength(1);
-      expect((await transactions[0]!.rollback()).exitCode).toBe(0);
+      expect((await transactions[0]!.rollback(() => {})).exitCode).toBe(0);
       await expect(fs.readFile(manifest, "utf8")).resolves.toHaveLength(1024 * 1024);
       const finished = observations.filter((record) => record.event === "reader-settled");
-      expect(finished.map((record) => record.phase)).toEqual(["baseline", "retained", "restored"]);
-      expect(new Set(finished.map((record) => record.readerId)).size).toBe(3);
+      expect(finished.map((record) => record.phase)).toEqual([
+        "baseline",
+        "baseline",
+        "retained",
+        "restored",
+      ]);
+      expect(new Set(finished.map((record) => record.readerId)).size).toBe(4);
       for (const record of finished) {
         expect(record).toMatchObject({ outcome: "completed", budgetMs: 30_000, pendingIo: 0 });
         expect(record.timeoutObservedAtMonotonicMs).toBeUndefined();
@@ -179,6 +267,9 @@ describe("package verification bounds", () => {
         const close = vi.spyOn(handle, "close");
         const read = vi.spyOn(handle, "read");
         const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          if (String(args[0]) !== path.join(packageRoot, "dist", "index.js")) {
+            return realOpen(...args);
+          }
           if (operation === "open") {
             return late.promise;
           }
@@ -197,13 +288,21 @@ describe("package verification bounds", () => {
             onLiveMutation,
             timeoutMs: 40,
           });
-          expect(result.status).toBe("failed");
-          expect(result.step.stderrTail).toContain("timed out");
+          expect(result.status).toBe("committed");
+          expect(result.step.advisory?.message).toContain(
+            "baseline package fingerprint incomplete",
+          );
           expect(Date.now() - started).toBeLessThan(2000);
-          expect(beforeActivate).not.toHaveBeenCalled();
-          expect(onLiveMutation).not.toHaveBeenCalled();
-          expect(open).toHaveBeenCalledTimes(1);
-          const baseline = observations.filter((record) => record.phase === "baseline");
+          expect(beforeActivate).toHaveBeenCalledOnce();
+          expect(onLiveMutation).toHaveBeenCalledOnce();
+          expect(
+            open.mock.calls.filter(
+              ([file]) => String(file) === path.join(packageRoot, "dist", "index.js"),
+            ),
+          ).toHaveLength(1);
+          const baseline = observations.filter(
+            (record) => record.readerId === observations[0]?.readerId,
+          );
           expect(baseline).toHaveLength(2);
           const [begin, settled] = baseline;
           expect(begin).toMatchObject({ event: "reader-started", budgetMs: 40 });
@@ -230,8 +329,8 @@ describe("package verification bounds", () => {
           }
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-          ).resolves.toContain('"version":"1.0.0"');
-          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+          ).resolves.toContain('"version":"2.0.0"');
+          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
         } finally {
           late.resolve(handle);
           await handle.close();
@@ -289,7 +388,7 @@ describe("package verification bounds", () => {
         const result = await swapStagedPackageInstall({ ...params, timeoutMs: 40 });
         // Preserve the existing best-effort close policy, but report its timeout.
         expect(result.status).toBe("committed");
-        expect(observations.find((record) => record.event === "reader-settled")).toMatchObject({
+        expect(observations.findLast((record) => record.event === "reader-settled")).toMatchObject({
           phase: "baseline",
           outcome: "timed-out",
           pendingIo: 1,

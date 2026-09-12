@@ -15,14 +15,11 @@ import {
 } from "../../plugins/plugin-metadata-snapshot.js";
 import { repairMergedGatewayOwnerProfile } from "../../state/user-profiles-owner-migration.js";
 import { migrateLegacyTailscaleProfileIdentities } from "../../state/user-profiles-tailscale-migration.js";
-import {
-  collectOpenAICodexAuthProfileStoreIdMap,
-  maybeMigrateAuthProfileJsonStoresToSqlite,
-  maybeRepairOpenAICodexAuthConfig,
-} from "../doctor-auth-flat-profiles.js";
+import { collectOpenAICodexAuthProfileStoreIdMap } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
+import { repairAuthProfileMigration } from "./auth-profile-repair.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -185,15 +182,11 @@ export async function runDoctorRepairSequence(params: {
   });
   // Auth JSON is archived below; retain its exact collision-aware profile map
   // so durable session selections can follow the same account after import.
-  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
-    cfg: state.candidate,
-    env,
-  });
-  applyMutation(
-    maybeRepairOpenAICodexAuthConfig(state.candidate, {
-      profileIdMap: openAICodexAuthProfileIdMap,
-    }),
-  );
+  let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> =
+    collectOpenAICodexAuthProfileStoreIdMap({
+      cfg: state.candidate,
+      env,
+    });
   applyMutation(
     await runWithCurrentPluginMetadata(() =>
       maybeRepairContextEngineHostCompatibility({
@@ -338,23 +331,15 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(staleOAuthShadowRepair);
-  const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+  const authRepair = await repairAuthProfileMigration({
     cfg: state.candidate,
-    prompter: { confirmAutoFix: async () => true },
     env,
-    openAICodexAuthProfileIdMap,
+    prompter: { shouldRepair: true, confirmAutoFix: async () => true },
+    profileIdMap: openAICodexAuthProfileIdMap,
   });
-  if (authProfileSqliteMigration.configChanged) {
-    state = applyDoctorConfigMutation({
-      state,
-      mutation: {
-        config: state.candidate,
-        changes: ["Auth profile SQLite migration updated auth.profiles."],
-      },
-      shouldRepair: true,
-    });
-  }
-  appendRepairNotes(authProfileSqliteMigration);
+  appendNotes(changeNotes, authRepair.storeChanges);
+  openAICodexAuthProfileIdMap = authRepair.profileIdMap;
+  applyMutation(authRepair);
   const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
     cfg: state.candidate,
     env,
@@ -373,7 +358,7 @@ export async function runDoctorRepairSequence(params: {
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
-    authProfileSqliteMigration.changes.length > 0;
+    authRepair.storeChanges.length > 0;
 
   return {
     state,
@@ -382,7 +367,7 @@ export async function runDoctorRepairSequence(params: {
     warningNotes,
     authProfilesRepaired,
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
-    ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),
+    openAICodexAuthProfileIdMap,
     ...(pluginMetadataSnapshotState.current
       ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
       : {}),

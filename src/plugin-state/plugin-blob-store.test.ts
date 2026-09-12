@@ -1,4 +1,5 @@
 // Plugin blob store tests cover persistence, quotas, expiry, and copied bytes.
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -36,17 +37,21 @@ function createPluginBlobStore<TMetadata>(pluginId: string, testOptions: TestBlo
 }
 
 describe("plugin blob store", () => {
-  it("round-trips metadata and copies bytes on both sides", async () => {
+  it("round-trips VM realm metadata and copies bytes on both sides", async () => {
     await withOpenClawTestState({ label: "plugin-blob-roundtrip" }, async (state) => {
-      const store = createPluginBlobStore<{ kind: string }>("diffs", options(state.env));
+      const store = createPluginBlobStore("diffs", options(state.env));
       const source = new Uint8Array([1, 2, 3]);
-      await store.register("viewer", source, { kind: "viewer" });
+      const metadata: unknown = runInNewContext(
+        '({ kind: "viewer", nested: [{ labels: ["retained", null] }] })',
+      );
+      const expectedMetadata = { kind: "viewer", nested: [{ labels: ["retained", null] }] };
+      await store.register("viewer", source, metadata);
       source[0] = 9;
 
       const first = await store.lookup("viewer");
       expect(first).toMatchObject({
         key: "viewer",
-        metadata: { kind: "viewer" },
+        metadata: expectedMetadata,
         sizeBytes: 3,
       });
       expect(first?.bytes).toEqual(new Uint8Array([1, 2, 3]));
@@ -54,10 +59,55 @@ describe("plugin blob store", () => {
       expect((await store.lookup("viewer"))?.bytes).toEqual(new Uint8Array([1, 2, 3]));
       const entries = await store.entries();
       expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({ key: "viewer", metadata: { kind: "viewer" } });
+      expect(entries[0]).toMatchObject({ key: "viewer", metadata: expectedMetadata });
+      resetPluginBlobStoreForTests();
+      const reopened = createPluginBlobStore("diffs", options(state.env));
+      await expect(reopened.lookup("viewer")).resolves.toMatchObject({
+        metadata: expectedMetadata,
+        bytes: new Uint8Array([1, 2, 3]),
+      });
       expect("bytes" in entries[0]!).toBe(false);
     });
   });
+
+  it.each([
+    ["class instance", "new (class Entry { value = 1; })()"],
+    ["custom prototype", "Object.create({ inherited: true })"],
+    ["null prototype", "Object.create(null)"],
+    [
+      "forged root constructor",
+      "Object.create(Object.create(null, { constructor: { value: Object } }))",
+    ],
+    [
+      "constructor accessor",
+      "Object.create(Object.create(null, { constructor: { get() { onAccess(); return Object; } } }))",
+    ],
+    ["accessor", "({ get value() { onAccess(); return 1; } })"],
+    ["symbol key", "({ [Symbol('hidden')]: 1 })"],
+    ["non-enumerable key", "Object.defineProperty({}, 'hidden', { value: 1 })"],
+  ])(
+    "rejects nested VM realm %s without replacing blob metadata or invoking getters",
+    async (_shape, expression) => {
+      await withOpenClawTestState({ label: "plugin-blob-realm-shapes" }, async (state) => {
+        const store = createPluginBlobStore("diffs", options(state.env));
+        await store.register("retained", new Uint8Array([1]), null);
+        const onAccess = vi.fn();
+        const metadata: unknown = runInNewContext(`({ nested: [${expression}] })`, { onAccess });
+
+        await expect(
+          store.register("retained", new Uint8Array([2]), metadata),
+        ).rejects.toMatchObject({
+          code: "PLUGIN_BLOB_INVALID_INPUT",
+          operation: "register",
+        });
+        expect(onAccess).not.toHaveBeenCalled();
+        await expect(store.lookup("retained")).resolves.toMatchObject({
+          metadata: null,
+          bytes: new Uint8Array([1]),
+        });
+      });
+    },
+  );
 
   it("rejects quota overflow without disturbing existing rows", async () => {
     await withOpenClawTestState({ label: "plugin-blob-reject" }, async (state) => {

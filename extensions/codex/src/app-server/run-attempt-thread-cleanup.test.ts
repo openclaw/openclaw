@@ -87,6 +87,9 @@ describe("Codex app-server main thread cleanup", () => {
       let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
       const request = vi.fn(async (method: string, params?: unknown) => {
         requests.push({ method, params });
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return threadStartResult();
         }
@@ -161,7 +164,11 @@ describe("Codex app-server main thread cleanup", () => {
         pluginAppsFingerprint: expect.any(String),
       });
 
-      expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
+      expect(requests.map((entry) => entry.method)).toEqual([
+        "config/read",
+        "thread/start",
+        "turn/start",
+      ]);
     },
   );
 
@@ -625,6 +632,9 @@ describe("Codex app-server main thread cleanup", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       requests.push({ method, params });
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -651,6 +661,7 @@ describe("Codex app-server main thread cleanup", () => {
       }),
     ).rejects.toThrow(error.message);
     expect(requests.map((entry) => entry.method)).toEqual([
+      "config/read",
       "thread/start",
       "turn/start",
       "thread/unsubscribe",
@@ -709,7 +720,12 @@ describe("Codex app-server main thread cleanup", () => {
         const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
         harness.send({ id: unsubscribe.id, result: {} });
       }
-      await expect(failure).resolves.toMatchObject({ message: "turn/start aborted" });
+      await expect(failure).resolves.toMatchObject({
+        message: "turn/start aborted: cancelled",
+        cause: "cancelled",
+        reason: "aborted",
+        mayHaveWritten: true,
+      });
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).toEqual([
         "initialize",
         "initialized",
@@ -736,6 +752,9 @@ describe("Codex app-server main thread cleanup", () => {
       throw new Error("client retirement failed");
     });
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -766,6 +785,7 @@ describe("Codex app-server main thread cleanup", () => {
       }),
     ).rejects.toBe(startupError);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
       "thread/start",
       "turn/start",
       "turn/interrupt",

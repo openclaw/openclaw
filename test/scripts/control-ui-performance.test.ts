@@ -48,14 +48,23 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
   tempDirs.push(rootDir);
   const scriptsDir = path.join(rootDir, "scripts");
+  const scriptLibDir = path.join(scriptsDir, "lib");
   const configDir = path.join(rootDir, "config");
   const distDir = path.join(rootDir, "dist/control-ui");
   const assetsDir = path.join(distDir, "assets");
-  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.mkdirSync(scriptLibDir, { recursive: true });
   fs.mkdirSync(configDir, { recursive: true });
   fs.mkdirSync(assetsDir, { recursive: true });
   const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mts");
   fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mts"), scriptPath);
+  fs.copyFileSync(
+    path.resolve("scripts/lib/control-ui-i18n-config.ts"),
+    path.join(scriptLibDir, "control-ui-i18n-config.ts"),
+  );
+  fs.copyFileSync(
+    path.resolve("scripts/lib/control-ui-i18n-config.json"),
+    path.join(scriptLibDir, "control-ui-i18n-config.json"),
+  );
   fs.writeFileSync(
     path.join(scriptsDir, "tsx.mjs"),
     `await import(${JSON.stringify(tsxImport)});\n`,
@@ -111,6 +120,7 @@ function createMetrics(startupJsGzipBytes: number) {
       },
     },
     mermaidRenderer: [],
+    localeCatalogs: [],
   };
 }
 
@@ -269,6 +279,144 @@ describe("Control UI performance budgets", () => {
     }
   });
 
+  it.each([
+    {
+      name: "accepts a capped deferred locale pair",
+      baseGzipBytes: 200 * 1024,
+      configHintsGzipBytes: 100 * 1024,
+      violations: [],
+    },
+    {
+      name: "rejects combined locale pair growth above its cap",
+      baseGzipBytes: 200 * 1024,
+      configHintsGzipBytes: 100 * 1024 + 1,
+      violations: ["largest locale catalog pair JS gzip"],
+    },
+    {
+      name: "rejects duplicate base chunks for one locale",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      duplicateBase: true,
+      violations: ["locale catalog base JS assets per locale"],
+    },
+    {
+      name: "rejects duplicate config-hint chunks for one locale",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      duplicateConfigHints: true,
+      violations: ["locale config-hint JS assets per locale"],
+    },
+    {
+      name: "rejects a base locale chunk in startup preloads",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      startupAsset: "ru-a.js",
+      violations: ["startup locale catalog JS assets"],
+    },
+    {
+      name: "rejects a config-hint chunk in startup preloads",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      startupAsset: "locale-config-hints-ru-a.js",
+      violations: ["startup locale catalog JS assets"],
+    },
+    {
+      name: "does not combine mismatched locale chunks",
+      baseGzipBytes: 200_000,
+      configHintsGzipBytes: 200_000,
+      configHintsName: "locale-config-hints-de-a.js",
+      violations: [],
+    },
+    {
+      name: "retains the ordinary chunk cap beside locale pairs",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      ordinaryGzipBytes: 215 * 1024 + 1,
+      violations: ["largest JS gzip"],
+    },
+    {
+      name: "does not exempt unsupported config-hint chunks",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 300 * 1024,
+      configHintsName: "locale-config-hints-en-a.js",
+      violations: ["largest JS gzip"],
+    },
+    {
+      name: "does not exempt config-hint chunks without a suffix",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 300 * 1024,
+      configHintsName: "locale-config-hints-ru-.js",
+      violations: ["largest JS gzip"],
+    },
+  ])(
+    "$name",
+    ({
+      baseGzipBytes,
+      configHintsGzipBytes,
+      duplicateBase,
+      duplicateConfigHints,
+      startupAsset,
+      ordinaryGzipBytes,
+      configHintsName,
+      violations,
+    }) => {
+      const { distDir, writeAsset } = createDistFixture();
+      fs.writeFileSync(
+        path.join(distDir, "index.html"),
+        '<script type="module" src="./assets/index-a.js"></script>\n' +
+          '<link rel="stylesheet" href="./assets/index-c.css">\n' +
+          (startupAsset ? `<link rel="modulepreload" href="./assets/${startupAsset}">\n` : ""),
+      );
+      writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
+      writeAsset("lazy-b.js", {
+        rawBytes: 200,
+        gzipBytes: ordinaryGzipBytes ?? 70,
+        brotliBytes: 55,
+      });
+      writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+      writeAsset("ru-a.js", {
+        rawBytes: 200,
+        gzipBytes: baseGzipBytes,
+        brotliBytes: 100,
+      });
+      writeAsset(configHintsName ?? "locale-config-hints-ru-a.js", {
+        rawBytes: 200,
+        gzipBytes: configHintsGzipBytes,
+        brotliBytes: 100,
+      });
+      if (duplicateBase) {
+        writeAsset("ru-duplicate.js", {
+          rawBytes: 200,
+          gzipBytes: 100,
+          brotliBytes: 50,
+        });
+      }
+      if (duplicateConfigHints) {
+        writeAsset("locale-config-hints-ru-duplicate.js", {
+          rawBytes: 200,
+          gzipBytes: 100,
+          brotliBytes: 50,
+        });
+      }
+
+      const metrics = collectControlUiPerformanceMetrics(distDir);
+      expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual(
+        violations,
+      );
+      expect(metrics.total.js.gzipBytes).toBe(
+        40 +
+          (ordinaryGzipBytes ?? 70) +
+          baseGzipBytes +
+          configHintsGzipBytes +
+          (duplicateBase || duplicateConfigHints ? 100 : 0),
+      );
+      if (!configHintsName) {
+        expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
+        expect(formatControlUiPerformanceReport(metrics)).toContain("locale catalog JS:");
+      }
+    },
+  );
+
   it("includes exact bytes when rounded violation values collide", () => {
     const metrics = createMetrics(43_009);
     const budgets = {
@@ -378,7 +526,9 @@ describe("Control UI performance budgets", () => {
       const baselinePath = path.join(configDir, "control-ui-startup-budget-baseline.json");
       const before = fs.readFileSync(baselinePath, "utf8");
       const args = ["--update-baseline", option];
-      if (option === "--base-dist") args.push(distDir);
+      if (option === "--base-dist") {
+        args.push(distDir);
+      }
 
       const result = runControlUiPerformanceCli(scriptPath, args, rootDir);
       expect(result.status).toBe(1);

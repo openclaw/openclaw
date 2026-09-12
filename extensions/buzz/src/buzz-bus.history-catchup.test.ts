@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, Relay, type Event, type Filter } from "nostr-tools";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -124,6 +125,11 @@ vi.mock("nostr-tools", async (importOriginal) => {
 });
 
 import { startBuzzBus } from "./buzz-bus.js";
+import { catchUpBuzzRoomHistory } from "./history-catchup.js";
+import {
+  BUZZ_REPLAY_DISPATCH_MAX_PENDING,
+  createBuzzReplayDispatchQueue,
+} from "./replay-dispatch.js";
 
 const BUZZ_NORMAL_MESSAGE_KIND = 9;
 const BUZZ_ROOM_MEMBERSHIP_KIND = 39_002;
@@ -406,6 +412,37 @@ describe("Buzz reconnect history catch-up", () => {
       `Buzz room history query closed for ${CHANNEL_ID}: relay rejected subscription`,
     ]);
     expect(relayMocks.close).toHaveBeenCalled();
+  });
+
+  it("does not request history when canceled after capacity resolves but before recovery resumes", async () => {
+    const abort = new AbortController();
+    const queue = createBuzzReplayDispatchQueue({ onTaskError: vi.fn() });
+    const capacity = createDeferred<Awaited<ReturnType<typeof queue.reserveCapacity>>>();
+    const onEvent = vi.fn();
+    try {
+      const reservation = await queue.reserveCapacity(HISTORY_LIMIT);
+      expect(reservation).toBeDefined();
+      const recovery = catchUpBuzzRoomHistory({
+        relay: new Relay("wss://buzz.example.com"),
+        channelId: CHANNEL_ID,
+        since: BASE_TIMESTAMP - 60,
+        until: BASE_TIMESTAMP,
+        limit: HISTORY_LIMIT,
+        reserveCapacity: () => capacity.promise,
+        onEvent,
+        signal: abort.signal,
+      });
+      capacity.resolve(reservation);
+      abort.abort();
+      await expect(recovery).resolves.toBe("aborted");
+      expect(relayMocks.historyRequests).toEqual([]);
+      expect(onEvent).not.toHaveBeenCalled();
+      const recoveredCapacity = await queue.reserveCapacity(BUZZ_REPLAY_DISPATCH_MAX_PENDING);
+      expect(recoveredCapacity).toBeDefined();
+      recoveredCapacity?.release();
+    } finally {
+      await queue.close();
+    }
   });
 
   it("stops an active history query quietly when the bus closes", async () => {

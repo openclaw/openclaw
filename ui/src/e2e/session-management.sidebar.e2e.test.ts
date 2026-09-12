@@ -115,14 +115,11 @@ suite.define(() => {
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
-      // The parent is idle: its running child is summarized by the collapsed toggle
-      // on the right, never as a ring on the parent's own glyph.
+      // Delegated work keeps the idle parent's ring visible even with children collapsed.
       await expect
         .poll(() => parent.locator(".sidebar-child-session-toggle--running").count())
         .toBe(1);
-      expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
-        0,
-      );
+      await parent.getByRole("img", { name: "Subagents working", exact: true }).waitFor();
       const accessibility = await context.newCDPSession(page);
       const collapsedTree = await accessibility.send("Accessibility.getFullAXTree");
       const collapsedToggle = collapsedTree.nodes.find(

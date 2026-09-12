@@ -38,6 +38,7 @@ export async function runSkillWorkshopReview(
       // Review prompts and cloned prefixes are sized for this exact model.
       modelSelectionLocked: true,
       modelFallbacksOverride: [],
+      requestedRouteResolution: "resolved",
       disableTrajectory: true,
       skillWorkshopProposalOnly: params.skillWorkshopProposalOnly ?? true,
       cleanupBundleMcpOnRunEnd: true,

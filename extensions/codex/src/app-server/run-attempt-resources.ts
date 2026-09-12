@@ -3,6 +3,7 @@ import {
   runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -19,6 +20,7 @@ import {
   type CodexNativePreToolUseFailure,
   type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
@@ -210,11 +212,31 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const registerNativeSubagentMonitor = (parentThreadId: string) => {
     unregisterNativeSubagentMonitor();
+    const sessionKey = params.sessionKey;
+    const storePath = params.sessionTarget?.storePath;
+    const parentSession =
+      sessionKey && storePath
+        ? getSessionEntry({
+            agentId: sessionAgentId,
+            sessionKey,
+            storePath,
+            readConsistency: "latest",
+            hydrateSkillPromptRefs: false,
+          })
+        : undefined;
     state.nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
       client: state.client,
       parentThreadId,
       requesterSessionKey: params.sessionKey,
       taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+      historyOwner: createCodexNativeSubagentHistoryOwner({
+        parentThreadId,
+        sessionId: params.sessionId,
+        ...(parentSession?.sessionId === params.sessionId
+          ? { lifecycleRevision: parentSession.lifecycleRevision }
+          : {}),
+        binding: state.thread,
+      }),
       agentId: sessionAgentId,
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
       retainParentThread: (protectedThreadId) =>
@@ -247,10 +269,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   });
   const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);
-  const buildNativeHookRelayFinalConfigPatch = (
+  const buildNativeHookRelayFinalConfigPatch = async (
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
-    state.nativeHookRelay?.unregister();
+    const previousRelay = state.nativeHookRelay;
+    previousRelay?.unregister();
+    await previousRelay?.drain();
+    connection.assertCurrent();
     if (params.pluginHarnessToolPolicyRestricted === true) {
       state.nativeHookRelay = undefined;
       return {
@@ -302,6 +327,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         }
       },
     });
+    await state.nativeHookRelay?.prepareInvocation();
+    connection.assertCurrent();
     return {
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({

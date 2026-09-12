@@ -1,5 +1,4 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
@@ -8,19 +7,12 @@ import {
   chunkOpenAIQuicksilverAppendText,
   parseOpenAIQuicksilverEvent,
 } from "./realtime-quicksilver-wire.js";
-import { FakeSocket, parseSent } from "./realtime-quicksilver.test-helpers.js";
-
-type ConsultRunner = ((params: {
-  prompt: string;
-  signal?: AbortSignal;
-  requesterFinal?: { append: (text: string) => boolean };
-}) => Promise<{ text: string; yielded?: true }>) & {
-  adoptCompletionClaims?: () => void;
-  claimAppend?: () => boolean;
-  claimFailureAppend?: () => boolean;
-  revokeRequesterFinal?: () => void;
-  steer?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
-};
+import {
+  FakeSocket,
+  parseSent,
+  createDelegationHarness,
+  type ConsultRunner,
+} from "./realtime-quicksilver.test-helpers.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -28,52 +20,6 @@ function deferred<T>() {
     resolve = done;
   });
   return { promise, resolve };
-}
-
-function createDelegationHarness(params?: {
-  claimAppend?: (() => boolean) | null;
-  claimFailureAppend?: (() => boolean) | null;
-  revokeRequesterFinal?: () => void;
-  runAgentConsult?: ConsultRunner;
-  steerAgentConsult?: ConsultRunner["steer"];
-  handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
-  getSocket?: () => FakeSocket;
-  onWireEventType?: (eventType: string) => void;
-}) {
-  const socket = new FakeSocket("manual");
-  socket.readyState = 1;
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const onFatalError = vi.fn();
-  const sessionController = new AbortController();
-  const claimAppend =
-    params?.claimAppend === null ? undefined : (params?.claimAppend ?? (() => true));
-  const claimFailureAppend =
-    params?.claimFailureAppend === null ? undefined : (params?.claimFailureAppend ?? (() => true));
-  const runAgentConsult = Object.assign(
-    params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" })),
-    {
-      ...(claimAppend ? { claimAppend } : {}),
-      ...(claimFailureAppend ? { claimFailureAppend } : {}),
-      ...(params?.revokeRequesterFinal
-        ? { revokeRequesterFinal: params.revokeRequesterFinal }
-        : {}),
-      ...(params?.steerAgentConsult ? { steer: params.steerAgentConsult } : {}),
-    },
-  );
-  const controller = new OpenAIQuicksilverDelegationController(
-    {
-      getSocket: params?.getSocket ?? (() => socket),
-      handleDelegationInput: params?.handleDelegationInput,
-      logger,
-      model: "gpt-live-test-canary",
-      onFatalError,
-      onWireEventType: params?.onWireEventType,
-      runAgentConsult,
-      signal: sessionController.signal,
-    },
-    formatErrorMessage,
-  );
-  return { controller, logger, onFatalError, runAgentConsult, sessionController, socket };
 }
 
 function delegate(

@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import ignore from "ignore";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addIgnoreRules } from "./ignore-rules.js";
 
@@ -114,9 +113,7 @@ describe("addIgnoreRules", () => {
       const nestedDir = path.join(tempDir, name);
       fs.mkdirSync(nestedDir);
       fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversized, "utf-8");
-      ig = ig
-        ? addIgnoreRules(nestedDir, tempDir, ig, { ignoreCase: true })
-        : addIgnoreRules(nestedDir, tempDir);
+      ig = addIgnoreRules(nestedDir, tempDir, ig);
 
       expect(ig.ignores(name)).toBe(true);
       expect(ig.ignores(`${name}/secret.txt`)).toBe(true);
@@ -133,48 +130,15 @@ describe("addIgnoreRules", () => {
     }
   });
 
-  it("preserves case-sensitive semantics for a supplied matcher", () => {
+  it("keeps fail-closed subtree matching case-insensitive", () => {
     const nestedDir = path.join(tempDir, "Private");
     fs.mkdirSync(nestedDir);
     fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
 
-    const ig = addIgnoreRules(nestedDir, tempDir, ignore({ ignorecase: false }), {
-      ignoreCase: false,
-    });
-
-    expect(ig.ignores("Private/secret.txt")).toBe(true);
-    expect(ig.ignores("private/secret.txt")).toBe(false);
-
-    const otherDir = path.join(tempDir, "Other");
-    fs.mkdirSync(otherDir);
-    fs.writeFileSync(path.join(otherDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-    addIgnoreRules(otherDir, tempDir, ig, { ignoreCase: false });
-    expect(ig.ignores("Other/secret.txt")).toBe(true);
-    expect(ig.ignores("other/secret.txt")).toBe(false);
-  });
-
-  it("preserves case-insensitive semantics for a supplied default matcher", () => {
-    const nestedDir = path.join(tempDir, "Private");
-    fs.mkdirSync(nestedDir);
-    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-
-    const ig = addIgnoreRules(nestedDir, tempDir, ignore(), { ignoreCase: true });
+    const ig = addIgnoreRules(nestedDir, tempDir);
 
     expect(ig.ignores("Private/secret.txt")).toBe(true);
     expect(ig.ignores("private/secret.txt")).toBe(true);
-  });
-
-  it("adopts the explicit case mode after matcher composition", () => {
-    const source = addIgnoreRules(tempDir, tempDir);
-    const inherited = ignore().add(source);
-    const nestedDir = path.join(tempDir, "Private");
-    fs.mkdirSync(nestedDir);
-    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-
-    addIgnoreRules(nestedDir, tempDir, inherited, { ignoreCase: true });
-
-    expect(inherited.ignores("Private/secret.txt")).toBe(true);
-    expect(inherited.ignores("private/secret.txt")).toBe(true);
   });
 
   it("keeps fail-closed metadata when the matcher is extended", () => {
@@ -184,30 +148,10 @@ describe("addIgnoreRules", () => {
     const ig = addIgnoreRules(nestedDir, tempDir);
 
     fs.writeFileSync(path.join(tempDir, ".gitignore"), "!locked/\n!locked/secret.txt\n", "utf-8");
-    addIgnoreRules(tempDir, tempDir, ig, { ignoreCase: true });
+    expect(addIgnoreRules(tempDir, tempDir, ig)).toBe(ig);
 
     expect(ig.ignores("locked")).toBe(true);
     expect(ig.ignores("locked/secret.txt")).toBe(true);
-
-    const inherited = ignore().add(ig);
-    inherited.add("!locked/\n!locked/secret.txt");
-    expect(inherited.ignores("locked")).toBe(true);
-    expect(inherited.ignores("locked/secret.txt")).toBe(true);
-  });
-
-  it("preserves the configured ignore matcher surface", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), "from-file\n", "utf-8");
-    const configured = ignore().add("preconfigured");
-
-    const ig = addIgnoreRules(tempDir, tempDir, configured, { ignoreCase: true });
-
-    expect(ig).toBe(configured);
-    expect(ig.ignores("preconfigured")).toBe(true);
-    expect(ig.test("from-file").ignored).toBe(true);
-    expect(ig.filter(["from-file", "visible"])).toEqual(["visible"]);
-    expect(["from-file", "visible"].filter(ig.createFilter())).toEqual(["visible"]);
-    ig.add("added-later");
-    expect(ig.ignores("added-later")).toBe(true);
   });
 
   it("follows a symlinked .gitignore to a regular file", () => {

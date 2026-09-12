@@ -19,6 +19,7 @@ import {
   getUpdateRun,
   reconcileAbandonedUpdateRuns,
 } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -50,8 +51,9 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
@@ -80,6 +82,9 @@ export async function updateFinalizeCommand(
       const root = await withUpdateInProgressEnv(invocationCwd, () =>
         lifecycle.run("preflight", async () => {
           // Refused invocations cannot create a ledger or write failure-triage artifacts.
+          // A missing canonical path can be an interrupted publication, not a
+          // fresh installation. Only the recovery executor may reconcile it.
+          await assertUpdateRecoveryAdmission({ env: process.env });
           assertConfigWriteAllowedInCurrentMode();
           await assertOpenClawStateWriteAllowedAtPath({
             databasePath: resolveOpenClawStateSqlitePath(process.env),
@@ -143,7 +148,7 @@ async function prepareUpdateFinalization(
   if (requestedChannel === "extended-stable") {
     const installKind = await resolveUpdateInstallKind(root);
     if (installKind === "git") {
-      await reportPreMutationUpdateFailure({
+      await reportPreMutationUpdateResult({
         root,
         installKind,
         reason: "unsupported_git_channel",
@@ -194,6 +199,7 @@ async function updateFinalizeCommandInternal(
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
       ...new Set([...doctorWarnings, ...warnings]),
     ]);
+    lifecycle.recordWarnings(doctorWarnings);
   };
 
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
@@ -260,6 +266,12 @@ async function updateFinalizeCommandInternal(
     (result) => pluginOutcome(result.pluginUpdate),
   );
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
+  lifecycle.recordWarnings(
+    (pluginUpdate.warnings ?? [])
+      .filter((warning) => warning.reason === "plugin-target-unavailable")
+      .map((warning) => warning.message),
+    "plugins",
+  );
   configSnapshot = completedPluginUpdate.configSnapshot;
   const completionBudget = lifecycle.budget("completionCache");
   // Leave shutdown time inside the phase deadline so optional cache failures can settle.

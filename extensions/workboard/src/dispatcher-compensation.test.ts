@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
+import { sqliteTestAuxStores } from "./test/sqlite-store.js";
 
 describe("Workboard dispatcher compensation", () => {
   it.each([
@@ -35,8 +36,8 @@ describe("Workboard dispatcher compensation", () => {
     const dbPath = path.join(dir, "workboard.sqlite");
     const dispatchStores = createWorkboardSqliteStores({ dbPath });
     const hostStores = createWorkboardSqliteStores({ dbPath });
-    const store = new WorkboardStore(dispatchStores.cards);
-    const host = new WorkboardStore(hostStores.cards);
+    const store = new WorkboardStore(dispatchStores.cards, sqliteTestAuxStores(dispatchStores));
+    const host = new WorkboardStore(hostStores.cards, sqliteTestAuxStores(hostStores));
     try {
       const card = await store.create({
         title: "Isolated worker",

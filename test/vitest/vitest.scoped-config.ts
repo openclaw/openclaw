@@ -110,6 +110,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-providers",
     "extension-signal",
     "extension-slack",
+    "extension-database-workers",
     "extension-telegram",
     "extension-voice-call",
     "extension-whatsapp",

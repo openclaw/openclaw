@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, reload, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to scaffold or validate a simple tool plugin
@@ -7,6 +7,8 @@ read_when:
 title: "Plugins CLI"
 sidebarTitle: "Plugins"
 ---
+
+# `openclaw plugins`
 
 Manage Gateway plugins, hook packs, and compatible bundles.
 
@@ -39,6 +41,7 @@ openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
 openclaw plugins enable <id> [--accept-capabilities]
 openclaw plugins disable <id>
+openclaw plugins reload <id> [--accept-capabilities] [--json]
 openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]
@@ -57,7 +60,7 @@ command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
 to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
 
 <Note>
-In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `update`, `uninstall`, `enable`, and `disable` all refuse to run. Edit the Nix source for this install instead (`programs.openclaw.config` or `instances.<name>.config` for nix-openclaw), then rebuild. See the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
+In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `update`, `uninstall`, `enable`, and `disable` all refuse to run. Manage those choices in the Nix source for this install (`programs.openclaw.config` or `instances.<name>.config` for nix-openclaw), then rebuild. Reload remains available when no new capability consent needs to be recorded; it preserves config and installation state. See the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 </Note>
 
 <Note>
@@ -78,7 +81,7 @@ reader job. Open the page that matches your task.
 | [Author plugins](/cli/plugins/authoring)                          | You are scaffolding, building, validating, or packing a plugin project.          |
 | [Install plugins](/cli/plugins/install)                           | You are installing from ClawHub, npm, git, a path, an archive, or a marketplace. |
 | [List installed plugins](/cli/plugins/list)                       | You want the installed inventory, discovery diagnostics, or the plugin index.    |
-| [Uninstall and update plugins](/cli/plugins/uninstall-and-update) | You are removing a plugin, or updating one across pins, channels, and sources.   |
+| [Uninstall and update plugins](/cli/plugins/uninstall-and-update) | You are removing or reloading a plugin, or updating its version and source.      |
 | [Inspect and diagnose plugins](/cli/plugins/inspect-and-diagnose) | You need plugin identity, runtime registrations, load errors, or registry state. |
 | [Marketplace feeds](/cli/plugins/marketplace)                     | You are browsing, listing, or refreshing a marketplace or hosted signed feed.    |
 
@@ -108,6 +111,7 @@ points at the page that now holds the content.
 - <a id="param-verbose" />[`--verbose`](/cli/plugins/list#param-verbose)
 - <a id="param-json" />[`--json`](/cli/plugins/list#param-json)
 - <a id="plugin-index" />[Plugin index](/cli/plugins/list#plugin-index)
+- <a id="reload" />[Reload](/cli/plugins/uninstall-and-update#reload)
 - <a id="uninstall" />[Uninstall](/cli/plugins/uninstall-and-update#uninstall)
 - <a id="update" />[Update](/cli/plugins/uninstall-and-update#update)
 - <a id="resolving-plugin-id-vs-npm-spec" />[Resolving plugin id vs npm spec](/cli/plugins/uninstall-and-update#resolving-plugin-id-vs-npm-spec)

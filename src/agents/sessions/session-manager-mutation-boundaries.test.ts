@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
@@ -13,11 +13,32 @@ import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
+
+afterEach(async () => {
+  // Reconcile workers can otherwise retain the shared state lock into later tests.
+  const stateDirs = [...tempDirs.dirs];
+  const errors: unknown[] = [];
+  for (const stateDir of stateDirs) {
+    try {
+      await cleanupSessionStateForTest({ stateDir });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Session fixture cleanup failed");
+  }
+  tempDirs.cleanup();
+});
 
 it("publishes the rewritten view before commit observers append", async () => {
   const dir = tempDirs.make("openclaw-rewrite-observer-");

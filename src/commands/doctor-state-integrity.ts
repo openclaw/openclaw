@@ -54,6 +54,8 @@ import {
 } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
@@ -215,6 +217,11 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
         const hasNestedAgentDir = existsDir(nestedAgentDir);
         if (!hasNestedAgentDir) {
+          return false;
+        }
+        // Reserved system agent ids own a state dir but can never appear in
+        // agents.list, so their directories are never orphans.
+        if (isReservedSystemAgentId(agentId)) {
           return false;
         }
         if (
@@ -1445,6 +1452,9 @@ export async function noteStateIntegrity(
   // Scan that file once under the compatibility owner so full-store work is not repeated.
   const inspectedLegacyStores = new Set<string>();
   for (const target of sessionTargets) {
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      continue;
+    }
     const legacyStorePath = path.resolve(target.storePath);
     const inspectLegacyStore =
       !legacyStorePath.endsWith(".sqlite") && !inspectedLegacyStores.has(legacyStorePath);
@@ -1472,7 +1482,7 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
     return null;
   }
-  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 }
 
 /** Emits the workspace backup tip when applicable. */

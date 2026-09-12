@@ -17,6 +17,10 @@ import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
 } from "./triage-runtime.test-support.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "./update-managed-service-handoff-database.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
@@ -258,6 +262,9 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
   );
   const log = path.join(root, "handoff.log");
   const databasePath = resolveManagedUpdateLeaseDatabasePath();
+  const updateLeaseDatabaseIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+  );
   const paramsFile = path.join(root, "handoff.json");
   const helperFile = path.join(root, "handoff.cjs");
   await fs.writeFile(helperFile, await stagedHandoffScript(root));
@@ -267,6 +274,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     OPENCLAW_HOME: "",
     OPENCLAW_PROFILE: "default",
     OPENCLAW_SUPERVISOR_MODE: "",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "auto",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     OPENCLAW_WORKSPACE_DIR: path.join(stateDir, "workspace"),
@@ -318,7 +326,8 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
       metaPath,
       stateDatabasePath: path.join(root, "state.sqlite"),
       nodeSqliteLocation: path.join(root, "state.sqlite"),
-      updateLeaseDatabasePath: databasePath,
+      updateLeaseDatabasePath: updateLeaseDatabaseIdentity.databasePath,
+      updateLeaseDatabaseIdentity,
       updateLeaseKey: installRoot,
       updateLeaseOwner: root,
       sensitivePaths: runtimeFiles,
@@ -653,7 +662,7 @@ const service={
   readRuntime:async()=>{
     phase('readRuntime');
     const primary=JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-    return {status:primary.active?'running':'stopped',pid:primary.active?primary.pid:undefined};
+    return {status:primary.active?'running':'stopped',pid:primary.active?primary.pid:undefined,systemd:{managerUid:2001}};
   },
   stop:()=>native('stop'),
   restart:()=>native('restart'),

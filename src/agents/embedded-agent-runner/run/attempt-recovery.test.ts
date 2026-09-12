@@ -418,13 +418,16 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(failover.advanceAuthProfile).toHaveBeenCalledOnce();
   });
 
-  it("continues from the transcript after a transient transport drop on a settled exec batch", async () => {
+  it.each([
+    { errorMessage: "WebSocket error" },
+    { errorMessage: "Responses stream ended with unresolved tool calls", diagnostics: [] },
+  ])("continues a settled exec batch after $errorMessage", async (scenario) => {
     const {
       recovery,
       markOwnedTranscriptRetry,
       continueFromCurrentTranscript,
       failoverRetryController,
-    } = await recoverAfterTransportDrop();
+    } = await recoverAfterTransportDrop(scenario);
 
     expect(recovery).toMatchObject({ action: "retry" });
     expect(failoverRetryController.transientRetryCount).toBe(1);

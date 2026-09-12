@@ -51,7 +51,7 @@ import {
   registerIdempotentCleanup,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
-import { startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
+import { startRuntimePty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
   baseUrl: string;
@@ -633,12 +633,16 @@ async function startLocalModeTui(
       writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
     ]);
 
-    run = startPty(process.execPath, buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]), {
-      cwd: process.cwd(),
-      env,
-      exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-      outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-    });
+    run = await startRuntimePty(
+      process.execPath,
+      buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]),
+      {
+        cwd: process.cwd(),
+        env,
+        exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+        outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+      },
+    );
   } catch (error) {
     let cleanupFailure: unknown;
     try {
@@ -800,7 +804,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
       key: initialSessionKey,
       agentId: initialScenario.agentId,
     });
-    run = startPty(
+    run = await startRuntimePty(
       process.execPath,
       buildTuiProcessArgs([
         "tui",
@@ -993,7 +997,7 @@ async function startIsolatedGatewayPty(params: {
     if (sessionKey) {
       cliArgs.push("--session", sessionKey);
     }
-    run = startPty(process.execPath, buildTuiProcessArgs(cliArgs), {
+    run = await startRuntimePty(process.execPath, buildTuiProcessArgs(cliArgs), {
       cwd: process.cwd(),
       env: {
         ...gateway.env,
@@ -1203,7 +1207,7 @@ describe("TUI PTY real backends", () => {
   it(
     "rejects Gateway options on a local TUI alias through a real PTY",
     async ({ onTestFinished }) => {
-      const run = startPty(
+      const run = await startRuntimePty(
         process.execPath,
         buildTuiProcessArgs(["chat", "--url", "ws://127.0.0.1:1"]),
         {
@@ -1244,11 +1248,13 @@ describe("TUI PTY real backends", () => {
         );
         const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: fixture.env });
         const selectedSession = { agentId, sessionKey, storePath: databasePath };
-        let refreshOwner: ReturnType<typeof acquireSessionCostUsageRefreshLock> | undefined;
+        let refreshOwner:
+          | Awaited<ReturnType<typeof acquireSessionCostUsageRefreshLock>>
+          | undefined;
         // Repeated teardown must not reopen the removed root through release().
         cleanupState.run = createIdempotentCleanup(() =>
           runQaGatewayFixture(
-            async () => withEnv(fixture.env, () => refreshOwner?.release()),
+            async () => withEnvAsync(fixture.env, async () => await refreshOwner?.release()),
             () => fixture.run.dispose(),
             () =>
               withEnvAsync(fixture.env, () =>
@@ -1260,14 +1266,14 @@ describe("TUI PTY real backends", () => {
         await runQaGatewayFixture(
           async () => {
             await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
-            withEnv(fixture.env, () => {
+            await withEnvAsync(fixture.env, async () => {
               // An empty existing row still makes the direct Session reader wait.
               expect(loadSessionEntry(selectedSession)).toBeUndefined();
               if (cacheState === "refreshing") {
-                refreshOwner = acquireSessionCostUsageRefreshLock(agentId, databasePath);
+                refreshOwner = await acquireSessionCostUsageRefreshLock(agentId, databasePath);
                 expect(refreshOwner.acquired).toBe(true);
               }
-              expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
+              expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
                 cacheState === "refreshing",
               );
             });
@@ -1297,9 +1303,9 @@ describe("TUI PTY real backends", () => {
             ].join(" ");
             expect(text).toContain(expected);
             expect(fixture.mockModel.requests()).toHaveLength(0);
-            withEnv(fixture.env, () => {
+            await withEnvAsync(fixture.env, async () => {
               expect(loadSessionEntry(selectedSession)).toBeUndefined();
-              expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
+              expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
                 cacheState === "refreshing",
               );
             });

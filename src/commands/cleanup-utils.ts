@@ -18,8 +18,8 @@ import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, shortenHomeInString, shortenHomePath } from "../utils.js";
 
@@ -444,7 +444,7 @@ export async function removeStateAndLinkedPaths(
 
   const lock = await acquireStateCleanupOwnership(cleanup);
   let lockHeld = true;
-  let stateCoordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+  let stateCoordinator: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
   const releaseLock = async () => {
     if (!lockHeld) {
       return;
@@ -470,10 +470,7 @@ export async function removeStateAndLinkedPaths(
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
     });
-    stateCoordinator = acquireStateDatabaseCoordinator({
-      databasePath,
-      busyTimeoutMs: 0,
-    });
+    stateCoordinator = acquireOpenClawStateDatabaseFileExclusion(databasePath);
     const preservePaths = requestedPreservePaths
       .map((target) =>
         isPathWithin(target, requestedStateDir)
@@ -585,9 +582,7 @@ export async function removeWorkspaceDirs(
       }
     }
     if (!opts?.dryRun && statePlan) {
-      await attempt(stateLabel, () => {
-        deleteWorkspaceState(statePlan);
-      });
+      await attempt(stateLabel, () => deleteWorkspaceState(statePlan));
     }
   }
   return [...failures];
@@ -600,7 +595,8 @@ export async function listAgentSessionDirs(stateDir: string): Promise<string[]> 
     const entries = await fs.readdir(root, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(root, entry.name, "sessions"));
+      .map((entry) => path.join(root, entry.name, "sessions"))
+      .toSorted();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];

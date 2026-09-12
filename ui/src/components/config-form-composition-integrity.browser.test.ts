@@ -6,6 +6,55 @@ import { renderObject } from "./config-form.node.collection.ts";
 import { analyzeConfigSchema, renderConfigForm, renderNode } from "./config-form.ts";
 
 describe("config form composition integrity", () => {
+  it("renders object fields guarded by a required-property exclusion", () => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        github: {
+          type: "object",
+          title: "GitHub",
+          properties: { token: { type: "string" } },
+          required: ["token"],
+        },
+        people: { type: "array", items: { type: "string" } },
+        peopleFile: { type: "string" },
+      },
+      required: ["github"],
+      not: { required: ["people", "peopleFile"] },
+    });
+
+    expect(analysis.unsupportedPaths).toEqual([]);
+    expect(
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
+        github: { token: "secret" },
+        people: ["alice"],
+        peopleFile: "people.json",
+      }),
+    ).toBe(false);
+    expect(
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
+        github: { token: "secret" },
+        people: ["alice"],
+      }),
+    ).toBe(true);
+
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        showAdvanced: true,
+        onShowAdvanced: () => {},
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.textContent).toContain("Github");
+    expect(container.textContent).not.toContain("Unsupported schema node");
+  });
+
   it("keeps mixed union and allOf compositions fail-closed", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
@@ -37,7 +86,7 @@ describe("config form composition integrity", () => {
     expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
-  it("renders finite boolean unions while keeping open typed unions in Raw mode", () => {
+  it("renders finite boolean unions and string-or-literal unions while keeping constrained unions in Raw mode", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
@@ -49,6 +98,9 @@ describe("config form composition integrity", () => {
         },
         nullableBoolean: {
           anyOf: [{ type: ["boolean", "null"] }, { const: "auto" }],
+        },
+        nullableString: {
+          anyOf: [{ type: ["string", "null"] }, { type: "boolean", const: false }],
         },
         ambiguousBooleanLabel: {
           anyOf: [{ type: "boolean" }, { const: "true" }],
@@ -75,9 +127,9 @@ describe("config form composition integrity", () => {
     });
 
     expect(analysis.unsupportedPaths).toEqual([
-      "retention",
       "guarded",
       "nullableBoolean",
+      "nullableString",
       "ambiguousBooleanLabel",
       "overlappingOneOf",
     ]);

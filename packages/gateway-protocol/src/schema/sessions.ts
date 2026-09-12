@@ -12,6 +12,11 @@ import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sess
 import { SessionOwnerSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export {
+  SessionsStorageParamsSchema,
+  SessionsStorageStatusResultSchema,
+  type SessionsStorageStatusResult,
+} from "./sessions-storage.js";
 export * from "./sessions-title.js";
 export * from "./sessions-goal.js";
 export { SessionsListParamsSchema, type SessionsListParams } from "./sessions-list.js";
@@ -426,6 +431,7 @@ export const SessionsSearchHitSchema = closedObject({
 export const SessionsSearchResultSchema = closedObject({
   results: Type.Array(SessionsSearchHitSchema),
   indexing: Type.Optional(Type.Boolean()),
+  archivedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
   truncated: Type.Optional(Type.Boolean()),
 });
 
@@ -533,6 +539,7 @@ export const SessionsResetParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+  expectedSessionId: Type.Optional(NonEmptyString),
 });
 
 /** Reassigns mutable session responsibility without changing provenance or sharing authority. */

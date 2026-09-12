@@ -43,16 +43,18 @@ receipt, current state, and next action. Remove unselected rows rather than
 reporting them as passed. Stable/full includes macOS unless explicitly scoped
 out; extended-stable does not inherit ClawHub, GitHub Release, or native apps.
 
-| Surface                 | Evidence and state                                                   | Next action or blocker |
-| ----------------------- | -------------------------------------------------------------------- | ---------------------- |
-| Core and plugin npm     | `<version, selectors, parent/child receipts>`                        | `<action>`             |
-| Docker                  | `<digests, aliases, run/attempt>`                                    | `<action>`             |
-| ClawHub                 | `<child and postpublish verification receipts>`                      | `<action>`             |
-| GitHub Release / Latest | `<release URL, draft/prerelease/latest readback>`                    | `<action>`             |
-| macOS                   | `<handoff, validation, notarized preflight, promotion run/attempts>` | `<action>`             |
-| Stable appcast          | `<signed artifact, main commit/PR, public feed readback>`            | `<action>`             |
-| Other selected apps     | `<platform, exact source, publication proof>`                        | `<action>`             |
-| Stable main closeout    | `<PR, shipped metadata, immutable closeout manifest>`                | `<action>`             |
+| Surface                   | Evidence and state                                                       | Next action or blocker |
+| ------------------------- | ------------------------------------------------------------------------ | ---------------------- |
+| Core and plugin npm       | `<version, selectors, parent/child receipts>`                            | `<action>`             |
+| Docker                    | `<digests, aliases, run/attempt>`                                        | `<action>`             |
+| ClawHub                   | `<child and postpublish verification receipts>`                          | `<action>`             |
+| GitHub Release / Latest   | `<release URL, draft/prerelease/latest readback>`                        | `<action>`             |
+| macOS                     | `<handoff, validation, notarized preflight, promotion run/attempts>`     | `<action>`             |
+| Stable appcast            | `<signed artifact, main commit/PR, public feed readback>`                | `<action>`             |
+| Other selected apps       | `<platform, exact source, publication proof>`                            | `<action>`             |
+| Stable main closeout      | `<PR, shipped metadata, immutable closeout manifest>`                    | `<action>`             |
+| Approved docs publication | `<source PR/merge SHA, ordered sources and digest, verified deployment>` | `<action>`             |
+| Post-docs release body    | `<approved bundle, release ID, fresh body read and verified update>`     | `<action>`             |
 
 A successful publish parent does not complete detached ClawHub verification or
 macOS. Preserve their exact identities and advance ready independent work while
@@ -74,8 +76,9 @@ reference for commands rather than redispatching the release parent.
 
 - confirmed product/code failure: fix the release branch, freeze a new Code
   SHA, and invalidate downstream product evidence
-- regular changelog-only failure: change only `CHANGELOG.md`, freeze a new
-  Release SHA, and reuse green Code SHA evidence after delta proof
+- regular changelog-only failure: change the selected release entry and only
+  its permitted record/index paths, freeze a new Release SHA, and reuse green
+  Code SHA evidence after `split-changelog-release-v1` delta proof
 - extended-stable branch change: land the approved product/changelog change or
   smallest frozen-target repair by PR, record its source/invariant, and replace
   all exact-head evidence

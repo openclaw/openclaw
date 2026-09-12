@@ -13,6 +13,7 @@ import {
   renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsToggleRow,
   renderSettingsValue,
@@ -26,6 +27,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
@@ -33,10 +35,11 @@ import {
   createCloudWorkerDraft,
   readCloudWorkerProfiles,
   validateCloudWorkerDraft,
-  type CloudWorkerDraftError,
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
+import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
+import "./cloud-worker-snapshots.ts";
 
 registerSettingsEnglish();
 
@@ -57,15 +60,15 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
+  @state() private view: "profiles" | "snapshots" = "profiles";
   @state() private advertisedProfiles = new Map<string, ProfileSummary>();
   @state() private catalogLoaded = false;
   @state() private catalogLoading = false;
   @state() private catalogError: string | null = null;
   @state() private editor: EditorState = null;
   @state() private draft: CloudWorkerProfileDraft = createCloudWorkerDraft();
-  @state() private formError: string | null = null;
-  @state() private notice: string | null = null;
-  @state() private busyProfileId: string | null = null;
+
+  private readonly configSave = new CloudWorkerConfigSave(this);
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -91,7 +94,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   }
 
   private resetGatewayState() {
-    this.busyProfileId = null;
+    this.configSave.update({ busy: false });
     this.advertisedProfiles = new Map();
     this.catalogLoaded = false;
     this.catalogLoading = false;
@@ -152,7 +155,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       configState?.configSnapshot?.hash &&
       !configState.configLoading &&
       !configState.configSaving &&
-      this.busyProfileId === null,
+      !this.configSave.state.busy,
     );
   }
 
@@ -162,8 +165,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     }
     this.editor = { kind: "add" };
     this.draft = createCloudWorkerDraft();
-    this.formError = null;
-    this.notice = null;
+    this.configSave.update({ error: null, notice: null });
   }
 
   private openEdit(profile: ConfiguredCloudWorkerProfile) {
@@ -176,25 +178,20 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     }
     this.editor = { kind: "edit", profileId: profile.id };
     this.draft = createCloudWorkerDraft(profile);
-    this.formError = null;
-    this.notice = null;
+    this.configSave.update({ error: null, notice: null });
   }
 
   private closeEditor() {
-    if (this.busyProfileId !== null) {
+    if (this.configSave.state.busy) {
       return;
     }
     this.editor = null;
-    this.formError = null;
+    this.configSave.update({ error: null });
   }
 
   private patchDraft(patch: Partial<CloudWorkerProfileDraft>) {
     this.draft = { ...this.draft, ...patch };
-    this.formError = null;
-  }
-
-  private errorText(error: CloudWorkerDraftError): string {
-    return t(`cloudWorkersPage.errors.${error}`);
+    this.configSave.update({ error: null });
   }
 
   private async saveProfile(draft: CloudWorkerProfileDraft) {
@@ -210,47 +207,22 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     );
     const validationError = validateCloudWorkerDraft(draft, currentProfiles, editingId);
     if (validationError) {
-      this.formError = this.errorText(validationError);
+      this.configSave.update({ error: t(`cloudWorkersPage.errors.${validationError}`) });
       return;
     }
     const profileId = editingId ?? draft.id;
-    this.busyProfileId = profileId;
-    this.formError = null;
-    this.notice = null;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
-    try {
-      const patched = await runtimeConfig.patchFromSnapshot((base) => {
-        const built = buildCloudWorkerUpsertPatch(base, draft, editingId);
-        return "error" in built
-          ? { error: this.errorText(built.error) }
-          : {
-              options: {
-                raw: built.patch,
-                replacePaths: built.replacePaths,
-                note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
-                canDispatch: isCurrent,
-              },
-            };
-      });
-      if (!isCurrent()) {
-        return;
-      }
-      if (!patched) {
-        this.formError = runtimeConfig.state.lastError ?? t("cloudWorkersPage.errors.saveFailed");
-        return;
-      }
-      this.editor = null;
-      this.notice = t("labsPage.restartRequired");
-    } catch (error) {
-      if (isCurrent()) {
-        this.formError = formatUiError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        this.busyProfileId = null;
-      }
-    }
+    await this.configSave.save(runtimeConfig, isCurrent, {
+      build: (base) => buildCloudWorkerUpsertPatch(base, draft, editingId),
+      note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
+      canDispatch: isCurrent,
+      failed: () => t("cloudWorkersPage.errors.saveFailed"),
+      success: () => {
+        this.editor = null;
+        return `${t("labsPage.restartRequired")} ${t("cloudWorkersPage.snapshots.buildAfterRestart")}`;
+      },
+    });
   }
 
   private async deleteProfile(profile: ConfiguredCloudWorkerProfile) {
@@ -278,48 +250,23 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       this.context.runtimeConfig !== runtimeConfig ||
       !this.canManage()
     ) {
-      this.formError = t("cloudWorkersPage.errors.deleteFailed");
+      this.configSave.update({ error: t("cloudWorkersPage.errors.deleteFailed") });
       return;
     }
-    this.busyProfileId = profile.id;
-    this.formError = null;
-    this.notice = null;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
-    try {
-      const patched = await runtimeConfig.patchFromSnapshot((base) => {
-        const built = buildCloudWorkerDeletePatch(base, profile.id);
-        return "error" in built
-          ? { error: this.errorText(built.error) }
-          : {
-              options: {
-                raw: built.patch,
-                replacePaths: built.replacePaths,
-                note: `cloud workers: delete ${profile.id}`,
-                canDispatch: isCurrent,
-              },
-            };
-      });
-      if (!isCurrent()) {
-        return;
-      }
-      if (!patched) {
-        this.formError = runtimeConfig.state.lastError ?? t("cloudWorkersPage.errors.deleteFailed");
-        return;
-      }
-      if (this.editor?.kind === "edit" && this.editor.profileId === profile.id) {
-        this.editor = null;
-      }
-      this.notice = t("labsPage.restartRequired");
-    } catch (error) {
-      if (isCurrent()) {
-        this.formError = formatUiError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        this.busyProfileId = null;
-      }
-    }
+    await this.configSave.save(runtimeConfig, isCurrent, {
+      build: (base) => buildCloudWorkerDeletePatch(base, profile.id),
+      note: `cloud workers: delete ${profile.id}`,
+      canDispatch: isCurrent,
+      failed: () => t("cloudWorkersPage.errors.deleteFailed"),
+      success: () => {
+        if (this.editor?.kind === "edit" && this.editor.profileId === profile.id) {
+          this.editor = null;
+        }
+        return t("labsPage.restartRequired");
+      },
+    });
   }
 
   private profileDescription(profile: ConfiguredCloudWorkerProfile): string {
@@ -388,11 +335,46 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     });
   }
 
+  private renderDraftInput(
+    field:
+      | "backend"
+      | "machineClass"
+      | "ttl"
+      | "idleTimeout"
+      | "binary"
+      | "setupEnv"
+      | "readyWorkers"
+      | "suspendAfter",
+    options: {
+      description?: ReturnType<typeof html>;
+      placeholder?: string;
+      type?: "text" | "number";
+    } = {},
+  ) {
+    return renderSettingsRow({
+      title: t(`cloudWorkersPage.fields.${field}`),
+      description: options.description ?? t(`cloudWorkersPage.fields.${field}Help`),
+      control: html`<input
+        class="settings-input mono"
+        aria-label=${t(`cloudWorkersPage.fields.${field}`)}
+        placeholder=${options.placeholder ?? nothing}
+        type=${options.type ?? nothing}
+        min=${field === "readyWorkers" ? "0" : nothing}
+        step=${field === "readyWorkers" ? "1" : nothing}
+        autocomplete="off"
+        spellcheck="false"
+        .value=${this.draft[field]}
+        ?disabled=${this.configSave.state.busy}
+        @input=${(event: Event) => this.patchDraft({ [field]: formControlValue(event) })}
+      />`,
+    });
+  }
+
   private renderEditor() {
     if (!this.editor) {
       return nothing;
     }
-    const busy = this.busyProfileId !== null;
+    const busy = this.configSave.state.busy;
     const canSave = this.canManage();
     const editing = this.editor.kind === "edit";
     const operatingSystems = editing
@@ -420,20 +402,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
                 @input=${(event: Event) => this.patchDraft({ id: formControlValue(event) })}
               />`,
         }),
-        renderSettingsRow({
-          title: t("cloudWorkersPage.fields.backend"),
+        this.renderDraftInput("backend", {
           description: html`${t("cloudWorkersPage.fields.backendHelp")}
           ${renderDocsLink(CLOUD_WORKERS_DOCS_URL, t("cloudWorkersPage.providerList"))}`,
-          control: html`<input
-            class="settings-input mono"
-            aria-label=${t("cloudWorkersPage.fields.backend")}
-            placeholder=${t("cloudWorkersPage.fields.backendPlaceholder")}
-            autocomplete="off"
-            spellcheck="false"
-            .value=${this.draft.backend}
-            ?disabled=${busy}
-            @input=${(event: Event) => this.patchDraft({ backend: formControlValue(event) })}
-          />`,
+          placeholder: t("cloudWorkersPage.fields.backendPlaceholder"),
         }),
         ...(operatingSystems.length >= 2 || unadvertisedTarget
           ? [
@@ -445,15 +417,24 @@ class CloudWorkersPage extends OpenClawLightDomElement {
                   aria-label=${t("cloudWorkersPage.fields.operatingSystem")}
                   .value=${this.draft.target}
                   ?disabled=${busy}
-                  @change=${(event: Event) => this.patchDraft({ target: formControlValue(event) })}
+                  @change=${(event: Event) => {
+                    const target = formControlValue(event);
+                    if (!operatingSystems.find((system) => system.id === target)?.disabledReason) {
+                      this.patchDraft({ target });
+                    }
+                  }}
                 >
                   <option value="" ?selected=${!this.draft.target}>
                     ${t("cloudWorkersPage.fields.providerDefault")}
                   </option>
                   ${operatingSystems.map(
                     (system) => html`
-                      <option value=${system.id} ?selected=${this.draft.target === system.id}>
-                        ${system.label}
+                      <option
+                        value=${system.id}
+                        ?selected=${this.draft.target === system.id}
+                        ?disabled=${Boolean(system.disabledReason)}
+                      >
+                        ${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}
                       </option>
                     `,
                   )}
@@ -468,46 +449,12 @@ class CloudWorkersPage extends OpenClawLightDomElement {
               }),
             ]
           : []),
-        renderSettingsRow({
-          title: t("cloudWorkersPage.fields.machineClass"),
-          description: t("cloudWorkersPage.fields.machineClassHelp"),
-          control: html`<input
-            class="settings-input mono"
-            aria-label=${t("cloudWorkersPage.fields.machineClass")}
-            autocomplete="off"
-            spellcheck="false"
-            .value=${this.draft.machineClass}
-            ?disabled=${busy}
-            @input=${(event: Event) => this.patchDraft({ machineClass: formControlValue(event) })}
-          />`,
+        this.renderDraftInput("machineClass"),
+        this.renderDraftInput("ttl", {
+          placeholder: t("cloudWorkersPage.fields.ttlPlaceholder"),
         }),
-        renderSettingsRow({
-          title: t("cloudWorkersPage.fields.ttl"),
-          description: t("cloudWorkersPage.fields.ttlHelp"),
-          control: html`<input
-            class="settings-input mono"
-            aria-label=${t("cloudWorkersPage.fields.ttl")}
-            placeholder=${t("cloudWorkersPage.fields.ttlPlaceholder")}
-            autocomplete="off"
-            spellcheck="false"
-            .value=${this.draft.ttl}
-            ?disabled=${busy}
-            @input=${(event: Event) => this.patchDraft({ ttl: formControlValue(event) })}
-          />`,
-        }),
-        renderSettingsRow({
-          title: t("cloudWorkersPage.fields.idleTimeout"),
-          description: t("cloudWorkersPage.fields.idleTimeoutHelp"),
-          control: html`<input
-            class="settings-input mono"
-            aria-label=${t("cloudWorkersPage.fields.idleTimeout")}
-            placeholder=${t("cloudWorkersPage.fields.idleTimeoutPlaceholder")}
-            autocomplete="off"
-            spellcheck="false"
-            .value=${this.draft.idleTimeout}
-            ?disabled=${busy}
-            @input=${(event: Event) => this.patchDraft({ idleTimeout: formControlValue(event) })}
-          />`,
+        this.renderDraftInput("idleTimeout", {
+          placeholder: t("cloudWorkersPage.fields.idleTimeoutPlaceholder"),
         }),
         renderSettingsRow({
           title: t("cloudWorkersPage.fields.setup"),
@@ -531,25 +478,43 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           disabled: busy,
           onChange: (desktop) => this.patchDraft({ desktop }),
         }),
-        renderSettingsRow({
-          title: t("cloudWorkersPage.fields.binary"),
-          description: t("cloudWorkersPage.fields.binaryHelp"),
-          control: html`<input
-            class="settings-input mono"
-            aria-label=${t("cloudWorkersPage.fields.binary")}
-            placeholder=${t("cloudWorkersPage.fields.binaryPlaceholder")}
-            autocomplete="off"
-            spellcheck="false"
-            .value=${this.draft.binary}
-            ?disabled=${busy}
-            @input=${(event: Event) => this.patchDraft({ binary: formControlValue(event) })}
-          />`,
+        this.renderDraftInput("binary", {
+          placeholder: t("cloudWorkersPage.fields.binaryPlaceholder"),
         }),
-        ...(this.formError
+        renderSettingsSection({ title: t("cloudWorkersPage.advanced") }, [
+          renderSettingsRow({
+            title: t("cloudWorkersPage.fields.warmImage"),
+            description: t("cloudWorkersPage.fields.warmImageHelp"),
+            control: html`<select
+              class="settings-select"
+              aria-label=${t("cloudWorkersPage.fields.warmImage")}
+              .value=${this.draft.warmImage}
+              ?disabled=${busy}
+              @change=${(event: Event) => {
+                const value = formControlValue(event);
+                if (value === "auto" || value === "on" || value === "off") {
+                  this.patchDraft({ warmImage: value });
+                }
+              }}
+            >
+              ${(["auto", "on", "off"] as const).map(
+                (value) => html`
+                  <option value=${value} ?selected=${this.draft.warmImage === value}>
+                    ${t(`cloudWorkersPage.warmImage.${value}`)}
+                  </option>
+                `,
+              )}
+            </select>`,
+          }),
+          ...(["setupEnv", "readyWorkers", "suspendAfter"] as const).map((field) =>
+            this.renderDraftInput(field, { type: field === "readyWorkers" ? "number" : "text" }),
+          ),
+        ]),
+        ...(this.configSave.state.error
           ? [
               renderSettingsRow({
                 title: t("cloudWorkersPage.errors.title"),
-                description: html`<span role="alert">${this.formError}</span>`,
+                description: html`<span role="alert">${this.configSave.state.error}</span>`,
               }),
             ]
           : []),
@@ -601,13 +566,13 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           : nothing
       }
       ${
-        this.formError && !this.editor
-          ? html`<div class="callout warning" role="alert">${this.formError}</div>`
+        this.configSave.state.error && !this.editor
+          ? html`<div class="callout warning" role="alert">${this.configSave.state.error}</div>`
           : nothing
       }
       ${
-        this.notice
-          ? html`<div class="callout warning" role="status">${this.notice}</div>`
+        this.configSave.state.notice
+          ? html`<div class="callout warning" role="status">${this.configSave.state.notice}</div>`
           : nothing
       }
       ${renderSettingsSection(
@@ -619,14 +584,30 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         },
         rows,
       )}
-      ${this.renderEditor()}
+      ${this.renderEditor()} ${renderCloudWorkerRepositories(canManage)}
     `);
     return html`
       ${renderSettingsPageHeader({
         title: titleForRoute("cloud-workers"),
         subtitle: html`${t("cloudWorkersPage.intro")} ${renderLearnMoreLink(CLOUD_WORKERS_DOCS_URL)}`,
       })}
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(html`
+        ${renderSettingsPage(
+          renderSettingsSegmented({
+            mode: "buttons",
+            value: this.view,
+            ariaLabel: t("cloudWorkersPage.snapshots.viewLabel"),
+            options: [
+              { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
+              { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
+            ],
+            onChange: (value) => {
+              this.view = value;
+            },
+          }),
+        )}
+        ${this.view === "profiles" ? body : html`<openclaw-cloud-worker-snapshots></openclaw-cloud-worker-snapshots>`}
+      `)}
     `;
   }
 }

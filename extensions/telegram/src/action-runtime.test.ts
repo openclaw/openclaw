@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { DurableMessageBatchSendResult } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
@@ -82,7 +83,7 @@ const sendDurableMessageBatch = vi.fn(
       readFile?: (filePath: string) => Promise<Buffer>;
       workspaceDir?: string;
     };
-  }) => {
+  }): Promise<DurableMessageBatchSendResult> => {
     const payload = params.payloads[0] ?? {};
     const mediaUrls = payload.mediaUrls?.length
       ? payload.mediaUrls
@@ -930,6 +931,37 @@ describe("handleTelegramAction", () => {
     expect(sendStickerTelegram).not.toHaveBeenCalled();
   });
 
+  it("returns sticker search results from asynchronous storage", async () => {
+    telegramActionRuntime.searchStickers = vi.fn(async () => [
+      {
+        fileId: "fox-file",
+        fileUniqueId: "fox-id",
+        description: "A waving fox",
+        cachedAt: "2026-01-26T12:00:00.000Z",
+      },
+    ]);
+    const result = await handleTelegramAction(
+      { action: "searchSticker", query: "fox" },
+      telegramConfig({ actions: { sticker: true } }),
+    );
+    expect(resultDetails(result)).toEqual({
+      ok: true,
+      count: 1,
+      stickers: [{ fileId: "fox-file", description: "A waving fox" }],
+    });
+  });
+
+  it("returns sticker statistics from asynchronous storage", async () => {
+    const stats = {
+      count: 2,
+      oldestAt: "2026-01-20T12:00:00.000Z",
+      newestAt: "2026-01-26T12:00:00.000Z",
+    };
+    telegramActionRuntime.getCacheStats = vi.fn(async () => stats);
+    const result = await handleTelegramAction({ action: "stickerCacheStats" }, telegramConfig({}));
+    expect(resultDetails(result)).toEqual({ ok: true, ...stats });
+  });
+
   it("sends stickers when enabled", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", actions: { sticker: true } } },
@@ -1137,6 +1169,168 @@ describe("handleTelegramAction", () => {
       { type: "text", text: JSON.stringify(details, null, 2) },
     ]);
   });
+
+  it.each([
+    "cancelled_by_message_sending_hook",
+    "cancelled_by_reply_payload_sending_hook",
+    "empty_after_message_sending_hook",
+    "empty_after_reply_payload_sending_hook",
+    "no_visible_payload",
+    "adapter_returned_no_send",
+    "no_visible_result",
+  ] as const)("returns intentional %s without a tool error or hook diagnostics", async (reason) => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+      reason,
+      payloadOutcomes: [
+        {
+          index: 0,
+          status: "suppressed",
+          reason,
+          hookEffect: { cancelReason: "dedupe" },
+        },
+      ],
+    });
+
+    const result = await handleTelegramAction(
+      { action: "sendMessage", to: "@testchannel", content: "Hello, Telegram!" },
+      telegramConfig(),
+    );
+    expect(result.details).toEqual({ status: "suppressed", reason });
+    expect(JSON.stringify(result)).not.toContain("dedupe");
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("preserves the required reason when optional payload diagnostics are absent", async () => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+      reason: "cancelled_by_message_sending_hook",
+    });
+    const result = await handleTelegramAction(
+      { action: "sendMessage", to: "123", content: "hello" },
+      telegramConfig(),
+    );
+    expect(result.details).toEqual({
+      status: "suppressed",
+      reason: "cancelled_by_message_sending_hook",
+    });
+  });
+
+  it.each<{
+    name: string;
+    reason: Extract<DurableMessageBatchSendResult, { status: "suppressed" }>["reason"];
+    payloadOutcomes: Extract<
+      DurableMessageBatchSendResult,
+      { status: "suppressed" }
+    >["payloadOutcomes"];
+    ambiguous: boolean;
+  }>([
+    {
+      name: "top-level identityless send",
+      reason: "adapter_returned_no_identity",
+      payloadOutcomes: undefined,
+      ambiguous: true,
+    },
+    {
+      name: "later identityless send",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [{ index: 1, status: "suppressed", reason: "adapter_returned_no_identity" }],
+      ambiguous: true,
+    },
+    {
+      name: "later identified send",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        { index: 1, status: "sent", results: [{ channel: "telegram", messageId: "accepted-1" }] },
+      ],
+      ambiguous: true,
+    },
+    {
+      name: "later partial failure",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        {
+          index: 1,
+          status: "failed",
+          error: new Error("partial failure"),
+          stage: "platform_send",
+          sentBeforeError: true,
+        },
+      ],
+      ambiguous: true,
+    },
+    {
+      name: "failure before any send",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        {
+          index: 1,
+          status: "failed",
+          error: new Error("pre-dispatch failure"),
+          stage: "platform_send",
+          sentBeforeError: false,
+        },
+      ],
+      ambiguous: false,
+    },
+  ])(
+    "preserves the delivery evidence for $name after cancellation",
+    async ({ reason, payloadOutcomes, ambiguous }) => {
+      sendDurableMessageBatch.mockResolvedValueOnce({
+        status: "suppressed",
+        results: [],
+        receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+        reason,
+        ...(payloadOutcomes
+          ? {
+              payloadOutcomes: [
+                { index: 0, status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+                ...payloadOutcomes,
+              ],
+            }
+          : {}),
+      });
+      const result = handleTelegramAction(
+        { action: "sendMessage", to: "123", content: "hello" },
+        telegramConfig(),
+      );
+      if (ambiguous) {
+        await expect(result).rejects.toThrow(
+          "Telegram sendMessage was suppressed before delivery.",
+        );
+      } else {
+        await expect(result).resolves.toMatchObject({ details: { status: "suppressed", reason } });
+      }
+    },
+  );
+
+  it.each(["failed", "partial_failed"] as const)(
+    "preserves a %s delivery error",
+    async (status) => {
+      const error = new Error("Telegram transport failed");
+      sendDurableMessageBatch.mockResolvedValueOnce(
+        status === "failed"
+          ? { status, error }
+          : {
+              status,
+              error,
+              sentBeforeError: true,
+              results: [{ channel: "telegram", messageId: "accepted-1" }],
+              receipt: { platformMessageIds: ["accepted-1"], parts: [], sentAt: 1 },
+            },
+      );
+      await expect(
+        handleTelegramAction(
+          { action: "sendMessage", to: "123", content: "hello" },
+          telegramConfig(),
+        ),
+      ).rejects.toBe(error);
+    },
+  );
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
     const stateDir = openClawState.stateDir;

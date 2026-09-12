@@ -14,11 +14,6 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
-import {
-  createXaiPayloadCaptureStream,
-  expectXaiFastToolStreamShaping,
-  runXaiGrok4ResponseStream,
-} from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
 
@@ -293,11 +288,6 @@ describe("xai stream wrappers", () => {
     );
   });
 
-  it("leaves unsupported or disabled models unchanged", () => {
-    expect(captureWrappedModelId({ modelId: "grok-3-fast", fastMode: true })).toBe("grok-3-fast");
-    expect(captureWrappedModelId({ modelId: "grok-3", fastMode: false })).toBe("grok-3");
-  });
-
   it("resolves dynamic fast mode for each xai stream call", () => {
     const capturedModelIds: string[] = [];
     const baseStreamFn: StreamFn = (model) => {
@@ -323,18 +313,6 @@ describe("xai stream wrappers", () => {
     void wrapped?.(model, { messages: [] } as Context, {});
 
     expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
-  });
-
-  it("composes the xai provider stream chain from extra params", () => {
-    const capture = createXaiPayloadCaptureStream();
-
-    const wrapped = wrapXaiProviderStream({
-      streamFn: capture.streamFn,
-      extraParams: { fastMode: true },
-    } as never);
-
-    runXaiGrok4ResponseStream(wrapped);
-    expectXaiFastToolStreamShaping(capture);
   });
 
   it("leaves tool-call argument html entities untouched, delegating decode to the core path", async () => {

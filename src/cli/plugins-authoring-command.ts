@@ -115,10 +115,9 @@ function readPackageManifest(rootDir: string): JsonObject {
   return readJsonFile(packagePath);
 }
 
-async function importToolPluginEntry(entryPath: string, rootDir: string): Promise<unknown> {
+async function importToolPluginEntry(entryPath: string): Promise<unknown> {
   const loader = getCachedPluginModuleLoader({
     modulePath: entryPath,
-    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: entryPath,
     aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
@@ -144,7 +143,7 @@ export async function loadToolPlugin(params: {
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
-  const entry = await importToolPluginEntry(params.entryPath, params.rootDir);
+  const entry = await importToolPluginEntry(params.entryPath);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
     throw new Error(

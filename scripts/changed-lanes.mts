@@ -6,17 +6,18 @@ import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-fa
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
+import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
 
-// Source files knip's production scan reads. Any edit to one of these can orphan
-// an export -- including an import-only edit that drops a barrel re-export's last
-// consumer -- so the scan is selected by path, not by inspecting changed lines.
-const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+// Application, script, and test sources read by the export scans. Import-only
+// edits and deleted tests can orphan exports in unchanged files, so select by
+// path rather than inspecting changed lines.
+const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages|scripts|test)\/.+\.[cm]?[jt]sx?$/u;
 
-/** Returns whether any changed path is production source knip scans. */
+/** Returns whether a changed source path selects the existing export scans. */
 export function hasDeadcodeScannedSource(changedPaths: string[]): boolean {
   return changedPaths.some((path) => DEADCODE_SOURCE_PATH_RE.test(path));
 }
@@ -204,8 +205,10 @@ export function detectChangedLanes(
   if (
     !packageJsonIsLiveDockerTooling &&
     !packageJsonIsTooling &&
-    paths.some((changedPath) => RELEASE_METADATA_PATHS.has(changedPath)) &&
-    paths.every((changedPath) => RELEASE_METADATA_PATHS.has(changedPath))
+    paths.every(
+      (changedPath) =>
+        RELEASE_METADATA_PATHS.has(changedPath) || isReleaseChangelogPath(changedPath),
+    )
   ) {
     lanes.releaseMetadata = true;
     lanes.docs = paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "docs");

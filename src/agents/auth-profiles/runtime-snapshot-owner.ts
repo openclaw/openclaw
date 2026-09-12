@@ -314,6 +314,13 @@ export function pruneAuthProfileStoreReferences(
   keptProfileIds: Set<string>,
   keptOrderProfileIds = keptProfileIds,
 ): void {
+  if (store.runtimeCredentialSources) {
+    store.runtimeCredentialSources = Object.fromEntries(
+      Object.entries(store.runtimeCredentialSources).filter(([profileId]) =>
+        keptProfileIds.has(profileId),
+      ),
+    );
+  }
   store.order = store.order
     ? Object.fromEntries(
         Object.entries(store.order)

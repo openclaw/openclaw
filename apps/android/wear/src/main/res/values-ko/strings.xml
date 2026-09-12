@@ -79,6 +79,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"작업이 수락되지 않음"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"문제가 발생했습니다"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"목록을 새로고침하고 다시 시도하세요."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"일부 모델을 새로고침하지 못했습니다. 목록에 있는 모델은 계속 사용할 수 있습니다."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"이 채팅에서 모델을 선택하려면 휴대전화의 OpenClaw와 Gateway를 업데이트하세요."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"워치에서 다시 시도하세요."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"업데이트 필요"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화와 워치 모두에서 OpenClaw를 업데이트하세요."</string>

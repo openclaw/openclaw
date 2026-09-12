@@ -93,7 +93,6 @@ import { resolveDelegationCapability } from "../delegation-capability.js";
 import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
-import { appendGitCoauthorContext } from "../git-coauthor-attribution.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
@@ -967,13 +966,6 @@ export function runAgentAttempt(params: {
           params.opts.inputProvenance?.kind === "inter_session"
             ? cliEffectivePrompt
             : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
-        const cliModelPrompt = appendGitCoauthorContext(
-          cliPrompt,
-          params.opts.gitCoauthorAttribution,
-        );
-        const cliPersistencePrompt = params.opts.gitCoauthorAttribution
-          ? (cliTranscriptPrompt ?? cliPrompt)
-          : cliTranscriptPrompt;
         const mutableCliSessionStore =
           params.sessionKey && params.sessionStore && params.storePath
             ? {
@@ -1071,8 +1063,8 @@ export function runAgentAttempt(params: {
             workspaceDir: params.workspaceDir,
             cwd: params.cwd,
             config: params.cfg,
-            prompt: cliModelPrompt,
-            transcriptPrompt: cliPersistencePrompt,
+            prompt: cliPrompt,
+            transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
@@ -1308,13 +1300,6 @@ export function runAgentAttempt(params: {
     );
   }
 
-  const embeddedModelPrompt = appendGitCoauthorContext(
-    effectivePrompt,
-    params.opts.gitCoauthorAttribution,
-  );
-  const embeddedPersistencePrompt = params.opts.gitCoauthorAttribution
-    ? (continuationTranscriptBody ?? effectivePrompt)
-    : continuationTranscriptBody;
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     preparedRunAdmission: params.preparedRunAdmission,
     sessionId: params.sessionId,
@@ -1345,8 +1330,8 @@ export function runAgentAttempt(params: {
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
     skillsSnapshot: params.skillsSnapshot,
-    prompt: embeddedModelPrompt,
-    transcriptPrompt: embeddedPersistencePrompt,
+    prompt: effectivePrompt,
+    transcriptPrompt: continuationTranscriptBody,
     // CLI-origin retries cannot rely on transcript replay: orphan-user repair
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -1356,6 +1341,7 @@ export function runAgentAttempt(params: {
     provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelRoutingProvenance: params.modelRoutingProvenance,
+    requestedRouteResolution: "resolved",
     modelHasVision: params.modelHasVision,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
@@ -1415,6 +1401,7 @@ export function runAgentAttempt(params: {
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
     onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
+    onRetryWait: params.deferredLifecycle?.beginRetryWait,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     assistantErrorTranscript: params.assistantErrorTranscript,

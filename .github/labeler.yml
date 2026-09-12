@@ -364,6 +364,7 @@
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
+          - "docs/gateway/sandboxing/**"
           - "docs/install/docker.md"
           - "docs/install/docker/**"
           - "docs/tools/multi-agent-sandbox-tools.md"
@@ -616,6 +617,7 @@
           - "docs/plugins/codex-harness/**"
           - "docs/plugins/codex-harness-reference.md"
           - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-harness-runtime/**"
           - "docs/plugins/codex-supervision.md"
           - "docs/specs/codex-supervision.md"
 "extensions: copilot":
@@ -665,6 +667,12 @@
           - "extensions/qwen/**"
           - "docs/providers/qwen.md"
           - "docs/plugins/reference/qwen.md"
+"extensions: radius":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/radius/**"
+          - "docs/providers/radius.md"
+          - "docs/plugins/reference/radius.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:

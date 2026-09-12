@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -303,7 +304,7 @@ describe("startup admission before persistent writes", () => {
           expect(fs.readFileSync(configPath, "utf8")).toBe(
             fs.readFileSync(`${configPath}.bak`, "utf8"),
           );
-          expect(schemaMetadata(databasePath).userVersion).toBe(16);
+          expect(schemaMetadata(databasePath).userVersion).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         } else {
           expect(manifest(stateDir)).toEqual(before);
           expect(schemaMetadata(databasePath)).toEqual(schemaBefore);

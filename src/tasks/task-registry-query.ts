@@ -5,7 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus, ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
-import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  cloneTaskRecordForObserver,
+  normalizeTaskTimestamps,
+} from "./task-registry-records.js";
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
   TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
@@ -360,7 +364,7 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 
-export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskRecord[]> {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(ownerKey);
   if (!key) {
@@ -370,7 +374,7 @@ export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   if (store.listTasksForOwnerKey) {
     try {
       const merged = new Map<string, TaskRecord>();
-      for (const task of store.listTasksForOwnerKey(key)) {
+      for (const task of await store.listTasksForOwnerKey(key)) {
         merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
       }
       return [...merged.values()]
@@ -450,7 +454,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   emitTaskRegistryObserverEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,
-    previous: cloneTaskRecord(current),
+    previous: cloneTaskRecordForObserver(current),
   }));
   return true;
 }

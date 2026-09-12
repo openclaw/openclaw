@@ -6,6 +6,9 @@ import { pathToFileURL } from "node:url";
 const PARTIAL_FAILURE_RECOVERY_SCENARIO = "telegram-partial-failure-recovery";
 const SETTLED_EMPTY_RESPONSE_SCENARIO = "telegram-empty-response-after-write-recovery";
 const PROGRESS_TOOL_VISIBILITY_SCENARIO = "telegram-progress-tool-visibility";
+const PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO = "telegram-provider-failure-before-output";
+const QUEUE_INVALID_MODE_SCENARIO = "telegram-queue-invalid-mode";
+const RICH_INLINE_COMPOSITION_SCENARIO = "telegram-rich-inline-composition";
 
 function readSource(sourceRoot: string, relativePath: string): string | undefined {
   try {
@@ -44,11 +47,36 @@ export function isPreProgressToolVisibilityTarget(sourceRoot: string): boolean {
   );
 }
 
+export function isPreProviderFailureBeforeOutputTarget(sourceRoot: string): boolean {
+  return (
+    readSource(sourceRoot, "qa/scenarios/channels/telegram-provider-failure-before-output.yaml") ===
+    undefined
+  );
+}
+
+export function isPreQueueInvalidModeTarget(sourceRoot: string): boolean {
+  return (
+    readSource(sourceRoot, "qa/scenarios/channels/telegram-queue-invalid-mode.yaml") === undefined
+  );
+}
+
+export function isPreRichInlineCompositionTarget(sourceRoot: string): boolean {
+  return (
+    readSource(sourceRoot, "qa/scenarios/channels/telegram-rich-inline-composition.yaml") ===
+    undefined
+  );
+}
+
 export function resolveFrozenTelegramScenarioOmissions(sourceRoot: string): string[] {
   return [
     ...(isPrePartialFailureRecoveryTarget(sourceRoot) ? [PARTIAL_FAILURE_RECOVERY_SCENARIO] : []),
     ...(isPreSettledEmptyResponseTarget(sourceRoot) ? [SETTLED_EMPTY_RESPONSE_SCENARIO] : []),
     ...(isPreProgressToolVisibilityTarget(sourceRoot) ? [PROGRESS_TOOL_VISIBILITY_SCENARIO] : []),
+    ...(isPreProviderFailureBeforeOutputTarget(sourceRoot)
+      ? [PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO]
+      : []),
+    ...(isPreQueueInvalidModeTarget(sourceRoot) ? [QUEUE_INVALID_MODE_SCENARIO] : []),
+    ...(isPreRichInlineCompositionTarget(sourceRoot) ? [RICH_INLINE_COMPOSITION_SCENARIO] : []),
   ];
 }
 

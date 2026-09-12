@@ -207,8 +207,13 @@ Both ordinary CI and this strict audit publish the outcome, package count,
 duration, timestamp, and bounded failure reason in the job summary. A completed
 npm check covers npm bulk advisories only, not every upstream advisory source.
 
-The triage owner is **@steipete**. Investigate failed scheduled runs and rerun
-the strict workflow to confirm recovery:
+The triage owner is **@steipete**, set on 2026-09-03 in
+[#137960](https://github.com/openclaw/openclaw/pull/137960). No `.github/CODEOWNERS`
+rule covers `.github/workflows/dependency-audit.yml`, so this line is the only
+record of that ownership. Review routing for a fix follows the lockfile owner
+`@openclaw/openclaw-secops`, which owns `/pnpm-lock.yaml` and `/package-lock.json`.
+Investigate failed scheduled runs and rerun the strict workflow to confirm
+recovery:
 
 ```bash
 gh workflow run dependency-audit.yml --repo openclaw/openclaw --ref main
@@ -276,6 +281,8 @@ for the weekly burst separately from PR and main admission.
 ## ClawSweeper activity forwarding
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
+
+Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
 
 The workflow has three lanes:
 

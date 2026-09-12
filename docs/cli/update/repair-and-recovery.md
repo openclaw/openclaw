@@ -12,11 +12,14 @@ What happens when an update fails, and the subcommands that finish the job. Part
 
 ## Recover a failed update
 
-After a failed interactive update or repair, OpenClaw finishes cleanup and
-opens [Triage](/cli/triage). Triage immediately starts the first directly
-launchable coding agent on `PATH`, in this order: Claude Code, Codex, OpenCode,
-then Pi. It passes the captured update failure directly and leaves fresh Doctor
-checks and diagnostics collection to the agent, so a broken installation does
+After a failed interactive update or repair, OpenClaw finishes cleanup and offers
+**Diagnose update failure**, **Report update failure**, or **Exit**. Reporting
+previews the sanitized issue body and requires separate confirmation.
+
+Choosing **Diagnose update failure** opens [Triage](/cli/triage), which starts the
+first directly launchable coding agent on `PATH`, in this order: Claude Code,
+Codex, OpenCode, then Pi. It passes the captured update failure directly and leaves
+fresh Doctor checks and diagnostics collection to the agent, so a broken installation does
 not delay the handoff. The agent keeps its existing authentication, sandbox, and
 approval settings.
 
@@ -24,9 +27,15 @@ The agent starts in the operator's original working directory, or their OS home
 if that directory is no longer accessible. The failed installation's resolved
 state, config, and default workspace paths remain pinned for the repair.
 
-Updates using `--yes`, `--json`, or a non-interactive session (including piped
-input or output) collect diagnostics and print handoff commands without starting
-an external coding agent. The updater's earlier
+A verified rollback leaves the previous generation running. The interactive menu
+selects **Exit** by default; declining or cancelling keeps the failed update's
+nonzero exit status. After a verified rollback, `--json`, `--yes`, non-interactive,
+and managed-service handoff runs do not prompt or collect automatic diagnostics.
+
+For failures without a verified rollback, updates using `--yes`, `--json`, or a
+non-interactive session (including piped input or output) collect diagnostics
+and print handoff commands without starting an external coding agent. The updater's
+earlier
 [unattended repair slot](/install/updating#unattended-repair-on-your-own-inference)
 can still run on configured inference. With `--json`, triage output goes to stderr so stdout retains
 the original update result. Diagnostic collection failures never hide the update
@@ -58,10 +67,10 @@ succeeds.
 Dry runs and commands rejected by the initial argument, external-supervisor,
 state-store ownership, handoff identity, or immutable-config checks do not
 collect diagnostics or start an agent. Once those checks pass, failed metadata,
-schema, runtime, and managed-service checks enter triage even when installation
-is blocked. This includes an update that cannot safely stop its parent Gateway
-process. Diagnosis preserves that refusal: it does not stop the Gateway, retry
-the update, or bypass safety checks. See
+schema, runtime, and managed-service checks use the failure actions above even
+when installation is blocked. This includes an update that cannot safely stop
+its parent Gateway process. Diagnosis preserves that refusal: it does not stop the
+Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
 ## `update repair`
@@ -88,15 +97,25 @@ openclaw update repair --accept-capabilities
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
 
+Untouched, identityless 2026.9.2-era update admissions heal automatically after
+more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`
+retain the row as an abandoned failure with reason `legacy-driver-expired` and an
+advisory to run `openclaw update` to retry. The Control UI refreshes the Gateway's
+recovery classification before refusing a suspended config write, so an expired
+orphan does not keep settings or provider sign-in blocked. Live updates and
+pending recovery remain protected. No explicit repair is needed for this shape.
+
 `update repair` first inspects stale update history. When the installed Gateway
 generation is healthy and the only remaining problem is an inactive ledger row,
 repair records `failed` / `abandoned` and exits successfully without Doctor,
 maintenance, or a service stop. It also acknowledges a Gateway-reconciled row
 once within 30 minutes of reconciliation. Later repair invocations use full
 finalization, so historical recovery cannot suppress plugin convergence.
-Explicit recovery permits identityless historical rows only
-after more than 30 minutes of inactivity; a recorded live or uninspectable driver
-still blocks recovery. JSON output identifies reconciled run IDs in
+Explicit recovery does not wait 30 minutes when every recorded updater process
+is provably dead (its PID is gone or its process-start identity has changed).
+Identityless rows and runs with an unrecorded adopter still require more than
+30 minutes of inactivity; a recorded live or uninspectable driver blocks recovery.
+JSON output identifies reconciled run IDs in
 `reconciledRuns`, with `status: "ok"`, `mode: "repair"`, and `restart: false`.
 
 Explicit channel or capability changes and known incomplete post-core work use
@@ -145,8 +164,12 @@ package root; a broken same-ID source copy does not trigger replacement of a
 healthy managed package.
 
 With `--json`, stdout contains one JSON document. Doctor panels and other
-diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
-plugin finalization steps still exit non-zero.
+diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
+availability, installation, or load failures appear in
+`postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
+successfully when required checks pass. Failed required Doctor execution,
+invalid configuration or state, ownership errors, and failed required readiness
+checks still exit nonzero.
 
 Doctor repair uses the same enabled-plugin and default-check selection as
 ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,
@@ -215,6 +238,29 @@ interactive terminal to review plugin capabilities. After reviewing the changes,
 automation can use `openclaw update repair --accept-capabilities`. Acceptance
 applies to each artifact's recomputed declared surface during this invocation;
 it does not approve future capability additions.
+
+### Skipped legacy audit recovery
+
+Doctor can leave a legacy audit source in place when its raw archive has no
+checkpoint and begins with ambiguous whitespace, changed other than by append,
+or cannot obtain another durable raw-archive checkpoint. These conditions produce
+a `skipped` migration receipt with a warning. Other repairs continue, and update
+finalization can complete with warnings. An unsafe recovery failure, such as an
+interrupted archive that cannot be restored, still stops Doctor.
+
+Preserve the reported source, its sanitized companion (for example,
+`logs/config-audit.jsonl.migrated` beside `logs/config-audit.jsonl.migrated.raw`),
+and any recovery journals or backups. Follow [backup guidance](/install/backups)
+before attempting recovery, and include the warning and archive filenames when
+requesting help. Do not delete or rewrite archives or checkpoints to suppress
+the warning.
+
+The warning repeats on later Doctor or `openclaw update repair` runs until the
+archive is resolved. Successful finalization does not mean this historical audit
+data was imported. There is currently no supported sanitized-only import when
+the raw archive is unusable: accepting the companion as a recovery source needs
+an explicit reconciliation procedure that preserves duplicate events, retained
+history, and checkpoint evidence.
 
 ## `update cleanup`
 

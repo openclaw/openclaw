@@ -31,8 +31,8 @@ import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
+import { isTerminalTaskStatus } from "../tasks/task-registry.types.js";
 import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
 import {
   type ChatAbortControllerEntry,
@@ -362,8 +362,12 @@ export function startGatewayEventSubscriptions(params: {
         .map((candidateRunId) => params.chatAbortControllers.get(candidateRunId))
         .find((entry) => entry !== undefined);
       const runContext = getAgentRunContext(evt.runId);
-      const sessionAgentId = trackedEntry?.agentId ?? evt.agentId ?? runContext?.agentId;
+      // Match the chat projection owner before preparing the shared terminal write.
+      // A bound ACP runtime emits its target key, but the chat link owns the source run.
+      const sessionAgentId =
+        chatLink?.agentId ?? evt.agentId ?? trackedEntry?.agentId ?? runContext?.agentId;
       const knownSessionKey =
+        chatLink?.sessionKey ??
         evt.deliverySessionKey ??
         evt.sessionKey ??
         trackedEntry?.sessionKey ??

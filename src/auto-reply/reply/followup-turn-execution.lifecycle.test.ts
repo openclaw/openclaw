@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import {
@@ -13,6 +14,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
 const createTypingController = createFollowupTurnTestTypingController;
@@ -24,10 +26,7 @@ beforeEach(resetFollowupTurnTestState);
 describe("executeFollowupTurn lifecycle", () => {
   it("drains detached progress before the caller can project a final", async () => {
     const order: string[] = [];
-    let releaseProgress!: () => void;
-    const progressBarrier = new Promise<void>((resolve) => {
-      releaseProgress = resolve;
-    });
+    const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
@@ -88,7 +87,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const updateSessionId = vi.fn();
     const turn = createTurn({
       operation: {
-        abortSignal: new AbortController().signal,
+        ...createMockReplyOperation().replyOperation,
         updateSessionId,
       } as unknown as AdmittedFollowupTurn["operation"],
     });
@@ -113,10 +112,7 @@ describe("executeFollowupTurn lifecycle", () => {
 
   it("drains detached progress before propagating execution failure", async () => {
     const order: string[] = [];
-    let releaseProgress!: () => void;
-    const progressBarrier = new Promise<void>((resolve) => {
-      releaseProgress = resolve;
-    });
+    const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
     const failure = new Error("execution failed");
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
@@ -151,7 +147,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const onItemEvent = vi.fn(async () => {});
     const fail = vi.fn();
     const operation = {
-      abortSignal: new AbortController().signal,
+      ...createMockReplyOperation().replyOperation,
       fail,
     } as unknown as AdmittedFollowupTurn["operation"];
     const turn = createTurn({ operation });
@@ -190,10 +186,7 @@ describe("executeFollowupTurn lifecycle", () => {
 
   it("waits for every pending task before propagating a drain failure", async () => {
     const failure = new Error("tool task failed");
-    let releaseSlowTask!: () => void;
-    const slowBarrier = new Promise<void>((resolve) => {
-      releaseSlowTask = resolve;
-    });
+    const { promise: slowBarrier, resolve: releaseSlowTask } = createDeferred();
     const order: string[] = [];
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       const failedTask = Promise.reject(failure).finally(() => {

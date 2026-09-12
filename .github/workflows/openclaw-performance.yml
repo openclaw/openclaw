@@ -88,9 +88,9 @@ env:
   OCM_VERSION: v0.2.33
   OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 3da9582e9c3eef970ef102dc3950595e0876a1d5
-  KOVA_LEGACY_LIST_CONFIG_REF: 3da9582e9c3eef970ef102dc3950595e0876a1d5
-  KOVA_TRUSTED_LIVE_REF: 3da9582e9c3eef970ef102dc3950595e0876a1d5
+  KOVA_CANONICAL_CONFIG_REF: c2de7c24ea835ea054c416f8bf19d3cb22f104e9
+  KOVA_LEGACY_LIST_CONFIG_REF: c2de7c24ea835ea054c416f8bf19d3cb22f104e9
+  KOVA_TRUSTED_LIVE_REF: c2de7c24ea835ea054c416f8bf19d3cb22f104e9
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -122,6 +122,7 @@ jobs:
           sparse-checkout: |
             package.json
             src/config/zod-schema.agent-defaults.ts
+            src/config/zod-schema.agent-defaults-base.ts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -174,6 +175,14 @@ jobs:
 
           if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
             schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
+            # Follow the shipped composition only when the wrapper has no inline contract.
+            if [[ -f "$schema_path" ]] &&
+              ! grep -Fqx '    mediaModels: z' "$schema_path" &&
+              ! grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' "$schema_path" &&
+              grep -Fqx 'import { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";' "$schema_path" &&
+              grep -Fqx 'export const AgentDefaultsSchema = AgentDefaultsBaseSchema.safeExtend({' "$schema_path"; then
+              schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults-base.ts"
+            fi
             if [[ -f "$schema_path" ]]; then
               schema_content="$(cat "$schema_path")"
             elif [[ -z "$kova_ref" ]]; then

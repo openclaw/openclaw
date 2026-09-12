@@ -42,17 +42,21 @@ Seven testable properties:
 6. **Recorded provenance.** Memory, audit, and delivery use recorded facts, explicit retention policies, and documented deletion limits.
 7. **Independent stewardship.** The license has no separate enterprise edition; releases are signed by an accountable identity; the security record is public.
 
+<a id="where-each-section-moved" />
+
 ## How OpenClaw answers
 
 The short answers, with details and limits on the linked pages:
 
-- **Isolation limits what compromised execution can reach.** Configured sandboxes, nodes, and cloud workers separate execution from Gateway authority; exposure still depends on tools, mounts, network policy, and scoped credentials. ([Trust boundary](/start/why-openclaw/the-trust-boundary))
-- **Configured policy is enforced in code.** Tool availability and exec denial do not depend only on model compliance; commands requiring approval must satisfy the applicable binding rules. ([Policy as code](/start/why-openclaw/policy-as-code))
-- **Access follows the configured admission policy.** Pairing-mode channels challenge unknown senders, and broader device scopes require approval; role ceilings and a deny-all default role require configuration. ([Identity and roles](/start/why-openclaw/identity-and-roles))
-- **Protected credentials can stay out of model context.** Protected secret values use handles and supported egress substitution; agent-readable entries, host access, and permitted-service responses have separate exposure risks. ([Secrets](/start/why-openclaw/secrets))
-- **Version checks guard upgrades.** Schemas are versioned, updaters check compatibility, and releases are immutable and signed. Version checks do not guarantee that every upgrade succeeds. ([Versioned state](/start/why-openclaw/versioned-state-guarded-upgrades))
-- **Forgetting has explicit boundaries.** Attributable memories can be purged, and forgotten-session records prevent reingestion through participating paths; original transcripts, untracked writes, and external copies remain separate. ([Provenance](/start/why-openclaw/provenance))
+- <a id="the-trust-boundary" />**Isolation limits what compromised execution can reach.** Configured sandboxes, nodes, and cloud workers separate execution from Gateway authority; exposure still depends on tools, mounts, network policy, and scoped credentials. ([Trust boundary](/start/why-openclaw/the-trust-boundary))
+- <a id="policy-as-code" />**Configured policy is enforced in code.** Tool availability and exec denial do not depend only on model compliance; commands requiring approval must satisfy the applicable binding rules. ([Policy as code](/start/why-openclaw/policy-as-code))
+- <a id="identity-and-roles" />**Access follows the configured admission policy.** Pairing-mode channels challenge unknown senders, and broader device scopes require approval; role ceilings and a deny-all default role require configuration. ([Identity and roles](/start/why-openclaw/identity-and-roles))
+- <a id="secrets" />**Protected credentials can stay out of model context.** Protected secret values use handles and supported egress substitution; agent-readable entries, host access, and permitted-service responses have separate exposure risks. ([Secrets](/start/why-openclaw/secrets))
+- <a id="versioned-state%2C-guarded-upgrades" /><a id="versioned-state-guarded-upgrades" />**Version checks guard upgrades.** Schemas are versioned, updaters check compatibility, and releases are immutable and signed. Version checks do not guarantee that every upgrade succeeds. ([Versioned state](/start/why-openclaw/versioned-state-guarded-upgrades))
+- <a id="provenance" />**Forgetting has explicit boundaries.** Attributable memories can be purged, and forgotten-session records prevent reingestion through participating paths; original transcripts, untracked writes, and external copies remain separate. ([Provenance](/start/why-openclaw/provenance))
 - **The Foundation provides independent stewardship.** MIT under an independent 501(c)(3) foundation, with signed releases and public security advisories. Advisory counts are not a comparative safety score. ([Governance](#governance))
+
+<a id="openclaw-and-hermes-agent" />
 
 The [comparison table](/start/why-openclaw/openclaw-and-hermes-agent) condenses the source-verified contrast with Hermes. [What we do not claim](#what-we-do-not-claim) states the limits, starting with sandboxing being off by default.
 
@@ -78,7 +82,7 @@ Skills follow the [AgentSkills spec](/tools/skills), plugin installs auto-detect
 
 Most agent-assisted work today happens between one person and one terminal; others see the finished commits. A shared OpenClaw gateway makes the work itself observable. [Sessions](/concepts/session) carry an immutable creator, an assignable owner, and the people who actually prompted; the [Control UI](/web/control-ui) shows [who is viewing and typing](/concepts/presence) in real time (drafts stay ephemeral and never reach the model or the transcript), and the sidebar filters by owner or by "involving me" ([multi-user](/concepts/multi-user)). A conversation that starts in a channel can continue as a session the whole team can open, steer, and take over.
 
-OpenClaw supplies exact `Co-authored-by` trailers for eligible shared-session participants with verified GitHub identity and **Git co-author credit** enabled, ordered by recorded contribution aggregates. Credit is on by default for verified accounts and can be disabled in Profile. The Gateway publication broker enforces that credit in its generated commits and pull requests; ordinary Git relies on agent instructions and post-commit verification. When an external HTTPS session URL is available, broker-created pull requests end with a link to the team session ([user model](/concepts/user-model)), so a reviewer with access can read the conversation that produced the diff. Local coding sessions can be mirrored near-live to a team gateway with [Beam](/plugins/beam), and [cloud workers](/gateway/cloud-workers) put execution on disposable machines while the transcript stays in one shared place. [Portals](/gateway/portals) proxy an agent's development server into the operator's browser through the Gateway, and Cloud Worker Desktop streams a live VNC view of the worker — an authenticated loopback-only RFB server, reached through a single-use broker ticket over the worker's own outbound connection, never public ingress, with view-only filtering and single-controller arbitration. Hermes also provides visual observation: its desktop app [forwards remote development servers over SSH](https://github.com/NousResearch/hermes-agent/blob/6defe7eb6c462bb784d1f27f5afe7ca4b627fc70/apps/desktop/electron/preview-reach.ts), and its [Camofox integration can expose a browser VNC viewer](https://github.com/NousResearch/hermes-agent/blob/6defe7eb6c462bb784d1f27f5afe7ca4b627fc70/tools/browser_camofox.py#L154). Those are different transports and scopes from OpenClaw's Gateway-brokered worker desktop. OpenClaw is developed in shared sessions on the maintainers' own team gateway; the roles, attribution, and audit surfaces in [Identity and roles](/start/why-openclaw/identity-and-roles) and [Provenance](/start/why-openclaw/provenance) support that workflow. To set this up for your own team, follow [Team setup](/start/teams).
+OpenClaw supplies exact `Co-authored-by` trailers for eligible shared-session participants with verified GitHub identity and **Git co-author credit** enabled, ordered by recorded contribution aggregates. Credit is on by default for verified accounts and can be disabled in Profile. The Gateway publication broker enforces that credit in its generated commits and pull requests; ordinary Git relies on the agent following the session's system prompt. When an external HTTPS session URL is available, broker-created pull requests end with a link to the team session ([user model](/concepts/user-model)), so a reviewer with access can read the conversation that produced the diff. Local coding sessions can be mirrored near-live to a team gateway with [Beam](/plugins/beam), and [cloud workers](/gateway/cloud-workers) put execution on disposable machines while the transcript stays in one shared place. [Portals](/gateway/portals) proxy an agent's development server into the operator's browser through the Gateway, and Cloud Worker Desktop streams a live VNC view of the worker — an authenticated loopback-only RFB server, reached through a single-use broker ticket over the worker's own outbound connection, never public ingress, with view-only filtering and single-controller arbitration. Hermes also provides visual observation: its desktop app [forwards remote development servers over SSH](https://github.com/NousResearch/hermes-agent/blob/6defe7eb6c462bb784d1f27f5afe7ca4b627fc70/apps/desktop/electron/preview-reach.ts), and its [Camofox integration can expose a browser VNC viewer](https://github.com/NousResearch/hermes-agent/blob/6defe7eb6c462bb784d1f27f5afe7ca4b627fc70/tools/browser_camofox.py#L154). Those are different transports and scopes from OpenClaw's Gateway-brokered worker desktop. OpenClaw is developed in shared sessions on the maintainers' own team gateway; the roles, attribution, and audit surfaces in [Identity and roles](/start/why-openclaw/identity-and-roles) and [Provenance](/start/why-openclaw/provenance) support that workflow. To set this up for your own team, follow [Team setup](/start/teams).
 
 ## Governance
 
@@ -117,18 +121,3 @@ Each enterprise configuration item links to its reference:
 Then operate it as replaceable infrastructure: pin a channel, let [doctor](/cli/doctor) own migrations, restore [backups](/cli/backup) by verification, and redeploy instead of repairing deployments in place.
 
 Corrections to any claim on this page, about OpenClaw or about others, are welcome as issues or pull requests.
-
-## Where each section moved
-
-Every section heading from the previous single-page version keeps its anchor
-here, so an existing link such as `/start/why-openclaw#the-trust-boundary` still
-resolves. Each entry points at the page that now holds the content.
-
-- <a id="the-trust-boundary" />[The trust boundary](/start/why-openclaw/the-trust-boundary)
-- <a id="policy-as-code" />[Policy as code](/start/why-openclaw/policy-as-code)
-- <a id="identity-and-roles" />[Identity and roles](/start/why-openclaw/identity-and-roles)
-- <a id="secrets" />[Secrets](/start/why-openclaw/secrets)
-- <a id="versioned-state%2C-guarded-upgrades" />[Versioned state, guarded upgrades](/start/why-openclaw/versioned-state-guarded-upgrades)
-- <a id="versioned-state-guarded-upgrades" />[Versioned state, guarded upgrades](/start/why-openclaw/versioned-state-guarded-upgrades)
-- <a id="provenance" />[Provenance](/start/why-openclaw/provenance)
-- <a id="openclaw-and-hermes-agent" />[OpenClaw and Hermes Agent](/start/why-openclaw/openclaw-and-hermes-agent)

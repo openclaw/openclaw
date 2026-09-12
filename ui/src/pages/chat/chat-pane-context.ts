@@ -371,6 +371,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionSharingStates = new Map();
       this.sessionSharingHydrationTargets.clear();
       state.guardianNotices = [];
+      state.providerPolicyNotice = null;
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;

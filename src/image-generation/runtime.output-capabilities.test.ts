@@ -7,8 +7,8 @@ describe("image-generation output capabilities", () => {
     { model: "extended", accepted: true },
     { model: "legacy", accepted: false },
     { model: "restricted", accepted: false },
-  ])("filters quality against $model model capabilities", async ({ model, accepted }) => {
-    let seenQuality: string | undefined;
+  ])("filters output hints against $model model capabilities", async ({ model, accepted }) => {
+    let seenRequest: { quality?: string; outputFormat?: string; background?: string } | undefined;
     const provider: ImageGenerationProvider = {
       id: "test",
       capabilities: {
@@ -16,12 +16,20 @@ describe("image-generation output capabilities", () => {
         edit: { enabled: true },
         output: {
           qualities: ["low"],
+          formats: ["png"],
+          backgrounds: ["opaque"],
           qualitiesByModel: { extended: ["xhigh", "max"], restricted: [] },
+          formatsByModel: { extended: ["webp"], restricted: [] },
+          backgroundsByModel: { extended: ["transparent"], restricted: [] },
         },
       },
       async generateImage(req) {
-        seenQuality = req.quality;
-        return { images: [{ buffer: Buffer.from("image"), mimeType: "image/png" }] };
+        seenRequest = {
+          quality: req.quality,
+          outputFormat: req.outputFormat,
+          background: req.background,
+        };
+        return { images: [{ buffer: Buffer.from("image"), mimeType: "image/webp" }] };
       },
     };
     const result = await generateImage(
@@ -30,13 +38,27 @@ describe("image-generation output capabilities", () => {
         modelOverride: `test/${model}`,
         prompt: "A sticker",
         quality: "max",
+        outputFormat: "webp",
+        background: "transparent",
       },
       {
         getProvider: (id) => (id === provider.id ? provider : undefined),
         listProviders: () => [provider],
       },
     );
-    expect(seenQuality).toBe(accepted ? "max" : undefined);
-    expect(result.ignoredOverrides).toEqual(accepted ? [] : [{ key: "quality", value: "max" }]);
+    expect(seenRequest).toEqual({
+      quality: accepted ? "max" : undefined,
+      outputFormat: accepted ? "webp" : undefined,
+      background: accepted ? "transparent" : undefined,
+    });
+    expect(result.ignoredOverrides).toEqual(
+      accepted
+        ? []
+        : [
+            { key: "quality", value: "max" },
+            { key: "outputFormat", value: "webp" },
+            { key: "background", value: "transparent" },
+          ],
+    );
   });
 });

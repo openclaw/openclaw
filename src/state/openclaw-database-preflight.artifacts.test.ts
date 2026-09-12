@@ -13,7 +13,7 @@ import {
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
-import * as snapshots from "../infra/sqlite-readonly-location.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabase,

@@ -2,7 +2,6 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   resolveProviderPluginChoiceCore as resolveProviderPluginChoiceImpl,
   runProviderModelSelectedHookCore as runProviderModelSelectedHookImpl,
@@ -40,20 +39,17 @@ export function resolvePluginProviders(
   if (!preparedInstallRecords) {
     return resolvePluginProvidersImpl(params);
   }
-  // Installation changes package facts within the lease. Build a separate view
-  // with the installer's accepted records without replacing Gateway inventory.
-  return withPluginCache(createPluginCache(), () => {
-    const pluginMetadataSnapshot = loadInstalledPluginIndexWithDiscovery({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      installRecords: {
-        ...loadInstalledPluginIndexInstallRecordsSync({ env: params.env }),
-        ...preparedInstallRecords,
-      },
-    });
-    return resolvePluginProvidersImpl({ ...params, pluginMetadataSnapshot });
+  // The async auth owner supplies fresh installer facts and retains their cache through its consumer.
+  const pluginMetadataSnapshot = loadInstalledPluginIndexWithDiscovery({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    installRecords: {
+      ...loadInstalledPluginIndexInstallRecordsSync({ env: params.env }),
+      ...preparedInstallRecords,
+    },
   });
+  return resolvePluginProvidersImpl({ ...params, pluginMetadataSnapshot });
 }
 
 /** Runtime wrapper for plugin setup-provider discovery. */

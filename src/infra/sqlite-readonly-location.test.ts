@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -11,11 +12,13 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
-  prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "./sqlite-snapshot-source.js";
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -32,6 +35,15 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 function createTempDatabasePath(): string {
   const tempDir = tempDirs.make("openclaw-sqlite-readonly-");
   return path.join(tempDir, "state.sqlite");
+}
+
+function workerPreloadEnv(preloadPath: string): Record<string, string> {
+  if (!process.versions.bun) {
+    return { NODE_OPTIONS: `--require=${preloadPath}` };
+  }
+  const preloadUrl = pathToFileURL(preloadPath).href;
+  const loader = Buffer.from(`import ${JSON.stringify(preloadUrl)};`).toString("base64");
+  return { BUN_OPTIONS: `--preload=data:text/javascript;base64,${loader}` };
 }
 
 async function expectPublicSnapshot(
@@ -492,7 +504,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       database.close();
       const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
       const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
-      const moduleUrl = new URL(`./sqlite-readonly-location${extension}`, workerUrl).href;
+      const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
       const script = `
         const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
         try {
@@ -556,7 +568,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
     const missingPath = path.join(tempDir, "missing.db");
 
-    await withEnvAsync({ NODE_OPTIONS: `--require=${preloadPath}` }, async () => {
+    await withEnvAsync(workerPreloadEnv(preloadPath), async () => {
       let message = "";
       try {
         await prepareSqliteReadOnlyLocation(missingPath);

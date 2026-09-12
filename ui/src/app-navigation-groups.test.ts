@@ -144,7 +144,13 @@ describe("sidebar entries", () => {
     }
   });
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:dashboards", "route:cron", "route:plugins"]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
+      "route:agents-home",
+      "route:dashboards",
+      "route:cron",
+      "route:plugins",
+    ]);
+    expect(isSettingsNavigationRoute("agents-home")).toBe(false);
   });
 
   it("drops retired routes from persisted entries", () => {
@@ -189,6 +195,18 @@ describe("sidebar entries", () => {
     expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
     expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
   });
+
+  it.each(["plugin-settings", "skill-settings"] as const)(
+    "keeps %s visible to admins and read-only operators",
+    (routeId) => {
+      expect(visibleSettingsNavigationGroups(true).flatMap((group) => group.routes)).toContain(
+        routeId,
+      );
+      expect(visibleSettingsNavigationGroups(false).flatMap((group) => group.routes)).toContain(
+        routeId,
+      );
+    },
+  );
 
   it("filters admin-only settings while preserving legacy fail-open visibility", () => {
     const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);

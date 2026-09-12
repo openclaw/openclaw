@@ -27,7 +27,9 @@ const providerAuthChoiceMocks = vi.hoisted(() => ({
 }));
 const setupSharedMocks = vi.hoisted(() => ({
   readSetupConfigFileSnapshot: vi.fn(),
-  writeWizardConfigFile: vi.fn(),
+}));
+const authConfigMocks = vi.hoisted(() => ({
+  writeProviderAuthConfig: vi.fn(),
 }));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
@@ -39,7 +41,10 @@ vi.mock("../../plugins/provider-auth-choice.js", () => ({
 }));
 vi.mock("../../wizard/setup.shared.js", () => ({
   readSetupConfigFileSnapshot: setupSharedMocks.readSetupConfigFileSnapshot,
-  writeWizardConfigFile: setupSharedMocks.writeWizardConfigFile,
+}));
+vi.mock("../../plugins/provider-auth-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-auth-config.js")>()),
+  writeProviderAuthConfig: authConfigMocks.writeProviderAuthConfig,
 }));
 
 const config: OpenClawConfig = {
@@ -106,8 +111,8 @@ describe("openclaw.setup provider resolution", () => {
       config,
       issues: [],
     });
-    setupSharedMocks.writeWizardConfigFile.mockImplementation(
-      async (writtenConfig) => writtenConfig,
+    authConfigMocks.writeProviderAuthConfig.mockImplementation(
+      async ({ config: writtenConfig }) => writtenConfig,
     );
   });
 
@@ -416,7 +421,7 @@ describe("openclaw.setup provider resolution", () => {
     }
     expect(installed).toBe(true);
     expect(submittedBeforeCleanup).toBe(false);
-    expect(setupSharedMocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
     expect(offeredStepType).toBe(expiresDuringInstall ? undefined : "text");
     expect(promoteModel).not.toHaveBeenCalled();
     expect(statusAtCheckpoint).toBe(finalCommit ? "running" : "cancelled");
@@ -493,7 +498,9 @@ describe("openclaw.setup provider resolution", () => {
     ["missing", null],
     ["retryable", { config, retrySelection: true, authProfiles: [], persistAuthProfiles: vi.fn() }],
   ])("returns actionable doctor guidance when provider setup is %s", async (_, result) => {
-    providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockResolvedValueOnce(result);
+    providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockImplementationOnce(
+      async (_params, consume) => consume(result),
+    );
     const { wizardSessions, context } = makeContext();
     const handler = expectDefined(
       systemAgentHandlers["openclaw.setup.prepare.start"],
@@ -514,10 +521,10 @@ describe("openclaw.setup provider resolution", () => {
       done: true,
       status: "error",
       error:
-        'Error: Provider setup resolution failed for "ollama". Run `openclaw doctor --fix`, restart the Gateway, and try again.',
+        'Provider setup resolution failed for "ollama". Run `openclaw doctor --fix`, restart the Gateway, and try again.',
     });
     await whenAdmittedWizardSessionSettled(session);
-    expect(setupSharedMocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
   });
   it.each([false, true])(
     "returns verified provider auth through wizard transport (restart %s)",
@@ -672,7 +679,7 @@ describe("openclaw.setup provider resolution", () => {
         expect(done).toEqual({
           done: true,
           status: "error",
-          error: "Error: Probe rejected [redacted]",
+          error: "Probe rejected [redacted]",
           activationRejection: { disposition: "rejected-before-promotion", status },
         });
         expect(done).not.toHaveProperty("modelActivation");
@@ -730,7 +737,7 @@ describe("openclaw.setup provider resolution", () => {
           expect(done).toMatchObject({
             done: true,
             status: "error",
-            error: `Error: ${shutdownMessage}`,
+            error: shutdownMessage,
           });
           expect(done).not.toHaveProperty("modelActivation");
         }
@@ -772,7 +779,7 @@ describe("openclaw.setup provider resolution", () => {
     expect(done).toEqual({
       done: true,
       status: "error",
-      error: "Error: Provider rejected sign-in",
+      error: "Provider rejected sign-in",
       activationRejection: { disposition: "rejected-before-promotion", status: "auth" },
     });
     expect(done).not.toHaveProperty("step");
@@ -857,10 +864,10 @@ describe("openclaw.setup provider resolution", () => {
             outcome === "application-error"
               ? expect.stringContaining("AI access was saved, but the Gateway could not apply it")
               : outcome === "retention-indeterminate"
-                ? "SetupInferenceActivationIndeterminateError: Could not retain Codex safely"
+                ? "Could not retain Codex safely"
                 : outcome === "thrown"
-                  ? "Error: 401 Provider rejected sign-in"
-                  : "Error: Provider rejected sign-in",
+                  ? "401 Provider rejected sign-in"
+                  : "Provider rejected sign-in",
           ...(outcome === "rejected"
             ? { activationRejection: { disposition: "rejected-before-promotion", status: "auth" } }
             : {}),

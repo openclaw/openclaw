@@ -289,9 +289,6 @@ export async function createOwnedKeychain(options = {}) {
     throw new Error(`Expected one job-owned keychain, found ${created.length}`);
   }
   const resolvedPath = created[0];
-  if (!resolvedPath.endsWith("-db")) {
-    throw new Error(`Expected the resolved macOS keychain path to end in -db: ${resolvedPath}`);
-  }
 
   appendCommandValue(stateFile, "resolved_path", resolvedPath, appendFile);
   appendCommandValue(environmentFile, "MATCH_KEYCHAIN_NAME", resolvedPath, appendFile);
@@ -384,9 +381,6 @@ export async function probeOwnedKeychain(options = {}) {
   const ownedRoot = validateOwnedRoot(runnerTemp, path.dirname(keychainPath), true);
   const requestedPath = path.join(ownedRoot, KEYCHAIN_NAME);
   const resolvedKeychain = validateOwnedKeychain(ownedRoot, requestedPath, keychainPath, true);
-  if (!resolvedKeychain.endsWith("-db")) {
-    throw new Error(`Expected the resolved macOS keychain path to end in -db: ${resolvedKeychain}`);
-  }
 
   const teamId = expectedTeamId(workspace);
   const identityResult = await runCommand(

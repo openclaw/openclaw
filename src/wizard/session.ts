@@ -1,5 +1,6 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   WizardNextResult as ProtocolWizardNextResult,
   WizardStep as ProtocolWizardStep,
@@ -269,6 +270,7 @@ export class WizardSession {
   private expiryPending = false;
   private settled = false;
   private pendingExternalUrl: string | undefined;
+  private externalUrlImmediate: ReturnType<typeof setImmediate> | undefined;
   private answerDeferred = new Map<
     string,
     {
@@ -413,6 +415,7 @@ export class WizardSession {
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
     this.rejectPendingAnswers();
+    this.consumeExternalUrl();
     this.progressSteps = [];
     this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
@@ -425,6 +428,7 @@ export class WizardSession {
       return;
     }
     this.inputClosedError ??= error;
+    this.consumeExternalUrl();
     if (!this.cancellationLocked && !this.preparationCancellationLocked) {
       this.abortController.abort(this.inputClosedError);
     }
@@ -473,11 +477,14 @@ export class WizardSession {
     if (this.status !== "running") {
       return;
     }
+    clearImmediate(this.externalUrlImmediate);
+    this.externalUrlImmediate = undefined;
     const step: WizardStep = {
       id: randomUUID(),
       type: "progress",
       message,
       executor: "gateway",
+      ...(this.pendingExternalUrl ? { externalUrl: this.pendingExternalUrl } : {}),
     };
     if (this.stepDeferred) {
       this.rememberDeliveredProgressStep(step.id);
@@ -505,10 +512,21 @@ export class WizardSession {
   }
 
   queueExternalUrl(url: string) {
+    if (this.status !== "running" || this.inputClosedError) {
+      return;
+    }
+    this.consumeExternalUrl();
     this.pendingExternalUrl = url;
+    // Let same-turn prompts consume the URL first; callback waits have no next prompt.
+    // Publish progress afterward so browser sign-in never needs an extra answer.
+    this.externalUrlImmediate = setImmediate(() => {
+      this.pushProgress("Complete sign-in in your browser.");
+    });
   }
 
   consumeExternalUrl(): string | undefined {
+    clearImmediate(this.externalUrlImmediate);
+    this.externalUrlImmediate = undefined;
     const url = this.pendingExternalUrl;
     this.pendingExternalUrl = undefined;
     return url;
@@ -532,10 +550,11 @@ export class WizardSession {
         this.error = error.message;
       } else {
         this.status = "error";
-        this.error = String(error);
+        this.error = coerceErrorMessage(error);
       }
     } finally {
       this.settled = true;
+      this.consumeExternalUrl();
       if (this.expiryTimer) {
         clearTimeout(this.expiryTimer);
       }

@@ -31,6 +31,7 @@ internal data class WearUiState(
   val activeAgentId: String? = null,
   val selectedModelRef: String? = null,
   val models: List<WearModel> = emptyList(),
+  val modelCatalogRefreshFailed: Boolean = false,
   val proxyCapabilities: Set<WearProxyCapability> = emptySet(),
   val sessions: List<WearSession> = emptyList(),
   val selectedSession: WearSession? = null,
@@ -58,41 +59,7 @@ internal data class WearUiState(
   val agentPulseFailure: WearConversationFailure? = null,
 )
 
-internal fun WearUiState.resetForPhoneChange(): WearUiState =
-  copy(
-    loading = true,
-    connected = false,
-    phoneNodeId = null,
-    agents = emptyList(),
-    activeAgentId = null,
-    selectedModelRef = null,
-    models = emptyList(),
-    proxyCapabilities = emptySet(),
-    sessions = emptyList(),
-    selectedSession = null,
-    phoneActiveSessionKey = null,
-    sessionSearchQuery = null,
-    sessionSearchResults = emptyList(),
-    sessionSearchHasMore = false,
-    sessionSearchNextOffset = null,
-    modelSearchQuery = null,
-    modelSearchResults = emptyList(),
-    messages = emptyList(),
-    streamText = null,
-    activeRunId = null,
-    sending = false,
-    realtimeTalk = WearRealtimeTalkSnapshot(),
-    realtimeCapturing = false,
-    realtimePlaying = false,
-    realtimeMouthLevel = 0f,
-    realtimePlaybackFailed = false,
-    talkBusy = false,
-    controlBusy = false,
-    failure = null,
-    agentPulse = null,
-    agentPulseLoading = false,
-    agentPulseFailure = null,
-  )
+internal fun WearUiState.resetForPhoneChange(): WearUiState = WearUiState()
 
 internal fun WearUiState.switchAgentContext(agentId: String): WearUiState =
   copy(
@@ -111,6 +78,7 @@ internal fun WearUiState.switchAgentContext(agentId: String): WearUiState =
     activeRunId = null,
     selectedModelRef = null,
     models = emptyList(),
+    modelCatalogRefreshFailed = false,
     agentPulse = null,
     agentPulseLoading = false,
     agentPulseFailure = null,
@@ -130,6 +98,7 @@ internal fun WearUiState.switchSessionContext(session: WearSession): WearUiState
     activeRunId = null,
     selectedModelRef = session.modelRef,
     models = emptyList(),
+    modelCatalogRefreshFailed = false,
     realtimeTalk = WearRealtimeTalkSnapshot(),
     realtimeMouthLevel = 0f,
     talkBusy = false,
@@ -148,6 +117,9 @@ internal fun WearUiState.switchModelContext(modelRef: String): WearUiState {
     // The phone preserves the selected model in its bounded catalog slice.
     // A model change therefore invalidates the previous slice.
     models = emptyList(),
+    modelCatalogRefreshFailed = false,
+    modelSearchQuery = null,
+    modelSearchResults = emptyList(),
     sessions = sessions.map { session -> if (session.key == updatedSession.key) updatedSession else session },
   )
 }
@@ -736,10 +708,16 @@ internal class WearViewModel(
             selectedSession?.modelRef
               ?: wearSelectedModelRef(selectedSession?.key, activeSessionKey, status.selectedModelRef)
           val modelList =
-            if (status.connected && WearProxyCapability.ModelControls in status.capabilities) {
+            if (
+              status.connected &&
+              selectedSession != null &&
+              WearProxyCapability.ModelControls in status.capabilities &&
+              WearProxyCapability.SessionScopedModelCatalog in status.capabilities
+            ) {
               repository.models(
                 expectedNodeId = status.phoneNodeId,
                 capabilities = status.capabilities,
+                sessionKey = selectedSession.key,
                 selectedModelRef = selectedModelRef,
               )
             } else {
@@ -784,6 +762,7 @@ internal class WearViewModel(
                   ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
               selectedModelRef = selectedModelRef,
               models = modelList.models,
+              modelCatalogRefreshFailed = modelList.refreshFailed,
               proxyCapabilities = status.capabilities,
               sessions = projectedSessions,
               selectedSession = selectedSession,
@@ -822,6 +801,7 @@ internal class WearViewModel(
               activeAgentId = null,
               selectedModelRef = null,
               models = emptyList(),
+              modelCatalogRefreshFailed = false,
               proxyCapabilities = emptySet(),
               sessions = emptyList(),
               selectedSession = null,
@@ -878,6 +858,9 @@ internal class WearViewModel(
               selectedSession = loadedSession,
               selectedModelRef = loadedSession.modelRef,
               models = if (catalogScopeChanged) emptyList() else it.models,
+              modelCatalogRefreshFailed = !catalogScopeChanged && it.modelCatalogRefreshFailed,
+              modelSearchQuery = if (catalogScopeChanged) null else it.modelSearchQuery,
+              modelSearchResults = if (catalogScopeChanged) emptyList() else it.modelSearchResults,
               sessions =
                 it.sessions.map { item ->
                   if (item.key == session.key) {
@@ -976,6 +959,7 @@ internal class WearViewModel(
     val capabilities = current.proxyCapabilities
     if (
       WearProxyCapability.ModelControls !in capabilities ||
+      WearProxyCapability.SessionScopedModelCatalog !in capabilities ||
       (query != null && WearProxyCapability.ModelCatalogSearch !in capabilities) ||
       !wearSessionRequestIsCurrent(session, current.selectedSession, session.phoneNodeId)
     ) {
@@ -990,6 +974,7 @@ internal class WearViewModel(
             repository.models(
               expectedNodeId = session.phoneNodeId,
               capabilities = capabilities,
+              sessionKey = session.key,
               selectedModelRef = session.modelRef,
               query = query,
             )
@@ -1011,9 +996,18 @@ internal class WearViewModel(
               state
             } else {
               if (query == null) {
-                state.copy(models = modelList.models, modelSearchQuery = null, modelSearchResults = emptyList())
+                state.copy(
+                  models = modelList.models,
+                  modelCatalogRefreshFailed = modelList.refreshFailed,
+                  modelSearchQuery = null,
+                  modelSearchResults = emptyList(),
+                )
               } else {
-                state.copy(modelSearchQuery = query, modelSearchResults = modelList.models)
+                state.copy(
+                  modelCatalogRefreshFailed = modelList.refreshFailed,
+                  modelSearchQuery = query,
+                  modelSearchResults = modelList.models,
+                )
               }
             }
           }

@@ -45,6 +45,7 @@ import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveStableMessageToolAvailability } from "./session-stable-reply-mode.js";
 import {
@@ -491,6 +492,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
     const operation = state.getDispatchReplyOperation();
+    recordReplyOperationAgentTurn([state.replyOperationRunState], operation);
     // Feedback only for pre-run drops: the user never saw output. Finalization or
     // terminal-settle stalls already produced/settled output, so a notice is noise.
     const droppedBeforeOutput =

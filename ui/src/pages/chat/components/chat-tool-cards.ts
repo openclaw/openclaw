@@ -26,6 +26,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import type { PluginToolIcon } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
 import {
@@ -33,6 +34,7 @@ import {
   toolWorkspacePath,
   type ToolRenderOptions,
 } from "./chat-tool-content.ts";
+import { renderToolFailures } from "./chat-tool-failure.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 export {
@@ -85,7 +87,16 @@ export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   );
 }
 
-function renderToolIcon(name: string) {
+export function renderToolIcon(name: string, pluginIcon?: PluginToolIcon) {
+  if (pluginIcon) {
+    return html`<img
+      src=${pluginIcon.url}
+      alt=""
+      width="16"
+      height="16"
+      @error=${pluginIcon.onError}
+    />`;
+  }
   // SAFETY: Unknown display icon names produce undefined and use the fallback.
   return icons[name as IconName] ?? icons.puzzle;
 }
@@ -445,7 +456,9 @@ export function renderToolCard(
   const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
   const rowContent = html`
-    <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
+    <span class="chat-tool-msg-summary__icon"
+      >${renderToolIcon(icon, opts.pluginToolIcons?.get(card.name))}</span
+    >
     <span class="chat-tool-disclosure__content"
       >${renderToolRowContent(
         card,
@@ -507,6 +520,7 @@ export function renderToolCard(
               `
             : nothing
         }
+        ${expanded ? nothing : renderToolFailures([card], false)}
         ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
       </div>
     `,

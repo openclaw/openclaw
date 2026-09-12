@@ -61,6 +61,7 @@ vi.mock("./usage.js", () => ({
 vi.mock("../../plugins/provider-model-routes.js", () => ({
   // Synthetic route IDs in this fixture are already canonical.
   createProviderModelCatalogIdNormalizer: () => (modelId: string) => modelId,
+  resolveProviderModelCatalogId: ({ modelId }: { modelId: string }) => modelId,
   resolveProviderModelPolicySurface: () => null,
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));

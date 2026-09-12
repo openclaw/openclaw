@@ -1,16 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 function createCanonicalRoutePane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+  vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
+  onTestFinished(() => sessions.dispose());
+  const { pane, state } = createTestChatPane({ client, sessions });
   const hello = {
     snapshot: {
       sessionDefaults: {
@@ -64,11 +70,15 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     pane.applyGatewaySnapshot(snapshot);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "agent:main:current",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "agent:main:current",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
         { role: "assistant", content: [{ type: "text", text: "Recovered transcript" }] },
@@ -102,11 +112,16 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     pane.applyGatewaySnapshot(snapshot);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenNthCalledWith(2, "chat.startup", {
-      sessionKey: state.sessionKey,
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "chat.startup",
+      {
+        sessionKey: state.sessionKey,
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
         { role: "assistant", content: [{ type: "text", text: "Recovered after reconnect" }] },

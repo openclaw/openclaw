@@ -10,7 +10,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
 import { isErrno } from "./errno.js";
-import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
+import {
+  cancelUnreadResponseBody,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "./http-body.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -21,7 +25,7 @@ const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
 export type ClawHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-type ClawHubRequestParams = {
+export type ClawHubRequestParams = {
   baseUrl?: string;
   path?: string;
   url?: string;
@@ -197,40 +201,56 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
   return url;
 }
 
-export async function requestClawHub(
-  params: ClawHubRequestParams,
-): Promise<{ response: Response; url: URL; hasToken: boolean }> {
+type ClawHubResponse = {
+  response: Response;
+  url: URL;
+  hasToken: boolean;
+  /** Successful archives keep only their chunk-idle timeout while streaming. */
+  releaseDeadline: () => void;
+};
+
+async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResponse> {
   const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
+  const headers = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
+    ...params.headers,
+  };
+  const init: RequestInit = {};
+  if (params.method) {
+    init.method = params.method;
+  }
+  if (Object.keys(headers).length > 0) {
+    init.headers = headers;
+  }
+  if (params.json !== undefined) {
+    init.body = JSON.stringify(params.json);
+  }
   const request = async () => {
     const controller = new AbortController();
-    const timeout = setTimeout(
+    let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
-    const headers = {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
-      ...params.headers,
+    const releaseDeadline = () => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
     };
-    const init: RequestInit = { signal: controller.signal };
-    if (params.method) {
-      init.method = params.method;
-    }
-    if (Object.keys(headers).length > 0) {
-      init.headers = headers;
-    }
-    if (params.json !== undefined) {
-      init.body = JSON.stringify(params.json);
-    }
     try {
-      const response = await (params.fetchImpl ?? fetch)(url, init);
-      return { response, url, hasToken: Boolean(token) };
-    } finally {
-      clearTimeout(timeout);
+      const response = await (params.fetchImpl ?? fetch)(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      return { response, url, hasToken: Boolean(token), releaseDeadline };
+    } catch (error) {
+      releaseDeadline();
+      throw error;
     }
   };
 
@@ -240,10 +260,25 @@ export async function requestClawHub(
     return await request();
   }
   return await retryClawHubRead(request, {
-    disposeRetry: async ({ response }) => {
-      await response.body?.cancel().catch(() => undefined);
+    disposeRetry: async ({ response, releaseDeadline }) => {
+      releaseDeadline();
+      await cancelUnreadResponseBody(response);
     },
   });
+}
+
+export async function withClawHubResponse<T>(
+  params: ClawHubRequestParams,
+  consume: (result: ClawHubResponse) => Promise<T>,
+): Promise<T> {
+  const result = await requestClawHub(params);
+  try {
+    // Body failures must not replay a request that already returned headers.
+    return await consume(result);
+  } finally {
+    result.releaseDeadline();
+    await cancelUnreadResponseBody(result.response);
+  }
 }
 
 async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
@@ -307,20 +342,24 @@ export function decodeClawHubResponseBody(buffer: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 
-export async function fetchClawHubJson<T>(params: ClawHubRequestParams): Promise<T> {
-  const { response, url, hasToken } = await requestClawHub(params);
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
+export async function fetchClawHubJson<T>(
+  params: ClawHubRequestParams & { maxResponseBytes?: number },
+): Promise<T> {
+  return await withClawHubResponse(params, async ({ response, url, hasToken }) => {
+    if (!response.ok) {
+      throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+    }
+    return parseClawHubJsonBody<T>(response, url, params.timeoutMs, params.maxResponseBytes);
+  });
 }
 
 export async function parseClawHubJsonBody<T>(
   response: Response,
   url: URL,
   timeoutMs?: number,
+  maxResponseBytes = CLAWHUB_JSON_MAX_BYTES,
 ): Promise<T> {
-  const buffer = await readResponseWithLimit(response, CLAWHUB_JSON_MAX_BYTES, {
+  const buffer = await readResponseWithLimit(response, maxResponseBytes, {
     chunkTimeoutMs: resolveClawHubRequestTimeoutMs(timeoutMs),
     onOverflow: ({ size, maxBytes }) =>
       new Error(

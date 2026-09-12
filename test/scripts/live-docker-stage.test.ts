@@ -2,6 +2,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -11,7 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -30,11 +32,26 @@ function committedSourceFixture(files: Record<string, string | null>) {
     writeFileSync(path.join(root, relative), content);
   }
   const git = (...args: string[]) =>
-    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    // Corruption controls own loose objects; automatic packing would move the target first.
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
+        ...args,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ).trim();
   git("init", "-q");
   git("config", "user.email", "test@example.invalid");
   git("config", "user.name", "Test");
@@ -45,6 +62,252 @@ function committedSourceFixture(files: Record<string, string | null>) {
   };
   return { root, git, commit, sha: commit() };
 }
+
+describe("frozen selected consumer ownership", () => {
+  const runtimePath = "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts";
+  const typedFiles = [
+    "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
+    "scripts/e2e/lib/release-scenarios/assertions.mjs",
+    "scripts/e2e/lib/fixtures/mock-openai-config.mjs",
+  ];
+
+  function runConsumer(
+    source: ReturnType<typeof committedSourceFixture>,
+    consumer: string,
+    { authorized = true, dockerStatus = 91 } = {},
+  ) {
+    const bin = path.join(source.root, "bin");
+    const dockerLog = path.join(source.root, "docker.log");
+    const packagePath = path.join(source.root, "fixture.tgz");
+    const profilePath = path.join(source.root, "fixture.profile");
+    writeFileSync(profilePath, "OPENAI_API_KEY=synthetic-test-key\n");
+    mkdirSync(bin);
+    writeFileSync(packagePath, "package bytes are not consumed before the Docker boundary\n");
+    writeFileSync(
+      path.join(bin, "docker"),
+      `#!/bin/sh\nprintf '%s\\0' "$@" >> "$FIXTURE_DOCKER_LOG"\nexit ${dockerStatus}\n`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync("bash", [`scripts/e2e/${consumer}-docker.sh`], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        TMPDIR: source.root,
+        FIXTURE_DOCKER_LOG: dockerLog,
+        OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE: profilePath,
+        OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE: "unsupported",
+        OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        OPENCLAW_DOCKER_E2E_REPO_ROOT: source.root,
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: authorized ? "1" : "0",
+        OPENCLAW_SELECTED_SHA: authorized ? source.sha : "",
+        OPENCLAW_TOOLING_SHA: authorized ? "b".repeat(40) : "",
+      },
+    });
+    const args = existsSync(dockerLog)
+      ? readFileSync(dockerLog, "utf8").split("\0").filter(Boolean)
+      : [];
+    return { result, args };
+  }
+
+  it.each(
+    [
+      "onboard",
+      "release-typed-onboarding",
+      "mcp-code-mode-gateway",
+      "session-runtime-context",
+    ].flatMap((consumer) =>
+      ["unknown", "missing blob", "absent"].map((runtime) => ({ consumer, runtime })),
+    ),
+  )(
+    "runs only the $consumer source contract with $runtime runtime-context source",
+    ({ consumer, runtime }) => {
+      const source = committedSourceFixture({
+        "package.json": '{"type":"module","version":"2026.7.33"}\n',
+        [runtimePath]: runtime === "absent" ? null : "unknown runtime-context contract\n",
+        ...Object.fromEntries(
+          typedFiles.map((relative) => [relative, "selected fixture; never execute\n"]),
+        ),
+      });
+      if (runtime === "missing blob") {
+        const object = source.git("rev-parse", `${source.sha}:${runtimePath}`);
+        rmSync(path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2)));
+      }
+      const { result, args } = runConsumer(source, consumer);
+      if (consumer === "session-runtime-context") {
+        expect(result.status, result.stderr).toBe(2);
+        expect(args).toEqual([]);
+        expect(result.stderr).toContain(
+          runtime === "missing blob"
+            ? "unable to read selected source"
+            : "unable to resolve frozen runtime-context input contract",
+        );
+      } else {
+        expect(args.length, result.stderr).toBeGreaterThan(0);
+        expect(result.stderr).not.toContain("runtime-context");
+      }
+    },
+  );
+
+  it.each([
+    { contract: "shipped tuple", missing: [], authorized: true },
+    { contract: "absent tuple", missing: typedFiles, authorized: true },
+    { contract: "absent assertions", missing: [typedFiles[1]], authorized: true },
+    { contract: "authorization off", missing: [], authorized: false },
+  ])("mounts the typed onboarding $contract with its hook mode", ({ missing, authorized }) => {
+    const missingPaths = new Set(missing);
+    const source = committedSourceFixture({
+      "package.json": '{"type":"module","version":"2026.7.33"}\n',
+      "src/commands/onboard-hooks.ts": "setupInternalHooks\n",
+      [runtimePath]: "unknown runtime-context contract\n",
+      ...Object.fromEntries(
+        typedFiles.map((relative) => [
+          relative,
+          missingPaths.has(relative) ? null : "selected fixture; never execute\n",
+        ]),
+      ),
+    });
+    const { result, args } = runConsumer(source, "release-typed-onboarding", {
+      authorized,
+      dockerStatus: 0,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    for (const relative of typedFiles) {
+      const selectedRoot = authorized && !missingPaths.has(relative) ? source.root : repoRoot;
+      const mount = `${selectedRoot}/${relative}:/app/${relative}:ro`;
+      expect(args.filter((arg) => arg.endsWith(`:/app/${relative}:ro`))).toEqual([mount]);
+    }
+    expect(args).toContain(
+      `OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE=${authorized ? "interactive" : "required"}`,
+    );
+  });
+
+  it.each(
+    ["session-runtime-context", "openai-chat-tools"].flatMap((consumer) =>
+      [false, true].flatMap((supported) =>
+        [false, true].map((authorized) => ({
+          consumer,
+          supported,
+          authorized,
+        })),
+      ),
+    ),
+  )(
+    "derives $consumer cold mode (supported=$supported, authorized=$authorized)",
+    ({ consumer, supported, authorized }) => {
+      const source = committedSourceFixture({
+        "package.json": '{"type":"module","version":"2026.9.4"}',
+        [runtimePath]:
+          "fragments?: RuntimeContextFragment[];\nconst fragments = params.fragments?.filter",
+        "src/config/zod-schema.session.ts":
+          "export const SessionSchema = z.object({ maintenance: z.object({ pruneAfter: PositiveDurationSchema.optional() }) });",
+        "src/config/zod-schema.session-config.ts": supported ? "coldStorage: z.object({})" : null,
+      });
+      const { result, args } = runConsumer(source, consumer, { authorized, dockerStatus: 0 });
+      expect(result.status, result.stderr).toBe(0);
+      const mode = authorized && !supported ? "unsupported" : "required";
+      expect(args).toContain(`OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE=${mode}`);
+      if (consumer === "openai-chat-tools") {
+        const configPath = path.join(source.root, "config.json");
+        const configResult = spawnSync(
+          process.execPath,
+          ["scripts/e2e/lib/openai-chat-tools/write-config.mjs"],
+          {
+            cwd: repoRoot,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: source.root,
+              OPENCLAW_TEST_WORKSPACE_DIR: path.join(source.root, "workspace"),
+              OPENCLAW_OPENAI_CHAT_TOOLS_MODEL: "openai/gpt-5.4-mini",
+              OPENCLAW_GATEWAY_TOKEN: "synthetic-gateway-token",
+              OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE: mode,
+            },
+          },
+        );
+        expect(configResult.status, configResult.stderr).toBe(0);
+        const config = JSON.parse(readFileSync(configPath, "utf8"));
+        expect(config.session).toEqual(
+          mode === "required"
+            ? {
+                maintenance: {
+                  mode: "warn",
+                  pruneAfter: "3650d",
+                  archiveDashboardAfter: false,
+                  maxDiskBytes: false,
+                  coldStorage: { enabled: true, afterDays: 30 },
+                },
+              }
+            : undefined,
+        );
+        expect(config.gateway.http.endpoints.chatCompletions.enabled).toBe(true);
+        expect(config.tools).toEqual({ allow: ["get_weather"] });
+      }
+    },
+  );
+
+  it.each(typedFiles)("rejects an unreadable typed companion %s before Docker", (relative) => {
+    const source = committedSourceFixture({
+      "package.json": '{"type":"module","version":"2026.7.33"}\n',
+      ...Object.fromEntries(typedFiles.map((file) => [file, `${file}\n`])),
+    });
+    const object = source.git("rev-parse", `${source.sha}:${relative}`);
+    rmSync(path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2)));
+    const { result, args } = runConsumer(source, "release-typed-onboarding", { dockerStatus: 0 });
+    expect(result.status, result.stderr).toBe(2);
+    expect(result.stderr).toContain("unable to read selected source");
+    expect(args).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "rejects unknown runtime source only when the selected consumers include it: %s",
+    (includeRuntime) => {
+      const source = committedSourceFixture({
+        "package.json": "{}\n",
+        [runtimePath]: "unknown runtime-context contract\n",
+      });
+      const consumers = [
+        "onboard_contract",
+        "mcp_code_mode_contract",
+        "plugin_harness_capabilities",
+        "live_cli_backend_package_mode",
+        ...(includeRuntime ? ["runtime_context_contract"] : []),
+      ];
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          'set -euo pipefail; source "$1"; root="$2"; shift 2; for consumer in "$@"; do "openclaw_resolve_frozen_$consumer" "$root"; done; printf "selected contracts resolved\\n"',
+          "test",
+          stageScriptPath,
+          source.root,
+          ...consumers,
+        ],
+        {
+          cwd: repoRoot,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+            OPENCLAW_SELECTED_SHA: source.sha,
+            OPENCLAW_TOOLING_SHA: "b".repeat(40),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(includeRuntime ? 2 : 0);
+      expect(result.stdout).toBe(includeRuntime ? "" : "selected contracts resolved\n");
+      if (includeRuntime) {
+        expect(result.stderr).toContain("unable to resolve frozen runtime-context input contract");
+      }
+    },
+  );
+});
 
 describe("frozen committed source errors", () => {
   const metadata = "scripts/print-cli-backend-live-metadata.ts";
@@ -58,7 +321,14 @@ describe("frozen committed source errors", () => {
   ) {
     return spawnSync(
       "bash",
-      ["-c", `set -euo pipefail; source "$1"; ${command}`, "test", stageScriptPath, source.root],
+      [
+        "-c",
+        `set -euo pipefail; source "$1"; ${command}`,
+        "test",
+        stageScriptPath,
+        source.root,
+        repoRoot,
+      ],
       {
         cwd: repoRoot,
         encoding: "utf8",
@@ -81,6 +351,29 @@ describe("frozen committed source errors", () => {
     return objectPath;
   }
 
+  it("preserves real read-failure injection under inherited automatic Git maintenance", () => {
+    const config = { "gc.auto": "1", "gc.autoDetach": "false", "maintenance.strategy": "gc" };
+    vi.stubEnv("GIT_CONFIG_COUNT", String(Object.keys(config).length));
+    for (const [index, [key, value]] of Object.entries(config).entries()) {
+      vi.stubEnv(`GIT_CONFIG_KEY_${index}`, key);
+      vi.stubEnv(`GIT_CONFIG_VALUE_${index}`, value);
+    }
+    try {
+      const source = committedSourceFixture({
+        [metadata]: "unavailable source bytes",
+        // Git samples directory 17/ for its loose-object auto-GC threshold.
+        "gc-sample-a": "gc sample 376\n",
+        "gc-sample-b": "gc sample 568\n",
+        "gc-sample-c": "gc sample 675\n",
+      });
+      removeObject(source, `${source.sha}:${metadata}`);
+      const reader = createFrozenTargetSource(source.root, source.sha);
+      expect(() => reader.readText(metadata)).toThrow("unable to read selected source");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
     const committedText = "selected committed text\n";
     const source = committedSourceFixture({ [metadata]: committedText });
@@ -90,6 +383,7 @@ describe("frozen committed source errors", () => {
     expect(reader.readText("scripts/absent.ts")).toBeNull();
 
     removeObject(source, `${source.sha}:${metadata}`);
+    expect(() => reader.readText(metadata)).toThrow();
     const freshReader = createFrozenTargetSource(source.root, source.sha);
     expect(() => freshReader.readText(metadata)).toThrow();
   });
@@ -170,13 +464,15 @@ describe("frozen committed source errors", () => {
     ["plugin_harness_capabilities", "src/config/types.plugins.ts"],
     ["plugin_harness_capabilities", "src/plugin-sdk/session-store-runtime.ts"],
     ["plugin_harness_capabilities", "src/plugins/uninstall-package-plan.ts"],
-    ["core_harness_capabilities", "src/config/zod-schema.ts"],
-    ["core_harness_capabilities", "src/commands/onboard-hooks.ts"],
-    ["core_harness_capabilities", "src/agents/memory-search.ts"],
-    ["core_harness_capabilities", "src/state/openclaw-agent-db-session-migrations.ts"],
-    ["core_harness_capabilities", "src/commands/doctor-session-transcripts.ts"],
-    ["core_harness_capabilities", "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"],
-    ["core_harness_capabilities", "src/agents/code-mode-namespaces.ts"],
+    ["onboard_contract", "src/config/zod-schema.ts"],
+    ["typed_onboarding_contract", "src/commands/onboard-hooks.ts"],
+    ["mcp_code_mode_contract", "src/agents/memory-search.ts"],
+    ["session_cold_storage_contract", "src/config/zod-schema.session-config.ts"],
+    ["session_cold_storage_contract", "src/config/zod-schema.session.ts"],
+    ["runtime_context_contract", "src/state/openclaw-agent-db-session-migrations.ts"],
+    ["runtime_context_contract", "src/commands/doctor-session-transcripts.ts"],
+    ["runtime_context_contract", "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"],
+    ["mcp_code_mode_contract", "src/agents/code-mode-namespaces.ts"],
   ])("propagates %s read failure at %s", (resolver, relative) => {
     const source = committedSourceFixture({
       "src/plugins/clawhub.ts": 'from "../infra/clawhub.js"',
@@ -193,7 +489,7 @@ describe("frozen committed source errors", () => {
     removeObject(source, `${source.sha}:${relative}`);
     const result = invoke(
       source,
-      `status=0; openclaw_resolve_frozen_${resolver} "$2" || status=$?; exit "$status"`,
+      `status=0; openclaw_resolve_frozen_${resolver} "$2" "$3" || status=$?; exit "$status"`,
     );
     expect(result.status, result.stderr).toBe(2);
     expect(result.stderr).toContain("unable to read selected source");
@@ -396,6 +692,7 @@ describe("frozen bundle committed contract", () => {
     source: { root: string; sha: string },
     env: Record<string, string> = {},
     cwd = repoRoot,
+    helper = stageScriptPath,
   ) {
     return spawnSync(
       "bash",
@@ -403,7 +700,7 @@ describe("frozen bundle committed contract", () => {
         "-c",
         'set -euo pipefail; source "$1"; status=0; openclaw_resolve_frozen_agent_bundle_mcp_contract "$2" || status=$?; printf "%s:%s\\n" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_CLIENT_PATH"; exit "$status"',
         "test",
-        stageScriptPath,
+        helper,
         source.root,
       ],
       {
@@ -468,6 +765,84 @@ describe("frozen bundle committed contract", () => {
     const result = resolve(source, {}, source.root);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`legacy:${julyClient}\n`);
+  });
+
+  it.each([
+    "ancestor",
+    "NODE_PATH",
+    "donor link",
+    "wrong version",
+    "owned pnpm",
+    "missing",
+    "authorization off",
+  ])("validates the trusted parser before execution: %s", (shape) => {
+    const outer = tempDirs.make("openclaw-parser-origin-");
+    const tooling = path.join(outer, ".release-harness");
+    const lib = path.join(tooling, "scripts/lib");
+    mkdirSync(lib, { recursive: true });
+    for (const file of ["frozen-target-compat.sh", "frozen-target-source.mjs"]) {
+      copyFileSync(path.join(repoRoot, "scripts/lib", file), path.join(lib, file));
+    }
+    for (const file of ["package.json", "pnpm-lock.yaml"]) {
+      copyFileSync(path.join(repoRoot, file), path.join(tooling, file));
+    }
+    const pin = JSON.parse(readFileSync(path.join(tooling, "package.json"), "utf8")).dependencies
+      .typescript;
+    const poison = path.join(outer, "poison-executed");
+    const parser =
+      shape === "ancestor"
+        ? path.join(outer, "node_modules/typescript")
+        : shape === "NODE_PATH"
+          ? path.join(outer, "global/typescript")
+          : shape === "donor link"
+            ? path.join(outer, "donor/typescript")
+            : shape === "owned pnpm"
+              ? path.join(tooling, `node_modules/.pnpm/typescript@${pin}/node_modules/typescript`)
+              : path.join(tooling, "node_modules/typescript");
+    if (shape !== "missing" && shape !== "authorization off") {
+      if (shape === "owned pnpm") {
+        cpSync(path.join(repoRoot, "node_modules/typescript"), parser, {
+          recursive: true,
+          dereference: true,
+        });
+      } else {
+        mkdirSync(parser, { recursive: true });
+        writeFileSync(
+          path.join(parser, "package.json"),
+          JSON.stringify({
+            name: "typescript",
+            version: shape === "wrong version" ? "0.0.0" : pin,
+            main: "index.js",
+          }),
+        );
+        writeFileSync(
+          path.join(parser, "index.js"),
+          `require("node:fs").writeFileSync(${JSON.stringify(poison)}, "executed"); throw new Error("poison parser executed");`,
+        );
+      }
+      if (shape === "donor link" || shape === "owned pnpm") {
+        mkdirSync(path.join(tooling, "node_modules"), { recursive: true });
+        symlinkSync(parser, path.join(tooling, "node_modules/typescript"), "dir");
+      }
+    }
+    const result = resolve(
+      fixture(),
+      {
+        NODE_PATH: shape === "NODE_PATH" ? path.join(outer, "global") : "",
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: shape === "authorization off" ? "0" : "1",
+      },
+      tooling,
+      path.join(lib, "frozen-target-compat.sh"),
+    );
+    expect(existsSync(poison), result.stderr).toBe(false);
+    if (shape === "owned pnpm" || shape === "authorization off") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `${shape === "owned pnpm" ? "legacy" : "current"}:${julyClient}\n`,
+      );
+    } else {
+      expectRejected(result, "trusted TypeScript parser");
+    }
   });
 
   it.each<{ env: Record<string, string>; error: string }>([
@@ -1127,7 +1502,7 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(run(legacySha, false).stdout).toBe("0:0\n");
   });
 
-  it("derives frozen harness capabilities only from an authorized selected source", () => {
+  it("derives selected consumer contracts only from an authorized selected source", () => {
     const root = tempDirs.make("openclaw-frozen-target-core-dialects-");
     mkdirSync(path.join(root, "src/agents"), { recursive: true });
     mkdirSync(path.join(root, "src/agents/embedded-agent-runner/run"), { recursive: true });
@@ -1165,7 +1540,7 @@ export function parseRegistryNpmSpec(spec: string) {
     }).trim();
     const resolveCoreDialects = [
       "-c",
-      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s|%s|%s|%s|%s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES"',
+      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_onboard_contract "$2"; openclaw_resolve_frozen_mcp_code_mode_contract "$2"; openclaw_resolve_frozen_runtime_context_contract "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s|%s|%s|%s|%s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES"',
       "test",
       stageScriptPath,
       root,
@@ -1238,7 +1613,7 @@ export function parseRegistryNpmSpec(spec: string) {
       "bash",
       [
         "-c",
-        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; printf "%s\\n" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE"',
+        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_runtime_context_contract "$2"; printf "%s\\n" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE"',
         "test",
         stageScriptPath,
         root,

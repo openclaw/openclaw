@@ -8,7 +8,9 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
+  stateDirGatewayFixtureEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
+import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
 import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
@@ -19,7 +21,10 @@ import {
   triageMaintenanceRuntimeEntrypoints,
 } from "../../src/infra/triage-runtime.test-support.ts";
 import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runtime.test-support.ts";
-import { publishedSdkBridgeEntrypoints } from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
+import {
+  mcpProviderCatalogEntrypoint,
+  publishedSdkBridgeEntrypoints,
+} from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
@@ -40,8 +45,11 @@ export const vitestWorkerBuildEntries = {
       codeModeDescriptionRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
       ...publishedSdkBridgeEntrypoints,
+      mcpProviderCatalogEntrypoint,
       ...Object.values(cliRecoveryEntrypoints),
+      ...Object.values(updateExecutorNativeEntrypoints),
       ...Object.values(gatewayDirectStopEntrypoints),
+      stateDirGatewayFixtureEntrypoint,
       ...Object.values(doctorConfigRuntimeEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),
@@ -62,7 +70,7 @@ export const vitestWorkerBuildEntries = {
   // The retention fixture executes the real nested QuickJS worker.
   "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
   // The real ulimit fixture must import its parent before imposing a file-size limit.
-  "infra/sqlite-readonly-location": "src/infra/sqlite-readonly-location.ts",
+  "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

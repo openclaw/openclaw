@@ -11,6 +11,10 @@ read_when:
 Build a provider plugin to add a model provider (LLM) to OpenClaw: a model
 catalog, API-key auth, and dynamic model resolution.
 
+Acme AI is a fictional vendor used throughout this guide and its child pages.
+Helpers named `fetchAcme*` in the samples are placeholders for your own vendor
+API calls, not exported OpenClaw functions.
+
 <Info>
   New to OpenClaw plugins? Read [Getting Started](/plugins/building-plugins)
   first for package structure and manifest setup.
@@ -41,13 +45,77 @@ Explicitly disabled or denied migration owners cannot execute their artifacts.
 The existing bundled migration compatibility rules still apply.
 
 The login caller selects only the declared auth item. Its details must contain
-the matching `provider` and `credentialKind`; a migrated result also supplies
+the matching `provider` and `credentialKind`. A migrated result also supplies
 the saved `profileId`. The owner must honor cancellation, reread the selected
 source before persistence, and reject a changed credential. Login passes
 `configPatchMode: "none"` so import preserves model defaults and restrictions.
 Unavailable storage or an unusable matching OAuth profile continues to interactive
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
+
+## Handle model access after sign-in
+
+Existing consumers of `runModelsAuthLoginFlow` from
+`openclaw/plugin-sdk/provider-auth-login-flow-runtime` must handle a selection
+after credentials are saved. When effective restrictions can hide the provider's
+models, the existing `prompter.select` receives these options:
+
+| Value  | Label                        | Effect                                                      |
+| ------ | ---------------------------- | ----------------------------------------------------------- |
+| `all`  | `Show all <Provider> models` | Adds that provider's wildcard to the existing policy owner. |
+| `keep` | `Keep current restrictions`  | Leaves restrictions unchanged.                              |
+
+Render the supplied message and options, and return the selected option's value.
+Do not assume that every `select` call chooses a provider or auth method. Neither
+choice activates a new default model. No choice is requested when restrictions
+are absent or already allow the whole provider.
+
+Canceling or rejecting this post-save selection does not undo saved credentials.
+The flow throws `ProviderAuthConfigApplyError`, which extends
+`ProviderCredentialsSavedError`; report that credentials were saved instead of
+treating it as a failed credential exchange. Cancellation at the selection leaves
+restrictions unchanged. A later application failure can leave the policy saved
+but not active in the running Gateway. Keep credential persistence and model
+visibility outcomes distinct.
+
+### Defer the choice to a later reply
+
+For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
+receives a `PreparedProviderModelAccess` request and replaces the post-save
+`select` call; it does not apply the choice. Retain the prepared request until
+login finishes. Use `createProviderLoginFlowRegistry` and
+`reserveProviderLoginFlow` to reserve only the credential exchange.
+
+After login finishes, call `offerProviderLoginModelAccess` with `flows`, `flowKey`,
+`prepared`, and `terminalMessage`. Deliver its structured reply. Always release
+the login in `finally` with `releaseProviderLoginFlow({ flows, flowKey, record })`.
+The pending model-access question has its own lifetime and remains answerable
+after that release; it does not block another login.
+
+Pass the later command to `answerProviderLoginModelAccess` with `flows`, `flowKey`,
+`agentId`, `command`, `runtime`, `readConfig`, and `assertCurrent`; `signal` is
+optional. `readConfig` must return the host's current config. The owner validates
+the answer, applies the choice, and consumes that question. Expired or conflicting
+choices receive a fresh question based on current restrictions.
+Use `cancelProviderLoginFlow({ flows, flowKey })` to cancel either pending phase.
+Do not reconstruct a wildcard write from button text or reuse a prepared request
+for a new login.
+
+### Keep hosted writes authorized
+
+Hosted callers supply `signal` and `assertCurrent` to check the current login,
+sender authority, and selected provider/method before effects and after awaited
+work. An abort signal or matching login identifier alone is not current
+authorization. `beforePersistentEffect` remains the credential-persistence
+preparation callback. Browser authorization ends after the credential phase;
+the later model choice uses the current conversation or wizard authority.
+
+For a deferred choice, pass the answering command's current authority check as
+`answerProviderLoginModelAccess.assertCurrent`. Use its config argument when
+supplied: it is the policy writer's current config. Otherwise read the host's
+current config. The original login callback does not authorize a later command.
+Let the shared owner report the visibility outcome:
+a saved policy is not proof that the running Gateway applied it.
 
 ## Walkthrough
 
@@ -124,14 +192,17 @@ A failed selected import stops the operation instead of silently starting a diff
     model ids like `acme-large` before runtime hooks exist. `openclaw.compat`
     and `openclaw.build` in `package.json` are required for ClawHub
     publishing (`openclaw.compat.pluginApi` and `openclaw.build.openclawVersion`
-    are the two required fields; `minGatewayVersion` falls back to
+    are the two required fields. `minGatewayVersion` falls back to
     `openclaw.install.minHostVersion` when omitted).
+
+    The version strings in the sample manifests are placeholders. Pin them to
+    the OpenClaw release your plugin builds and tests against.
 
   </Step>
 
   <Step title="Register the provider">
     A minimal text provider needs an `id`, `label`, `auth`, and `catalog`.
-    `catalog` is the provider-owned runtime/config hook; it can call live
+    `catalog` is the provider-owned runtime/config hook. It can call live
     vendor APIs and returns `models.providers` entries.
 
     ```typescript index.ts
@@ -224,7 +295,7 @@ A failed selected import stops the operation instead of silently starting a diff
     `registerModelCatalogProvider` is the newer control-plane catalog surface
     for list/help/picker UI, covering `text`, `voice`, `image_generation`,
     `video_generation`, and `music_generation` rows. Keep vendor endpoint
-    calls and response mapping in the plugin; OpenClaw owns the shared row
+    calls and response mapping in the plugin. OpenClaw owns the shared row
     shape, source labels, and help rendering.
 
     That is a working provider. Users can now run
@@ -235,8 +306,10 @@ A failed selected import stops the operation instead of silently starting a diff
     import `findNormalizedProviderValue` and `resolveAuthProfileOrder` from
     `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
     loading the full agent runtime just to select a credential. The deprecated
-    `agent-runtime` exports remain available for compatibility; use the narrower
-    `provider-auth` route in new code.
+    `agent-runtime` exports remain available for compatibility. Use the narrower
+    `provider-auth` route in new code. See the [removal
+    timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
+    that govern deprecated surfaces named on this page and its child pages.
 
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:
@@ -321,7 +394,7 @@ A failed selected import stops the operation instead of silently starting a diff
     [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
 
     Register the audio capabilities from [Provider voice
-    capabilities](/plugins/sdk-provider-plugins/voice-and-audio); register
+    capabilities](/plugins/sdk-provider-plugins/voice-and-audio). Register
     embeddings, generation, fetch, and search from [Provider media and
     search](/plugins/sdk-provider-plugins/media-and-search).
 

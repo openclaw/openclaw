@@ -17,7 +17,7 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
-import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
+import { cronRunReceiptMutationHooks } from "./run-receipts.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
@@ -697,7 +697,12 @@ describe("cron service store seam coverage", () => {
     try {
       await expect(
         persistOrRestore(state, snapshot, {
-          transactionHooks: cronRunReceiptOwnerMutationHooks({ state, jobId: job.id }),
+          transactionHooks: cronRunReceiptMutationHooks({
+            state,
+            jobId: job.id,
+            ownerChanged: true,
+            triggerStateChanged: false,
+          }),
         }),
       ).rejects.toBeInstanceOf(CronRunReceiptConflictError);
       expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("alpha");

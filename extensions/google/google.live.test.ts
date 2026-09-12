@@ -383,7 +383,7 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(
@@ -461,8 +461,8 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
-      bridge.close();
+      await bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(
@@ -484,36 +484,50 @@ describeLive("google plugin live", () => {
     expect(closeReasons).toEqual(["completed"]);
   }, 120_000);
 
-  it("runs Gemini web search through the registered provider tool", async () => {
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool?.({
-      config: {},
-      searchConfig: { gemini: { apiKey: GOOGLE_API_KEY }, cacheTtlMinutes: 0, timeoutSeconds: 90 },
-    } as never);
+  it.each([undefined, "gemini-3.5-flash"])(
+    "runs Gemini web search with model %j",
+    async (model) => {
+      const provider = createGeminiWebSearchProvider();
+      const tool = provider.createTool?.({
+        config: {
+          plugins: {
+            entries: {
+              google: { config: { webSearch: { apiKey: GOOGLE_API_KEY, model } } },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini", cacheTtlMinutes: 0, timeoutSeconds: 90 },
+      } as never);
 
-    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
-        lastError = undefined;
-        break;
-      } catch (error) {
-        lastError = error;
-        if (!isTransientGeminiSearchError(error) || attempt === 1) {
-          throw error;
+      let result:
+        | { provider?: string; model?: string; content?: unknown; citations?: unknown }
+        | undefined;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+          lastError = undefined;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!isTransientGeminiSearchError(error) || attempt === 1) {
+            throw error;
+          }
         }
       }
-    }
-    if (lastError) {
-      throw toLintErrorObject(lastError, "Non-Error thrown");
-    }
+      if (lastError) {
+        throw toLintErrorObject(lastError, "Non-Error thrown");
+      }
 
-    expect(result?.provider).toBe("gemini");
-    expect(typeof result?.content).toBe("string");
-    expect((result!.content as string).length).toBeGreaterThan(20);
-    expect(Array.isArray(result?.citations)).toBe(true);
-  }, 120_000);
+      expect(result?.provider).toBe("gemini");
+      expect(result?.model).toBe(model ?? "gemini-3.6-flash");
+      expect(typeof result?.content).toBe("string");
+      expect((result!.content as string).length).toBeGreaterThan(20);
+      expect(Array.isArray(result?.citations)).toBe(true);
+      expect((result!.citations as unknown[]).length).toBeGreaterThan(0);
+    },
+    120_000,
+  );
 
   it("runs Gemini web search through the Google model provider config fallback", async () => {
     await withGoogleApiEnvUnset(async () => {
@@ -536,6 +550,7 @@ describeLive("google plugin live", () => {
       expect(process.env.GEMINI_API_KEY).toBeUndefined();
       expect(process.env.GOOGLE_API_KEY).toBeUndefined();
       expect(result?.provider).toBe("gemini");
+      expect(result?.model).toBe("gemini-3.6-flash");
       expect(typeof result?.content).toBe("string");
       expect((result!.content as string).length).toBeGreaterThan(20);
       expect(Array.isArray(result?.citations)).toBe(true);

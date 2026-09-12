@@ -51,8 +51,8 @@ struct WebChatSessionObserverVisibilityOwners {
 final class WebChatManager {
     static let shared = WebChatManager()
 
-    private struct ProfileWindowInstance {
-        let profileID: String
+    private struct GatewayWindowInstance {
+        let target: DashboardGatewayTarget
         let connection: GatewayConnection
         let controller: WebChatSwiftUIWindowController
     }
@@ -100,8 +100,8 @@ final class WebChatManager {
     private var primaryOpenTask: Task<Void, Never>?
     private var windowGeneration: UInt64 = 0
     private var fleetShutdownTask: Task<Void, Never>?
-    private var profileWindows: [UUID: ProfileWindowInstance] = [:]
-    private var profileWindowOrder: [UUID] = []
+    private var gatewayWindows: [UUID: GatewayWindowInstance] = [:]
+    private var gatewayWindowOrder: [UUID] = []
     private var unavailableProfileIDs: Set<String> = []
     private var sessionObserverOwners = WebChatSessionObserverVisibilityOwners()
     private var sessionObserverMonitors: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -249,16 +249,20 @@ final class WebChatManager {
             guard let self else { return }
             do {
                 let profiles = try await MacGatewayProfileStore.shared.profiles()
+                let local = try await DashboardGatewayCatalog.loadEntries().first { $0.id == "local" }
                 guard generation == self.windowGeneration else { return }
-                guard !profiles.isEmpty else {
+                guard !profiles.isEmpty || local != nil else {
                     AppNavigationActions.openConnection(tab: .gateways)
                     return
                 }
-                let preferredID = self.selection.profileID
-                switch Self.promptForGatewayProfile(profiles: profiles, preferredID: preferredID) {
+                let preferredID = self.selection.target == .local ? "local" : self.selection.profileID
+                switch Self.promptForGatewayProfile(profiles: profiles, preferredID: preferredID, local: local) {
                 case let .profile(profile):
                     guard generation == self.windowGeneration else { return }
                     try await self.show(profile: profile)
+                case .local:
+                    guard generation == self.windowGeneration else { return }
+                    try await self.showGateway(target: .local, name: "This Mac")
                 case .manage:
                     AppNavigationActions.openConnection(tab: .gateways)
                 case nil:
@@ -285,29 +289,46 @@ final class WebChatManager {
     }
 
     func show(profile: MacGatewayProfile) async throws {
+        try await self.showGateway(target: .profile(profile.id), name: profile.name)
+    }
+
+    private func showGateway(target: DashboardGatewayTarget, name: String) async throws {
         let generation = self.windowGeneration
         // An older close must finish retiring the fleet before this open can acquire its successor.
         await self.fleetShutdownTask?.value
-        try self.requireCurrentWindowRequest(generation, profileID: profile.id)
-        let binding = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
-        let connection = binding.connection
-        let chatStoreID = binding.chatStoreID
-        try self.requireCurrentWindowRequest(generation, profileID: profile.id)
+        try self.requireCurrentWindowRequest(generation, target: target)
+        let connection: GatewayConnection
+        let chatStoreID: String
+        let autosaveID: String
+        switch target {
+        case .primary: return
+        case .local:
+            let binding = await MacGatewayConnectionFleet.shared.localBinding()
+            connection = binding.connection
+            chatStoreID = binding.chatStoreID
+            autosaveID = "local"
+        case let .profile(profileID):
+            let binding = try await MacGatewayConnectionFleet.shared.binding(profileID: profileID)
+            connection = binding.connection
+            chatStoreID = binding.chatStoreID
+            autosaveID = profileID
+        }
+        try self.requireCurrentWindowRequest(generation, target: target)
         let sessionKey = await connection.mainSessionKey()
-        try self.requireCurrentWindowRequest(generation, profileID: profile.id)
+        try self.requireCurrentWindowRequest(generation, target: target)
         let windowID = UUID()
         let route = WebChatRoute(sessionKey: sessionKey, agentID: nil)
-        let previousController = self.profileWindowOrder.reversed().lazy
-            .compactMap { self.profileWindows[$0] }
-            .first { $0.profileID == profile.id }?
+        let previousController = self.gatewayWindowOrder.reversed().lazy
+            .compactMap { self.gatewayWindows[$0] }
+            .first { $0.target == target }?
             .controller
         let controller = WebChatSwiftUIWindowController(
             sessionKey: route.sessionKey,
             agentID: route.agentID,
             connection: connection,
             gatewayID: chatStoreID,
-            windowTitle: "\(profile.name) — OpenClaw",
-            windowAutosaveName: "OpenClawChatWindow-\(profile.id)")
+            windowTitle: "\(name) — OpenClaw",
+            windowAutosaveName: "OpenClawChatWindow-\(autosaveID)")
         controller.onVisibilityChanged = { [weak self, weak controller] visible in
             guard let self, let controller else { return }
             self.setSessionObserverVisible(visible, owner: controller, connection: connection)
@@ -315,42 +336,54 @@ final class WebChatManager {
         controller.onClosed = { [weak self, weak controller] in
             guard let self, let controller else { return }
             self.setSessionObserverVisible(false, owner: controller, connection: connection)
-            guard self.profileWindows[windowID]?.controller === controller else { return }
-            self.profileWindows.removeValue(forKey: windowID)
-            self.profileWindowOrder.removeAll { $0 == windowID }
+            guard self.gatewayWindows[windowID]?.controller === controller else { return }
+            self.gatewayWindows.removeValue(forKey: windowID)
+            self.gatewayWindowOrder.removeAll { $0 == windowID }
         }
-        self.profileWindows[windowID] = ProfileWindowInstance(
-            profileID: profile.id,
+        self.gatewayWindows[windowID] = GatewayWindowInstance(
+            target: target,
             connection: connection,
             controller: controller)
-        self.profileWindowOrder.append(windowID)
+        self.gatewayWindowOrder.append(windowID)
         controller.cascade(from: previousController)
         controller.show()
-        self.selection.select(.profile(profile.id))
+        self.selection.select(target)
     }
 
-    private func requireCurrentWindowRequest(_ generation: UInt64, profileID: String) throws {
+    private func requireCurrentWindowRequest(_ generation: UInt64, target: DashboardGatewayTarget) throws {
         try Task.checkCancellation()
         guard generation == self.windowGeneration else { throw CancellationError() }
-        guard !self.unavailableProfileIDs.contains(profileID) else {
-            throw MacGatewayProfileError.profileNotFound
+        switch target {
+        case .primary: throw CancellationError()
+        case .local:
+            let state = AppStateStore.shared
+            guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
+                  state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
+        case let .profile(profileID):
+            guard !self.unavailableProfileIDs.contains(profileID) else { throw MacGatewayProfileError.profileNotFound }
         }
     }
 
-    /// Open native chat windows bound to a saved profile's shared fleet connection.
-    func openWindowCount(profileID: String) -> Int {
-        self.profileWindowOrder.count { self.profileWindows[$0]?.profileID == profileID }
+    func openWindowCount(for target: DashboardGatewayTarget) -> Int {
+        self.gatewayWindowOrder.count { self.gatewayWindows[$0]?.target == target }
     }
 
     func closeGatewayWindows(profileID: String) {
-        // Removal fences in-flight window creation before awaiting connection
-        // shutdown, so an old picker selection cannot resurrect this profile.
         self.unavailableProfileIDs.insert(profileID)
+        self.closeGatewayWindows(target: .profile(profileID))
+    }
+
+    func closeLocalGatewayWindows() {
+        self.closeGatewayWindows(target: .local)
+    }
+
+    private func closeGatewayWindows(target: DashboardGatewayTarget) {
+        // Fence in-flight opens before retiring windows or their connection.
         self.windowGeneration &+= 1
-        let windowIDs = self.profileWindowOrder.filter { self.profileWindows[$0]?.profileID == profileID }
-        let instances = windowIDs.compactMap { self.profileWindows.removeValue(forKey: $0) }
+        let windowIDs = self.gatewayWindowOrder.filter { self.gatewayWindows[$0]?.target == target }
+        let instances = windowIDs.compactMap { self.gatewayWindows.removeValue(forKey: $0) }
         let windowIDSet = Set(windowIDs)
-        self.profileWindowOrder.removeAll { windowIDSet.contains($0) }
+        self.gatewayWindowOrder.removeAll { windowIDSet.contains($0) }
         for instance in instances {
             instance.controller.close()
             self.retireSessionObserver(connection: instance.connection)
@@ -395,9 +428,9 @@ final class WebChatManager {
         // Invalidate admitted opens before closing windows or awaiting fleet retirement.
         self.windowGeneration &+= 1
         self.resetPrimaryConnections()
-        let profileControllers = self.profileWindows.values.map(\.controller)
-        self.profileWindows.removeAll()
-        self.profileWindowOrder.removeAll()
+        let profileControllers = self.gatewayWindows.values.map(\.controller)
+        self.gatewayWindows.removeAll()
+        self.gatewayWindowOrder.removeAll()
         for controller in profileControllers {
             controller.close()
         }
@@ -534,29 +567,36 @@ final class WebChatManager {
     }
 
     enum GatewayProfileSelection {
+        case local
         case profile(MacGatewayProfile)
         case manage
     }
 
     static func promptForGatewayProfile(
         profiles: [MacGatewayProfile],
-        preferredID: String?) -> GatewayProfileSelection?
+        preferredID: String?,
+        local: DashboardGatewayEntry? = nil) -> GatewayProfileSelection?
     {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
+        if let local { popup.addItem(withTitle: local.name) }
         popup.addItems(withTitles: profiles.map(Self.profilePickerTitle))
-        popup.selectItem(at: Self.preferredProfileIndex(profiles: profiles, preferredID: preferredID))
+        let offset = local == nil ? 0 : 1
+        popup.selectItem(at: profiles.isEmpty || (preferredID == "local" && local != nil) ? 0
+            : Self.preferredProfileIndex(profiles: profiles, preferredID: preferredID) + offset)
 
         let alert = NSAlert()
         alert.messageText = "New Gateway Window"
-        alert.informativeText = "Choose a saved Gateway. You can open more than one window for the same Gateway."
+        alert.informativeText = "Choose a Gateway. You can open more than one window for the same Gateway."
         alert.accessoryView = popup
         alert.addButton(withTitle: "Open Window")
         alert.addButton(withTitle: "Manage Gateways…")
         alert.addButton(withTitle: "Cancel")
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            guard profiles.indices.contains(popup.indexOfSelectedItem) else { return nil }
-            return .profile(profiles[popup.indexOfSelectedItem])
+            if local != nil, popup.indexOfSelectedItem == 0 { return .local }
+            let index = popup.indexOfSelectedItem - offset
+            guard profiles.indices.contains(index) else { return nil }
+            return .profile(profiles[index])
         case .alertSecondButtonReturn:
             return .manage
         default:
@@ -584,7 +624,7 @@ final class WebChatManager {
     }
 
     func _testProfileWindowCount(profileID: String) -> Int {
-        self.profileWindows.values.count { $0.profileID == profileID }
+        self.gatewayWindows.values.count { $0.target == .profile(profileID) }
     }
     #endif
 }

@@ -37,8 +37,8 @@ apply it through the normal approval flow or with `openclaw skills workshop`.
 When the actual turn supports only personal publication, including paired-node
 personal CLI authoring, `/learn` stops without changing a skill. Ask normally
 for explicit personal creation if you want to publish a revision, or use the
-existing administrator UI or CLI for Workshop proposal review. Personal
-pending drafts are not currently supported.
+existing administrator UI or CLI for Workshop proposal review. Personal turns
+cannot stage a pending draft.
 
 Create:
 

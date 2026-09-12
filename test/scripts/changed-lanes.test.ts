@@ -49,33 +49,16 @@ import {
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
+const releaseNotesHelper =
+  ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 type ExecFileSyncFailure = Error & { status?: number | null; stderr?: Buffer };
-const nestedGitEnvKeys = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_QUARANTINE_PATH",
-  "GIT_WORK_TREE",
-] as const;
-
-function createNestedGitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  for (const key of nestedGitEnvKeys) {
-    delete env[key];
-  }
-  return env;
-}
 
 const git = (cwd: string, args: string[]) =>
   execFileSync("git", args, {
@@ -166,7 +149,7 @@ function createRootTestLintFixture() {
     writeRepoFile(dir, file, source);
   }
   materializeNativeCompiler(dir);
-  for (const name of ["@types/node", "vitest"]) {
+  for (const name of ["@types/node", "vitest", "tsx"]) {
     const destination = path.join(dir, "node_modules", name);
     mkdirSync(path.dirname(destination), { recursive: true });
     symlinkSync(path.join(repoRoot, "node_modules", name), destination, "junction");
@@ -197,6 +180,8 @@ function createRootTestLintFixture() {
   }
   // Stub unrelated package gates at the executable boundary: real pnpm could
   // reconcile this partial install. The CLI and source-only lint wrapper stay real.
+  // The export audit is selected normally, but this fixture has only the lint graph.
+  writeRepoFile(dir, "scripts/check-deadcode-exports.mts", "export {};\n");
   const binDir = path.join(dir, "bin");
   for (const bin of ["pnpm", "corepack"]) {
     writeRepoFile(dir, `bin/${bin}`, "#!/bin/sh\nexit 0\n");
@@ -657,42 +642,46 @@ describe("scripts/changed-lanes", () => {
     );
   });
 
-  it("keeps the hidden maintainer helper trio on tooling checks through both CLIs", () => {
-    const paths = [
-      githubActivityHelper,
-      ".agents/skills/openclaw-pr-maintainer/SKILL.md",
-      "test/scripts/github-activity-helper.test.ts",
-    ];
-    const lanes = runChangedLanesCli(repoRoot, ["--json", "--", ...paths]);
-    const result = runRepoScript("scripts/check-changed.mjs", ["--dry-run", "--", ...paths]);
+  it.each([githubActivityHelper, releaseNotesHelper])(
+    "keeps hidden helper %s on tooling checks through both CLIs",
+    (helper) => {
+      const paths = [
+        helper,
+        ".agents/skills/openclaw-pr-maintainer/SKILL.md",
+        "test/scripts/github-activity-helper.test.ts",
+      ];
+      const lanes = runChangedLanesCli(repoRoot, ["--json", "--", ...paths]);
+      const result = runRepoScript("scripts/check-changed.mjs", ["--dry-run", "--", ...paths]);
 
-    expectLanes(lanes.lanes, { docs: true, testRoot: true, tooling: true });
-    expect(lanes).toMatchObject({ extensionImpactFromCore: false, docsOnly: false });
-    expect(lanes.paths.toSorted()).toEqual(paths.toSorted());
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("[check:changed:dry-run] lanes=testRoot, docs, tooling");
-    const commands = result.stderr
-      .split("\n")
-      .filter((line) => line.startsWith("[check:changed:dry-run] would run: "))
-      .map((line) => line.replace("[check:changed:dry-run] would run: ", ""));
-    expect(commands).toEqual([
-      "pnpm check:no-conflict-markers",
-      "pnpm check:changelog-attributions",
-      "pnpm check:doctor-deprecation-registry",
-      "pnpm lint:extensions:no-guarded-wildcard-reexports",
-      "pnpm lint:extensions:no-plugin-sdk-wildcard-reexports",
-      "pnpm dup:check:coverage",
-      "pnpm deps:pins:check",
-      `pnpm format:check --no-error-on-unmatched-pattern -- ${lanes.paths.join(" ")}`,
-      "pnpm deps:patches:check",
-      "node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD",
-      "pnpm lint:tmp:tsgo-core-boundary",
-      "pnpm tsgo:test:root",
-      "pnpm check:coercion-helpers",
-      "pnpm lint:scripts",
-      "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/github-activity-helper.test.ts",
-    ]);
-  });
+      expectLanes(lanes.lanes, { docs: true, testRoot: true, tooling: true });
+      expect(lanes).toMatchObject({ extensionImpactFromCore: false, docsOnly: false });
+      expect(lanes.paths.toSorted()).toEqual(paths.toSorted());
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("[check:changed:dry-run] lanes=testRoot, docs, tooling");
+      const commands = result.stderr
+        .split("\n")
+        .filter((line) => line.startsWith("[check:changed:dry-run] would run: "))
+        .map((line) => line.replace("[check:changed:dry-run] would run: ", ""));
+      expect(commands).toEqual([
+        "pnpm check:no-conflict-markers",
+        "pnpm check:changelog-attributions",
+        "pnpm check:doctor-deprecation-registry",
+        "pnpm lint:extensions:no-guarded-wildcard-reexports",
+        "pnpm lint:extensions:no-plugin-sdk-wildcard-reexports",
+        "pnpm dup:check:coverage",
+        "pnpm deps:pins:check",
+        `pnpm format:check --no-error-on-unmatched-pattern -- ${lanes.paths.join(" ")}`,
+        "pnpm deps:patches:check",
+        "node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD",
+        "pnpm lint:tmp:tsgo-core-boundary",
+        "pnpm tsgo:test:root",
+        "pnpm check:coercion-helpers",
+        "node --import tsx scripts/check-deadcode-exports.mts",
+        "pnpm lint:scripts",
+        "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/github-activity-helper.test.ts",
+      ]);
+    },
+  );
 
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
@@ -1130,7 +1119,17 @@ describe("scripts/changed-lanes", () => {
     // touches, so selection is by path; inspecting changed lines would miss it.
     { name: "import-only edit", changedPaths: ["src/agents/tool-surface-plan.ts"], expected: true },
     { name: "docs tree", changedPaths: ["docs/example.ts"], expected: false },
-    { name: "scripts tree", changedPaths: ["scripts/check-changed.mjs"], expected: false },
+    { name: "script entry", changedPaths: ["scripts/check-changed.mjs"], expected: true },
+    {
+      name: "script helper",
+      changedPaths: ["scripts/lib/budget-number-args.mts"],
+      expected: true,
+    },
+    {
+      name: "root test consumer",
+      changedPaths: ["test/scripts/test-perf-budget.test.ts"],
+      expected: true,
+    },
     // knip never reads these, so they must not pull in the scan.
     { name: "markdown under src", changedPaths: ["src/README.md"], expected: false },
     { name: "sql under src", changedPaths: ["src/state/schema.sql"], expected: false },
@@ -1236,7 +1235,6 @@ describe("scripts/changed-lanes", () => {
       "src/config/schema.test.ts",
       "src/plugins/manifest-registry.test.ts",
       "extensions/whatsapp/src/monitor.ts",
-      "src/gateway/server-runtime-state.ts",
       "scripts/docs-list.js",
       "docs/ci.md",
     ].map((file) => ({ paths: [file], selected: false })),
@@ -1962,23 +1960,26 @@ describe("scripts/changed-lanes", () => {
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(false);
   });
 
-  it("adds the dead export scan only for production source changes", () => {
+  it.each([
+    ["core source", "src/config/config.ts"],
+    ["script consumer", "scripts/test-perf-budget.mts"],
+    ["root test consumer", "test/scripts/test-perf-budget.test.ts"],
+  ])("adds the dead export scan for %s changes", (_name, changedPath) => {
     const command = {
       name: "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       bin: "node",
       args: ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
-      env: expect.any(Object),
     };
-    const sourceResult = detectChangedLanes(["src/config/config.ts"]);
-    const toolingResult = detectChangedLanes(["scripts/check-changed.mjs"]);
+    const sourceResult = detectChangedLanes([changedPath]);
+    const commands = (env = {}) =>
+      createChangedCheckPlan(sourceResult, { env }).commands.map(({ name, bin, args }) => ({
+        name,
+        bin,
+        args,
+      }));
 
-    expect(createChangedCheckPlan(sourceResult).commands).toContainEqual(command);
-    expect(createChangedCheckPlan(toolingResult).commands).not.toContainEqual(command);
-    expect(
-      createChangedCheckPlan(sourceResult, {
-        env: { OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" },
-      }).commands,
-    ).not.toContainEqual(command);
+    expect(commands()).toContainEqual(command);
+    expect(commands({ OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" })).not.toContainEqual(command);
   });
 
   it("keeps classified changed gates local", () => {
@@ -2179,7 +2180,9 @@ describe("scripts/changed-lanes", () => {
     ".agents/skills/openclaw-pr-maintainer-extra/scripts/github-activity.sh",
     ".agents/config.json",
     ".agents/skills/autoreview/scripts/autoreview",
-    ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
+    `${releaseNotesHelper}.bak`,
+    `${releaseNotesHelper}/child.mjs`,
+    ".agents/skills/openclaw-changelog-update/scripts/unknown.mjs",
   ])("fails safe for %s even alongside the hidden maintainer helper", (changedPath) => {
     for (const paths of [[changedPath], [githubActivityHelper, changedPath]]) {
       const result = detectChangedLanes(paths);
@@ -2450,6 +2453,8 @@ describe("scripts/changed-lanes", () => {
   it("keeps release metadata commits off the full changed gate", () => {
     const result = detectChangedLanes([
       "CHANGELOG.md",
+      "CHANGELOG/2026.9.4.md",
+      "CHANGELOG/records/2026.9.4.md",
       "apps/android/CHANGELOG.md",
       "apps/android/Config/Version.properties",
       "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
@@ -2485,6 +2490,7 @@ describe("scripts/changed-lanes", () => {
       "check:wrapper-shadowing",
       "deps:patches:check",
       "release-metadata:check",
+      "changelog:check",
       "android:version:check",
       "config:schema:check",
       "deps:root-ownership:check",
@@ -2502,6 +2508,9 @@ describe("scripts/changed-lanes", () => {
     expect(
       plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
     ).toEqual(["release-metadata:check", "--base", "main", "--head", "feature"]);
+    expect(plan.commands.find((command) => command.args[0] === "changelog:check")?.args).toEqual([
+      "changelog:check",
+    ]);
   });
 
   it("keeps docs plus changelog entries on the docs-only changed gate", () => {

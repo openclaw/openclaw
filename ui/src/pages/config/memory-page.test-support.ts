@@ -1,11 +1,17 @@
 import { ContextProvider } from "@lit/context";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import {
   applicationContext,
   type ApplicationContext,
+  type ApplicationGatewaySnapshot,
   type ApplicationNavigationOptions,
 } from "../../app/context.ts";
+import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { setPluginEnabled, type PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
 type MemoryPageElement = HTMLElement & {
@@ -32,7 +38,7 @@ export function createMemoryTestEngine(id: string, enabled: boolean, name = id):
     enabled,
     state: enabled ? "enabled" : "disabled",
     kind: ["memory"],
-  } as unknown as PluginCatalogItem;
+  };
 }
 
 export function createMemoryTestAddon(id: string, enabled: boolean): PluginCatalogItem {
@@ -42,7 +48,22 @@ export function createMemoryTestAddon(id: string, enabled: boolean): PluginCatal
     installed: true,
     enabled,
     state: enabled ? "enabled" : "disabled",
-  } as unknown as PluginCatalogItem;
+  };
+}
+
+export function createMemoryTestMutationResult(
+  pluginId: string,
+  enabled: boolean,
+  warnings: string[] = [],
+  generation = 1,
+): Awaited<ReturnType<typeof setPluginEnabled>> {
+  return {
+    ok: true,
+    plugin: createMemoryTestAddon(pluginId, enabled),
+    restartRequired: false,
+    runtime: { operationId: `${pluginId}-${generation}`, generation, pluginIds: [pluginId] },
+    warnings,
+  };
 }
 
 export function createMemoryPage(params: {
@@ -62,7 +83,6 @@ export function createMemoryPage(params: {
   basePath?: string;
   agents?: Array<{ id: string; name?: string }>;
   memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
-  processInstanceIds?: Array<string | undefined>;
   processInfo?: (call: number) => Promise<{ processInstanceId?: string }>;
   scopes?: string[];
   lookupSchemaPath?: (call: number) => Promise<unknown>;
@@ -70,7 +90,7 @@ export function createMemoryPage(params: {
   let listCalls = 0;
   let schemaLookups = 0;
   let systemInfoCalls = 0;
-  const request = vi.fn((method: string, payload?: { agentId?: string; probe?: boolean }) => {
+  const request = vi.fn((method: string, payload?: unknown) => {
     if (method === "plugins.list") {
       const result: Promise<{
         plugins: readonly PluginCatalogItem[];
@@ -85,22 +105,18 @@ export function createMemoryPage(params: {
       }));
     }
     if (method === "doctor.memory.status") {
+      const input = asOptionalRecord(payload);
+      const agentId = typeof input?.agentId === "string" ? input.agentId : "main";
       return params.memoryStatus
-        ? params.memoryStatus(payload?.agentId ?? "main", payload?.probe === true)
+        ? params.memoryStatus(agentId, input?.probe === true)
         : Promise.resolve({
-            agentId: payload?.agentId ?? "main",
+            agentId,
             provider: "none",
             embedding: { ok: false, checked: false },
           });
     }
-    if (method === "system.info") {
-      if (params.processInfo) {
-        return params.processInfo(systemInfoCalls++);
-      }
-      const ids = params.processInstanceIds ?? [];
-      return Promise.resolve({
-        processInstanceId: ids[Math.min(systemInfoCalls++, ids.length - 1)],
-      });
+    if (method === "system.info" && params.processInfo) {
+      return params.processInfo(systemInfoCalls++);
     }
     return Promise.resolve({});
   });
@@ -108,26 +124,27 @@ export function createMemoryPage(params: {
     (_client, pluginId, enabled) =>
       (params.setEnabled
         ? params.setEnabled(pluginId, enabled)
-        : Promise.resolve({})) as ReturnType<typeof setPluginEnabled>,
+        : Promise.resolve(createMemoryTestMutationResult(pluginId, enabled))) as ReturnType<
+        typeof setPluginEnabled
+      >,
   );
-  const gatewayListeners = new Set<() => void>();
   const runtimeListeners = new Set<() => void>();
-  const gateway = {
-    snapshot: {
-      client: { request },
-      phase: "connected",
-      hello: {
-        auth: { role: "operator", scopes: params.scopes },
-        features: {
-          methods: params.processInstanceIds || params.processInfo ? ["system.info"] : [],
-        },
-      },
+  const gatewayHarness = createApplicationGateway({
+    client: createTestGatewayClient(request),
+    phase: "connected",
+    offlineStable: false,
+    pluginCapabilities: null,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: null,
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
+    hello: {
+      ...gatewayHelloForMethods(params.processInfo ? ["system.info"] : [], params.scopes),
+      server: { version: "test", bootId: "memory-boot-a", connId: "memory-connection" },
     },
-    subscribe: (notify: () => void) => {
-      gatewayListeners.add(notify);
-      return () => gatewayListeners.delete(notify);
-    },
-  };
+  });
+  const gateway = gatewayHarness.gateway;
   const element = document.createElement("openclaw-memory-settings") as MemoryPageElement;
   element.configObject = params.configObject;
   element.routeData = params.routeData ?? memoryTabRoute("settings");
@@ -154,36 +171,43 @@ export function createMemoryPage(params: {
     removeFormValue: vi.fn(),
     waitForPendingWrites: params.waitForPendingWrites ?? (() => Promise.resolve()),
     refresh: vi.fn(params.refresh ?? (() => Promise.resolve())),
-    runExternalMutation: vi.fn((task: (client: unknown) => Promise<unknown>) => {
-      const connection = gateway.snapshot;
-      const run = async () => {
-        await runtimeConfig.waitForPendingWrites();
-        if (gateway.snapshot !== connection) {
-          return { ok: false as const, error: "Connection changed before the update started." };
-        }
-        try {
-          const value = await task(connection.client);
-          try {
-            await runtimeConfig.refresh();
-            return { ok: true as const, value, refresh: { ok: true as const } };
-          } catch (error) {
-            return {
-              ok: true as const,
-              value,
-              refresh: { ok: false as const, error: (error as Error).message },
-            };
+    runExternalMutation: vi.fn(
+      (task: (client: unknown) => Promise<unknown>, options?: { canDispatch?: () => boolean }) => {
+        const connection = gateway.snapshot;
+        const scope = connectionLifecycle.capture();
+        const run = async () => {
+          await runtimeConfig.waitForPendingWrites();
+          if (
+            !scope ||
+            !connectionLifecycle.isCurrent(scope) ||
+            options?.canDispatch?.() === false
+          ) {
+            return { ok: false as const, error: "Connection changed before the update started." };
           }
-        } catch (error) {
-          return { ok: false as const, error: (error as Error).message };
-        }
-      };
-      const pending = mutationQueue.then(run, run);
-      mutationQueue = pending.then(
-        () => undefined,
-        () => undefined,
-      );
-      return pending;
-    }),
+          try {
+            const value = await task(connection.client);
+            try {
+              await runtimeConfig.refresh();
+              return { ok: true as const, value, refresh: { ok: true as const } };
+            } catch (error) {
+              return {
+                ok: true as const,
+                value,
+                refresh: { ok: false as const, error: (error as Error).message },
+              };
+            }
+          } catch (error) {
+            return { ok: false as const, error: (error as Error).message };
+          }
+        };
+        const pending = mutationQueue.then(run, run);
+        mutationQueue = pending.then(
+          () => undefined,
+          () => undefined,
+        );
+        return pending;
+      },
+    ),
     ensureLoaded: () => Promise.resolve(),
   };
   const context = {
@@ -204,24 +228,52 @@ export function createMemoryPage(params: {
     navigate: params.navigate ?? vi.fn(),
     replace: params.replace ?? vi.fn(),
   } as unknown as ApplicationContext;
+  const connectionLifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   (element as unknown as { context: ApplicationContext }).context = context;
   new ContextProvider(element, { context: applicationContext, initialValue: context }).setValue(
     context,
   );
-  const setPhase = (phase: string) => {
-    gateway.snapshot = { ...gateway.snapshot, phase };
+  const publishGateway = (snapshot: ApplicationGatewaySnapshot) => {
+    connectionLifecycle.transition(snapshot);
+    gatewayHarness.publish(snapshot);
+  };
+  const setPhase = (phase: "connected" | "disconnected") => {
     runtimeConfig.state = { ...runtimeConfig.state, connected: phase === "connected" };
-    for (const notify of gatewayListeners) {
-      notify();
-    }
+    publishGateway({ ...gateway.snapshot, phase: phase === "connected" ? "connected" : "offline" });
     for (const notify of runtimeListeners) {
       notify();
     }
+  };
+  const publishPluginGeneration = (generation: number) => {
+    publishGateway({
+      ...gateway.snapshot,
+      pluginCapabilities: { ok: true, generation, descriptors: [] },
+    });
+  };
+  const setBootId = (bootId: string | undefined) => {
+    const hello = gateway.snapshot.hello;
+    if (!hello) {
+      throw new Error("Missing Memory fixture hello");
+    }
+    publishGateway({
+      ...gateway.snapshot,
+      hello: { ...hello, server: { ...hello.server, bootId } },
+    });
+  };
+  const setScopes = (scopes: string[]) => {
+    const hello = gateway.snapshot.hello;
+    if (!hello?.auth) {
+      throw new Error("Missing Memory fixture auth");
+    }
+    publishGateway({ ...gateway.snapshot, hello: { ...hello, auth: { ...hello.auth, scopes } } });
   };
   return {
     element,
     request,
     setPhase,
+    publishPluginGeneration,
+    setBootId,
+    setScopes,
     refresh: runtimeConfig.refresh,
     runExternalMutation: runtimeConfig.runExternalMutation,
     lookupSchemaPath: runtimeConfig.lookupSchemaPath,

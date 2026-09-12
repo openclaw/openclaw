@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { CiTestTimings } from "./ci-test-timings-schema.mts";
+import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
 
 export type CiTimingRun = {
   id: number;
@@ -101,10 +102,47 @@ function readCompactLog(
   }
 }
 
-function refitMap(samples: Samples, previous: Record<string, number> = {}, contributingRuns = 0) {
+function recordCompleteParentSamples(samples: Samples, observedParents: Set<string>) {
+  const generations = new Map<
+    string,
+    { parent: string; expected: number; parts: Map<number, number> }
+  >();
+  for (const [key, values] of samples) {
+    const parsed = parseCompactSplitTimingKey(key);
+    if (!parsed) {
+      continue;
+    }
+    observedParents.add(parsed.parentShardName);
+    const generation = generations.get(parsed.generationKey) ?? {
+      parent: parsed.parentShardName,
+      expected: parsed.expectedParts,
+      parts: new Map<number, number>(),
+    };
+    generation.parts.set(parsed.part, median(values));
+    generations.set(parsed.generationKey, generation);
+  }
+  for (const { parent, expected, parts } of generations.values()) {
+    if (parts.size !== expected) {
+      continue;
+    }
+    // Inventory-specific child keys expire when files move. Retain the full
+    // measured cost at its parent so the next inventory has a measured floor.
+    // One run/profile supplies one sample, even after retries or repartitioning.
+    const total = [...parts.values()].reduce((sum, duration) => sum + duration, 0);
+    const direct = samples.get(parent);
+    samples.set(parent, [Math.max(total, direct ? median(direct) : 0)]);
+  }
+}
+
+function refitMap(
+  samples: Samples,
+  previous: Record<string, number> = {},
+  contributingRuns = 0,
+  observedParents?: Set<string>,
+) {
   const next = Object.fromEntries(
     Object.entries(previous).filter(
-      ([key]) => contributingRuns < MIN_PRUNE_RUNS || samples.has(key),
+      ([key]) => contributingRuns < MIN_PRUNE_RUNS || samples.has(key) || observedParents?.has(key),
     ),
   );
   for (const [key, values] of samples) {
@@ -139,6 +177,7 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
     github: new Set<number>(),
   };
   const overhead: number[] = [];
+  const observedParents = { blacksmith: new Set<string>(), github: new Set<string>() };
   for (const run of runs) {
     const current = {
       uiE2e: new Map<string, number[]>(),
@@ -153,6 +192,9 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
       } else {
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
+    }
+    for (const profile of ["blacksmith", "github"] as const) {
+      recordCompleteParentSamples(current[profile], observedParents[profile]);
     }
     // Retries or duplicate reporter lines in one run must not satisfy the two-run minimum.
     for (const profile of ["uiE2e", "repoE2e", "blacksmith", "github"] as const) {
@@ -179,11 +221,13 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
         samples.blacksmith,
         previous?.compactGroupSeconds.blacksmith,
         contributingRuns.blacksmith.size,
+        observedParents.blacksmith,
       ),
       github: refitMap(
         samples.github,
         previous?.compactGroupSeconds.github,
         contributingRuns.github.size,
+        observedParents.github,
       ),
     },
     repoE2eFileSeconds: refitMap(
@@ -248,5 +292,11 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
     timings,
     changes: changes.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     runIds,
+    contributingRunIds: {
+      blacksmith: [...contributingRuns.blacksmith].toSorted((a, b) => a - b),
+      github: [...contributingRuns.github].toSorted((a, b) => a - b),
+      repoE2e: [...contributingRuns.repoE2e].toSorted((a, b) => a - b),
+      uiE2e: [...contributingRuns.uiE2e].toSorted((a, b) => a - b),
+    },
   };
 }

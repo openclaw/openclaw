@@ -43,7 +43,7 @@ import {
   type TurnEndEvent,
   type TurnStartEvent,
 } from "./extensions/index.js";
-import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import type { CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
@@ -102,10 +102,6 @@ export abstract class AgentSessionBase {
   // Retry state
   protected retryAbortController: AbortController | undefined = undefined;
   protected retryCount = 0;
-
-  // Bash execution state
-  protected bashAbortController: AbortController | undefined = undefined;
-  protected pendingBashMessages: BashExecutionMessage[] = [];
 
   // Extension system
   protected currentExtensionRunner!: ExtensionRunner;
@@ -612,7 +608,6 @@ export abstract class AgentSessionBase {
       () => this.abortRetry(),
       () => this.abortCompaction(),
       () => this.abortBranchSummary(),
-      () => this.abortBash(),
       () => this.agent.abort(),
     ];
     for (const abortOperation of abortOperations) {
@@ -886,6 +881,4 @@ export abstract class AgentSessionBase {
   abstract abortRetry(): void;
   abstract abortCompaction(): void;
   abstract abortBranchSummary(): void;
-  abstract abortBash(): void;
-  protected abstract flushPendingBashMessages(): void;
 }

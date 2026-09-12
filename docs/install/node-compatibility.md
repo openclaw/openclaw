@@ -18,7 +18,15 @@ This reference covers supported Node.js lines, why the minimum versions exist, a
 | Node 23 | Unsupported | —               | Excluded earlier for incompatible `node:sqlite` behavior. |
 | Node 22 | Unsupported | —               | Unsupported since the 24.16.0/26.1.0 floor.               |
 
-The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It is enforced by `package.json` engines during npm installation, the startup runtime guard for every `openclaw` command, and the installer scripts.
+The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the documented support policy and the `package.json` engine range used by package managers.
+
+## How the gate decides
+
+Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The probe uses an in-memory database and caches the current process result; checks of another executable run the same probe in that executable with a bounded timeout. A build within the supported version table is refused if the probe fails.
+
+The running package's startup guard and Gateway runtime selection admit a Node 24 or newer release outside the table when the probe passes, with the note `unsupported version, capability probe passed`. Its capabilities meet this package's correctness gate, but it remains outside the tested support policy. This permits vendor backports without claiming support for their version. Node 22 and 23 remain excluded, and package manager engine checks still apply.
+
+Installers retain the numeric Node requirement and add the probe as a second gate. Package and Git update preflight also require the selected target's `engines.node` range numerically, including any fallback runtime. A passing probe cannot relax another package's requirements: an older release may still enforce its version table at startup.
 
 ## Why the floors exist
 
@@ -54,9 +62,9 @@ See [Installer internals](/install/installer) for provisioning details.
 node -v
 ```
 
-Upgrade Node before updating OpenClaw if your version is unsupported. The startup guard prints this requirement sentence:
+Use a supported Node release for the recommended installation path. A broken TEXT decoder is refused with this diagnostic:
 
-> `openclaw requires Node >=24.16.0 <25, or >=26.1.0.`
+> `Node <v>: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`
 
 ## History across releases
 
@@ -64,7 +72,8 @@ Rows identify the first effective release, including a beta when applicable. Rec
 
 | Release                              | Node requirement                                 | What changed and why                                                                                                                                                                                          |
 | ------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unreleased (main)                    | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672 |
+| Unreleased (main)                    | Unchanged support policy                         | Replaces decoder version-only admission with an in-memory NUL round-trip probe; capable vendor builds on Node 24+ may run with an unsupported-version note. Node 22/23 remain excluded.                       |
+| v2026.9.3                            | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672 |
 | v2026.8.2                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Preserves supported RPM-owned Node packages with unsafe system SQLite and provisions a separate user-space runtime. The numeric range and loaded-library safety requirement stay unchanged. #134166           |
 | v2026.8.1                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Rootless defaults advance to 24.19.0, or 22.23.2 on ARMv7. Linux package provisioning returns to Node 24 LTS to avoid prerelease repository builds. #130369                                                   |
 | v2026.8.1-beta.3; stable v2026.8.1   | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Centralizes release classification in `node-version.mjs`, rejecting prerelease, nightly, and malformed version labels. #124812                                                                                |

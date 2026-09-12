@@ -186,6 +186,13 @@
   color: var(--muted);
 }
 
+.side-panel__header .tabstrip-tab__favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
 .side-panel__header .tabstrip-tab[active] .tabstrip-tab__icon {
   color: var(--text);
 }

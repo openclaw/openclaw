@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
@@ -97,6 +98,102 @@ async function startPlacementReclaim(
 }
 
 suite.define(() => {
+  it.each(["restart", "stop-first"] as const)(
+    "offers failed worker actions from %s recovery across session menus",
+    async (recoveryAction) => {
+      const context = await suite.newBrowserContext(proofContextOptions());
+      const page = await context.newPage();
+      const restartable = recoveryAction === "restart";
+      const sessionKey = `agent:main:failed-worker-${recoveryAction}`;
+      const session = {
+        key: sessionKey,
+        kind: "direct",
+        label: "Failed worker recovery",
+        sessionId: `failed-worker-${recoveryAction}`,
+        updatedAt: Date.now(),
+        archived: restartable,
+        hasActiveRun: false,
+        activeRunIds: [],
+        placement: {
+          state: "failed",
+          generation: 2,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          stateChangedAtMs: 2,
+          recoveryAction,
+          recoveryError: restartable
+            ? "Cloud worker disappeared: worker provider no longer recognizes the lease."
+            : "Cloud worker cleanup is still pending.",
+        },
+      } satisfies GatewaySessionRow;
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.startup", "sessions.reclaim", "sessions.dispatch"],
+        historyMessages: [{ role: "assistant", content: "Worker recovery proof." }],
+        methodResponses: { "sessions.list": chatSessionListResponse([session]) },
+        sessionInfo: session,
+        sessionKey,
+      });
+
+      try {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.getByRole("button", { name: "Runs on worker", exact: true }).click();
+        const headerMenu = page.locator(".chat-pane__placement-menu");
+        await headerMenu
+          .getByText(restartable ? "Restart session…" : "Stop worker…", { exact: true })
+          .waitFor();
+        await expect
+          .poll(() => headerMenu.getByText("Stop worker…", { exact: true }).count())
+          .toBe(restartable ? 0 : 1);
+        await capture(page, `worker-${recoveryAction}-header.png`);
+        await page.keyboard.press("Escape");
+
+        if (restartable) {
+          await page.getByRole("button", { name: "Unarchive", exact: true }).waitFor();
+          await page.getByRole("button", { name: "Filter & sort" }).click();
+          await page
+            .locator(".sidebar-session-sort-menu")
+            .getByRole("menuitemradio", { name: "All", exact: true })
+            .click();
+        }
+        const sidebarRow = page.locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+        );
+        await sidebarRow.hover();
+        await sidebarRow.getByRole("button", { name: "Open session menu" }).click();
+        const sidebarMenu = page.locator("openclaw-session-menu");
+        await sidebarMenu
+          .getByRole("menuitem", { name: restartable ? "Restore session" : "Archive session" })
+          .waitFor();
+        await capture(page, `worker-${recoveryAction}-sidebar.png`);
+        await expect
+          .poll(() => sidebarMenu.getByRole("menuitem", { name: "Stop cloud worker…" }).count())
+          .toBe(restartable ? 0 : 1);
+
+        await page.goto(`${suite.server.baseUrl}sessions?status=all`);
+        const sessionsRow = page.locator(".session-data-row").filter({ hasText: session.label });
+        await sessionsRow.click({ button: "right" });
+        const sessionsMenu = page.locator("openclaw-session-menu");
+        await sessionsMenu
+          .getByRole("menuitem", { name: restartable ? "Restore session" : "Archive session" })
+          .waitFor();
+        const stopWorker = sessionsMenu.getByRole("menuitem", { name: "Stop cloud worker…" });
+        await expect.poll(() => stopWorker.count()).toBe(restartable ? 0 : 1);
+        await capture(page, `worker-${recoveryAction}-sessions.png`);
+        if (!restartable) {
+          await gateway.deferNext("sessions.reclaim");
+          await stopWorker.click();
+          await page.getByRole("button", { name: "Stop worker", exact: true }).click();
+          const reclaim = await gateway.waitForRequest("sessions.reclaim");
+          expect(reclaim.params).toEqual({ key: sessionKey, agentId: "main" });
+        } else {
+          expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
   it("does not resurrect a reveal failure after navigating away", async () => {
     const context = await suite.newBrowserContext(proofContextOptions());
     const page = await context.newPage();

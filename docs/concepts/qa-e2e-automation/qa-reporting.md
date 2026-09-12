@@ -41,6 +41,11 @@ producer `qa-evidence.json`. When `qa suite` is reached through `qa run
 --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 
+The QA Lab evidence gallery uses recognized file suffixes to select image,
+video, JSON, or text previews. A `.log` file remains text even when its free-form
+artifact kind contains a media hint such as `gif`. Kind hints still classify
+extensionless files and unknown suffixes; the complete kind label is preserved.
+
 `qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
 own Markdown table cells, collapsing whitespace for display. The JSON summary
 preserves the annotation values, including internal line breaks.

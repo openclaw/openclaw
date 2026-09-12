@@ -15,6 +15,7 @@ scripts/lib/managed-child-process.mts
 scripts/lib/merge-head-diff-base.mjs
 scripts/lib/numeric-options.mjs
 scripts/lib/record-shared.mjs
+scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/vitest-build-prerequisites.mts
@@ -62,6 +63,7 @@ test/vitest/vitest.extension-misc-paths.mjs
 test/vitest/vitest.extension-msteams-paths.mjs
 test/vitest/vitest.extension-provider-paths.mjs
 test/vitest/vitest.extension-qa-paths.mjs
+test/vitest/vitest.extension-database-workers-paths.mjs
 test/vitest/vitest.extension-telegram-paths.mjs
 test/vitest/vitest.extension-voice-call-paths.mjs
 test/vitest/vitest.extension-whatsapp-paths.mjs

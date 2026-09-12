@@ -964,7 +964,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       env: { ...state.env, AWS_PROFILE: "default" },
       explicitProviders: { "amazon-bedrock": explicitProvider },
       sourceModelFields: new Map([
-        ["amazon-bedrock/vision-model", { inputOmitted: true, cost: undefined }],
+        [
+          JSON.stringify(["amazon-bedrock", "vision-model"]),
+          { inputOmitted: true, cost: undefined },
+        ],
       ]),
     });
 

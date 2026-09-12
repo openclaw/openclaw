@@ -349,7 +349,7 @@ describe("installPluginFromNpmSpec e2e", () => {
           observations[stage] = {
             exitCode, authorityClosed, error: errors.join("\\n"),
             configUnchanged: configBefore === await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"),
-            pluginInstalls: await readPersistedInstalledPluginIndexInstallRecords() ?? {},
+            pluginInstalls: readPersistedInstalledPluginIndexInstallRecords() ?? {},
             hookInstalls: readHookInstalls(),
             npmPayloads: npmEntries.filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
             hookPayload: existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "hooks", packageName)),

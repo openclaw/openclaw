@@ -1,17 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearLocalAudioInspectionCacheForTests,
-  inspectLocalAudioSelection,
-  recordLocalAudioBackendObservation,
-} from "./local-audio.js";
+import { inspectLocalAudioSelection } from "./local-audio.js";
 
 const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
-  clearLocalAudioInspectionCacheForTests();
   tempDirs.cleanup();
 });
 
@@ -165,6 +160,10 @@ describe("local audio selection", () => {
   });
 
   it("does not rank Metal-capable whisper ahead of sherpa until a run observes Metal", async () => {
+    // Backend observations belong to this case, not the other selection fixtures.
+    vi.resetModules();
+    const { inspectLocalAudioSelection: inspectSelection, recordLocalAudioBackendObservation } =
+      await import("./local-audio.js");
     const tempDir = tempDirs.make("openclaw-local-audio-");
     const modelPath = path.join(tempDir, "whisper.bin");
     const sherpaDir = path.join(tempDir, "sherpa");
@@ -176,7 +175,7 @@ describe("local audio selection", () => {
       }),
     );
 
-    const selection = await inspectLocalAudioSelection({
+    const selection = await inspectSelection({
       env: {
         WHISPER_CPP_MODEL: modelPath,
         SHERPA_ONNX_MODEL_DIR: sherpaDir,
@@ -211,7 +210,7 @@ describe("local audio selection", () => {
       args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-nt", "{{MediaPath}}"],
       output: "whisper_backend_init_gpu: using MTL0 backend",
     });
-    const mismatchedCommandSelection = await inspectLocalAudioSelection({
+    const mismatchedCommandSelection = await inspectSelection({
       env: {
         WHISPER_CPP_MODEL: modelPath,
         SHERPA_ONNX_MODEL_DIR: sherpaDir,
@@ -234,7 +233,7 @@ describe("local audio selection", () => {
       args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-nt", "{{MediaPath}}"],
       output: "whisper_backend_init_gpu: using MTL0 backend",
     });
-    const observedSelection = await inspectLocalAudioSelection({
+    const observedSelection = await inspectSelection({
       env: {
         WHISPER_CPP_MODEL: modelPath,
         SHERPA_ONNX_MODEL_DIR: sherpaDir,
@@ -267,7 +266,7 @@ describe("local audio selection", () => {
           ].join("\n"),
         }),
       ).toBe("cpu");
-      const failedAccelerationSelection = await inspectLocalAudioSelection({
+      const failedAccelerationSelection = await inspectSelection({
         env: {
           WHISPER_CPP_MODEL: modelPath,
           SHERPA_ONNX_MODEL_DIR: sherpaDir,

@@ -16,16 +16,8 @@ function normalizeClaudeModelId(modelId?: string): string {
 }
 
 export const CLAUDE_FABLE_5_THINKING_PROFILE = {
-  levels: [
-    { id: "minimal" },
-    { id: "low" },
-    { id: "medium" },
-    { id: "high" },
-    { id: "xhigh" },
-    { id: "adaptive" },
-    { id: "max" },
-  ],
-  defaultLevel: "high",
+  levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
+  defaultLevel: "medium",
   preserveWhenCatalogReasoningFalse: true,
 } as const;
 
@@ -52,10 +44,10 @@ export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
   const configuredCanonicalModelId =
     typeof ref.params?.canonicalModelId === "string" ? ref.params.canonicalModelId : undefined;
   const normalized = normalizeClaudeModelId(configuredCanonicalModelId ?? ref.id);
-  const match = /(?:^|[-/])claude-/.exec(normalized);
-  return match
-    ? normalized.slice((match.index ?? 0) + (match[0].startsWith("claude-") ? 0 : 1))
-    : normalized;
+  // Routing namespaces can themselves start with "Claude"; only the final
+  // path component identifies the backing model.
+  const match = /(?:^|[-/])(claude-[^/]+)$/.exec(normalized);
+  return match?.[1] ?? normalized;
 }
 
 /** Resolve Claude Fable 5 through direct ids, cloud ids, or deployment metadata. */

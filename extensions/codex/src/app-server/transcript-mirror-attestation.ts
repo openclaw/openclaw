@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexAsyncQuestions } from "./async-questions.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
 import type { CodexAsyncAssistantMessage } from "./event-projector-assistant-message.js";
 import { readMirrorIdentity, readUpstreamUserText } from "./upstream-prompt-provenance.js";
@@ -103,9 +104,13 @@ export function readCodexMirrorSourceFingerprint(message: AgentMessage): string 
 
 export function serializeCodexMirrorSourceEvidence(message: AgentMessage): string {
   const content = "content" in message ? message.content : undefined;
+  const questions = isMirroredAgentMessage(message)
+    ? readCodexAsyncQuestions(message.openclawAsyncDelivery?.questions)
+    : undefined;
   return JSON.stringify({
     role: message.role,
     content,
+    ...(questions ? { questions } : {}),
     ...(message.role === "user" ? { upstreamUserText: readUpstreamUserText(message) } : {}),
     ...(message.role === "toolResult"
       ? {

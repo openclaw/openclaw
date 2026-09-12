@@ -70,16 +70,51 @@ function buildCatalogModelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-function resolveThinkingCatalogEntry(params: {
+type ThinkingCatalogQuery = {
   provider?: string | null;
   model?: string | null;
-  catalog?: ThinkingCatalogEntry[];
-}): ThinkingCatalogEntry | undefined {
+};
+
+export type ThinkingCatalogResolver = (
+  params: ThinkingCatalogQuery,
+) => ThinkingCatalogEntry | undefined;
+
+function resolveThinkingCatalogKey(params: ThinkingCatalogQuery): string | undefined {
   const providerRaw = normalizeOptionalString(params.provider);
   const normalizedProvider = providerRaw ? normalizeProviderId(providerRaw) : "";
   const modelId = normalizeOptionalString(params.model) ?? "";
-  const selectedCatalogKey =
-    normalizedProvider && modelId ? buildCatalogModelKey(normalizedProvider, modelId) : undefined;
+  return normalizedProvider && modelId
+    ? buildCatalogModelKey(normalizedProvider, modelId)
+    : undefined;
+}
+
+/** Indexes one prepared catalog while retaining its first matching row and policy owner. */
+export function createThinkingCatalogResolver(
+  catalog: readonly ThinkingCatalogEntry[],
+): ThinkingCatalogResolver {
+  const byKey = new Map<string, ThinkingCatalogEntry>();
+  for (const entry of catalog) {
+    const key = buildCatalogModelKey(normalizeProviderId(entry.provider), entry.id);
+    if (!byKey.has(key)) {
+      byKey.set(key, entry);
+    }
+  }
+  return (params) => {
+    const key = resolveThinkingCatalogKey(params);
+    return key === undefined ? undefined : byKey.get(key);
+  };
+}
+
+function resolveThinkingCatalogEntry(
+  params: ThinkingCatalogQuery & {
+    catalog?: ThinkingCatalogEntry[];
+    catalogResolver?: ThinkingCatalogResolver;
+  },
+): ThinkingCatalogEntry | undefined {
+  if (params.catalogResolver) {
+    return params.catalogResolver(params);
+  }
+  const selectedCatalogKey = resolveThinkingCatalogKey(params);
   const selected = params.catalog?.find(
     (entry) =>
       selectedCatalogKey !== undefined &&
@@ -92,6 +127,7 @@ function resolveThinkingPolicyContext(params: {
   provider?: string | null;
   model?: string | null;
   catalog?: ThinkingCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   agentRuntime?: string | null;
   configuredReasoning?: boolean;
 }) {
@@ -214,6 +250,7 @@ export function resolveThinkingProfile(params: {
   provider?: string | null;
   model?: string | null;
   catalog?: ThinkingCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   agentRuntime?: string | null;
   configuredReasoning?: boolean;
   providerPolicySource?: ProviderThinkingPolicySource;
@@ -346,13 +383,17 @@ export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
   catalog?: ThinkingCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   agentRuntime?: string | null;
+  providerPolicySource?: ProviderThinkingPolicySource;
 }): ThinkLevel {
   const profile = resolveThinkingProfile({
     provider: params.provider,
     model: params.model,
     catalog: params.catalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime: params.agentRuntime,
+    providerPolicySource: params.providerPolicySource,
   });
   if (profile.defaultLevel) {
     return profile.defaultLevel;
@@ -390,6 +431,9 @@ function resolveSupportedThinkingLevelFromProfile(
   if (profile.levels.some((entry) => entry.id === level)) {
     return level;
   }
+  if (level === "adaptive" && profile.defaultLevel && profile.defaultLevel !== "off") {
+    return profile.defaultLevel;
+  }
   const requestedRank = THINKING_LEVEL_RANKS[level];
   const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
   return (
@@ -405,6 +449,7 @@ export function resolveSupportedThinkingLevel(params: {
   model?: string | null;
   level: ThinkLevel;
   catalog?: ThinkingCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   agentRuntime?: string | null;
   configuredReasoning?: boolean;
   providerPolicySource?: ProviderThinkingPolicySource;
@@ -413,6 +458,7 @@ export function resolveSupportedThinkingLevel(params: {
     provider: params.provider,
     model: params.model,
     catalog: params.catalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime: params.agentRuntime,
     configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,

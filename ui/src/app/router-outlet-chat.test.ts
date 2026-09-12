@@ -8,6 +8,7 @@ import {
 import { html, nothing, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -36,19 +37,6 @@ type RouterOutletElement = LitElement & {
   retryContext?: TestContext;
   retentionScope?: object;
 };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 function location(pathname: string, search = ""): RouteLocation {
   return { pathname, search, hash: "" };
@@ -112,7 +100,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));
-    const refreshed = deferred<ChatRouteData>();
+    const refreshed = createDeferredCore<ChatRouteData>();
     const loader = vi
       .fn()
       .mockResolvedValueOnce(sessionData(sessionKey, "chat"))
@@ -178,7 +166,7 @@ describe("openclaw-router-outlet chat ownership", () => {
   it("keeps a parked session hidden until the requested session resolves", async () => {
     const firstKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
     const nextKey = "agent:main:dashboard:abcdef12-3456-7890-abcd-ef1234567890";
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     const teardown = vi.fn(async () => undefined);
     const render = ownedRenderer(teardown);
     const chatModule = await routeModule("chat", render);
@@ -231,9 +219,9 @@ describe("openclaw-router-outlet chat ownership", () => {
     let scope = { key: 1 };
     const oldKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
     const newKey = "agent:main:dashboard:abcdef12-3456-7890-abcd-ef1234567890";
-    const teardownDone = deferred<void>();
+    const teardownDone = createDeferredCore();
     const teardown = vi.fn(() => teardownDone.promise);
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     const loader = vi
       .fn()
       .mockResolvedValueOnce(sessionData(oldKey, "chat"))
@@ -295,8 +283,8 @@ describe("openclaw-router-outlet chat ownership", () => {
   it("keeps a pending destination and ignores its retired scope's late result", async () => {
     const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
     let scope = { key: 1 };
-    const oldResult = deferred<ChatRouteData>();
-    const newResult = deferred<ChatRouteData>();
+    const oldResult = createDeferredCore<ChatRouteData>();
+    const newResult = createDeferredCore<ChatRouteData>();
     const loader = vi
       .fn()
       .mockImplementationOnce(() => oldResult.promise)
@@ -343,8 +331,8 @@ describe("openclaw-router-outlet chat ownership", () => {
     let scope = { key: 1 };
     const render = ownedRenderer(async () => undefined);
     const chatModule = await routeModule("chat", render);
-    const dashboardModule = deferred<TestModule>();
-    const homeModule = deferred<TestModule>();
+    const dashboardModule = createDeferredCore<TestModule>();
+    const homeModule = createDeferredCore<TestModule>();
     const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
       routes: [
         definePage({
@@ -387,7 +375,7 @@ describe("openclaw-router-outlet chat ownership", () => {
 
   it("keeps a returning session inert until its pending MCP teardown completes", async () => {
     const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-    const done = deferred<void>();
+    const done = createDeferredCore();
     const teardown = vi.fn(() => done.promise);
     const render = ownedRenderer(teardown);
     const module = await routeModule("chat", render);
@@ -473,7 +461,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       fallbackAgentId: "main",
       row: { key: nextSessionKey, displayName: "Next retained board" },
     });
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     const teardown = vi.fn(async () => undefined);
     const render = ownedRenderer(teardown);
     const chatModule = await routeModule("chat", render);
@@ -533,7 +521,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       `?${new URLSearchParams({ draft: "ship it", [SESSION_COMPOSER_FOCUS_PARAM]: "1" })}`,
     );
     const initial = { ...sessionData(sessionKey, "chat"), canonicalLocation: canonical };
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));
@@ -571,7 +559,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     const firstKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
     const secondKey = "agent:main:dashboard:12345678-0bbb-4000-8000-000000000002";
     const pathname = "/chat/main/deploy-monitor-12345678";
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));
@@ -636,7 +624,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     },
   ])("retains an unresolved route until $label replaces it", async ({ result }) => {
     const sessionKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferredCore<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));

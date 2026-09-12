@@ -2,11 +2,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import {
   CLI_PROCESS_DEADLOCK_GUARD_MS,
   formatCliProcessFailure,
@@ -97,6 +99,7 @@ registerHooks({
 
 async function runCliProcess(params: {
   args: string[];
+  entry?: URL;
   config?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   forbidTlsImport?: boolean;
@@ -121,6 +124,7 @@ async function runCliProcess(params: {
   const expectedExitCode = params.expectedExitCode ?? 0;
   const exit = await runCliProcessChild({
     nodeArgs: [
+      // Prepared entrypoints still load source-checkout plugins; keep the same TSX loader.
       "--import",
       "tsx",
       // Node runs later sync customization hooks first. Install test guards after
@@ -132,7 +136,7 @@ async function runCliProcess(params: {
       ...(params.failRunMainImport
         ? ["--import", pathToFileURL(fixture.failRunMainImportPath).href]
         : []),
-      "src/entry.ts",
+      params.entry ? fileURLToPath(params.entry) : "src/entry.ts",
       ...params.args,
     ],
     env: {
@@ -353,6 +357,7 @@ describe("models list JSON failure process output", () => {
   )("renders $name as one clean canonical JSON document", async ({ provider, message, env }) => {
     const result = await runCliProcess({
       args: ["models", "list", "--provider", provider, "--json"],
+      entry: resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
       config: {},
       env,
       expectedExitCode: 1,

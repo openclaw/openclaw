@@ -1,24 +1,23 @@
 // Tests local port probing and availability detection.
 import net from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type TestContext } from "vitest";
 import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
 
 async function withListeningServer(
+  skip: TestContext["skip"],
   cb: (address: net.AddressInfo) => Promise<void>,
   host = "127.0.0.1",
 ): Promise<void> {
-  const server = net.createServer();
+  await using server = net.createServer();
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, host, () => resolve());
     });
   } catch (err) {
-    if (
-      (err as NodeJS.ErrnoException).code === "EPERM" ||
-      (err as NodeJS.ErrnoException).code === "EADDRNOTAVAIL"
-    ) {
-      return;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EADDRNOTAVAIL") {
+      skip(`TCP listener bind unavailable: ${code}`);
     }
     throw err;
   }
@@ -27,13 +26,7 @@ async function withListeningServer(
     throw new Error("expected tcp address");
   }
 
-  try {
-    await cb(address);
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
+  await cb(address);
 }
 
 describe("tryListenOnPort", () => {
@@ -52,7 +45,7 @@ describe("tryListenOnPort", () => {
     ).rejects.toBe(reason);
   });
 
-  it("returns an ephemeral port only after its listener closes", async () => {
+  it("returns an ephemeral port only after its listener closes", async ({ skip }) => {
     let signalClose: () => void = () => {};
     const closeSignaled = new Promise<void>((resolve) => {
       signalClose = resolve;
@@ -91,7 +84,7 @@ describe("tryListenOnPort", () => {
         ),
       ]);
       if (firstEvent instanceof Error && (firstEvent as NodeJS.ErrnoException).code === "EPERM") {
-        return;
+        skip("TCP listener bind unavailable: EPERM");
       }
       expect(firstEvent).toBe("closing");
       expect(settled).toBe(false);
@@ -103,8 +96,8 @@ describe("tryListenOnPort", () => {
     }
   });
 
-  it("rejects when the port is already in use", async () => {
-    await withListeningServer(async (address) => {
+  it("rejects when the port is already in use", async ({ skip }) => {
+    await withListeningServer(skip, async (address) => {
       let rejection: NodeJS.ErrnoException | undefined;
       try {
         await tryListenOnPort({ port: address.port, host: "127.0.0.1" });
@@ -125,16 +118,22 @@ describe("tryListenOnPort", () => {
 });
 
 describe("probePortUsage", () => {
-  it("reports an IPv4-only loopback listener as busy", async () => {
-    await withListeningServer(async (address) => {
+  it("reports an IPv4-only loopback listener as busy", async ({ skip }) => {
+    await withListeningServer(skip, async (address) => {
       await expect(probePortUsage(address.port)).resolves.toBe("busy");
     });
   });
 
-  it("can scope a probe to a free loopback address when another address owns the port", async () => {
-    await withListeningServer(async (address) => {
-      await expect(probePortUsage(address.port)).resolves.toBe("busy");
-      await expect(probePortUsage(address.port, ["127.0.0.1"])).resolves.toBe("free");
-    }, "127.0.0.2");
+  it("can scope a probe to a free loopback address when another address owns the port", async ({
+    skip,
+  }) => {
+    await withListeningServer(
+      skip,
+      async (address) => {
+        await expect(probePortUsage(address.port)).resolves.toBe("busy");
+        await expect(probePortUsage(address.port, ["127.0.0.1"])).resolves.toBe("free");
+      },
+      "127.0.0.2",
+    );
   });
 });

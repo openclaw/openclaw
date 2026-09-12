@@ -11,6 +11,8 @@ sidebarTitle: "Gateway"
 
 The Gateway is OpenClaw's WebSocket server (channels, nodes, sessions, hooks). All subcommands on the pages listed here live under `openclaw gateway ...`.
 
+`openclaw daemon ...` is a legacy alias for the service-control subcommands; see [`openclaw daemon`](/cli/daemon).
+
 <CardGroup cols={3}>
   <Card title="Bonjour discovery" href="/gateway/bonjour">
     Local mDNS + wide-area DNS-SD setup.
@@ -35,6 +37,8 @@ job. Open the page that matches your task.
 | [Query a running Gateway](/cli/gateway/query)                   | You want health, status, stability, diagnostics, or a direct RPC call.             |
 | [Manage the Gateway service](/cli/gateway/service)              | You are installing, starting, stopping, or repairing the native service.           |
 | [Discover gateways (Bonjour)](/cli/gateway/discovery)           | You are looking for gateways over mDNS or wide-area DNS-SD.                        |
+
+`openclaw gateway install` installs and starts the service. `--force` reinstalls an existing install and may restart a running Gateway. Finish offline configuration and runtime repairs before installation.
 
 ## Where each section moved
 

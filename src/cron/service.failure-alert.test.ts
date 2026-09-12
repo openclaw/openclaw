@@ -842,7 +842,7 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("adds Codex login recovery to OpenAI OAuth refresh failures", async () => {
+  it("adds provider login recovery to OpenAI OAuth refresh failures", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },
@@ -863,15 +863,15 @@ describe("CronService failure alerts", () => {
 
         const alert = alertCallArg(sendCronFailureAlert);
         expect(alert.text).toContain("Cause: auth_permanent");
-        expect(alert.text).toContain("/login codex");
+        expect(alert.text).toContain("Send `/login openai`");
         expect(alert.presentation).toEqual({
           blocks: [
             {
               type: "buttons",
               buttons: [
                 {
-                  label: "Log in to Codex",
-                  action: { type: "command", command: "/login codex" },
+                  label: "Sign in",
+                  action: { type: "command", command: "/login openai" },
                 },
               ],
             },
@@ -881,7 +881,7 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("does not offer Codex login for non-OAuth authentication failures", async () => {
+  it("does not offer provider login for non-OAuth authentication failures", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },

@@ -14,6 +14,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
@@ -106,7 +107,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   return storeTargets
     .filter(
       (target) =>
-        !params.statuses || hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses),
+        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }) &&
+        (!params.statuses ||
+          hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses)),
     )
     .toSorted(
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),

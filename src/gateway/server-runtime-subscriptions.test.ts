@@ -37,6 +37,7 @@ import {
   markTaskLostById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
+  reloadTaskRegistryFromStore,
 } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -780,6 +781,7 @@ describe("startGatewayEventSubscriptions", () => {
       runId: "run-throttle-primary",
       task: "Implement live progress",
       status: "running",
+      detail: { notes: [["runtime-owned task detail"]] },
     });
     const secondary = createTaskRecord({
       runtime: "subagent",
@@ -807,9 +809,15 @@ describe("startGatewayEventSubscriptions", () => {
       data: { text: "parallel" },
     });
 
-    await vi.advanceTimersByTimeAsync(999);
-    expect(broadcast).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      await vi.advanceTimersByTimeAsync(999);
+      expect(broadcast).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
     const firstFlush = readTaskUpserts(broadcast);
     expect(firstFlush).toHaveLength(2);
     expect(firstFlush.find((event) => event.task.id === primary.taskId)?.task.lastActivity).toBe(
@@ -859,7 +867,7 @@ describe("startGatewayEventSubscriptions", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
-  it("suppresses identical task summaries without delaying status transitions", async () => {
+  it("suppresses identical summaries and refreshes them after restore", async () => {
     const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
     unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
     await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
@@ -887,6 +895,18 @@ describe("startGatewayEventSubscriptions", () => {
         progressSummary: "Working",
       });
     }
+    const beforeRestore = readTaskUpserts(broadcast);
+    expect(beforeRestore).toHaveLength(1);
+    broadcast.mockClear();
+    reloadTaskRegistryFromStore();
+    expect(broadcast).toHaveBeenCalledWith("task", { action: "restored" }, { dropIfSlow: true });
+    recordTaskProgressByRunId({
+      runId,
+      runtime: "subagent",
+      lastEventAt: 200,
+      progressSummary: "Working",
+    });
+    expect(readTaskUpserts(broadcast)).toEqual(beforeRestore);
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
 
     const taskEvents = readTaskUpserts(broadcast);

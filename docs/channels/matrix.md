@@ -139,7 +139,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `joinIntro`: introduce when the bot joins an allowed group room. Default: `true`. Per-account override: `accounts.<accountId>.joinIntro`.
 - `replyToMode`: `"off"` (default), `"first"`, `"all"`, or `"batched"`.
-- `threadReplies`: `"off"` (top-level default resolves to `"inbound"` unless explicitly set), `"inbound"`, or `"always"`.
+- `threadReplies`: `"off"`, `"inbound"` (default), or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
 - `streaming`: nested object `{ mode, chunkMode, block: { enabled, coalesce }, preview: { toolProgress }, progress: { label, labels, maxLines, maxLineChars, toolProgress } }`. `mode` is `"off"` (default), `"partial"`, `"quiet"`, or `"progress"`. Legacy scalar/boolean spellings migrate via `openclaw doctor --fix`.
 - `streaming.block.enabled`: when `true`, completed assistant blocks are kept as separate progress messages. Default: `false`.
@@ -183,5 +183,5 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
 - [Security](/gateway/security) - access model and hardening

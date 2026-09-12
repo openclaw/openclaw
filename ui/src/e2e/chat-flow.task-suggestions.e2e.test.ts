@@ -14,8 +14,15 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("starts a model-suggested follow-up in a new session before workspace decisions", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+  it.each([
+    { mode: "local", label: "Start in a new session" },
+    { mode: "worktree", label: "Start in a new worktree" },
+    { mode: "session", label: "Start in this session" },
+  ])("starts a suggested task with $mode placement", async ({ mode, label }) => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      colorScheme: mode === "worktree" ? "dark" : "light",
+    });
     const page = await context.newPage();
     const suggestion = {
       id: "task_123",
@@ -42,7 +49,7 @@ suite.define(() => {
         "taskSuggestions.list": { suggestions: [suggestion] },
         "taskSuggestions.accept": {
           taskId: "task_123",
-          key: "agent:main:dashboard:suggested",
+          key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
         },
       },
     });
@@ -59,10 +66,24 @@ suite.define(() => {
       const startButton = page.getByRole("button", { name: "Start in a new session" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       const card = page.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`);
-      expect(await card.locator("wa-dropdown").count()).toBe(0);
+      const options = card.getByRole("button", { name: "Choose where to start the task" });
+      expect(
+        await startButton.evaluate((element) => getComputedStyle(element).borderTopRightRadius),
+      ).toBe("0px");
+      expect(
+        await options.evaluate((element) => getComputedStyle(element).borderTopLeftRadius),
+      ).toBe("0px");
+      await options.click();
+      await card.getByRole("menuitem", { name: "Start in a new worktree" }).waitFor();
+      expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
+      await captureUiProof(suite, page, "task-suggestions", `${mode}-menu.png`);
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => options.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       expect(await card.getByRole("button", { name: "Copy prompt" }).isEnabled()).toBe(true);
       expect(await gateway.getRequests("environments.list")).toHaveLength(0);
-      await captureUiProof(suite, page, "task-suggestions", "session-first.png");
+      await captureUiProof(suite, page, "task-suggestions", `${mode}-split-button.png`);
       await page.getByText("Show instructions", { exact: true }).click();
       await page
         .getByText("/projects/example", { exact: true })
@@ -72,13 +93,34 @@ suite.define(() => {
           exact: true,
         })
         .waitFor({ state: "visible", timeout: 10_000 });
-      await startButton.click();
+      const sourceUrl = page.url();
+      await gateway.deferNext("taskSuggestions.accept");
+      if (mode === "local") {
+        await startButton.click();
+      } else {
+        await options.click();
+        await card.getByRole("menuitem", { name: label, exact: true }).click();
+      }
+      await gateway.waitForRequest("taskSuggestions.accept");
+      expect(await card.getByRole("button", { name: "Starting…", exact: true }).isDisabled()).toBe(
+        true,
+      );
+      expect(await options.isDisabled()).toBe(true);
+      await gateway.resolveDeferred("taskSuggestions.accept", {
+        taskId: suggestion.id,
+        key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
+      });
 
       const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
-      expect(acceptRequest.params).toEqual({ taskId: "task_123", mode: "local" });
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath("agent:main:dashboard:suggested"));
+      expect(acceptRequest.params).toEqual({ taskId: "task_123", mode });
+      if (mode === "session") {
+        await card.waitFor({ state: "hidden" });
+        expect(page.url()).toBe(sourceUrl);
+      } else {
+        await expect
+          .poll(() => new URL(page.url()).pathname)
+          .toBe(controlUiSessionPath("agent:main:dashboard:suggested"));
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -180,6 +222,9 @@ suite.define(() => {
       expect(await card.getByRole("button", { name: "Start in a new session" }).isDisabled()).toBe(
         true,
       );
+      expect(
+        await card.getByRole("button", { name: "Choose where to start the task" }).isDisabled(),
+      ).toBe(true);
       expect(await card.getByRole("button", { name: "Copy prompt" }).isEnabled()).toBe(true);
     } finally {
       await suite.closeBrowserContext(context);

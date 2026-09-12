@@ -10,6 +10,40 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
+  it("does not borrow a provider for an ambiguous draft target", async () => {
+    const { context } = contextWith([
+      {
+        id: "model",
+        name: "First model",
+        provider: "openai",
+        reasoning: true,
+        thinkingLevels: [{ id: "high", label: "High" }],
+        thinkingDefault: "high",
+      },
+      { id: "model", name: "Second model", provider: "alternate-fixture", reasoning: true },
+    ]);
+    Object.assign(context.sessions.state.result!.defaults, {
+      model: "other",
+      modelProvider: "openai",
+    });
+    const agent = { id: "main", model: { primary: "model" } } satisfies GatewayAgentRow;
+    const onSelectionChange = vi.fn();
+    const control = new NewSessionModelControl(() => undefined, onSelectionChange);
+    control.load(context, "main", true, { agent });
+    await waitForFast(() =>
+      expect(
+        renderControl(control, context, "main", agent).querySelector(
+          '[data-chat-model-option="openai/model"]',
+        ),
+      ).not.toBeNull(),
+    );
+    const container = renderControl(control, context, "main", agent);
+    expect(container.querySelector('[data-chat-thinking-option="high"]')).toBeNull();
+    expect(container.querySelector('[data-chat-thinking-slider="true"]')).toBeNull();
+    expect(onSelectionChange).not.toHaveBeenCalled();
+    control.reset();
+  });
+
   it("keeps a draft model local without exposing its internal selection target", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
@@ -295,7 +329,7 @@ describe("new-session model runtime", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
-  it("renders initial metadata loading without synthesizing the configured default", async () => {
+  it("shows the known default immediately without inventing catalog choices", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     request.mockReturnValueOnce(pending.promise);
@@ -312,16 +346,17 @@ describe("new-session model runtime", () => {
       ".skeleton.chat-controls__model-trigger-skeleton",
     );
     expect(loadingModelTrigger).not.toBeNull();
-    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("false");
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
-      true,
+      false,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("gpt-5.6-luna");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
-    expect(loadingSkeleton).not.toBeNull();
-    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingSkeleton).toBeNull();
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(control.modelForSubmission()).toBe("");
+    expect(control.modelSelectionBlockedReason({ id: "main" })).toBeUndefined();
     pending.resolve({ models: [] });
   });
 

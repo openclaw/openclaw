@@ -12,8 +12,13 @@ read_when:
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs
 first. It looks for the newest prior green full validation with the same release
 profile, coverage policy, effective soak setting, and validation inputs. Exact-target reruns use
-`exact-target-full-validation-v1`. A descendant whose complete delta is exactly
-`CHANGELOG.md` uses `changelog-only-release-v1`; every product lane is skipped
+`exact-target-full-validation-v1`. A descendant whose complete delta includes
+the selected `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its matching
+`CHANGELOG/records/YYYY.M.PATCH.md`, and root `CHANGELOG.md` uses
+`split-changelog-release-v1`. Entry/record additions or modifications and index
+modifications are allowed; renames, deletions, other releases, and docs source
+edits are rejected. Historical root-only receipts retain
+`changelog-only-release-v1`. Under either changelog policy, every product lane is skipped
 and the verifier independently rechecks the GitHub commit comparison, immutable
 parent artifact, child runs, and dispatch logs. Any other target change requires
 a fresh Code SHA validation. Pass `reuse_evidence=false` to force a fresh full
@@ -168,10 +173,11 @@ The verifier uploads the canonical manifest as
 its artifact ID, digest, producer run, and attempt before downloading that exact
 artifact ID. It caps the downloaded ZIP, verifies its bytes against the REST
 `sha256:` digest, and streams the only allowed bounded manifest entry without
-extracting the archive. A stable-name alias remains temporarily for older
-publish consumers. The verifier always prefers the attempt-qualified artifact;
-as a transition, it accepts the stable name only for an attempt-1 manifest v2
-producer. It rejects that legacy name for later attempts and manifest v3.
+extracting the archive. A stable-name alias remains for older publish
+consumers. The verifier always prefers the attempt-qualified artifact and
+accepts the stable name only for an attempt-1 manifest v2 producer. It rejects
+that stable name for later attempts and for manifest v3, so the alias stops
+applying once a producer emits manifest v3.
 
 Concurrency is keyed by Validation SHA, Tooling SHA, rerun group, release
 profile, and effective soak coverage, and does not cancel an older run. The

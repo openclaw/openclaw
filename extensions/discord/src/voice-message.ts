@@ -32,6 +32,11 @@ import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-ru
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  getDiscordEndpointRuntime,
+  resolveDiscordEndpointAttachmentGuard,
+  type DiscordEndpointRuntime,
+} from "./endpoint-runtime.js";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
@@ -325,12 +330,18 @@ async function createVoiceRequestError(
 
 async function requestVoiceUploadUrl(params: {
   rest: RequestClient;
+  endpointRuntime: DiscordEndpointRuntime | null;
   channelId: string;
   botToken: string;
   filename: string;
   fileSize: number;
 }): Promise<UploadUrlResponse> {
-  const url = `${params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
+  const endpoint = params.endpointRuntime;
+  const uploadApiBaseUrl =
+    endpoint?.descriptor.restApiBaseUrl ??
+    params.rest.options?.baseUrl ??
+    "https://discord.com/api";
+  const url = `${uploadApiBaseUrl}/channels/${params.channelId}/attachments`;
   const uploadUrlInit: RequestInit = {
     method: "POST",
     headers: {
@@ -341,15 +352,24 @@ async function requestVoiceUploadUrl(params: {
       files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
     }),
   };
-  const { response: res, release } = await fetchWithSsrFGuard({
-    url,
-    init: uploadUrlInit,
-    // Keep control-plane negotiation on the REST budget; the binary upload below
-    // needs the longer attachment-transfer budget.
-    timeoutMs: params.rest.options.timeout,
-    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
-    auditContext: "discord.voice.upload-url",
-  });
+  const endpointResponse = endpoint
+    ? {
+        response: await endpoint.fetch(url, {
+          ...uploadUrlInit,
+          signal: AbortSignal.timeout(params.rest.options.timeout),
+        }),
+        release: async () => {},
+      }
+    : await fetchWithSsrFGuard({
+        url,
+        init: uploadUrlInit,
+        // Keep control-plane negotiation on the REST budget; the binary upload below
+        // needs the longer attachment-transfer budget.
+        timeoutMs: params.rest.options.timeout,
+        policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+        auditContext: "discord.voice.upload-url",
+      });
+  const { response: res, release } = endpointResponse;
   try {
     if (!res.ok) {
       throw await createVoiceRequestError(res, "Upload URL request failed");
@@ -363,7 +383,12 @@ async function requestVoiceUploadUrl(params: {
 async function uploadVoiceAttachment(params: {
   uploadUrl: string;
   audioBuffer: Buffer;
+  endpointRuntime: DiscordEndpointRuntime | null;
 }): Promise<void> {
+  const endpointGuard = resolveDiscordEndpointAttachmentGuard(
+    params.uploadUrl,
+    params.endpointRuntime,
+  );
   const { response: uploadResponse, release } = await fetchWithSsrFGuard({
     url: params.uploadUrl,
     init: {
@@ -374,7 +399,10 @@ async function uploadVoiceAttachment(params: {
       body: new Uint8Array(params.audioBuffer),
     },
     timeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+    policy: endpointGuard?.policy ?? DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+    ...(endpointGuard
+      ? { maxRedirects: endpointGuard.maxRedirects, requireHttps: endpointGuard.requireHttps }
+      : {}),
     auditContext: "discord.voice.attachment-upload",
   });
 
@@ -410,6 +438,8 @@ export async function sendDiscordVoiceMessage(
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
+  // Capture the environment-selected endpoint for the whole retrying operation.
+  const endpointRuntime = getDiscordEndpointRuntime() ?? null;
 
   // Step 1: Request upload URL from Discord
   // RequestClient auto-converts "files" bodies to multipart/form-data, but Discord's
@@ -421,6 +451,7 @@ export async function sendDiscordVoiceMessage(
   const { upload_filename } = await request(async () => {
     const uploadUrlResponse = await requestVoiceUploadUrl({
       rest,
+      endpointRuntime,
       channelId,
       botToken,
       filename,
@@ -435,6 +466,7 @@ export async function sendDiscordVoiceMessage(
     await uploadVoiceAttachment({
       uploadUrl: attachment.upload_url,
       audioBuffer,
+      endpointRuntime,
     });
     return attachment;
   }, "voice-upload");

@@ -8,16 +8,9 @@ import {
   renderMarkdownWithMarkers,
   tokenizeHtmlTags,
 } from "openclaw/plugin-sdk/text-chunking";
-import {
-  createMatrixPrivateMarkers,
-  MATRIX_FORMAT_PROFILE,
-  projectMatrixMarkdown,
-} from "./format-profile.js";
+import { createMatrixPrivateMarkers, MATRIX_FORMAT_PROFILE } from "./format-profile.js";
 import type { MatrixSpoilerMarkers, MatrixSpoilerProtection } from "./format-profile.js";
-import {
-  findMatrixSpoilerDelimiterOffsets,
-  hasMatrixSpoilerMetadataCollision,
-} from "./format-spoiler-ranges.js";
+import { analyzeMatrixSpoilers, type MatrixSpoilerAnalysis } from "./format-spoiler-ranges.js";
 import type { MatrixClient } from "./sdk.js";
 import { isMatrixQualifiedUserId } from "./target-ids.js";
 
@@ -488,16 +481,19 @@ export function markdownToMatrixHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode } = {},
 ): string {
-  if (hasMatrixSpoilerMetadataCollision(markdown)) {
-    return renderMatrixFallbackHtml(markdown);
+  const analysis = analyzeMatrixSpoilers(markdown);
+  if (analysis.metadataCollision) {
+    return renderMatrixFallbackHtml(analysis);
   }
-  const tokens = parseMatrixMarkdown(projectMatrixMarkdown(markdown), options.tableMode);
+  const tokens = parseMatrixMarkdown(analysis, options.tableMode);
   compactLooseListTokens(tokens);
   return md.renderer.render(tokens, md.options, {}).trimEnd();
 }
 
-export function protectMatrixSpoilerDelimiters(markdown: string): MatrixSpoilerProtection {
-  const offsets = findMatrixSpoilerDelimiterOffsets(markdown);
+export function protectMatrixSpoilerDelimiters(
+  analysis: MatrixSpoilerAnalysis,
+): MatrixSpoilerProtection {
+  const { markdown, delimiterOffsets: offsets } = analysis;
   if (offsets.length === 0) {
     return { markdown };
   }
@@ -516,8 +512,11 @@ export function protectMatrixSpoilerDelimiters(markdown: string): MatrixSpoilerP
   return { markdown: protectedMarkdown, markers };
 }
 
-function parseMatrixMarkdown(markdown: string, tableMode?: MarkdownTableMode): MarkdownToken[] {
-  const protectedSpoilers = protectMatrixSpoilerDelimiters(markdown);
+function parseMatrixMarkdown(
+  analysis: MatrixSpoilerAnalysis,
+  tableMode?: MarkdownTableMode,
+): MarkdownToken[] {
+  const protectedSpoilers = protectMatrixSpoilerDelimiters(analysis);
   if (tableMode === "off") {
     md.disable("table");
   }
@@ -533,9 +532,11 @@ function parseMatrixMarkdown(markdown: string, tableMode?: MarkdownTableMode): M
 }
 
 export function markdownToMatrixBody(markdown: string): string {
-  const projected = projectMatrixMarkdown(markdown);
-  const offsets = findMatrixSpoilerDelimiterOffsets(projected);
-  const metadataCollision = hasMatrixSpoilerMetadataCollision(projected);
+  return renderMatrixBody(analyzeMatrixSpoilers(markdown));
+}
+
+export function renderMatrixBody(analysis: MatrixSpoilerAnalysis): string {
+  const { markdown: projected, delimiterOffsets: offsets, metadataCollision } = analysis;
   if (offsets.length === 0 && !metadataCollision) {
     return projected;
   }
@@ -563,16 +564,16 @@ export function markdownToMatrixBody(markdown: string): string {
   );
 }
 
-function renderMatrixFallbackHtml(markdown: string): string {
-  return `<p>${escapeHtml(markdownToMatrixBody(markdown)).replaceAll("\n", "<br>\n")}</p>`;
+function renderMatrixFallbackHtml(analysis: MatrixSpoilerAnalysis): string {
+  return `<p>${escapeHtml(renderMatrixBody(analysis)).replaceAll("\n", "<br>\n")}</p>`;
 }
 
 async function resolveMarkdownMentionState(params: {
-  markdown: string;
+  analysis: MatrixSpoilerAnalysis;
   client: MatrixClient;
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
-  const tokens = parseMatrixMarkdown(projectMatrixMarkdown(params.markdown), params.tableMode);
+  const tokens = parseMatrixMarkdown(params.analysis, params.tableMode);
   const selfUserId = await resolveMatrixSelfUserId(params.client);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
@@ -609,7 +610,10 @@ export async function resolveMatrixMentionsInMarkdown(params: {
   markdown: string;
   client: MatrixClient;
 }): Promise<MatrixMentions> {
-  const state = await resolveMarkdownMentionState(params);
+  const state = await resolveMarkdownMentionState({
+    analysis: analyzeMatrixSpoilers(params.markdown),
+    client: params.client,
+  });
   return state.mentions;
 }
 
@@ -618,14 +622,15 @@ export async function renderMarkdownToMatrixHtmlWithMentions(params: {
   client: MatrixClient;
   tableMode?: MarkdownTableMode;
 }): Promise<{ html?: string; mentions: MatrixMentions }> {
-  const state = await resolveMarkdownMentionState(params);
-  if (hasMatrixSpoilerMetadataCollision(params.markdown)) {
-    const redacted = markdownToMatrixBody(params.markdown);
+  const analysis = analyzeMatrixSpoilers(params.markdown);
+  const state = await resolveMarkdownMentionState({ ...params, analysis });
+  if (analysis.metadataCollision) {
+    const redacted = renderMatrixBody(analysis);
     const redactedState = await resolveMarkdownMentionState({
       ...params,
-      markdown: redacted,
+      analysis: analyzeMatrixSpoilers(redacted),
     });
-    return { html: renderMatrixFallbackHtml(params.markdown), mentions: redactedState.mentions };
+    return { html: renderMatrixFallbackHtml(analysis), mentions: redactedState.mentions };
   }
   compactLooseListTokens(state.tokens);
   const html = md.renderer.render(state.tokens, md.options, {}).trimEnd();

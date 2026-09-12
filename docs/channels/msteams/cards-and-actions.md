@@ -56,7 +56,7 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 - Votes are recorded by the gateway in OpenClaw plugin-state SQLite under `state/openclaw.sqlite`.
 - Existing `msteams-polls.json` files are imported by `openclaw doctor --fix`, not by the running plugin.
 - The gateway must stay online to record votes.
-- Polls do not auto-post result summaries, and there is no poll-results CLI yet.
+- Polls do not auto-post result summaries, and there is no poll-results CLI.
 
 ## Presentation cards
 

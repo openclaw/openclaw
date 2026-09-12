@@ -40,4 +40,30 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   provider.activateFromBootstrap(anchor, target, trigger, delay);
 }
 
+export async function prefetchGitHubLink(
+  anchor: HTMLAnchorElement,
+  signal: AbortSignal,
+): Promise<void> {
+  const target = parseGitHubLinkTarget(anchor.href);
+  const owner = bootstrap.providerFor(anchor);
+  if (!target || !owner?.client?.connected || signal.aborted) {
+    return;
+  }
+  const { client, agentId } = owner;
+  await bootstrap.define();
+  const provider = bootstrap.providerFor(anchor);
+  if (
+    signal.aborted ||
+    !anchor.isConnected ||
+    anchor.href !== target.href ||
+    document.hidden ||
+    provider !== owner ||
+    provider.client !== client ||
+    provider.agentId !== agentId
+  ) {
+    return;
+  }
+  await provider.prefetch(target, signal);
+}
+
 bootstrap.install(activateHovercard);

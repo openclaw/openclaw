@@ -101,15 +101,14 @@ enum OnboardingSystemAgentResumeStore {
         state: AppState = AppStateStore.shared,
         preferredGatewayID: String? = GatewayDiscoveryPreferences.preferredStableID()) -> String?
     {
-        let defaultRemotePort = GatewayEnvironment.gatewayPort()
         let sshRemotePort: Int = if state.connectionMode == .remote,
                                     state.remoteTransport == .ssh
         {
-            RemotePortTunnel.resolveRemotePortOverride(
-                defaultRemotePort: defaultRemotePort,
-                for: CommandResolver.parseSSHTarget(state.remoteTarget)?.host ?? "") ?? defaultRemotePort
+            RemotePortTunnel.ports(
+                root: OpenClawConfigFile.loadDict(),
+                sshHost: CommandResolver.parseSSHTarget(state.remoteTarget)?.host ?? "").remote
         } else {
-            defaultRemotePort
+            18789
         }
         return self.routeIdentity(
             connectionMode: state.connectionMode,
@@ -128,7 +127,7 @@ enum OnboardingSystemAgentResumeStore {
         remoteURL: String,
         remoteTarget: String,
         localStateDir: URL = OpenClawConfigFile.stateDirURL(),
-        sshRemotePort: Int = GatewayEnvironment.gatewayPort()) -> String?
+        sshRemotePort: Int = 18789) -> String?
     {
         switch connectionMode {
         case .unconfigured:
@@ -664,9 +663,9 @@ struct OnboardingView: View {
     @State var cliStatusKnown = false
     @State var onboardingVisible = false
     @State var cliInstallLocation: String?
-    @State var showAdvancedConnection = false
     @State var showRemoteChoices = false
     @State var showBrowserGateway = false
+    @State var showConnectionEditor = false
     @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?

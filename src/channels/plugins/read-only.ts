@@ -237,6 +237,11 @@ function createManifestChannelPlugin(params: {
   if (!isSafeManifestChannelId(params.channelId)) {
     return undefined;
   }
+  // Package presentation describes one channel, even when the plugin owns several.
+  const packageChannel =
+    params.record.packageChannel?.id === params.channelId
+      ? params.record.packageChannel
+      : undefined;
   const catalogMeta =
     params.record.channelCatalogMeta?.id === params.channelId
       ? params.record.channelCatalogMeta
@@ -268,6 +273,8 @@ function createManifestChannelPlugin(params: {
     channelConfig?.description ?? catalogMeta?.blurb,
     params.record.description || "",
   );
+  const detailLabel = normalizeManifestText(packageChannel?.detailLabel, "");
+  const systemImage = normalizeManifestText(packageChannel?.systemImage, "");
   const commands = normalizeChannelCommandDefaults(
     channelConfig?.commands ?? catalogMeta?.commands,
   );
@@ -276,7 +283,9 @@ function createManifestChannelPlugin(params: {
     meta: {
       id: params.channelId,
       label,
-      selectionLabel: label,
+      selectionLabel: normalizeManifestText(packageChannel?.selectionLabel, label) || label,
+      ...(detailLabel ? { detailLabel } : {}),
+      ...(systemImage ? { systemImage } : {}),
       docsPath: `/channels/${encodeURIComponent(params.channelId)}`,
       blurb,
       ...(channelConfig?.preferOver?.length

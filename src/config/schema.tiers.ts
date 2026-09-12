@@ -119,6 +119,7 @@ channels.telegram.accounts.*.groups.*.topics.*.groupPolicy
 channels.telegram.direct.*.topics.*.groupPolicy
 channels.whatsapp.groups.*.requireMention channels.whatsapp.selfChatMode
 cron.enabled env.vars gateway.auth.mode gateway.auth.password gateway.auth.token
+gateway.cliAgents.enabled
 gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gateway.bind
 gateway.controlUi.allowedOrigins gateway.http.endpoints.chatCompletions.images.urlAllowlist
 gateway.http.endpoints.responses.files.urlAllowlist
@@ -130,6 +131,7 @@ gateway.trustedProxies hooks.allowedAgentIds hooks.enabled hooks.gmail.account h
 hooks.gmail.pushToken hooks.gmail.subscription hooks.gmail.topic
 hooks.gmail.model hooks.gmail.serve.port hooks.internal.entries.*.enabled
 hooks.mappings.*.agentId hooks.mappings.*.model hooks.token
+logging.audit.messages
 mcp.apps.enabled mcp.servers.*.args mcp.servers.*.auth mcp.servers.*.command
 mcp.servers.*.cwd mcp.servers.*.enabled mcp.servers.*.env mcp.servers.*.headers
 mcp.servers.*.oauth.authProfileId mcp.servers.*.transport mcp.servers.*.url
@@ -156,6 +158,9 @@ tools.github
 tools.fs tools.media.audio tools.media.image tools.media.video tools.message
 tools.exec.reviewer.model.primary tools.media.models.*.model
 tools.media.models.*.request.auth.token tools.profile tools.sessions
+tools.loopDetection.enabled tools.swarm tools.swarm.enabled
+tools.swarm.maxConcurrent tools.swarm.maxChildrenPerGroup tools.swarm.maxTotalPerGroup
+tools.swarm.waitTimeoutSecondsMax tools.swarm.defaultAgentId
 tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey

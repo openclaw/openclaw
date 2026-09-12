@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -250,19 +251,31 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             params: { sessionKey },
           })),
         );
+        const userMessage = expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: expect.stringContaining(user) }],
+        });
+        const assistantMessage = expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: expect.stringContaining(assistant) }],
+        });
         for (const reply of replies) {
           expect(reply).toMatchObject({
             sessionId: description!.session.sessionId,
             sessionInfo: description!.session,
-            messages: [
-              { role: "user", content: [{ text: expect.stringContaining(user) }] },
-              {
-                role: "assistant",
-                content: [{ text: expect.stringContaining(assistant) }],
-              },
-            ],
+            messages: expect.arrayContaining([userMessage, assistantMessage]),
           });
+          const messages = asNullableRecord(reply)?.messages;
+          if (!Array.isArray(messages)) {
+            throw new Error("Background task history must contain messages");
+          }
+          const userIndex = messages.findIndex((message) => userMessage.asymmetricMatch(message));
+          const assistantIndex = messages.findIndex((message) =>
+            assistantMessage.asymmetricMatch(message),
+          );
+          expect(userIndex).toBeLessThan(assistantIndex);
         }
+        expect(replies[1]).toMatchObject(replies[0]!);
       } finally {
         await page.close();
       }

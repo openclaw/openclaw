@@ -16,6 +16,17 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+An installation without a detected package-manager owner records a **skipped**
+update, exits successfully, and leaves the Gateway running. For Docker/container
+images, pull or build the new image and recreate the container with the same
+state/config mounts. For a standalone or extracted tarball installation, reinstall
+using the original method; Yarn global installations must be updated with Yarn.
+The CLI displays this next action. Existing profiles also record it in update
+history and include it in JSON as `run.origin.nextAction`. With `--json`, a fresh
+profile emits the guidance to stderr and does not create a state database for a
+skipped update. These non-outcomes do not run rollback verification or offer an
+update failure report.
+
 ## Usage
 
 ```bash
@@ -39,10 +50,29 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
+Update admission recognizes orphan `task_delivery_state` rows whose parent tasks
+are missing as repairable. When it can acquire Doctor's ownership fences, it runs
+the same [preservation-first recovery](/reference/database-schemas/integrity-and-recovery#doctor-reports-orphan-task-delivery-rows)
+before creating update history. Recovery and its ledger entry commit together;
+the entry records the row count and recovery directory. A live Gateway owner,
+read-only store, or failed preservation prevents repair and reports
+`openclaw doctor --fix` as the next action. Other foreign-key violations and
+structural damage still refuse admission.
+`--dry-run` reports the repairable condition without recovering rows or creating
+an update ledger entry for that refused preview.
+
+The installed 2026.9.4 updater cannot use this recovery before updating itself.
+If it refuses with a database integrity error, install the corrective release
+manually and run `openclaw doctor --fix`.
+
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.
-A verified rollback does not start triage: the previous generation is running
-again, and the report keeps the failing check as the reason.
+A verified rollback does not automatically start triage: the previous generation
+is running again, and the report keeps the failing check as the reason.
+An interactive update offers the diagnose/report menu with **Exit** selected by
+default. Declining or cancelling preserves the failed update's nonzero exit
+status. JSON, non-interactive, `--yes`, and managed-service handoff invocations do
+not prompt after rollback.
 
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
@@ -65,7 +95,60 @@ already exist.
 `--yes`, `--json`, non-interactive runs, and managed-service handoffs never
 submit a report.
 
+## Automation and SSH
+
+For an authorized update on another host, use the target installation's owning
+account and a non-interactive SSH command:
+
+```bash
+ssh -T user@gateway-host 'openclaw update --yes' </dev/null
+```
+
+Ensure `openclaw` resolves to the intended installation in that account's SSH
+environment. Add the existing global `--profile <name>` before `update` when
+targeting a named profile.
+
+An active chat session alone does not prevent an explicit update. `--yes` skips
+confirmation and optional shell-completion prompts. Without it, ordinary upgrades
+can still run with piped input, but an operation requiring confirmation, such as a
+downgrade, fails promptly. Failure-report menus and triage consent prompts do not
+wait for input when stdin is not a terminal. `--yes` does not grant exec approval
+or accept changed plugin capabilities.
+
+An agent updating the Gateway that hosts its own session should use the
+`gateway` tool's `update.run` action when available. The SSH recipe is for another
+host; verify that the destination is not that same Gateway. Normal execution
+approvals and deployment ownership still apply.
+
+## Native service commands during updates
+
+Native service install, restart, and stop commands launched by the updater through
+the target CLI retain the original update owner while their child processes settle. A command whose owner exits or
+loses its lease cannot start another native mutation or commit its pending config
+changes. A new update remains excluded while a registered child or its process
+group is still alive.
+
+The target runtime must support this ownership handoff. Candidate validation checks
+that support before stopping the Gateway or activating its replacement. A missing
+target CLI or an older target without support is refused; the updater does not
+invoke the old runtime installer as a substitute. Authorized installation-root
+changes bind the destination CLI separately while retaining the original update owner. Update-owned commands also refuse unmanaged
+restart/stop and detached restart or Windows Startup-folder fallbacks that cannot
+retain this ownership. Ordinary user-invoked `openclaw gateway` commands keep their
+existing behavior.
+
+This target-CLI protection does not cover every Doctor or plugin child, the
+in-process service preparation before package mutation, or the separate
+deferred-install activation checks.
+
 ## Options
+
+Updater-managed `openclaw update finalize` runs repair Doctor without an automatic
+wall-clock deadline, including post-plugin repair. It waits for completion,
+failure, or manual cancellation. An explicit `--timeout <seconds>` still limits
+each finalization phase and its child commands. Post-plugin config validation and
+readiness checks keep their separate three-minute defaults; other finalization
+phase limits are unchanged.
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -76,6 +159,7 @@ submit a report.
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
 | `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
+| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                           |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                             |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
@@ -102,6 +186,21 @@ restoring that link and its launchers does not verify the mutable checkout's
 runtime. Recovery stays unverified and does not authorize an automatic restart;
 inspect the checkout and recovery report before restarting it.
 
+For a profile without a runtime database, an older npm target initializes its
+compatible state before the updater records history. The selected release's
+Doctor runs before activation, including when npm's install hooks already created
+the database. Existing databases retain their downgrade protections.
+
+Explicit package specs on a fresh profile first stage with a temporary OpenClaw
+profile. The updater inspects the staged runtime's declared schema and Node
+requirements before admitting changes to the selected profile. Artifacts without
+declared schema support are refused without creating the profile's runtime database.
+Preparation uses the original package spec and owning package manager.
+
+A fresh-profile `--dry-run` leaves the database absent and does not record a run.
+If package metadata cannot be resolved, retry with an exact published `--tag`;
+failed target selection does not initialize the profile with the updater's schema.
+
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
@@ -118,7 +217,7 @@ changes before modifying the checkout. Use `openclaw update status` to inspect
 the current branch, version, and update availability.
 
 <Note>
-In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` remains read-only. `openclaw update --dry-run` previews the flow and records a skipped run without changing the installation.
+In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` remains read-only. `openclaw update --dry-run` previews the flow without changing the installation. It records a skipped run only when the profile already has a runtime database.
 </Note>
 
 <Warning>
@@ -164,6 +263,8 @@ freshness or dependencies. Those checks run when you apply the update; use
 - <a id="update-cleanup"></a>[`update cleanup`](/cli/update/repair-and-recovery#update-cleanup)
 - <a id="what-it-does"></a>[What it does](/cli/update/how-updates-run#what-it-does)
 - <a id="validation-and-activation"></a>[Validation and activation](/cli/update/how-updates-run#validation-and-activation)
+- <a id="durable-serving-recovery"></a>[Recovery limits](/cli/update/how-updates-run#durable-serving-recovery)
+- <a id="legacy-package-rollback"></a>[Compatibility-checked package rollback](/cli/update/how-updates-run#legacy-package-rollback)
 - <a id="restart-handoff"></a>[Restart handoff](/cli/update/how-updates-run#restart-handoff)
 - <a id="control-plane-response-shape"></a>[Control-plane response shape](/cli/update/how-updates-run#control-plane-response-shape)
 - <a id="git-checkout-flow"></a>[Git checkout flow](/cli/update/how-updates-run#git-checkout-flow)

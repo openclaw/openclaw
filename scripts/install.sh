@@ -1803,11 +1803,27 @@ node_binary_has_safe_sqlite() {
                         (minor === 51 && patch >= 3) ||
                         (minor === 50 && patch >= 7) ||
                         (minor === 44 && patch >= 6)));
-            if (!safe) process.exitCode = 1;
+            const text = "a\u0000b\u0000";
+            const bytes = Buffer.from(text, "utf8");
+            const json = JSON.stringify({ value: text });
+            db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+            db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+            const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+            const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+            const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+            const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
+            if (!textSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+            } else if (!blobSafe || !jsonSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+            } else if (!safe) {
+                console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
+            }
+            if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
         } finally {
             db.close();
         }
-    ' >/dev/null 2>&1
+    ' --no-warnings >/dev/null
 }
 
 node_binary_sqlite_version() {
@@ -1836,7 +1852,7 @@ node_version_is_supported() {
 }
 
 node_is_supported() {
-    node_version_is_supported && node_binary_has_safe_sqlite node
+    node_binary_is_supported node
 }
 
 node_binary_is_supported() {
@@ -2082,7 +2098,7 @@ promote_supported_node_binary() {
         seen_dirs="${seen_dirs}${dir}:"
         if node_binary_is_supported "$candidate"; then
             prepend_path_dir "$dir" || continue
-            if [[ "$OS" == "linux" ]]; then
+            if [[ "$OS" == "linux" && "${NVM_DETECTED:-0}" != "1" ]]; then
                 persist_shell_path_prepend "$dir" || true
             fi
             ui_info "Using Node.js runtime at ${candidate}"
@@ -2150,7 +2166,6 @@ ensure_macos_default_node_active() {
 }
 
 ensure_default_node_active_shell() {
-    promote_supported_node_binary || true
     if node_is_supported; then
         return 0
     fi
@@ -2162,48 +2177,111 @@ ensure_default_node_active_shell() {
     ui_error "Active Node.js must be ${NODE_SUPPORTED_VERSION_LABEL} but this shell is using ${active_version} (${active_path})"
     print_active_node_paths || true
 
-    local nvm_detected=0
-    if [[ -n "${NVM_DIR:-}" || "$active_path" == *"/.nvm/"* ]]; then
-        nvm_detected=1
-    fi
-    if command -v nvm >/dev/null 2>&1; then
-        nvm_detected=1
-    fi
-
-    if [[ "$nvm_detected" -eq 1 ]]; then
-        echo "nvm appears to be managing Node for this shell."
-        echo "Run:"
-        echo "  nvm install ${NODE_DEFAULT_MAJOR}"
-        echo "  nvm use ${NODE_DEFAULT_MAJOR}"
-        echo "  nvm alias default ${NODE_DEFAULT_MAJOR}"
-        echo "Then open a new shell and rerun:"
-        echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
-    else
-        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and ensure it is first on PATH, then rerun installer."
-    fi
-
+    echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and ensure it is first on PATH, then rerun installer."
     return 1
 }
 
 load_nvm_for_node_detection() {
-    local nvm_dir="${NVM_DIR:-}"
-    if [[ -n "$nvm_dir" && ! -s "$nvm_dir/nvm.sh" ]]; then
-        nvm_dir=""
+    NVM_DETECTED=0
+    local nvm_dir="${NVM_DIR:-}" profile
+    if [[ -n "$nvm_dir" || -d "$HOME/.nvm" ]] || command -v nvm >/dev/null 2>&1; then
+        NVM_DETECTED=1
     fi
-    if [[ -z "$nvm_dir" && -s "$HOME/.nvm/nvm.sh" ]]; then
+    # Detect custom/lazy hooks without executing arbitrary shell startup files.
+    for profile in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" \
+        "${ZDOTDIR:-$HOME}/.zshrc" "${ZDOTDIR:-$HOME}/.zprofile"; do
+        if [[ -r "$profile" ]] && grep -Eq '^[[:space:]]*([^#[:space:]].*)?(NVM_DIR|nvm[.]sh)' "$profile"; then
+            NVM_DETECTED=1
+        fi
+    done
+    if [[ ! -s "$nvm_dir/nvm.sh" && -s "$HOME/.nvm/nvm.sh" ]]; then
         nvm_dir="$HOME/.nvm"
     fi
-    if [[ -z "$nvm_dir" || ! -s "$nvm_dir/nvm.sh" ]]; then
-        return 0
-    fi
-
-    export NVM_DIR="$nvm_dir"
-    # shellcheck disable=SC1090,SC1091
-    . "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1 || . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
-    if command -v nvm >/dev/null 2>&1; then
-        nvm use default --silent >/dev/null 2>&1 || nvm use node --silent >/dev/null 2>&1 || true
+    if [[ -n "$nvm_dir" && -s "$nvm_dir/nvm.sh" ]]; then
+        NVM_DETECTED=1
+        export NVM_DIR="$nvm_dir"
+        # --no-use preserves the caller's selected system or managed runtime.
+        # shellcheck disable=SC1090,SC1091
+        if ! . "$NVM_DIR/nvm.sh" --no-use; then
+            ui_error "Could not load existing nvm at ${NVM_DIR}; load it in your shell and rerun the installer"
+            return 1
+        fi
     fi
     refresh_shell_command_cache
+}
+
+use_supported_nvm_node() {
+    command -v nvm >/dev/null 2>&1 || return 1
+    local candidate version
+    for candidate in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/node; do
+        [[ -x "$candidate" ]] || continue
+        node_binary_is_supported "$candidate" || continue
+        version="${candidate%/bin/node}"
+        version="${version##*/}"
+        nvm use --silent "$version" || return 1
+        refresh_shell_command_cache
+        node_is_supported || return 1
+        ui_info "Using existing nvm Node.js ${version} for this installation (${NVM_DIR})"
+        echo "  Shell profiles and the nvm default are unchanged. For later commands, run: nvm use ${version}"
+        return 0
+    done
+    return 1
+}
+
+install_node_with_existing_nvm() {
+    local reason="${1:-no compatible Node.js runtime is available}"
+    local default_version="" default_note="Your existing default alias setting will be preserved."
+    if command -v nvm >/dev/null 2>&1; then
+        default_version="$(nvm version default 2>/dev/null || true)"
+    fi
+    case "$default_version" in
+        v*|system) default_note="Keep current default ${default_version}; if nvm refreshes aliases, pin default to ${default_version}." ;;
+        *)
+            if [[ -n "${NVM_DIR:-}" && ! -e "$NVM_DIR/alias/default" ]]; then
+                default_note="nvm will also create its currently unset default alias."
+            fi
+            ;;
+    esac
+    ui_warn "Existing nvm detected; ${reason}"
+    echo "Load your existing nvm in your shell, then run:"
+    echo "  nvm install ${NODE_DEFAULT_MAJOR}"
+    echo "  nvm use ${NODE_DEFAULT_MAJOR}"
+    echo "nvm install can refresh LTS aliases; check your default with: nvm version default"
+    echo "Then rerun the installer. Shell profiles will not be changed."
+
+    local answer=""
+    if command -v nvm >/dev/null 2>&1 && is_promptable; then
+        answer="$(prompt_choice "Install Node.js ${NODE_DEFAULT_MAJOR} in your existing nvm (${NVM_DIR}) for this session? ${default_note} [y/N]" || true)"
+    fi
+    case "$answer" in
+        y|Y|yes|YES)
+            ui_info "Installing Node.js ${NODE_DEFAULT_MAJOR} in existing nvm (${NVM_DIR}). ${default_note}"
+            local install_result=0
+            nvm install "$NODE_DEFAULT_MAJOR" || install_result=$?
+            # Remote LTS metadata can move an existing default even on download failure.
+            case "$default_version" in
+                v*|system)
+                    if [[ "$(nvm version default 2>/dev/null || true)" != "$default_version" ]]; then
+                        ui_info "Preserving the previous default: nvm alias default ${default_version} (approved)"
+                        nvm alias default "$default_version" || return 1
+                    fi
+                    ;;
+            esac
+            if [[ "$install_result" -ne 0 ]]; then
+                ui_error "nvm install failed; any downloaded files remain in ${NVM_DIR}. Fix the reported error and rerun the command above."
+                return 1
+            fi
+            nvm use --silent "$NODE_DEFAULT_MAJOR" || return 1
+            refresh_shell_command_cache
+            ensure_default_node_active_shell || return 1
+            ui_info "nvm default now resolves to: $(nvm version default 2>/dev/null || true)"
+            ui_success "Using nvm Node.js $(node -v) for this installation; shell profiles unchanged"
+            ;;
+        *)
+            ui_error "Installation stopped without changing Node.js; run the nvm commands above to continue"
+            return 1
+            ;;
+    esac
 }
 
 check_node() {
@@ -2491,6 +2569,18 @@ fix_npm_permissions() {
 
     if [[ -w "$npm_prefix" || -w "$npm_prefix/lib" ]]; then
         return 0
+    fi
+
+    if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
+        # npm's persistent prefix setting makes subsequent nvm use commands fail.
+        ui_warn "npm global prefix is not writable: ${npm_prefix}; preserving nvm-compatible npm settings"
+        use_supported_nvm_node || install_node_with_existing_nvm "the active npm prefix is not writable" || return 1
+        npm_prefix="$(npm config get prefix 2>/dev/null || true)"
+        if [[ -n "$npm_prefix" && ( -w "$npm_prefix" || -w "$npm_prefix/lib" ) ]]; then
+            return 0
+        fi
+        ui_error "The selected nvm runtime still has an unwritable npm prefix (${npm_prefix}); check your npm config before rerunning"
+        return 1
     fi
 
     ui_warn "npm global prefix is not writable: ${npm_prefix}"
@@ -3075,6 +3165,15 @@ warn_shell_path_missing_dir() {
         return 0
     fi
     if path_has_dir "$ORIGINAL_PATH" "$dir"; then
+        return 0
+    fi
+
+    if [[ -n "${NVM_DIR:-}" && "$dir" == "$NVM_DIR"/versions/node/*/bin ]]; then
+        local version="${dir%/bin}"
+        version="${version##*/}"
+        ui_info "OpenClaw was installed under nvm Node.js ${version}"
+        echo "  For this shell and future shells, run: nvm use ${version}"
+        echo "  Shell profiles were not changed."
         return 0
     fi
 
@@ -3679,7 +3778,8 @@ refresh_gateway_service_if_loaded() {
     fi
 
     ui_info "Refreshing loaded gateway service"
-    if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+    if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/^Replacing unsupported Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/^Replacing missing Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+        refresh_output="$(printf '%s\n' "$refresh_output" | sed '/^node-runtime-replaced$/d')"
         if [[ -n "$refresh_output" ]]; then
             ui_warn "Code installed; gateway service definition left unchanged; ${refresh_output}"
             ui_info "Run openclaw gateway status --deep, verify the installation owner, and restart it manually if needed."
@@ -3689,6 +3789,9 @@ refresh_gateway_service_if_loaded() {
             return 0
         fi
     else
+        if [[ "$refresh_output" == *node-runtime-replaced* ]]; then
+            ui_success "Gateway service Node runtime replaced"
+        fi
         ui_success "Gateway service metadata refreshed"
     fi
 
@@ -3873,12 +3976,18 @@ main() {
 
     # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
     # only when they are about to call brew.
-    load_nvm_for_node_detection
-    if ! check_node; then
-        install_homebrew
-        install_node
+    load_nvm_for_node_detection || exit 1
+    if ! node_is_supported; then
+        use_supported_nvm_node || activate_supported_node_on_path || true
     fi
-    activate_supported_node_on_path || true
+    if ! check_node; then
+        if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
+            install_node_with_existing_nvm || exit 1
+        else
+            install_homebrew
+            install_node
+        fi
+    fi
     if ! ensure_default_node_active_shell; then
         exit 1
     fi
@@ -3907,7 +4016,7 @@ main() {
         fi
 
         # Step 4: npm permissions (Linux)
-        fix_npm_permissions
+        fix_npm_permissions || exit 1
 
         # Step 5: OpenClaw
         prepare_git_wrapper_backup_for_npm || return $?

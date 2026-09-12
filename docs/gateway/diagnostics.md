@@ -148,6 +148,18 @@ keys. Repeated stage visits contribute to the counts and totals. Parallel and
 nested stages can overlap, so their totals are neither an exclusive breakdown
 of request time nor CPU measurements.
 
+Two related info-level records help attribute slow worktree cleanup:
+`slow managed worktree removal` separates allocation admission, callback work,
+and final settlement; `slow Git ref mutation` separates directory resolution,
+queue waiting, and queued work. Both require diagnostics and info-level logging,
+emit only after an operation lasting at least one second settles, and have
+separate fixed budgets of 60 records per minute per runtime isolate with
+`omittedObservations` counts. They retain fixed scalar fields and existing traces,
+without adding private paths or new identities. Their elapsed intervals can nest
+inside `worktreeCleanup` and include asynchronous waits; they are not CPU or
+individual child-command timings. See [Slow worktree cleanup](/logging#slow-worktree-cleanup)
+for fields and missing-record limits.
+
 SQLite session-write warnings also separate `queueWaitMs`, `writerExecutionMs`,
 and `completionDelayMs`. These measure time until the writer starts, work and
 awaits inside the writer lane, and time until its caller resumes after execution.
@@ -241,3 +253,4 @@ file-system scan or writing a pre-OOM snapshot.
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector
 - [Codex harness runtime](/plugins/codex-harness-runtime) - runtime boundaries, permissions, and diagnostics for the Codex harness
+- [Diagnostics flags](/diagnostics/flags) - the named flags that turn on extra logging for one subsystem without raising `logging.level` globally

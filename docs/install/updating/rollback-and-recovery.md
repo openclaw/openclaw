@@ -91,6 +91,22 @@ openclaw doctor --lint --json
 openclaw update cleanup --dry-run
 ```
 
+<a id="automatic-checkpoint-recovery" />
+
+### Full-state recovery requires a backup
+
+`openclaw update` does not create or replay a full-state checkpoint. It can
+restore a retained package only under the compatibility checks below. It cannot
+reverse a database migration by replacing the package. Use a verified pre-update
+backup with its matching release when migration has made state incompatible.
+
+An existing pending checkpoint-recovery record blocks further mutable updates.
+The updater reports that it is unsupported and leaves its records, backups, and
+state unchanged. Do not remove or alter retained artifacts to force a clean
+status, and do not use `update finalize` to bypass the refusal. Preserve the
+reported locations for a compatible recovery implementation or an independent
+verified backup. An interrupted or refused restore is not a successful rollback.
+
 ### Automatic schema-neutral rollback
 
 If a newly activated package fails verification, `openclaw update` compares the
@@ -140,7 +156,12 @@ or stopped from the latest service observation, even when a running candidate di
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
 Automatic triage never follows a verified rollback; it runs only when the update
-ends failed.
+ends failed. In an interactive terminal, you can choose **Diagnose update failure**,
+**Report update failure**, or **Exit**, which is selected by default. Reporting
+shows the sanitized preview and requires separate confirmation before issue
+creation. Skipping or cancelling does not start diagnosis or submit a report.
+JSON, `--yes`, non-interactive, and managed-service handoff invocations do not
+show this menu after rollback.
 
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, rollback is refused with
@@ -165,8 +186,8 @@ A refusal before the live swap restarts the unchanged Gateway and preserves the 
 
 ### Before updating: create a verified backup
 
-`openclaw update` preserves an automatic pre-update config copy, but it does not
-create a full state recovery point. Before a significant update, create one
+`openclaw update` preserves an automatic pre-update config copy, not a full-state
+recovery point. Before a significant update, create an independent verified backup
 explicitly:
 
 ```bash
@@ -203,9 +224,14 @@ any recorded failed-update outcome so it can repair the installation and verify
 Gateway health, using its normal authentication, sandbox, and approval settings.
 Use `openclaw triage --agent codex` to select a particular agent.
 
-Failed interactive updates open triage automatically after updater cleanup and
+Failed interactive updates offer triage after updater cleanup and
 pass the captured failure to the agent before fresh diagnostics can delay the
-handoff. JSON, `--yes`, and non-interactive update invocations collect diagnostics
+handoff. Before launch, OpenClaw shows the agent, saved prompt path when available,
+and use of your own account/tokens; Enter or `y` proceeds, while `n` prints handoff
+commands and preserves diagnostics and the failed update's exit status.
+After 30 seconds without an answer, it announces that it is continuing and
+proceeds as Yes; explicit `openclaw triage` does not ask for this confirmation.
+JSON, `--yes`, and non-interactive update invocations collect diagnostics
 and print handoff commands without starting an agent. For diagnostic collection
 alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command
@@ -234,9 +260,29 @@ Only a passing validation allows activation; otherwise the update fails and
 discards the candidate without stopping the service.
 Before activation, repair shares one disposable rehearsal state/config snapshot
 across its turns and validation, then independently validates surviving candidate
-changes before activation; configuration changes are never promoted and
-stop as `repair-requires-config-change`, naming the changed top-level keys for
-the operator to inspect with `openclaw triage` or apply with `openclaw doctor --fix`.
+changes before activation. Successful repair can proceed when Doctor migrations
+change the copied config. Activation reruns update-mode Doctor against the
+captured live input, using the normal config writer, backup, and requester checks;
+it never copies rehearsal paths, canary settings, or inference edits into operator config.
+Optional repairs excluded during updates, such as disabling unavailable skills,
+remain excluded. The run ledger and update summary identify changed top-level
+keys and migration messages; the warning log retains the full messages.
+If the writer refuses promotion, `repair-requires-config-change` names the keys
+and the refusal reason. Revoked chat authority remains `requester-revoked`.
+Older candidates without guarded Doctor support continue through their normal
+activation Doctor. When candidate validation changes config, the ledger and
+summary warn with the changed keys that promotion receipts are unavailable for
+that candidate version.
+Repairs owned entirely by one internal include file use the existing include
+writer after requester and captured-root checks. The ledger, summary, and warning
+log name the affected keys and report `promotion unavailable for include-owned
+configuration`: the filesystem API does not yet support authority checks at each
+final include-file effect. Guarded authority resumes for later Doctor writes.
+Doctor retains the include values used to prepare each repair and refuses the
+write if those inputs change before publication.
+Mixed-ownership and external-include restrictions remain unchanged.
+Ledger entries and summaries retain their existing diagnostic limits; the warning
+log retains full migration messages.
 
 Git source updates keep the selected source revision. Repair may restore
 dependencies, generated runtime files, or state, but a candidate with changed

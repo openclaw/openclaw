@@ -101,7 +101,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
-  noteBackupDoctorHint(ctx.env ?? process.env);
+  await noteBackupDoctorHint(ctx.env ?? process.env);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -119,7 +119,10 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
     ...(ctx.configResult.openAICodexAuthProfileIdMap?.size
-      ? { authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap }
+      ? {
+          authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
+          ...(!ctx.prompter.shouldRepair ? { authProfileOnly: true } : {}),
+        }
       : {}),
   });
   if (result.changes.length > 0) {

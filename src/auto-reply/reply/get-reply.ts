@@ -17,6 +17,7 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
 import {
@@ -45,6 +46,7 @@ import {
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -87,6 +89,7 @@ import {
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { createReplyModelLevelResolver } from "./reply-model-levels.js";
 import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
@@ -350,6 +353,10 @@ export async function getReplyFromConfig(
       }),
     };
   });
+  const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
+  if (refusal) {
+    return { text: `${refusal.reason}\n${refusal.repairHint}`, isError: true };
+  }
   const agentSessionKey = initialAgentScope.agentSessionKey;
   const agentId = initialAgentScope.agentId;
   if (
@@ -997,14 +1004,14 @@ export async function getReplyFromConfig(
     model: resolvedModel,
     requestedRouteResolution,
     modelState,
+    resolveModelLevels,
     contextTokens,
     inlineStatusRequested,
     directiveAck,
     perMessageQueueMode,
     perMessageQueueOptions,
   } = directiveResult.result;
-  let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
-    directiveResult.result;
+  let { directives, cleanedBody } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 
@@ -1078,9 +1085,8 @@ export async function getReplyFromConfig(
       elevatedFailures,
       defaultActivation: () => defaultActivation,
       thinkingCatalog: statusThinkingCatalog,
-      resolvedThinkLevel,
+      resolveModelLevels,
       resolvedVerboseLevel,
-      resolvedReasoningLevel,
       resolvedElevatedLevel,
       blockReplyChunking,
       resolvedBlockStreamingBreak,
@@ -1111,6 +1117,7 @@ export async function getReplyFromConfig(
   const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
   const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
+  let resolveRunModelLevels = resolveModelLevels;
   if (runAutoFallbackPrimaryProbe) {
     try {
       runModelState = await createModelSelectionState({
@@ -1159,23 +1166,29 @@ export async function getReplyFromConfig(
       hasTurnOrSessionThinkLevel ||
       configuredThinkingDefault !== undefined ||
       runModelState.hasConfiguredThinkingDefault === true;
-    if (!hasTurnOrSessionThinkLevel) {
-      resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
-    }
     const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
     const hasExplicitReasoningLevel =
       directives.reasoningLevel !== undefined ||
       rawSessionReasoningLevel != null ||
       agentEntry?.reasoningDefault != null ||
       agentCfg?.reasoningDefault != null;
-    if (!hasExplicitReasoningLevel) {
-      const thinkingActive = resolvedThinkLevel !== "off";
-      resolvedReasoningLevel =
-        thinkingActive || hasExplicitThinkLevel
-          ? "off"
-          : await runModelState.resolveDefaultReasoningLevel();
-    }
+    resolveRunModelLevels = createReplyModelLevelResolver({
+      modelState: runModelState,
+      selection: {
+        provider: runModelState.provider,
+        model: runModelState.model,
+        thinkLevel: hasTurnOrSessionThinkLevel
+          ? (await resolveModelLevels()).resolvedThinkLevel
+          : undefined,
+        thinkingExplicit: hasExplicitThinkLevel,
+        reasoningLevel: hasExplicitReasoningLevel
+          ? (await resolveModelLevels()).resolvedReasoningLevel
+          : "off",
+        reasoningExplicit: hasExplicitReasoningLevel,
+      },
+    });
   }
+  const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
 
   let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
     ? collectStagedAttachmentPaths(finalized)
@@ -1189,6 +1202,12 @@ export async function getReplyFromConfig(
     hasInboundMedia(ctx)
   ) {
     const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
+    const stagingWorkspaceDir =
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: sessionEntry.spawnedBy,
+        workspaceDir: sessionEntry.spawnedWorkspaceDir,
+        cwd: sessionEntry.spawnedCwd,
+      }) ?? workspaceDir;
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
@@ -1196,7 +1215,7 @@ export async function getReplyFromConfig(
         cfg,
         agentId,
         sessionKey,
-        workspaceDir,
+        workspaceDir: stagingWorkspaceDir,
         abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );

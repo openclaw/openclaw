@@ -238,6 +238,9 @@ Suggested `.gitignore` starter:
 
 ## Related
 
+- [Backups](/install/backups) - archives, per-database snapshots, scheduling, and offsite copies of state and workspace
+- [Bootstrapping](/start/bootstrapping) - the first-run ritual that seeds a new workspace and its identity files
+- [Default AGENTS.md](/reference/AGENTS.default) - the default agent instructions and skills roster placed in the workspace
 - [Heartbeat](/gateway/heartbeat) - heartbeat monitors and cron scratch
 - [Sandboxing](/gateway/sandboxing) - workspace access in sandboxed environments
 - [Session](/concepts/session) - session storage paths

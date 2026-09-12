@@ -222,6 +222,8 @@ openclaw_resolve_frozen_agent_bundle_mcp_contract() {
   # Resolve the reader and parser from tooling, never from the selected checkout.
   resolved="$(node --input-type=module -e '
 import { createRequire } from "node:module";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 const [root, sha, trustedHelper] = process.argv.slice(1);
 const fail = (message) => { throw new Error(message); };
@@ -234,7 +236,37 @@ try {
     return source;
   };
   let ts;
-  try { ts = createRequire(trustedHelper)("typescript"); } catch {
+  try {
+    const tooling = realpathSync(resolve(dirname(trustedHelper), "../.."));
+    const modules = join(tooling, "node_modules");
+    if (realpathSync(modules) !== modules) fail("borrowed parser installation");
+    const manifest = JSON.parse(readFileSync(join(tooling, "package.json"), "utf8"));
+    const pin = manifest.dependencies?.typescript;
+    if (typeof pin !== "string" || !/^\d+\.\d+\.\d+$/.test(pin)) fail("parser is not pinned");
+    // Check the frozen lock entry without loading another installed dependency.
+    // Only the canonical root importer and integrity-bearing package entry count.
+    const lock = readFileSync(join(tooling, "pnpm-lock.yaml"), "utf8");
+    const rootImporters = [...lock.matchAll(/^  \.:\n((?: {4}.*\n|\n)*)/gm)];
+    const lockedPins = rootImporters.flatMap((entry) =>
+      [...entry[1].matchAll(/^      typescript:\n        specifier: ([^\n]+)\n        version: ([^\n]+)\n/gm)]);
+    const packageEntry = new RegExp(`^  typescript@${pin.replaceAll(".", "\\.")}:\\n    resolution: \\{integrity: sha512-[A-Za-z0-9+/=]+\\}`, "gm");
+    if (lockedPins.length !== 1 || lockedPins[0][1] !== pin || lockedPins[0][2] !== pin ||
+        [...lock.matchAll(packageEntry)].length !== 1) fail("parser lock does not match");
+    const require = createRequire(trustedHelper);
+    const metadataPath = realpathSync(require.resolve("typescript/package.json"));
+    const packageRoot = dirname(metadataPath);
+    const ownedRoots = [
+      join(modules, "typescript"),
+      join(modules, ".pnpm", `typescript@${pin}`, "node_modules/typescript"),
+    ];
+    if (!ownedRoots.includes(packageRoot)) fail("parser is outside trusted tooling");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const entry = realpathSync(require.resolve("typescript"));
+    if (metadata.name !== "typescript" || metadata.version !== pin ||
+        entry !== join(packageRoot, "lib/typescript.js")) fail("parser metadata does not match");
+    // Resolution and ownership checks precede the first module execution.
+    ts = require(entry);
+  } catch {
     fail("unable to load trusted TypeScript parser for bundle contract");
   }
   // Parse source text only: no target imports, config, plugins or type resolution.
@@ -311,17 +343,11 @@ try {
     OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_CLIENT_PATH="${resolved#*:}"
 }
 
-openclaw_resolve_frozen_core_harness_capabilities() {
+openclaw_resolve_frozen_onboard_contract() {
   local source_root="${1:?missing selected source root}" authorization_status=0
-  local has_access has_last_run has_hooks has_setup has_default_hooks has_memory has_migrations has_repair
-  local has_extract has_model_prompt has_fragments has_filter has_all_tools has_catalog
+  local has_access has_last_run
 
-  export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="" \
-    OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="required" \
-    OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="current" \
-    OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE="current" \
-    OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE="producer-fragments" \
-    OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="sqlite"
+  export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES=""
 
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
   [ "$authorization_status" -eq 1 ] && return 0
@@ -336,6 +362,20 @@ openclaw_resolve_frozen_core_harness_capabilities() {
       export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="local-basic,remote-non-interactive,reset,channels,skills"
     fi
   fi
+}
+
+openclaw_resolve_frozen_typed_onboarding_contract() {
+  local source_root="${1:?missing selected source root}" harness_root="${2:?missing trusted harness root}" authorization_status=0
+  local has_hooks has_setup has_default_hooks scenario assertions mock_config
+
+  export OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="required" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH="$harness_root/scripts/e2e/lib/release-typed-onboarding/scenario.sh" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH="$harness_root/scripts/e2e/lib/release-scenarios/assertions.mjs" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH="$harness_root/scripts/e2e/lib/fixtures/mock-openai-config.mjs"
+
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
 
   # Before default-hook onboarding, quickstart offered only the hooks it found
   # in the workspace. A successful old quickstart therefore cannot promise a
@@ -351,10 +391,56 @@ openclaw_resolve_frozen_core_harness_capabilities() {
     fi
   fi
 
-  has_memory="$(openclaw_frozen_target_source_flag contains "$source_root" src/agents/memory-search.ts 'cfg.agents?.defaults?.memorySearch')" || return 2
-  if [ "$has_memory" = 1 ]; then
-    export OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="agent"
+  # The shipped journey, assertions and config writer share one consumer owner.
+  scenario="$(openclaw_resolve_frozen_target_file "$source_root" \
+    scripts/e2e/lib/release-typed-onboarding/scenario.sh \
+    "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH")" || return 2
+  assertions="$(openclaw_resolve_frozen_target_file "$source_root" \
+    scripts/e2e/lib/release-scenarios/assertions.mjs \
+    "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH")" || return 2
+  mock_config="$(openclaw_resolve_frozen_target_file "$source_root" \
+    scripts/e2e/lib/fixtures/mock-openai-config.mjs \
+    "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH")" || return 2
+  export OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH="$scenario" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH="$assertions" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH="$mock_config"
+}
+
+openclaw_resolve_frozen_session_cold_storage_contract() {
+  local source_root="${1:?missing selected source root}" authorization_status=0 has_current has_cold has_legacy
+
+  export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="required"
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # Cold storage introduced the split session schema. A current target with a
+  # broken declaration must fail its tests rather than be treated as pre-feature.
+  has_current="$(openclaw_frozen_target_source_flag has "$source_root" src/config/zod-schema.session-config.ts)" || return 2
+  [ "$has_current" = 0 ] || return 0
+  has_cold="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'coldStorage:')" || return 2
+  [ "$has_cold" = 0 ] || return 0
+  has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'export const SessionSchema = z')" || return 2
+  if [ "$has_legacy" = 1 ]; then
+    has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'pruneAfter: PositiveDurationSchema.optional()')" || return 2
+    if [ "$has_legacy" = 1 ]; then
+      export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="unsupported"
+      return 0
+    fi
   fi
+  echo "unable to resolve frozen session cold-storage contract from selected source" >&2
+  return 2
+}
+
+openclaw_resolve_frozen_runtime_context_contract() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+  local has_migrations has_repair has_extract has_model_prompt has_fragments has_filter
+
+  export OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE="producer-fragments" \
+    OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="sqlite"
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
 
   has_migrations="$(openclaw_frozen_target_source_flag has "$source_root" src/state/openclaw-agent-db-session-migrations.ts)" || return 2
   if [ "$has_migrations" = 0 ]; then
@@ -386,6 +472,22 @@ openclaw_resolve_frozen_core_harness_capabilities() {
       return 2
       ;;
   esac
+}
+
+openclaw_resolve_frozen_mcp_code_mode_contract() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+  local has_memory has_all_tools has_catalog
+
+  export OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="current" \
+    OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE="current"
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  has_memory="$(openclaw_frozen_target_source_flag contains "$source_root" src/agents/memory-search.ts 'cfg.agents?.defaults?.memorySearch')" || return 2
+  if [ "$has_memory" = 1 ]; then
+    export OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="agent"
+  fi
 
   # The selected release exposes ALL_TOOLS to code mode but predates the
   # catalog global. Its fixture must use the global the package actually ships.

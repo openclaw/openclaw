@@ -22,6 +22,9 @@ Dreaming is enabled by default. Set
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
 Long-term promotion still writes only to `MEMORY.md`.
+An empty sweep records completion in plugin state without creating memory or
+dreaming files, so it does not complete a new workspace's first-run setup.
+Existing daily notes can still receive managed phase-block updates.
 Each newly promoted entry carries trailing recall metadata derived from the
 candidate: up to three concept tags in `<!-- trigger: phrase one, phrase two -->`
 and a bounded `<!-- importance: N -->` value from 1 to 10. Consolidation keeps
@@ -144,14 +147,14 @@ The Control UI exposes the same diary backfill/reset flow on the agent's Memory 
 
 Deep ranking uses six weighted base signals plus phase reinforcement:
 
-| Signal              | Weight | Description                                       |
-| ------------------- | ------ | ------------------------------------------------- |
-| Relevance           | 0.30   | Average retrieval quality for the entry           |
-| Frequency           | 0.24   | How many short-term signals the entry accumulated |
-| Query diversity     | 0.15   | Distinct query/day contexts that surfaced it      |
-| Recency             | 0.15   | Time-decayed freshness score                      |
-| Consolidation       | 0.10   | Multi-day recurrence strength                     |
-| Conceptual richness | 0.06   | Concept-tag density from snippet/path             |
+| Signal              | Weight | Description                                          |
+| ------------------- | ------ | ---------------------------------------------------- |
+| Relevance           | 0.30   | Average retrieval quality for the entry              |
+| Frequency           | 0.24   | How many short-term signals the entry accumulated    |
+| Query diversity     | 0.15   | Distinct interactive recall queries that surfaced it |
+| Recency             | 0.15   | Time-decayed freshness score                         |
+| Consolidation       | 0.10   | Multi-day recurrence strength                        |
+| Conceptual richness | 0.06   | Concept-tag density from snippet/path                |
 
 Light and REM phase hits recorded in SQLite-backed plugin state add a small recency-decayed boost.
 
@@ -315,6 +318,7 @@ Both sub-tabs show an enable hint instead when `memory-wiki` is off.
 ## Related
 
 - [Memory](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Memory CLI](/cli/memory)
 - [Memory configuration reference](/reference/memory-config)
 - [Memory search](/concepts/memory-search)

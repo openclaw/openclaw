@@ -96,7 +96,7 @@ async function prepareCodexInferenceRoute(params: {
   assertCurrent();
   const snapshot =
     params.effectiveConfig ??
-    (await readCodexEffectiveConfig(params.client, params.cwd, params.signal));
+    (await readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }));
   assertCurrent();
   if (snapshot.config.model_provider != null && snapshot.config.model_provider !== "openai") {
     return undefined;

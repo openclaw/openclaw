@@ -593,15 +593,9 @@ async function readManagedOutgoingImageBlob(
   opts?: ImageRenderOptions,
   artifactId?: string,
 ): Promise<Blob> {
-  const resource = resolveManagedOutgoingImageResource(source, opts, artifactId, "full");
-  const blobUrl = resource.value ?? (await resource.pending);
-  if (!blobUrl) {
+  const blob = await fetchManagedOutgoingImageBlob(source, opts, artifactId, "full");
+  if (!blob) {
     throw new Error("managed image is unavailable");
-  }
-  const response = await fetch(blobUrl);
-  const blob = await response.blob();
-  if (!blob.type.startsWith("image/")) {
-    throw new Error("managed image response is invalid");
   }
   return blob;
 }

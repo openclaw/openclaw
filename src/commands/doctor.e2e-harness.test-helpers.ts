@@ -132,6 +132,7 @@ export async function arrangeLegacyStateMigrationFixture(deps: {
   deps.runLegacyStateMigrations.mockResolvedValueOnce({
     changes: ["migrated"],
     warnings: [],
+    stepReceipts: [],
   });
   deps.confirm.mockClear();
 

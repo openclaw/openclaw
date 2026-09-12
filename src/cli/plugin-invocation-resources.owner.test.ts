@@ -315,19 +315,20 @@ it.each(["returned", "cooperating"] as const)(
       withCliCommandCleanup(false, async (cleanup) => {
         const resources = getCliPluginInvocationResources()!;
         const registry = await resources.acquire(fixture.load);
+        // Terminal cleanup consumes an admitted handle; it cannot acquire a retired provider.
+        const providers = withPluginRuntimeRegistryScope(registry, () =>
+          resolvePluginProviders({
+            config: fixture.config,
+            env: fixture.env,
+            onlyPluginIds: [fixture.id],
+          }),
+        );
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         let descendant: Promise<void> | undefined;
         const actualCleanup = async () => {
           entered.resolve();
           await resume.promise;
-          const providers = withPluginRuntimeRegistryScope(registry, () =>
-            resolvePluginProviders({
-              config: fixture.config,
-              env: fixture.env,
-              onlyPluginIds: [fixture.id],
-            }),
-          );
           expect(providers).toHaveLength(1);
           expect(
             providers[0]!.isCacheTtlEligible?.({

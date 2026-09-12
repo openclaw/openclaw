@@ -7,6 +7,7 @@ import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
@@ -192,8 +193,8 @@ export type ChatStreamSegment = {
   persisted?: true;
   /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
   retiredItemId?: string;
-  /** Original cumulative prefix when the item overtook its final chat delta. */
-  pendingStreamText?: string;
+  /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
+  pendingCommentary?: { text: string; prefixLength: number };
   toolCallId?: string;
   itemId?: string;
 };
@@ -262,6 +263,7 @@ export type MessageGroup = {
 
 /** Content item types in a normalized message */
 export type MessageContentItem =
+  | ClawHubRecommendation
   | {
       type: "text" | "tool_call" | "tool_result";
       text?: string;
@@ -336,6 +338,8 @@ export type NormalizedMessage = {
 export type ToolCard = {
   id: string;
   callId?: string;
+  runId?: string;
+  parentToolCallId?: string;
   name: string;
   args?: unknown;
   inputText?: string;

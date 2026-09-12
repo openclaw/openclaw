@@ -38,6 +38,8 @@ export async function updateAgentConfigEntry(params: {
 }): Promise<void> {
   await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
+    // Identity replacement may intentionally reduce the configuration size.
+    ...(params.identity ? { writeOptions: { allowConfigSizeDrop: true } } : {}),
     mutate: (draft) => {
       if (!isConfiguredAgent(draft, params.agentId)) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);

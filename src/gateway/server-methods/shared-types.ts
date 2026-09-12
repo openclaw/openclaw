@@ -11,9 +11,10 @@ import type {
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
@@ -25,7 +26,7 @@ import type { SystemAgentOperation } from "../../system-agent/operation-types.js
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import type {
   GatewayDeferredChannelReload,
   GatewayHotReloadStatus,
@@ -344,7 +345,7 @@ type GatewayResidentBridgeContext = {
   sessionViewerPresence?: ReturnType<
     typeof import("../session-viewer-presence.js").createSessionViewerPresenceDeclarations
   >;
-  notifyPluginMetadataChanged: () => void;
+  applyPluginLifecycleChange?: import("../../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
     includeSensitive?: boolean;
@@ -374,7 +375,7 @@ type GatewayResidentBridgeContext = {
   modelAccountConnectService?: ReturnType<
     typeof import("../model-account-connect.js").createModelAccountConnectService
   >;
-  getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
+  getRuntimeSnapshot: (channelId?: ChannelId) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];

@@ -10,14 +10,20 @@ import {
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptEvent } from "./session-accessor.js";
+import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "./session-cold-storage.js";
 import {
   listSessionsNeedingTranscriptIndexReconcile,
   SYNC_REBUILD_MAX_BYTES,
@@ -181,6 +187,51 @@ describe("searchSessionTranscripts", () => {
     expect(search("missing")).toEqual({ hits: [], indexing: false, truncated: false });
     expect(fs.existsSync(databasePath)).toBe(false);
     expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+  });
+
+  it("reports archived search exclusions within the requested scope and searches again after restore", async () => {
+    const sessionKey = "agent:main:archived";
+    const scope = transcriptScope("old", sessionKey);
+    await appendUserMessage("old", sessionKey, "archived needle");
+    await replaceSessionEntry(scope, { sessionId: "current", updatedAt: Date.now() });
+    const options = { agentId: "main", env: env() };
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(db)
+          .updateTable("session_windows")
+          .set({ updated_at: 1, transcript_updated_at: 1 })
+          .where("session_id", "=", scope.sessionId),
+      );
+    }, options);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: {
+            store: resolveOpenClawAgentSqlitePath(options),
+            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ archivedTranscripts: 1 });
+    expect(search("needle", { sessionKeys: [sessionKey] })).toEqual({
+      hits: [],
+      indexing: false,
+      truncated: false,
+      archivedTranscriptsExcluded: 1,
+    });
+    expect(search("needle", { sessionKeys: ["agent:main:other"] })).not.toHaveProperty(
+      "archivedTranscriptsExcluded",
+    );
+    await restoreSessionColdTranscript(scope);
+    expect(search("needle", { sessionKeys: [sessionKey] })).toMatchObject({
+      hits: [expect.objectContaining({ sessionId: "old", sessionKey })],
+      indexing: false,
+    });
+    expect(search("needle", { sessionKeys: [sessionKey] })).not.toHaveProperty(
+      "archivedTranscriptsExcluded",
+    );
   });
 
   it("indexes appended messages synchronously and returns bounded hits", async () => {

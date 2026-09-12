@@ -35,7 +35,6 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
-| `api.registerNodeHostCommand(command)`            | Command handler exposed to paired nodes                                |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
@@ -69,6 +68,87 @@ Admission retries use the connection's existing `busy_timeout`; this is not a
 total deadline for preparation or transaction execution. `options` supplies the
 same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
+The callback and SQLite calls still run synchronously on the caller's thread.
+
+For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Kysely shape once and binds fresh parameters on each call. It uses the normal
+synchronous executor and the connection's bounded statement cache when enabled.
+Keep the prepared function with its database owner and discard it when closing
+the connection; transaction callbacks must remain synchronous.
+
+### SQLite worker stores
+
+Use `openSqliteWorkerStore<Operations>` from
+`openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the
+application event loop. Call it from the main application thread with
+`{ moduleUrl, databasePath, input }`. `Operations` maps each domain operation to
+its `{ input, output }` types; `store.execute({ type, input }, { signal }?)`
+returns the corresponding output promise. The host currently rejects calls from
+other application workers, which need a shared host-broker connection.
+
+This first host supports filesystem-backed databases only. Empty paths, SQLite
+URIs, `:memory:`, and OpenClaw's reserved incognito database basename are refused
+before normalization or worker admission. In-memory and incognito ownership
+remain pending; these locators must never become disk filenames.
+
+The static local `moduleUrl` identifies a trusted feature module exporting
+`createSqliteWorkerBackend(input, { databasePath })`. Its factory owns database
+opening and schema setup; its synchronous `execute(command)` owns queries and
+transactions. `close()` may await cleanup outside transactions; the host retains
+the actor until that cleanup settles. Keep native handles, WAL maintenance, and
+prepared statements inside that backend. Send serializable domain commands and
+results across the boundary, never SQL strings, callbacks, or Kysely builders.
+Declare private build entries with
+[`openclaw.build.workerEntries`](/plugins/dependency-resolution#native-imports-from-a-standalone-source-build)
+and derive their locations from the loader's `api.runtimeSource` fact.
+
+Pass `existingOnly: true` when acquisition must preserve a missing database.
+The call returns `undefined` without starting a worker or invoking a factory
+when the file is absent and no active actor retains that path. A cold existing
+open requires the module's explicit
+`openExistingSqliteWorkerBackend(input, { databasePath })` export. The host
+never substitutes the ordinary creation factory. The existing factory must
+use SQLite's native read-only or existing-file opening mode and validate the
+current schema without creating or migrating it. A filesystem existence check
+followed by ordinary create-if-missing opening does not satisfy this contract.
+
+The host checks physical identity before dispatching the existing factory and
+again before returning the store. Disappearance or replacement after admission
+rejects acquisition. Existing-only and ordinary clients share the same physical
+actor when their module and initialization input match; changing open intent
+does not rerun a factory or create another connection. Domain commands still
+own write permission and any later schema initialization. Existing-only
+acquisition provides no read-only capability for subsequent commands.
+
+Abort signals remove operations that are still queued. Once dispatched, an
+operation retains its result or failure; cancellation does not prove rollback.
+`close()` rejects new work and drains that client's accepted operations. The
+last client also closes its database backend; the last backend releases its
+worker. Worker loss or failure to serialize a completed operation's result can
+reject with `code: "outcome-unknown"`. The operation may have committed: inspect
+authoritative state before deciding what to do next. The host never
+automatically retries a write.
+
+An asynchronous `execute` return violates the command contract. The host retires
+and joins that worker before reporting `outcome-unknown`; it does the same when
+a completed reply cannot be decoded. Failed cleanup retains its original error
+while the worker is drained.
+
+The process-wide host starts lazily and permits at most four workers, 64 opening
+or live store clients (including clients sharing a database), 128 outstanding
+operations, and 64 MiB of queued input. Each input message is limited to 32 MiB
+and each result to 64 MiB; capacity exhaustion rejects with
+`code: "overloaded"`. Operations for one database share its connection owner
+and execute in order. There are no reader replicas or worker-pool configuration
+options.
+
+File identities are admission facts, not native-handle attestations. Close and
+drain a database's clients before replacing or relocating its file. The host
+refuses observed identity changes and collisions with an existing owner; path
+checks cannot protect against an uncoordinated filesystem replacement.
+Each client retains its admitted lexical and canonical pathnames through
+drainage and close. The backend's opening paths remain pinned for its native
+lifetime; released secondary aliases do not accumulate while other clients live.
 
 ### Webhook body rejection
 
@@ -110,6 +190,7 @@ that detached work onto its own tracked admission root:
 ```typescript
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 
+// processWebhookEvent, event, and runtime are your plugin's own handler, payload, and logger.
 void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
   runtime.error?.(`webhook dispatch failed: ${String(error)}`);
 });
@@ -134,6 +215,7 @@ api.registerMcpServerConnectionResolver({
   serverName: "user-email",
   resolve: async (ctx) => {
     // ctx.requesterSenderId is host-trusted; never invent sender identity here.
+    // lookupUserToken is your plugin's own credential-store lookup, not an SDK export.
     const token = await lookupUserToken(ctx.requesterSenderId);
     if (!token) {
       return null; // omit this server for the current run

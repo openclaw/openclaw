@@ -615,16 +615,6 @@ describe("buildProviderStreamFamilyHooks", () => {
     expectDefaultThinkingBudget(toolStreamDisabledPayload);
     expect(toolStreamDisabledPayload).not.toHaveProperty("tool_stream");
   });
-
-  it("exposes canonical stream hook constants for reused families", () => {
-    expect(GOOGLE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(KILOCODE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(MINIMAX_FAST_MODE_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(MOONSHOT_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(TOOL_STREAM_DEFAULT_ON_HOOKS.wrapStreamFn).toBeTypeOf("function");
-  });
 });
 
 describe("createPlainTextToolCallCompatWrapper", () => {

@@ -85,6 +85,19 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         : prepared.hasCronEvents
           ? "cron"
           : "heartbeat",
+      InputProvenance: {
+        kind: "internal_system",
+        sourceTool: prepared.hasExecCompletion
+          ? "exec"
+          : prepared.hasCronEvents
+            ? "cron"
+            : opts.intent === "scheduled" ||
+                !wake.wakeSource ||
+                wake.wakeSource === "interval" ||
+                wake.wakeSource === "manual"
+              ? "heartbeat"
+              : wake.wakeSource,
+      },
       SessionKey: runSessionKey,
       AgentId: agentId,
     } satisfies MsgContext;

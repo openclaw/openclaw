@@ -59,7 +59,6 @@ import {
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
-  channelOptions: [],
   messageChannelOptions: "",
   agentChannelOptions: "web",
 };

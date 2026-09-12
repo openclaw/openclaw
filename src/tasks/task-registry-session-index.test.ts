@@ -4,7 +4,8 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createNextAcpTaskBackingDetail } from "./task-backing-authority.js";
 import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
 import { createTaskFlowForTask } from "./task-flow-registry.js";
-import { publishTaskRecordAfterAtomicStore, updateTask } from "./task-registry-mutation.js";
+import { updateTask } from "./task-registry-mutation.js";
+import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import {
   deleteTaskRecordById,
   hasActiveTaskForChildSessionKey,

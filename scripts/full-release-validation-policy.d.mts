@@ -1,4 +1,10 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
+export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
+export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
+export function classifyReleaseChangelogEvidenceComparison(
+  comparison: unknown,
+  identity: { baseSha: string; version?: unknown },
+): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,

@@ -95,4 +95,5 @@ Sub-agent auth is resolved by **agent id**, not by session type:
 - The shared auth profiles are merged in as a **fallback**; agent profiles override shared profiles on conflicts.
 
 The merge is additive, so shared profiles are always available as
-fallbacks. Fully isolated auth per agent is not supported yet.
+fallbacks. There is no setting that isolates an agent's auth from the shared
+profiles.

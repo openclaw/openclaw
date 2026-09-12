@@ -1,5 +1,6 @@
 // Gateway request scope tests cover request-local plugin runtime context propagation.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import {
   requireActivePluginRegistry,
@@ -55,7 +56,7 @@ describe("gateway request scope", () => {
     ) => Promise<void>,
   ) {
     await withTestGatewayScope(async (runtimeScope) => {
-      await runtimeScope.withPluginRuntimePluginIdScope(pluginId, async () => {
+      await runtimeScope.withPluginRuntimePluginScope({ pluginId }, async () => {
         await run(runtimeScope);
       });
     });
@@ -114,6 +115,33 @@ describe("gateway request scope", () => {
         expectGatewayScope(runtimeScope, { ...TEST_SCOPE, pluginRegistry: requestRegistry });
       });
       expect(requireActivePluginRegistry()).toBe(activeRegistry);
+    });
+  });
+  it("drops generation ownership for re-admission and restores the caller afterward", async () => {
+    const generation = await import("./generation-scope.js");
+    const registry = createEmptyPluginRegistry();
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "fixture", providers: ["fixture-provider"] }],
+    });
+    await withTestGatewayScope(async (runtimeScope) => {
+      await generation.withPluginRuntimeGenerationScope(
+        { metadataSnapshot, pluginRegistry: registry },
+        async () => {
+          const original = runtimeScope.getPluginRuntimeGatewayRequestScope();
+          expect(original?.declaredProviderOwners).toBe(metadataSnapshot.declaredProviderOwners);
+          await generation.runOutsidePluginRuntimeGenerationScope(async () => {
+            await Promise.resolve();
+            expect(generation.getPluginRuntimeGenerationRegistry()).toBeUndefined();
+            expectGatewayScope(runtimeScope, {
+              ...TEST_SCOPE,
+              pluginRegistry: undefined,
+              declaredProviderOwners: undefined,
+            });
+          });
+          expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(original);
+          expect(generation.getPluginRuntimeGenerationRegistry()).toBe(registry);
+        },
+      );
     });
   });
 });

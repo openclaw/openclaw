@@ -13,18 +13,29 @@ examples, and every option the command accepts.
 
 Doctor supports these postures:
 
-| Posture                   | Command                                   | Behavior                                                                         |
-| ------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- |
-| Guided checks             | `openclaw doctor`                         | Legacy health flow; can copy legacy config and apply automatic state migrations. |
-| Advisory JSON             | `openclaw doctor --json`                  | Read-only findings; exits successfully after producing a report.                 |
-| Repair                    | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe.  |
-| Lint                      | `openclaw doctor --lint [--json]`         | Read-only findings with threshold-based exit codes for CI gates.                 |
-| Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`  | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.    |
-| Session SQLite tools      | `openclaw doctor --session-sqlite <mode>` | Inspects or maintains SQLite sessions and explicitly imports legacy history.     |
+| Posture                   | Command                                   | Behavior                                                                              |
+| ------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------- |
+| Guided checks             | `openclaw doctor`                         | Interactive health flow; can copy legacy config and apply automatic state migrations. |
+| Advisory JSON             | `openclaw doctor --json`                  | Read-only findings; exits successfully after producing a report.                      |
+| Repair                    | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe.       |
+| Lint                      | `openclaw doctor --lint [--json]`         | Read-only findings with threshold-based exit codes for CI gates.                      |
+| Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`  | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.         |
+| Session SQLite tools      | `openclaw doctor --session-sqlite <mode>` | Inspects or maintains SQLite sessions and explicitly imports legacy history.          |
 
 Use `openclaw doctor --json` when an operator or script wants the advisory Doctor report as JSON. It exits successfully after producing a report; inspect `ok` and `findings` for health state. Use explicit `openclaw doctor --lint --json` when CI should exit nonzero for findings at the selected severity threshold. Prefer `--fix` when a human operator wants Doctor to edit config or state.
 
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
+
+When ordinary `doctor` asks **Apply recommended config repairs now?**, it checks
+that the selected root config file still matches the source of that proposal.
+If its contents or selected path changed before the write, Doctor preserves the newer file,
+leaves the pending config fixes unwritten, and exits with an error. Rerun
+`openclaw doctor` to review an updated proposal.
+
+If saving succeeds but later processing fails, Doctor stops with an error, names
+the file that was written, and reports whether the write was rolled back. When it was not rolled
+back or recovery could not be confirmed, inspect that file and the active config
+before rerunning Doctor.
 
 If the shared state database uses a newer schema, Doctor refuses before offering
 an interactive update because update admission also needs that database. Run
@@ -45,7 +56,9 @@ Explicit repair stops the matching managed Gateway and checks Gateway, state,
 and agent-database ownership before taking read-only schema snapshots. It
 excludes other processes during repair, verifies readiness,
 and restarts the same service once. It preserves the service definition and does
-not activate a service confirmed offline before maintenance. A loaded, enabled
+not activate a service confirmed offline before maintenance. On Linux, it also
+restores a previously running service if systemd unloads the stopped unit during
+repair; a changed service definition or manager still blocks restart. A loaded, enabled
 macOS job between respawns is not offline: Doctor stops it before repair and
 resumes it afterward. Run repair from a shell outside the Gateway process tree. For externally supervised or unmatched installations, stop
 and start the Gateway through its owning supervisor.
@@ -171,7 +184,7 @@ openclaw channels status --probe
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                     |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                               |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                         |
-| `--lint`                        | Run modernized health checks in read-only mode and emit diagnostic findings.                                                                                                                                |
+| `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                             |
 | `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                     |
 | `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                   |
 | `--session-sqlite <mode>`       | Run targeted session SQLite maintenance or legacy import: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                                   |

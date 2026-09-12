@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 export const NATIVE_HISTORY_STATE_EVENT = "openclaw:native-history-state";
 
 export type NativeHistoryState = {
@@ -23,14 +25,13 @@ export function isNativeWebChromeHost(): boolean {
 export function nativeEmbedHost(): NativeEmbedHost | null {
   // SAFETY: the host adds this optional document-start value; its shape is validated below.
   const host = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_EMBED__"];
-  if (!host || typeof host !== "object" || Array.isArray(host)) {
+  if (!isRecord(host)) {
     return null;
   }
-  return "platform" in host &&
-    (host.platform === "ios" || host.platform === "macos" || host.platform === "android") &&
-    "formFactor" in host &&
-    (host.formFactor === "phone" || host.formFactor === "pad" || host.formFactor === "desktop")
-    ? { platform: host.platform, formFactor: host.formFactor }
+  const { platform, formFactor } = host;
+  return (platform === "ios" || platform === "macos" || platform === "android") &&
+    (formFactor === "phone" || formFactor === "pad" || formFactor === "desktop")
+    ? { platform, formFactor }
     : null;
 }
 

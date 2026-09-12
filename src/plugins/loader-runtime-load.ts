@@ -1,6 +1,7 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
@@ -12,12 +13,15 @@ import {
 } from "./loader-runtime-core.js";
 import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
 import { createProviderRegistryResolver } from "./providers.runtime-core.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 import { createRuntimeModelAuth } from "./runtime/runtime-model-auth.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -57,6 +61,7 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
     return (modelConfig ??= Object.freeze({
       resolveDefaultModelForAgent,
       resolveAllowedModelRef: resolveAllowedModelRefCore,
+      resolveModelRuntimePolicy,
     }));
   },
   get capabilityCatalogContext() {
@@ -105,9 +110,41 @@ export async function acquirePluginRegistryForInspection(
 async function acquireRegistryResources(
   load: (resources: PluginRegistryInspectionResources) => PluginRegistry,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  const resources = new PluginRegistryInspectionResources();
+  const cache = createPluginCache();
+  const resources = new PluginRegistryInspectionResources(async (registry, rollbackInstances) => {
+    const instances = new Set(cache.instances);
+    for (const record of registry?.plugins ?? []) {
+      const instance = getPluginInstance(record);
+      if (instance) {
+        instances.add(instance);
+      }
+    }
+    // Inspections own disposal, not host cleanup notifications or persistent session state.
+    // Rollback completions were already consumed by the collector before this finalizer.
+    const results = await Promise.allSettled(
+      [...instances]
+        .filter((instance) => !rollbackInstances.has(instance))
+        .map((instance) => instance.dispose()),
+    );
+    for (const instance of instances) {
+      cache.instances.delete(instance);
+    }
+    try {
+      await retirePluginCache(cache);
+    } catch (reason) {
+      results.push({ status: "rejected", reason });
+    }
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new PluginRuntimeCloseRetainedError(
+        new AggregateError(failures, "Plugin inspection instances failed to retire"),
+      );
+    }
+  });
   try {
-    const registry = load(resources);
+    const registry = withPluginCache(cache, () => load(resources));
     return { registry, release: () => resources.release() };
   } catch (error) {
     try {

@@ -407,7 +407,7 @@ async function resolveStickerMedia(params: {
   });
 
   // Check sticker cache for existing description
-  const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+  const cached = sticker.file_unique_id ? await getCachedSticker(sticker.file_unique_id) : null;
   if (cached) {
     logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
     const fileId = sticker.file_id ?? cached.fileId;
@@ -415,7 +415,7 @@ async function resolveStickerMedia(params: {
     const setName = sticker.set_name ?? cached.setName;
     if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
       // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
-      cacheSticker({
+      await cacheSticker({
         ...cached,
         fileId,
         emoji,

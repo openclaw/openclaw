@@ -49,7 +49,7 @@ openclaw plugins install @openclaw/signal
   </Step>
   <Step title="Verify and pair">
     ```bash
-    openclaw gateway call channels.status --params '{"probe":true}'
+    openclaw channels status --probe
     ```
     Send a first DM and approve pairing: `openclaw pairing approve signal <CODE>`.
   </Step>
@@ -82,6 +82,8 @@ Minimal config:
 | `allowFrom` | Phone numbers or `uuid:<id>` values allowed to DM |
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
+
+If an account key such as `Work Phone` is listed as `work-phone` but reported unconfigured, run `openclaw doctor --fix` and restart the Gateway. Doctor preserves the account settings when moving an unambiguous key. If multiple keys normalize to the same account ID, or moving a key could change an account already using channel defaults, Doctor leaves it unchanged and asks you to review and rename it.
 
 Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
@@ -120,12 +122,13 @@ If you use the JVM build (`signal-cli-${VERSION}.tar.gz`), install a JRE first. 
 signal-cli -a +<BOT_PHONE_NUMBER> register
 ```
 
-If captcha is required (browser access is needed to complete this step):
+Still inside step 3, if captcha is required (browser access is needed to complete
+this step):
 
-1. Open `https://signalcaptchas.org/registration/generate.html`.
-2. Complete the captcha, copy the `signalcaptcha://...` link target from "Open Signal".
-3. Run from the same external IP as the browser session when possible (captcha tokens expire quickly).
-4. Register and verify immediately:
+- Open `https://signalcaptchas.org/registration/generate.html`.
+- Complete the captcha, copy the `signalcaptcha://...` link target from "Open Signal".
+- Run from the same external IP as the browser session when possible (captcha tokens expire quickly).
+- Register and verify immediately:
 
 ```bash
 signal-cli -a +<BOT_PHONE_NUMBER> register --captcha '<SIGNALCAPTCHA_URL>'
@@ -493,6 +496,7 @@ Provider options:
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size in characters (default 4000).
+- `channels.signal.markdown.tables`: Markdown table rendering mode, `off | bullets | code` (default `bullets`); `block` falls back to `code` (Signal has no native block tables).
 - `channels.signal.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap in MB (default 8).
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive` (default `minimal`). See [Reactions](#reactions-message-tool).
@@ -511,5 +515,7 @@ Related global options:
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
+- [Reactions](/tools/reactions) - emoji reaction semantics for the `message` tool
+- [RPC adapters](/reference/rpc) - the signal-cli JSON-RPC-over-HTTP daemon pattern behind this channel
 - [Security](/gateway/security) - access model and hardening

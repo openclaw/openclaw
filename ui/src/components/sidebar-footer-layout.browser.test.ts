@@ -2,10 +2,22 @@
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  createGateway,
+  createSessions,
+  mountSidebar,
+  setupSidebarTest,
+} from "../test-helpers/app-sidebar.ts";
+import "./app-sidebar.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../test-helpers/native-gateways.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -34,6 +46,7 @@ afterAll(async () => {
 });
 
 describeBrowserLayout("sidebar footer layout", () => {
+  setupSidebarTest();
   beforeAll(async () => {
     if (!chromiumAvailable) {
       return;
@@ -151,5 +164,52 @@ describeBrowserLayout("sidebar footer layout", () => {
     expect(centering?.above).toBeCloseTo(centering?.below ?? 0, 2);
     expect(centering?.actionCenterY).toBeCloseTo(centering?.cardCenterY ?? 0, 2);
     expect(centering?.trailingInset).toBeCloseTo(centering?.leadingInset ?? 0, 2);
+  });
+
+  it("fits the rendered native two-line identity inside the 53px footer", async () => {
+    setNativeGatewayTestState("local");
+    try {
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main"]),
+      );
+      const card = sidebar.querySelector<HTMLElement>(".sidebar-identity-card")!;
+      const avatar = card.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+        "openclaw-viewer-avatar",
+      )!;
+      await avatar.updateComplete;
+      await page.locator(".sidebar-identity-card").evaluate((element, markup) => {
+        element.outerHTML = markup;
+      }, card.outerHTML);
+      const geometry = await page.evaluate(() => {
+        const box = (selector: string) => {
+          const { top, bottom, right, height } = document
+            .querySelector(selector)!
+            .getBoundingClientRect();
+          return { top, bottom, right, height };
+        };
+        return {
+          footer: box(".sidebar-shell__footer"),
+          card: box(".sidebar-identity-card"),
+          name: box(".sidebar-identity-card__name"),
+          gateway: box(".sidebar-identity-card__gateway"),
+          avatar: box(".sidebar-identity-card .viewer-avatar--footer"),
+        };
+      });
+      expect(geometry.footer.height).toBe(53);
+      expect(geometry.name.height).toBe(18);
+      expect(geometry.gateway.height).toBe(14);
+      expect(geometry.gateway.top).toBeGreaterThanOrEqual(geometry.name.bottom);
+      expect(geometry.avatar.height).toBe(28);
+      expect(geometry.card.top).toBeGreaterThan(geometry.footer.top);
+      expect(geometry.card.bottom).toBeLessThan(geometry.footer.bottom);
+      for (const content of [geometry.name, geometry.gateway, geometry.avatar]) {
+        expect(content.top).toBeGreaterThanOrEqual(geometry.card.top);
+        expect(content.bottom).toBeLessThanOrEqual(geometry.card.bottom);
+        expect(content.right).toBeLessThanOrEqual(geometry.card.right);
+      }
+    } finally {
+      clearNativeGatewayTestState();
+    }
   });
 });

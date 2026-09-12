@@ -5,6 +5,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 type ModelRuntimeClose = (error: Error) => Promise<void>;
 class ProcessModelRuntimeLifetimes {
   readonly closeCallbacks = new Set<ModelRuntimeClose>();
+  retirePlugins?: () => Promise<void>;
   epoch = 0;
   closing?: Promise<void>;
 }
@@ -32,6 +33,12 @@ export function registerPreparedModelRuntimeClose(close: ModelRuntimeClose): () 
   return () => lifetimes.closeCallbacks.delete(close);
 }
 
+/** Install the shared plugin resource owner only when a real generation acquires it. */
+export function registerPreparedPluginRetirement(retire: () => Promise<void>): void {
+  capturePreparedModelRuntimeLifetime();
+  lifetimes.retirePlugins ??= retire;
+}
+
 /** Fence admission before abort callbacks run; old publications cannot enter the next lifetime. */
 export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   if (lifetimes.closing) {
@@ -41,18 +48,24 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   lifetimes.closing = closed.promise;
   lifetimes.epoch += 1;
   const error = new Error("prepared model runtime process lifetime closed");
-  void Promise.allSettled([...lifetimes.closeCallbacks].map((close) => close(error))).then(
-    (results) => {
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        closed.reject(new AggregateError(failures, "Prepared model runtime failed to close"));
-      } else {
-        lifetimes.closing = undefined;
-        closed.resolve();
-      }
-    },
-  );
+  void Promise.allSettled(
+    [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
+  ).then(async (results) => {
+    try {
+      await lifetimes.retirePlugins?.();
+      lifetimes.retirePlugins = undefined;
+    } catch (reason) {
+      results.push({ status: "rejected", reason });
+    }
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      closed.reject(new AggregateError(failures, "Prepared model runtime failed to close"));
+    } else {
+      lifetimes.closing = undefined;
+      closed.resolve();
+    }
+  });
   return closed.promise;
 }

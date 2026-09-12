@@ -77,18 +77,7 @@ async function readLogSlice(params: {
   maxBytes: number;
   filter?: (line: string) => boolean;
 }): Promise<Omit<LogTailPayload, "file">> {
-  const stat = await fs.stat(params.file).catch(missingPathToNull);
-  if (!stat) {
-    return {
-      cursor: 0,
-      size: 0,
-      lines: [],
-      truncated: false,
-      reset: false,
-    };
-  }
-
-  const size = stat.size;
+  const size = (await fs.stat(params.file).catch(missingPathToNull))?.size ?? 0;
   const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
   const limit = clamp(params.limit, 1, MAX_LIMIT);
   let cursor =

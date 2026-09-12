@@ -15,11 +15,24 @@ const MAX_SCAN_MS = 30_000;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
-type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
+export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
+export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
+
+export class PackageIntegrityTimeoutError extends Error {
+  constructor(readonly budgetMs: number) {
+    super("Package rollback verification timed out");
+  }
+}
 
 export type PackageRootIntegrityFingerprint =
   | { kind: "directory"; tree: PackageIntegrityFingerprint }
   | { kind: "link"; metadata: string[]; target: string };
+
+export async function readPackageVersionIfPresent(
+  packageRoot: string | null,
+): Promise<string | null> {
+  return packageRoot ? readPackageVersion(packageRoot) : null;
+}
 
 function identity(stat: BigIntStats): string {
   return `${stat.dev}:${stat.ino}`;
@@ -70,7 +83,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
   }
 
   async function observe<T>(
-    phase: "baseline" | "retained" | "restored",
+    phase: "baseline" | "retained" | "restored" | "transaction",
     operation: () => Promise<T>,
   ): Promise<T> {
     const emit = (event: string, facts?: Record<string, unknown>) => {
@@ -115,7 +128,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
           )
           .catch(() => {});
       }
-      throw new Error("Package rollback verification timed out");
+      throw new PackageIntegrityTimeoutError(budget);
     }
     return value;
   }
@@ -164,18 +177,17 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
       }
       const hash = createHash("sha256");
       const buffer = Buffer.allocUnsafe(64 * 1024);
+      const size = Number(stat.size);
       let position = 0;
-      while (true) {
+      // The final stat detects growth; an extra EOF read costs one OS call per file.
+      while (position < size) {
         const { bytesRead } = await read(() =>
-          handle.read(buffer, 0, Math.min(buffer.length, remainingBytes - position + 1), position),
+          handle.read(buffer, 0, Math.min(buffer.length, size - position), position),
         );
         if (bytesRead === 0) {
-          break;
+          throw new Error("Package rollback file changed while reading");
         }
         position += bytesRead;
-        if (position > remainingBytes) {
-          throw new Error("Package rollback verification byte limit exceeded");
-        }
         hash.update(buffer.subarray(0, bytesRead));
       }
       if (!unchanged(stat, await read(() => handle.stat({ bigint: true })))) {
@@ -300,6 +312,21 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     return { kind: "link", metadata: metadata(stat).slice(0, -1), target };
   }
 
+  async function directoryIdentity(root: string): Promise<PackageDirectoryIdentity | null> {
+    const stat = await read(() => fs.lstat(root, { bigint: true }));
+    if (stat.isSymbolicLink()) {
+      return null;
+    }
+    if (!stat.isDirectory() || stat.ino === 0n) {
+      throw new Error("Package rollback filesystem identity is unavailable");
+    }
+    const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
+    if (!version || !unchanged(stat, await read(() => fs.lstat(root, { bigint: true })))) {
+      throw new Error("Package rollback identity changed or version is unavailable");
+    }
+    return { identity: identity(stat), version };
+  }
+
   async function launcher(file: string): Promise<string> {
     const stat = await read(() => fs.lstat(file, { bigint: true }));
     const contents = stat.isSymbolicLink()
@@ -331,5 +358,5 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     }
   }
 
-  return { tree, rootEntry, launcher, exists, entries, observe };
+  return { tree, rootEntry, directoryIdentity, launcher, exists, entries, observe };
 }

@@ -137,8 +137,8 @@ allowlist such as `["all"]`.
 
 Exec-approvals checks read the runtime `exec_approvals_config` singleton row in
 `~/.openclaw/state/openclaw.sqlite` by default, or the same database under
-`$OPENCLAW_STATE_DIR/state` when `OPENCLAW_STATE_DIR` is set. Findings keep the
-stable `oc://exec-approvals.json/...` URI scheme; it now denotes paths within
+`$OPENCLAW_STATE_DIR/state` when `OPENCLAW_STATE_DIR` is set. Findings use the
+stable `oc://exec-approvals.json/...` URI scheme, which addresses paths within
 the authoritative JSON document stored in that row.
 Posture rules under `execApprovals.defaults.*` or `execApprovals.agents.*`
 require readable artifact evidence; a missing or invalid artifact reports as

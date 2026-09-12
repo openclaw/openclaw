@@ -16,7 +16,6 @@ import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
-import { notifyAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
@@ -848,19 +847,6 @@ function updateUsageStatsEntry(
   store.usageStats[profileId] = updater(store.usageStats[profileId]);
 }
 
-function notifyAuthProfileFailureSafely(reason: AuthProfileFailureReason): void {
-  try {
-    notifyAuthProfileFailureHook(reason);
-  } catch (err) {
-    // Hook errors must not break failure recording; log and continue.
-    authProfileUsageLog.warn("auth profile failure hook threw", {
-      event: "auth_profile_failure_hook_error",
-      tags: ["error_handling", "auth_profiles"],
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
 function keepActiveWindowOrRecompute(params: {
   existingUntil: number | undefined;
   now: number;
@@ -1013,7 +999,11 @@ export async function markAuthProfileFailure(params: {
 }): Promise<void> {
   const { store, profileId, reason, agentDir, runId, modelId } = params;
   const profile = store.profiles[profileId];
-  if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+  if (
+    !profile ||
+    profile.setup?.replacement ||
+    isAuthCooldownBypassedForProvider(profile.provider)
+  ) {
     return;
   }
 
@@ -1033,7 +1023,11 @@ export async function markAuthProfileFailure(params: {
     agentDir,
     updater: (freshStore) => {
       const profileValue = freshStore.profiles[profileId];
-      if (!profileValue || isAuthCooldownBypassedForProvider(profileValue.provider)) {
+      if (
+        !profileValue ||
+        profileValue.setup?.replacement ||
+        isAuthCooldownBypassedForProvider(profileValue.provider)
+      ) {
         return false;
       }
       const currentWhamResult =
@@ -1083,7 +1077,6 @@ export async function markAuthProfileFailure(params: {
         now: updateTime,
       });
     }
-    notifyAuthProfileFailureSafely(reason);
     return;
   }
   if (updated === null) {
@@ -1250,7 +1243,6 @@ export async function markInlineProviderApiKeyFailure(params: {
         now: updateTime,
       });
     }
-    notifyAuthProfileFailureSafely(reason);
     return;
   }
   if (updated === null) {

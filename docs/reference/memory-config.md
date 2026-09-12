@@ -164,7 +164,7 @@ Remote embeddings require an API key. Bedrock uses the AWS SDK default credentia
 | Bedrock        | AWS credential chain, or `AWS_BEARER_TOKEN_BEDROCK` | No API key needed                   |
 | DeepInfra      | `DEEPINFRA_API_KEY`                                 | `models.providers.deepinfra.apiKey` |
 | Gemini         | `GEMINI_API_KEY`                                    | `models.providers.google.apiKey`    |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`  | Auth profile via device login       |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`                              | Auth profile via device login       |
 | Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
@@ -231,12 +231,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     Upgrading any existing configuration that already uses
     `gemini-embedding-2` can trigger the same pause even when you do not edit the
-    configuration. Before this release, the stable model's dimension was
+    configuration. Before 2026.8.1, the stable model's dimension was
     omitted from index identity whether `outputDimensionality` was absent or
-    explicitly set. After upgrade, an absent setting resolves to 3072, while an
+    explicitly set. From 2026.8.1 ([#128716](https://github.com/openclaw/openclaw/pull/128716)),
+    an absent setting resolves to 3072, while an
     explicit setting between 128 and 3072 becomes part of the identity. The
     default `gemini-embedding-001` keeps its existing identity when this setting
-    is absent; an explicitly configured value that was previously ignored now
+    is absent; an explicitly configured value that 2026.8.1 no longer ignores
     also changes the identity. For either path, check the affected agent with
     `openclaw memory status --deep --agent <id>`, then rebuild when ready with
     `openclaw memory index --force --agent <id>`.
@@ -465,7 +466,13 @@ If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, chec
 permissions. Back up the legacy journal before replacing any symlink. To import it, preserve its
 contents at `memory/.dreams/events.jsonl` as a regular file under regular directories inside the intended
 workspace, then rerun `openclaw doctor --fix`. Doctor leaves rejected sources untouched. A symlink to
-the workspace root itself is supported; symlinks below that root are refused by this migration.
+the workspace root itself is supported. Symlinks below that root are refused when a legacy event
+source, import claim, or migrated archive is present; directories without those sources need no repair.
+
+If a checkpointed `events.jsonl.migrated` archive changed other than by append, Doctor warns and
+preserves both the archive and the already imported SQLite events. It defers later event generations
+in that workspace while continuing unrelated repairs. Preserve the archive for inspection; this warning
+does not mean its edited contents were imported. Unsafe source paths and failed imports still stop Doctor.
 
 ---
 
@@ -508,6 +515,8 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 ---
+
+<a id="session-memory-search-experimental" />
 
 ## Session memory search
 

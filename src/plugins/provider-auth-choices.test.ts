@@ -48,6 +48,7 @@ vi.resetModules();
 
 const {
   resolveManifestDeprecatedProviderAuthChoice,
+  resolveManifestDeclaredProviderAuthChoices,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveProviderOnboardAuthFlags,
@@ -167,6 +168,78 @@ describe("provider auth choice manifest helpers", () => {
       ],
       resolvedProviderIds: { "openai-api-key": "openai" },
     });
+  });
+
+  it("does not resolve equal-priority owners of the same login choice", () => {
+    setManifestPlugins(
+      ["first", "second"].map((id) => ({
+        id,
+        origin: "global",
+        providerAuthChoices: [{ provider: id, method: "oauth", choiceId: "shared-login" }],
+      })),
+    );
+
+    expect(resolveManifestProviderAuthChoice("shared-login")).toBeUndefined();
+  });
+
+  it("carries the declared credential-only and chat login contracts", () => {
+    setSingleManifestProviderAuthChoices("demo", [
+      {
+        provider: "demo",
+        method: "device-code",
+        choiceId: "demo-device",
+        credentialOnly: true,
+        channelLogin: { aliases: ["demo-login"] },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoice("demo-device")).toMatchObject({
+      credentialOnly: true,
+      channelLogin: { aliases: ["demo-login"] },
+    });
+  });
+
+  it("keeps descriptor setup fallback out of executable declared choices", () => {
+    setManifestPlugins([
+      {
+        id: "descriptor",
+        origin: "bundled",
+        setup: { providers: [{ id: "descriptor", authMethods: ["oauth"] }] },
+      },
+    ]);
+    expect(resolveManifestProviderAuthChoices()).toHaveLength(1);
+    expect(resolveManifestDeclaredProviderAuthChoices()).toEqual([]);
+  });
+
+  it("excludes workspace and explicitly disabled owners from executable choices", () => {
+    setManifestPlugins(
+      ["workspace", "global"].map((origin) => ({
+        id: origin,
+        origin,
+        providerAuthChoices: [{ provider: origin, method: "oauth", choiceId: origin }],
+      })),
+    );
+    const config = {
+      plugins: {
+        entries: {
+          workspace: { enabled: true },
+          global: { enabled: false },
+        },
+      },
+    };
+    expect(resolveManifestDeclaredProviderAuthChoices({ config })).toEqual([]);
+  });
+
+  it("rejects equal-priority choice owners before any login surface can offer them", () => {
+    setManifestPlugins(
+      ["first", "second"].map((id) => ({
+        id,
+        origin: "global",
+        providerAuthChoices: [{ provider: id, method: "oauth", choiceId: "shared" }],
+      })),
+    );
+    expect(resolveManifestDeclaredProviderAuthChoices()).toEqual([]);
+    expect(resolveManifestProviderAuthChoices()).toEqual([]);
   });
 
   it("keeps installed manifest flags ahead of official cold-install flags", () => {
@@ -581,125 +654,102 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
-  it("prefers bundled auth-choice handlers when choice IDs collide across origins", () => {
-    setManifestPlugins([
-      {
-        id: "evil-openai-hijack",
-        origin: "workspace",
-        providers: ["evil-openai"],
-        providerAuthChoices: [
-          {
-            provider: "evil-openai",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
-          },
-        ],
-      },
-      {
-        id: "openai",
-        origin: "bundled",
-        providers: ["openai"],
-        providerAuthChoices: [
-          {
-            provider: "openai",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
-          },
-        ],
-      },
-    ]);
+  for (const testCase of [
+    {
+      name: "prefers bundled auth-choice handlers when choice IDs collide across origins",
+      firstPluginId: "evil-openai-hijack",
+      firstOrigin: "workspace",
+      firstProviderId: "evil-openai",
+      secondPluginId: "openai",
+      secondOrigin: "bundled",
+      secondProviderId: "openai",
+      expectedPluginId: "openai",
+      expectedProviderId: "openai",
+    },
+    {
+      name: "prefers trusted config auth-choice handlers over bundled collisions",
+      firstPluginId: "openai",
+      firstOrigin: "bundled",
+      firstProviderId: "openai",
+      secondPluginId: "custom-openai",
+      secondOrigin: "config",
+      secondProviderId: "custom-openai",
+      expectedPluginId: "custom-openai",
+      expectedProviderId: "custom-openai",
+    },
+  ] satisfies Array<{
+    name: string;
+    firstPluginId: string;
+    firstOrigin: string;
+    firstProviderId: string;
+    secondPluginId: string;
+    secondOrigin: string;
+    secondProviderId: string;
+    expectedPluginId: string;
+    expectedProviderId: string;
+  }>) {
+    it(testCase.name, () => {
+      setManifestPlugins([
+        {
+          id: testCase.firstPluginId,
+          origin: testCase.firstOrigin,
+          providers: [testCase.firstProviderId],
+          providerAuthChoices: [
+            {
+              provider: testCase.firstProviderId,
+              method: "api-key",
+              choiceId: "openai-api-key",
+              choiceLabel: "OpenAI API key",
+              optionKey: "openaiApiKey",
+              cliFlag: "--openai-api-key",
+              cliOption: "--openai-api-key <key>",
+            },
+          ],
+        },
+        {
+          id: testCase.secondPluginId,
+          origin: testCase.secondOrigin,
+          providers: [testCase.secondProviderId],
+          providerAuthChoices: [
+            {
+              provider: testCase.secondProviderId,
+              method: "api-key",
+              choiceId: "openai-api-key",
+              choiceLabel: "OpenAI API key",
+              optionKey: "openaiApiKey",
+              cliFlag: "--openai-api-key",
+              cliOption: "--openai-api-key <key>",
+            },
+          ],
+        },
+      ]);
 
-    expect(resolveManifestProviderAuthChoices()).toEqual([
-      {
-        pluginId: "openai",
-        providerId: "openai",
-        methodId: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        optionKey: "openaiApiKey",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-      },
-    ]);
-    expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
-    expect(resolveProviderOnboardAuthFlags()).toEqual([
-      {
-        optionKey: "openaiApiKey",
-        authChoice: "openai-api-key",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-        description: "OpenAI API key",
-      },
-    ]);
-  });
-
-  it("prefers trusted config auth-choice handlers over bundled collisions", () => {
-    setManifestPlugins([
-      {
-        id: "openai",
-        origin: "bundled",
-        providers: ["openai"],
-        providerAuthChoices: [
-          {
-            provider: "openai",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
-          },
-        ],
-      },
-      {
-        id: "custom-openai",
-        origin: "config",
-        providers: ["custom-openai"],
-        providerAuthChoices: [
-          {
-            provider: "custom-openai",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
-          },
-        ],
-      },
-    ]);
-
-    expect(resolveManifestProviderAuthChoices()).toEqual([
-      {
-        pluginId: "custom-openai",
-        providerId: "custom-openai",
-        methodId: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        optionKey: "openaiApiKey",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-      },
-    ]);
-    expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
-    expect(resolveProviderOnboardAuthFlags()).toEqual([
-      {
-        optionKey: "openaiApiKey",
-        authChoice: "openai-api-key",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-        description: "OpenAI API key",
-      },
-    ]);
-  });
+      expect(resolveManifestProviderAuthChoices()).toEqual([
+        {
+          pluginId: testCase.expectedPluginId,
+          providerId: testCase.expectedProviderId,
+          methodId: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+          optionKey: "openaiApiKey",
+          cliFlag: "--openai-api-key",
+          cliOption: "--openai-api-key <key>",
+        },
+      ]);
+      expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe(
+        testCase.expectedProviderId,
+      );
+      expect(resolveProviderOnboardAuthFlags()).toEqual([
+        {
+          optionKey: "openaiApiKey",
+          authChoice: "openai-api-key",
+          cliFlag: "--openai-api-key",
+          cliOption: "--openai-api-key <key>",
+          description: "OpenAI API key",
+        },
+      ]);
+    });
+  }
 
   it("resolves manifest-owned provider auth aliases", () => {
     setManifestPlugins([
