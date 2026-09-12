@@ -3,7 +3,7 @@ import { collectUniqueCommandDescriptors } from "../cli/program/command-descript
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCliLoaderOptions } from "./cli-registry-loader.js";
 import { normalizePluginsConfig, resolveMemorySlotDecision } from "./config-state.js";
-import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { validatePluginConfig } from "./loader-shared.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
@@ -36,13 +36,18 @@ export async function getPluginCliCommandDescriptors(
     const memorySlot = context.config.plugins?.slots?.memory;
     const normalizedConfig = normalizePluginsConfig(context.config.plugins);
     const sourceConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
+    const isEnabled = createInstalledPluginEnabledPredicate(
+      snapshot.index.plugins,
+      context.config,
+      context.env,
+    );
 
     for (const plugin of snapshot.plugins) {
       if (seenPluginIds.has(plugin.id)) {
         continue;
       }
       seenPluginIds.add(plugin.id);
-      if (!isInstalledPluginEnabled(snapshot.index, plugin.id, context.config, context.env)) {
+      if (!isEnabled(plugin.id)) {
         continue;
       }
       const pluginConfig = normalizedConfig.entries[normalizePluginPolicyId(plugin.id)]?.config;
