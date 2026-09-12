@@ -34,9 +34,41 @@ tts, video_generate, web_fetch, x_search
 ```
 
 A policy containing only those denies stays on the normal Codex native surface;
-the harness applies the named OpenClaw denial directly. Any other deny fails
-closed into the restricted surface. For example, `tools.deny: ["nodes"]`
-restricts the native surface because `nodes` is not in the audited set.
+the harness applies the named OpenClaw denial directly. Whole-server denies of
+configured MCP, written as `<server>__*` for a static `mcp.servers` entry, also
+stay native: the harness omits that server from its `mcp_servers` projection,
+the same override `codex.agents` scoping uses, applies the same exclusion to
+the configured-MCP preflight and the dynamic materializer, and sends
+`mcp_servers.<server>.enabled = false` when the agent's native Codex config
+defines a server of the same name. A `<server>__*` pattern that could name two
+configured servers (one server's raw key normalizing onto another's sanitized
+name) is not accepted and still restricts the surface. Whole-app denies of
+Codex Apps, written as `mcp__codex_apps__<app>_*` where `<app>` is the
+namespace Codex derives from the app's connector name (for example
+`mcp__codex_apps__gamma_*` for tools like
+`mcp__codex_apps__gamma_list_items`), also stay native: the harness rebuilds
+the model-visible names from the `codex_apps` inventory in `mcpServerStatus/list`
+using Codex's own naming rules and leaves a fully covered app out of the
+thread's `apps` patch. The `<app>_*` form denies the whole app by its
+namespace, so it also covers a tool whose callable name carries no separator
+(a raw `capture_file_upload` under a `Gmail` connector is exposed as
+`mcp__codex_apps__gmailcapture_file_upload`). Tools an app hides from the
+model through `_meta.ui.visibility` are ignored, as Codex ignores them.
+`mcp__codex_apps__*` denies every app, including one whose tools carry no
+connector name and so cannot be addressed by an `<app>_*` form. An app-shaped deny that could also reach
+a configured MCP server's tools (a server named `codex_apps` or
+`codex_apps__<anything>`) still restricts the surface, because the app
+projection cannot remove that server's tools; a server of that shape defined
+only in the agent's native Codex config is switched off on the thread instead.
+A pattern that
+matches only some of one app's tools, a pattern that matches no app at all, an
+unreadable inventory, or a `codexPlugins` block that is absent or disabled
+cannot be projected, so that turn runs with all Codex apps disabled and an
+`app_policy_unenforceable` diagnostic. Any other deny fails
+closed into the restricted surface, which also disables account-connected
+Codex Apps for the turn. For example, `tools.deny: ["nodes"]` restricts the native surface because
+`nodes` is not in the audited set, and `tools.deny: ["<server>__get_*"]`
+restricts it because Codex accepts only exact MCP tool names.
 
 Policy-restricted turns have no Codex environment selection or native Code Mode.
 OpenClaw disables inherited and configured MCP servers, attests that they remain

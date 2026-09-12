@@ -179,6 +179,7 @@ type CodexThreadConfigurationOptions = {
   modelProvider?: string | null;
   hostSystemAgentActive?: boolean;
   restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+  deniedInheritedMcpServerNames?: readonly string[];
   shellEnvironment?: Readonly<Record<string, string>>;
   disableLoginShell?: boolean;
 };
@@ -209,6 +210,7 @@ export function buildCodexThreadConfiguration(
       hostSystemAgentActive: options.hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames:
         options.restrictedToolSurfaceInheritedMcpServerNames,
+      deniedInheritedMcpServerNames: options.deniedInheritedMcpServerNames,
       shellEnvironment: options.shellEnvironment,
       disableLoginShell: options.disableLoginShell,
     }),
@@ -409,6 +411,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+    deniedInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
     disableLoginShell?: boolean;
   } = {},
@@ -468,6 +471,7 @@ export function buildCodexRuntimeThreadConfigForRun(
             restrictedToolSurfaceMcpServerNames,
           ),
       restrictedTurnDisablesProjectDocs ? CODEX_NO_PROJECT_DOCS_CONFIG : undefined,
+      buildDeniedInheritedMcpServersPatch(options.deniedInheritedMcpServerNames),
       params.authoredContextTokenCap === undefined
         ? undefined
         : { model_context_window: params.authoredContextTokenCap },
@@ -494,6 +498,22 @@ export function buildCodexRingZeroThreadConfigPatch(
   return {
     ...buildRestrictedToolConfigPatch(inheritedMcpServerNames),
     ...CODEX_NO_PROJECT_DOCS_CONFIG,
+  };
+}
+
+/** Switches off native servers a certified policy deny names, independent of restricted mode. */
+function buildDeniedInheritedMcpServersPatch(
+  deniedInheritedMcpServerNames: readonly string[] | undefined,
+): JsonObject | undefined {
+  if (!deniedInheritedMcpServerNames?.length) {
+    return undefined;
+  }
+  return {
+    mcp_servers: Object.fromEntries(
+      [...new Set(deniedInheritedMcpServerNames)]
+        .toSorted()
+        .map((name) => [name, { enabled: false }]),
+    ),
   };
 }
 
