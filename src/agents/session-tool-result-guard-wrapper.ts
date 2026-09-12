@@ -25,6 +25,7 @@ import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
 import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { recordToolResultLocalMediaReplayAuthorization } from "./embedded-agent-tool-media.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -50,6 +51,8 @@ type GuardedSessionManager = SessionManager & {
     skipBeforeMessageWriteHooks: boolean | undefined,
     assistantErrorTranscript: AssistantErrorTranscript | undefined,
   ) => void;
+  /** Replace the tools whose local media this run may authorize for replay. */
+  setTrustedLocalMediaToolNames?: (names: ReadonlySet<string>) => void;
 };
 
 /**
@@ -69,6 +72,7 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    trustedLocalMediaToolNames?: ReadonlySet<string>;
     trigger?: EmbeddedRunTrigger;
     preparedUserTurnMessage?: PersistedUserTurnMessage;
     preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
@@ -109,10 +113,15 @@ export function guardSessionManager(
       skipBeforeMessageWriteHooks,
       opts?.assistantErrorTranscript,
     );
+    // Same-run helpers such as compaction reuse the manager without a set and keep the run's.
+    if (opts?.trustedLocalMediaToolNames) {
+      guardedSessionManager.setTrustedLocalMediaToolNames?.(opts.trustedLocalMediaToolNames);
+    }
     return guardedSessionManager;
   }
 
   const hookRunner = getGlobalHookRunner();
+  let trustedLocalMediaToolNames = opts?.trustedLocalMediaToolNames;
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   const preparedUserReplayKey =
     opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
@@ -179,6 +188,14 @@ export function guardSessionManager(
     const redacted = redactTranscriptMessage(message, opts?.config, sourceAppend);
     if (redacted !== message) {
       message = redacted;
+      changed = true;
+    }
+    if (message.role === "toolResult" && trustedLocalMediaToolNames) {
+      message = recordToolResultLocalMediaReplayAuthorization(
+        message,
+        message.toolName,
+        trustedLocalMediaToolNames,
+      );
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
@@ -312,6 +329,9 @@ export function guardSessionManager(
     guard.setTranscriptRunId(runId, errors);
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
+  };
+  guardedSessionManager.setTrustedLocalMediaToolNames = (names) => {
+    trustedLocalMediaToolNames = names;
   };
   return guardedSessionManager;
 }
