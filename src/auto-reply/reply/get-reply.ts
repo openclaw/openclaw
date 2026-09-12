@@ -101,7 +101,6 @@ import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
-import { resolveUpdateRequestReply } from "./update-request.js";
 
 type ResetCommandAction = "new" | "reset";
 
@@ -355,12 +354,6 @@ export async function getReplyFromConfig(
   });
   const agentSessionKey = initialAgentScope.agentSessionKey;
   const agentId = initialAgentScope.agentId;
-  const updateRequestReply = opts?.isHeartbeat
-    ? undefined
-    : resolveUpdateRequestReply({ ctx: finalized, cfg, agentId, sessionKey: agentSessionKey });
-  if (updateRequestReply) {
-    return markReplyPayloadForSourceSuppressionDelivery(updateRequestReply);
-  }
   if (
     preparedReplyDispatchRuntime &&
     !publishedModelCatalogOwnerMatchesAgent(preparedReplyDispatchRuntime, agentId)

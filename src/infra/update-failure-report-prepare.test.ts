@@ -220,4 +220,78 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).toContain("- Failed phase: doctor-failed\n");
     expect(report.body).not.toContain("openclaw doctor");
   });
+
+  it("retains failed phases from the durable run when the handoff result is compact", async () => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "durable-failure-history",
+        result: {
+          mode: "git",
+          status: "error",
+          reason: "state-migrated-no-rollback",
+          steps: [],
+          durationMs: 1,
+        },
+        recordedRun: {
+          steps: [
+            { step: "custom-tool private-customer-text", status: "failed" },
+            { step: "activating", status: "failed" },
+            {
+              step: "package rollback",
+              status: "failed",
+              detail: "Gateway service ownership or manager identity changed",
+            },
+          ],
+        },
+      },
+      context,
+    );
+
+    expect(report.body).toContain("- Failed phase: package-rollback\n");
+    expect(report.body).toContain("Failed phase activating: exit unknown");
+    expect(report.body).toContain("Failed phase package-rollback: exit unknown");
+    expect(report.body).toContain("Failed phase [redacted-command]: exit unknown");
+    expect(report.body).not.toContain("private-customer-text");
+    expect(report.body).not.toContain("Gateway service ownership");
+  });
+
+  it.each([{ earlierFailures: [] }, { earlierFailures: ["activating"] }])(
+    "preserves ledger order and measured exits after $earlierFailures",
+    async ({ earlierFailures }) => {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "measured-failure-history",
+          result: {
+            mode: "git",
+            status: "error",
+            reason: "verification-failed",
+            steps: [
+              {
+                name: "verifying",
+                command: "not copied",
+                cwd: "/private",
+                durationMs: 1,
+                exitCode: 7,
+              },
+            ],
+            durationMs: 1,
+          },
+          recordedRun: {
+            steps: [...earlierFailures, "verifying"].map((step) => ({ step, status: "failed" })),
+          },
+        },
+        context,
+      );
+
+      expect(report.body).toContain("- Failed phase: verifying\n");
+      expect(report.body).toContain("Failed phase verifying: exit 7");
+      expect(report.body.match(/Failed phase verifying:/gu)).toHaveLength(1);
+      for (const earlier of earlierFailures) {
+        expect(report.body.indexOf(`Failed phase ${earlier}: exit unknown`)).toBeGreaterThan(-1);
+        expect(report.body.indexOf(`Failed phase ${earlier}: exit unknown`)).toBeLessThan(
+          report.body.indexOf("Failed phase verifying: exit 7"),
+        );
+      }
+    },
+  );
 });

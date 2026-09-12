@@ -15,6 +15,7 @@ export type RunEntryTerminalBehavior =
   | {
       kind: "channel-delivery";
       readDeliveryEvidence: () => {
+        hasRetryBlockedDelivery: boolean;
         hasDirectlySentBlockReply: boolean;
         hasBlockReplyPipelineOutput: boolean;
       };

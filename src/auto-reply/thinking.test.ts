@@ -10,6 +10,8 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 }));
 
 const {
+  createThinkingCatalogResolver,
+  resolveThinkingProfile,
   listThinkingLevelLabels,
   listThinkingLevelOptions,
   listThinkingLevels,
@@ -26,6 +28,25 @@ beforeEach(() => {
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReset();
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
 });
+
+function mockQwenThinkingCatalog(id: string) {
+  providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
+    context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
+      ? {
+          levels: [{ id: "off" }, { id: "low", label: "on" }],
+          defaultLevel: "off",
+        }
+      : undefined,
+  );
+  return [
+    {
+      provider: "vllm",
+      id,
+      reasoning: true,
+      compat: { thinkingFormat: "qwen-chat-template" },
+    },
+  ];
+}
 
 describe("normalizeThinkLevel", () => {
   it("normalizes the documented none alias to off", () => {
@@ -75,6 +96,40 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
     expect(normalizeThinkLevel("ultrathink")).toBe("high");
   });
+});
+
+describe("prepared thinking catalog identity", () => {
+  it.each([
+    { provider: " demo ", model: " Mixed ", expected: ["high"] },
+    { provider: "demo", model: "demo/Mixed", expected: ["high"] },
+    { provider: "demo", model: "mixed", expected: ["off", "minimal", "low", "medium", "high"] },
+    { provider: "demo-cli", model: "Mixed", expected: ["off", "minimal", "low", "medium", "high"] },
+    { provider: "demo", model: "DEMO/Mixed", expected: ["off"] },
+  ])(
+    "preserves first-match and case rules for $provider/$model",
+    ({ provider, model, expected }) => {
+      const catalog = [
+        {
+          provider: " DEMO ",
+          id: "demo/Mixed",
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null, low: null, medium: null },
+        },
+        { provider: "demo", id: "Mixed", reasoning: false },
+        { provider: "demo", id: "DEMO/Mixed", reasoning: false },
+      ];
+      const catalogResolver = createThinkingCatalogResolver(catalog);
+      for (const prepared of [undefined, catalogResolver]) {
+        const profile = resolveThinkingProfile({
+          provider,
+          model,
+          catalog,
+          catalogResolver: prepared,
+        });
+        expect(profile.levels.map(({ id }) => id)).toEqual(expected);
+      }
+    },
+  );
 });
 
 describe("listThinkingLevels", () => {
@@ -341,22 +396,7 @@ describe("listThinkingLevels", () => {
   });
 
   it("passes catalog compat into provider thinking profiles", () => {
-    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
-      context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
-        ? {
-            levels: [{ id: "off" }, { id: "low", label: "on" }],
-            defaultLevel: "off",
-          }
-        : undefined,
-    );
-    const catalog = [
-      {
-        provider: "vllm",
-        id: "Qwen/Qwen3-8B",
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
-      },
-    ];
+    const catalog = mockQwenThinkingCatalog("Qwen/Qwen3-8B");
 
     expect(listThinkingLevelLabels("vllm", "Qwen/Qwen3-8B", catalog)).toEqual(["off", "on"]);
     for (const level of ["high", "adaptive"] as const) {
@@ -665,22 +705,7 @@ describe("listThinkingLevels", () => {
   });
 
   it("matches provider-qualified catalog ids for provider thinking profiles", () => {
-    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
-      context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
-        ? {
-            levels: [{ id: "off" }, { id: "low", label: "on" }],
-            defaultLevel: "off",
-          }
-        : undefined,
-    );
-    const catalog = [
-      {
-        provider: "vllm",
-        id: "vllm/Qwen/Qwen3-8B",
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
-      },
-    ];
+    const catalog = mockQwenThinkingCatalog("vllm/Qwen/Qwen3-8B");
 
     expect(listThinkingLevelLabels("vllm", "Qwen/Qwen3-8B", catalog)).toEqual(["off", "on"]);
     expect(

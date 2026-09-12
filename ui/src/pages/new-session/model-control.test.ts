@@ -329,7 +329,7 @@ describe("new-session model runtime", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
-  it("renders initial metadata loading without synthesizing the configured default", async () => {
+  it("shows the known default immediately without inventing catalog choices", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     request.mockReturnValueOnce(pending.promise);
@@ -346,16 +346,17 @@ describe("new-session model runtime", () => {
       ".skeleton.chat-controls__model-trigger-skeleton",
     );
     expect(loadingModelTrigger).not.toBeNull();
-    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("false");
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
-      true,
+      false,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("gpt-5.6-luna");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
-    expect(loadingSkeleton).not.toBeNull();
-    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingSkeleton).toBeNull();
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(control.modelForSubmission()).toBe("");
+    expect(control.modelSelectionBlockedReason({ id: "main" })).toBeUndefined();
     pending.resolve({ models: [] });
   });
 

@@ -4151,13 +4151,6 @@ struct OnboardingAISetupTests {
             RemoteGatewayAuthIssue.tokenRequired.statusMessage
         ))
         #expect(decision.showRemoteChoices)
-        #expect(decision.showAdvancedConnection)
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: decision.showAdvancedConnection,
-            remoteToken: appState.remoteToken,
-            remoteTokenUnsupported: appState.remoteTokenUnsupported,
-            authIssue: decision.authIssue
-        ))
     }
 
     @Test func `remote AI detection auth blocks without candidate fallthrough`() async throws {

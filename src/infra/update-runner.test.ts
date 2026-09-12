@@ -452,6 +452,7 @@ describe("runGatewayUpdate", () => {
   type TestCommandOptions = {
     env?: NodeJS.ProcessEnv;
     cwd?: string;
+    input?: string | Uint8Array;
     timeoutMs?: number;
   };
 
@@ -661,6 +662,7 @@ describe("runGatewayUpdate", () => {
         }
         return await runCommandWithTimeout(argv, {
           cwd: options.cwd,
+          input: options.input,
           env: options.env,
           timeoutMs: options.timeoutMs ?? 5000,
         });

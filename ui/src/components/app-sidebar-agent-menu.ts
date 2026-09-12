@@ -429,14 +429,13 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
   const current = snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId);
   return html`
     <div class="sidebar-customize-menu__title">${t("nav.gateway.sectionLabel")}</div>
-    ${snapshot?.gateways.map((gateway) => {
+    ${snapshot?.gateways.map((gateway, index) => {
       const selected = gateway.id === snapshot.currentId;
-      const healthLabel =
-        gateway.health === "ok"
-          ? t("nav.gateway.connected")
-          : gateway.health === "error"
-            ? t("nav.gateway.unreachable")
-            : t("nav.gateway.unknown");
+      const healthLabel = {
+        ok: t("nav.gateway.connected"),
+        error: t("nav.gateway.unreachable"),
+        unknown: t("nav.gateway.unknown"),
+      }[gateway.health];
       const openWindow = (event: MouseEvent) => {
         if (event.metaKey || event.ctrlKey) {
           event.preventDefault();
@@ -464,6 +463,7 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
         <span class="sidebar-customize-menu__text">${gateway.name}</span>
         <span slot="details" class="sidebar-gateway-details">
           ${gateway.isPrimary ? html`<span class="sidebar-gateway-primary">${t("nav.gateway.primaryTag")}</span>` : nothing}
+          ${index < 9 ? html`<kbd class="session-menu__shortcut" aria-hidden="true">⌘${index + 1}</kbd>` : nothing}
           ${selected ? html`<span class="sidebar-gateway-check" aria-hidden="true">${icons.check}</span>` : nothing}
         </span>
       </wa-dropdown-item>`;

@@ -642,6 +642,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       cards,
       configuredModels: buildSelectableDefaultModels(data.models, defaults),
       defaultModels: defaults,
+      authStatus: data.authStatus,
+      automaticUtilityModel: data.automaticUtilityModel,
       thinkingLevel: defaults.thinkingLevel,
       thinkingOverridden: defaults.thinkingOverridden,
       fastMode: defaults.fastMode,

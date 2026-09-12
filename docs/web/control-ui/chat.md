@@ -58,6 +58,18 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+New Session shows the agent's known default model while the model catalog loads.
+Model choices are cached in memory for the current connection, agent, session,
+and account, so reopening a picker or returning to a draft can show them
+immediately. Catalog and account changes invalidate these copies; reconnecting
+loads current choices again. Reopening a picker after a reported cooldown expires
+checks readiness again. A catalog refresh keeps existing controls visible,
+and the Gateway still validates the model and account when starting a run.
+
+If a New Session model lookup does not finish within 30 seconds, the controls
+show **Models unavailable**. Open the model picker to retry; your draft stays
+in place.
+
 When you open an existing session, you can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
 composer keeps your draft and focus when the conversation appears. Send shows
@@ -86,6 +98,7 @@ Chat error banners, including cloud runner failures, show short messages in full
   <Accordion title="Send and history semantics">
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Before sending, use **Remove attachment** at the corner of a staged attachment; the control supports touch and keyboard input in both Chat and New Session.
+    - Opening a Markdown attachment (`.md`, `.markdown`, or a Markdown MIME type) in the side panel shows formatted headings, lists, tables, and code blocks. Other text attachments stay literal. Previews keep the 256 KiB UTF-8 limit and the original download link; Markdown does not execute embedded HTML or automatically load remote images.
     - Staged attachments scroll horizontally when they no longer fit. Faded edges show where more attachments remain, including after adding files or resizing the composer.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).

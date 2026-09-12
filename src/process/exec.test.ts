@@ -703,6 +703,9 @@ describe("runCommandBuffered", () => {
             const closed = once(parent, "close", { signal: AbortSignal.timeout(1_000) });
             await vi.advanceTimersByTimeAsync(timeoutMs - 101);
             await vi.advanceTimersByTimeAsync(100);
+            // Output release runs in the next timers phase so buffered pipe I/O
+            // gets a poll turn on both Node and Bun.
+            await vi.advanceTimersByTimeAsync(1);
             await closed;
             expect(await command).toMatchObject({ code: null, termination: "timeout" });
             expect(isPidAlive(descendantPid)).toBe(true);

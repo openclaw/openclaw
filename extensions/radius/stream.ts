@@ -283,7 +283,8 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
           options: {
             temperature: options.temperature,
             maxTokens: options.maxTokens,
-            reasoning: options.reasoning,
+            // Pi represents disabled reasoning by omitting the option.
+            reasoning: options.reasoning === "off" ? undefined : options.reasoning,
             cacheRetention: options.cacheRetention,
             sessionId: options.sessionId,
             toolChoice: options.toolChoice,

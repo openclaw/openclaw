@@ -1,4 +1,5 @@
 import { ServerResponse } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceGatewayControl,
@@ -429,6 +430,51 @@ describe("GA Realtime call retirement", () => {
         failHangup = false;
         response.emit(deliveryEvent);
         await handling?.catch(() => undefined);
+        await realtime.cleanup();
+      }
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "awaits %s sideband retirement before hangup and reservation release",
+    async (outcome) => {
+      const retired = createDeferred<void>();
+      const bridge = retirementBridge();
+      vi.mocked(bridge.close).mockReturnValue(retired.promise);
+      const hangup = vi.fn();
+      const { realtime } = createBroker({
+        fetchImpl: async (url) => {
+          if (requestTarget(url).endsWith("/hangup")) {
+            hangup();
+            return new Response(null, { status: 204 });
+          }
+          return new Response("v=answer\r\n", {
+            status: 201,
+            headers: { Location: "/v1/realtime/calls/rtc_async_retirement" },
+          });
+        },
+      });
+      try {
+        const reservation = await reserveRetirementSession(realtime, () => bridge);
+        await realtime.handler(
+          createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
+          createResponseHarness().res,
+        );
+        const closing = realtime.broker.cancelBrowserSession(reservation);
+        const concurrent = realtime.cleanup();
+        expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 1 });
+        expect(bridge.close).toHaveBeenCalledOnce();
+        expect(hangup).not.toHaveBeenCalled();
+        if (outcome === "reject") {
+          retired.reject(new Error("sideband disposal failed"));
+        } else {
+          retired.resolve();
+        }
+        await Promise.all([closing, concurrent]);
+        expect(hangup).toHaveBeenCalledOnce();
+        expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 0 });
+      } finally {
+        retired.resolve();
         await realtime.cleanup();
       }
     },

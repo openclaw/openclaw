@@ -41,7 +41,7 @@ function resolveDisabledBundledPluginsDir(): string {
   return DISABLED_BUNDLED_PLUGINS_DIR;
 }
 
-function isSourceCheckoutRoot(packageRoot: string): boolean {
+export function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
     pluginCacheExistsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
     pluginCacheExistsSync(path.join(packageRoot, "src")) &&

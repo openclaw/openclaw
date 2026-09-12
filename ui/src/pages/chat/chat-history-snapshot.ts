@@ -4,7 +4,7 @@ import type {
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
-import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
+import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,

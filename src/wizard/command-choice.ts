@@ -22,8 +22,12 @@ export function buildCommandChoiceReply(
   };
 }
 
-/** Keep a reply token with its login record without holding an active command open. */
-export function createLoginChoicePrompt<T>(prompt: WizardSelectParams<T>, signal: AbortSignal) {
+/** Use only provider identity; Telegram callbacks have a 64-byte limit (2026-09-11). */
+export function createLoginChoicePrompt<T>(
+  prompt: WizardSelectParams<T>,
+  signal: AbortSignal,
+  provider: string,
+) {
   const id = randomBytes(8).toString("hex");
   let answered = false;
   return {
@@ -31,12 +35,12 @@ export function createLoginChoicePrompt<T>(prompt: WizardSelectParams<T>, signal
       prompt.message,
       prompt.options.map((option, index) => ({
         label: option.label,
-        action: { type: "command", command: `/login choice ${id} ${index}` },
+        action: { type: "command", command: `/login choice ${id} ${index} ${provider}` },
       })),
     ),
     answer(command: string): { value: T } | undefined {
-      const match = /^\/login choice ([a-f0-9]+) (\d+)$/u.exec(command.trim());
-      if (!match || answered || signal.aborted || match[1] !== id) {
+      const match = /^\/login choice ([a-f0-9]+) (\d+) (\S+)$/u.exec(command.trim());
+      if (!match || answered || signal.aborted || match[1] !== id || match[3] !== provider) {
         return undefined;
       }
       const index = Number(match[2]);

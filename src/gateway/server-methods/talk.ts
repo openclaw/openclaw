@@ -10,6 +10,7 @@ import {
   errorShape,
   missingScopeErrorShape,
   normalizeUiAppearancePreference,
+  type TalkCatalogParams,
   type TalkSpeakParams,
   UI_APPEARANCE_PREFERENCE_KEYS,
   validateTalkCatalogParams,
@@ -250,7 +251,7 @@ function buildTalkTtsConfig(
   };
 }
 
-function buildTalkCatalog(config: OpenClawConfig) {
+function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
   // Reject ambiguous ownership before provider discovery loads unrelated plugins.
   const realtimeAgentId = resolveTalkSessionAgentId(config);
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
@@ -267,28 +268,40 @@ function buildTalkCatalog(config: OpenClawConfig) {
       }).provider.id,
   );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
-  const realtimeConfig = buildTalkRealtimeConfig(config);
-  const realtimeProviderIds = Object.keys(realtimeConfig.providers);
+  const requestedProvider = normalizeOptionalString(params.provider);
+  const requestedModel = normalizeOptionalString(params.model);
+  const realtimeConfig = buildTalkRealtimeConfig(config, requestedProvider, requestedModel);
+  const realtimeProviderIds = [
+    ...(requestedProvider ? [requestedProvider] : []),
+    ...Object.keys(realtimeConfig.providers),
+  ];
   const realtimeSurface =
     realtimeConfig.transport === "gateway-relay" ? "gateway-relay" : "browser-session";
+  const realtimeResolveContext = {
+    cfg: config,
+    agentId: realtimeAgentId,
+    surface: realtimeSurface,
+    ...(realtimeSurface === "gateway-relay"
+      ? { autoRespondToAudio: realtimeConfig.consultRouting !== "force-agent-consult" }
+      : {}),
+  } as const;
   // Mirror talk.client.create's resolution inputs (agent scope + top-level model
   // override) so catalog readiness matches what session creation will actually do;
   // diverging here previously reported GPT-Live over OAuth as unconfigured.
-  const realtimeModelOverride = realtimeConfig.model
-    ? { providerConfigOverrides: { model: realtimeConfig.model } }
+  const realtimeModel = requestedModel ?? realtimeConfig.model;
+  const realtimeModelOverride = realtimeModel
+    ? { providerConfigOverrides: { model: realtimeModel } }
     : {};
   const realtimeSelection = resolveCatalogProviderSelection(
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     () => {
       assertSecretOwnerAvailable("capability", "talk:realtime");
       return resolveConfiguredRealtimeVoiceProvider({
-        cfg: config,
+        ...realtimeResolveContext,
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
         ...realtimeModelOverride,
-        agentId: realtimeAgentId,
         defaultModel: realtimeConfig.model,
-        surface: realtimeSurface,
       }).provider.id;
     },
   );
@@ -397,12 +410,21 @@ function buildTalkCatalog(config: OpenClawConfig) {
         });
         // Top-level talk.realtime.model overrides provider-level config, matching
         // talk.client.create's providerConfigOverrides precedence at session time.
-        const rawConfigWithModel = realtimeConfig.model
-          ? { ...rawConfig, model: realtimeConfig.model }
-          : rawConfig;
+        const model = provider.id === activeRealtimeProvider ? realtimeModel : realtimeConfig.model;
+        const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
+        const defaultRawConfig = { ...rawConfig };
+        delete defaultRawConfig.model;
+        const defaultProviderConfig = available
+          ? (provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: defaultRawConfig }) ??
+            defaultRawConfig)
+          : defaultRawConfig;
         const providerConfig = available
-          ? (provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-            rawConfigWithModel)
+          ? rawConfigWithModel.model === undefined
+            ? defaultProviderConfig
+            : (provider.resolveConfig?.({
+                ...realtimeResolveContext,
+                rawConfig: rawConfigWithModel,
+              }) ?? rawConfigWithModel)
           : rawConfigWithModel;
         const capabilities: ReturnType<typeof resolveRealtimeVoiceProviderCapabilities> = available
           ? resolveRealtimeVoiceProviderCapabilities({
@@ -436,8 +458,10 @@ function buildTalkCatalog(config: OpenClawConfig) {
             capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
           ),
         };
-        if (provider.defaultModel) {
-          entry.defaultModel = provider.defaultModel;
+        const defaultModel =
+          normalizeOptionalString(defaultProviderConfig.model) ?? provider.defaultModel;
+        if (defaultModel) {
+          entry.defaultModel = defaultModel;
         }
         if (provider.models?.length) {
           entry.models = [...provider.models];
@@ -834,7 +858,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      respond(true, buildTalkCatalog(context.getRuntimeConfig()), undefined);
+      respond(true, buildTalkCatalog(context.getRuntimeConfig(), catalogParams), undefined);
     } catch (err) {
       respond(
         false,

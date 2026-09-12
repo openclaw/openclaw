@@ -33,7 +33,9 @@ const skillCommandMocks = vi.hoisted(() => ({
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
+  deliverReplies: vi.fn<typeof import("./bot/delivery.replies.js").deliverReplies>(async () => ({
+    delivered: true,
+  })),
   editMessageTelegram: vi.fn(async () => ({ ok: true as const, messageId: "999", chatId: "100" })),
   emitTelegramMessageSentHooks: vi.fn(),
 }));

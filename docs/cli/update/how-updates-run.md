@@ -77,6 +77,12 @@ Candidate build and rehearsal processes resolve source-linked plugin SDKs from
 the candidate root, even when the serving source launcher passed its own checkout
 root. This keeps candidate assets and validation independent of the old checkout.
 
+The candidate answers the updater's native service capability probe before
+loading configuration or initializing debug capture. Probing capability does not
+open or migrate shared state, so the old Gateway can keep serving while its
+database schema is older than the candidate's. The installed updater runs first;
+this repair takes effect when the candidate it probes contains the fix.
+
 Snapshot preparation budgets time for the SQLite database and journal bytes,
 including copying and verification passes, with a five-minute startup floor.
 It uses the larger of that allowance and the configured per-step timeout.

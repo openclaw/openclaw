@@ -123,18 +123,6 @@ export async function runUpdateCommandRepair(params: {
           pending = (async () => {
             const validation = await params.validate(signal, assertCurrent, rehearsal);
             assertCurrent();
-            if (validation.ok && rehearsal) {
-              const keys = await rehearsal.changedConfigKeys();
-              assertCurrent();
-              if (keys.length) {
-                return {
-                  ...validation,
-                  ok: false,
-                  stopReason: "repair-requires-config-change",
-                  summary: `Config changes required in top-level keys: ${keys.join(", ")}. Copies were discarded; run openclaw doctor --fix under your own authority, or openclaw triage.`,
-                };
-              }
-            }
             return validation;
           })();
           return pending;

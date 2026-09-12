@@ -2,7 +2,9 @@
 
 The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
-Dashboard widgets load inside the app. Sign-in links and external links opened in a new window use your system browser.
+Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
+
+Reading tabs share a private browser session, isolated from the dashboard's native commands and authentication scripts. Closing every reading tab, switching Gateways, or quitting the app ends that private session. Reloading the dashboard retains its tabs. Sign-in links and **Open in browser** continue to use your system browser.
 
 The tray's **Stop Gateway** and **Restart Gateway** actions request graceful shutdown. Running work can delay completion; **Start Gateway** brings a stopped local Gateway back online.
 
@@ -65,6 +67,57 @@ cargo build
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
+
+### Inline browser live regression on Linux
+
+The existing first-run driver also exercises real native WebKit browser views
+against a synthetic Gateway. In addition to the driver's AT-SPI, Xvfb, and D-Bus
+packages, install `xdotool` for pointer input. With an unbundled development binary:
+
+```bash
+xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+  /usr/bin/python3 apps/linux/tests/first_run.py \
+  apps/linux/src-tauri/target/debug/openclaw-desktop --inline-browser
+```
+
+This scenario checks real pointer input to the dashboard and native child,
+element inspection, PNG snapshots, navigation history, and dashboard reload
+persistence. It then uses the app's dashboard deep link to replace the dashboard
+in the same process and verifies that a new browser tab works, saves the fixture
+bytes through the native chooser, and cancels a second save. The driver owns
+an isolated temporary HOME, loopback fixture, and read-only fixture CLI; no real
+Gateway or account is used. Add `--artifacts-dir DIRECTORY` to retain native
+screenshots and JSON results
+outside the repository. Screenshot capture also requires ImageMagick.
+
+### Inline browser live regression on Windows
+
+Start an isolated candidate app with a loopback WebView2 debugging endpoint and
+load its loopback Gateway dashboard. Once the dashboard is ready, run this from
+the repository root using the repository's supported Node version:
+
+```powershell
+node apps/linux/scripts/test-inline-browser.mjs --endpoint http://127.0.0.1:9223
+```
+
+The script uses the real dashboard bridge and native child WebViews. It serves
+synthetic pages on a separate loopback port and checks navigation, SPA history,
+conversation ownership and deduplication, popups, shared browser cookies,
+presentation scopes, snapshots, element inspection, dashboard reload persistence,
+and cleanup. It does not launch the app, change Gateway settings, or contact
+external sites. It closes only the tabs and scopes created by its run.
+
+Use `--dashboard-url http://127.0.0.1:PORT/` to select the candidate dashboard when
+multiple local dashboards are open. JSON results and PNG snapshots go to a unique
+OS temporary directory; `--output DIRECTORY` selects another proof location.
+Keep these generated proofs outside the repository.
+
+Add `--hold` to retain the synthetic pages for native screenshots and save-dialog
+checks. Create the printed `continue` file or press Ctrl+C to finish cleanup.
+Native visibility and download dialogs still need this UI verification; the
+automated scope checks verify the child viewport dimensions and retained tabs.
+The script exits nonzero on assertion or cleanup failure. `--help` describes all
+options without connecting to the app.
 
 ## First-run setup
 
@@ -195,8 +248,11 @@ Bundles land in `target/release/bundle/{deb,appimage}/`.
 
 The `Linux App` workflow checks affected pull requests with Rust formatting,
 `cargo test --locked --all-targets` on Linux and macOS, and the packaged runtime
-ABI scanner's unit tests. These checks compile, link, and run the native tests;
-they do not build bundles or run graphical first-run and AppImage runtime checks.
+ABI scanner's unit tests. It also runs the native Linux inline browser smoke
+under Xvfb, including pointer input, snapshots, dashboard replacement, and native
+save/cancel, and uploads the synthetic screenshots and JSON results as the
+`linux-inline-browser` proof artifact. Bundles, the full graphical first-run
+scenarios, and AppImage runtime checks remain manual dispatch checks.
 
 Manually dispatch `Linux App` on the branch to validate packaging before a
 release. It retains all pull-request checks, builds the `.deb` and AppImage,

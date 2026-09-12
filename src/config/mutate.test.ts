@@ -17,7 +17,7 @@ import { createConfigIO as createActualConfigIO } from "./io.factory.js";
 import type { ConfigWriteOptions } from "./io.js";
 import {
   ConfigMutationConflictError,
-  configWriteTargetsIncludeBoundary,
+  resolveConfigIncludeWriteBoundary,
   mutateConfigFile,
   replaceConfigFile,
   transformConfigFileWithRetry,
@@ -770,7 +770,7 @@ describe("config mutate helpers", () => {
       const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
       const nextConfig = structuredClone(snapshot.sourceConfig);
       setConfigValueAtPath(nextConfig, ["plugins", "entries", "alpha", "enabled"], true);
-      expect(configWriteTargetsIncludeBoundary({ snapshot, nextConfig })).toBe(false);
+      expect(resolveConfigIncludeWriteBoundary({ snapshot, nextConfig })).toBeNull();
       await expect(
         replaceConfigFile({
           snapshot,
@@ -1594,13 +1594,13 @@ describe("config mutate helpers", () => {
     };
 
     expect(
-      configWriteTargetsIncludeBoundary({
+      resolveConfigIncludeWriteBoundary({
         snapshot,
         nextConfig: {
           agents: { entries: { alpha: { model: "new-model" } } },
         } as OpenClawConfig,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("does not write through when a change falls outside the nested include", async () => {
@@ -3387,7 +3387,7 @@ describe("config mutate helpers", () => {
   });
 });
 
-describe("configWriteTargetsIncludeBoundary", () => {
+describe("resolveConfigIncludeWriteBoundary", () => {
   const nestedProvenance = [
     {
       path: ["agents", "entries", "alpha"],
@@ -3412,63 +3412,66 @@ describe("configWriteTargetsIncludeBoundary", () => {
 
   it("accepts a change owned by a nested include", () => {
     expect(
-      configWriteTargetsIncludeBoundary({
+      resolveConfigIncludeWriteBoundary({
         snapshot: nestedSnapshot,
         nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
       }),
-    ).toBe(true);
+    ).toEqual({
+      boundaryPath: ["agents", "entries", "alpha"],
+      includePath: "/cfg/config/agent-alpha.json5",
+    });
   });
 
   it("declines once root-level wizard metadata joins the change set", () => {
     // Doctor consults this before stamping wizard state; adding the root key
     // first would push the change outside the boundary and fail the write.
     expect(
-      configWriteTargetsIncludeBoundary({
+      resolveConfigIncludeWriteBoundary({
         snapshot: nestedSnapshot,
         nextConfig: {
           agents: { entries: { alpha: { model: "new-model" } } },
           wizard: { lastRunCommand: "doctor" },
         } as OpenClawConfig,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("declines an include-owned change once the root roster format must persist", () => {
     // Parity with the writer: persistCanonicalAgentRoster forces the root path,
     // so Doctor must not skip root metadata for a write that lands at the root.
     expect(
-      configWriteTargetsIncludeBoundary({
+      resolveConfigIncludeWriteBoundary({
         snapshot: nestedSnapshot,
         nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
         persistCanonicalAgentRoster: true,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("declines when the candidate no longer carries the owning boundary", () => {
     // The writer falls back to the root path for a removed section, so Doctor
     // must not treat that write as include-owned.
     expect(
-      configWriteTargetsIncludeBoundary({
+      resolveConfigIncludeWriteBoundary({
         snapshot: nestedSnapshot,
         nextConfig: { agents: { entries: {} } } as OpenClawConfig,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("declines when nothing changed or no include owns the change", () => {
     expect(
-      configWriteTargetsIncludeBoundary({ snapshot: nestedSnapshot, nextConfig: sourceConfig }),
-    ).toBe(false);
+      resolveConfigIncludeWriteBoundary({ snapshot: nestedSnapshot, nextConfig: sourceConfig }),
+    ).toBeNull();
     expect(
-      configWriteTargetsIncludeBoundary({
+      resolveConfigIncludeWriteBoundary({
         snapshot: {
           ...nestedSnapshot,
           includeProvenance: [],
         },
         nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

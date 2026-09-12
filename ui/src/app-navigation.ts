@@ -225,23 +225,25 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["profile", "appearance", "notifications"] },
-  { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
-  {
-    labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "talk", "devices"],
-  },
-  {
-    labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "model-providers", "plugin-settings", "skill-settings", "memory"],
-  },
-  { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
-  {
-    labelKey: "nav.settingsGroupSystem",
-    routes: ["advanced", "debug", "logs", "updates", "about"],
-  },
-] as const satisfies readonly SettingsNavigationGroup[];
+const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "profile",
+  "appearance",
+  "notifications",
+  "connection",
+  "channels",
+  "talk",
+  "devices",
+  "agents",
+  "model-providers",
+  "plugin-settings",
+  "skill-settings",
+  "memory",
+  "approvals",
+  "advanced",
+  "debug",
+  "logs",
+  "about",
+]);
 
 export function isSettingsNavigationRouteVisible(
   routeId: NavigationRouteId,
@@ -254,12 +256,7 @@ export function isSettingsNavigationRouteVisible(
   if (routeId === "updates") {
     return canAdmin || nativeDeviceSettings !== null;
   }
-  return (
-    canAdmin ||
-    NON_ADMIN_SETTINGS_NAVIGATION_GROUPS.some((group) =>
-      group.routes.some((candidate) => candidate === routeId),
-    )
-  );
+  return canAdmin || NON_ADMIN_SETTINGS_ROUTES.has(routeId);
 }
 
 export function deviceSettingsGroupLabelKey(
@@ -284,18 +281,15 @@ export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): readonly SettingsNavigationGroup[] {
-  const groups = canAdmin ? SETTINGS_NAVIGATION_GROUPS : NON_ADMIN_SETTINGS_NAVIGATION_GROUPS;
-  return groups
-    .map((group) => ({
-      labelKey:
-        group.labelKey === "nav.settingsGroupDevice"
-          ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
-          : group.labelKey,
-      routes: group.routes.filter((route) =>
-        isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
-      ),
-    }))
-    .filter((group) => group.routes.length > 0);
+  return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    labelKey:
+      group.labelKey === "nav.settingsGroupDevice"
+        ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
+        : group.labelKey,
+    routes: group.routes.filter((route) =>
+      isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
+    ),
+  })).filter((group) => group.routes.length > 0);
 }
 
 // Settings subpages render with settings chrome but stay out of the sidebar.

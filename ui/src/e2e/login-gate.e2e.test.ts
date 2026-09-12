@@ -213,7 +213,7 @@ suite.define(() => {
   });
 
   it.each([
-    { name: "tablet", width: 1024 },
+    { name: "tablet", width: 900 },
     { name: "phone", width: 390 },
   ])("spans the $name settings viewport while reconnecting", async ({ width }) => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width } });

@@ -22,6 +22,8 @@ export type RealtimeTalkTranscript = {
   role: "user" | "assistant";
   text: string;
   final: boolean;
+  /** Literal caption fragments bypass ASR correction and inferred turn boundaries. */
+  textMode?: "verbatim";
   itemId?: string;
   order?: number;
 };

@@ -151,6 +151,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
       agentId,
       defaultModel: realtimeConfig.model,
       surface: "browser-session",
+      requiredCapabilities: { supportsVideoFrames: wantsCameraFrames },
     });
     const providerCapabilities = resolveRealtimeVoiceProviderCapabilities({
       provider: resolution.provider,

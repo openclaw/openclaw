@@ -20,6 +20,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { listUserProfileAuthLinks } from "../../state/user-model-accounts.js";
 import { resolveChatAccountSelection } from "./chat-account-selection.js";
 import type {
   ChatMetadataReadParams,
@@ -284,7 +285,15 @@ export function createGatewayChatMetadataRuntime(params: {
     assertCurrent?.();
     const profiles = resolveSessionCatalogProfiles(sessionEntry, agent.owner.config, agent.agentId);
     const neutral = !hasSessionCatalogContext(profiles);
-    const defaultProfileId = useRequesterDefaults ? requesterProfileId : undefined;
+    // Read links on every draft request so connecting an account takes effect immediately;
+    // viewers without personal defaults can reuse the already-published neutral projection.
+    const defaultProfileId =
+      useRequesterDefaults &&
+      !profiles.preferredProfileId &&
+      requesterProfileId &&
+      listUserProfileAuthLinks(requesterProfileId).length > 0
+        ? requesterProfileId
+        : undefined;
     // Personal selections and credentials can change without publishing a shared auth
     // generation. Keep those projections request-local, including linked session pins.
     const requestScoped =

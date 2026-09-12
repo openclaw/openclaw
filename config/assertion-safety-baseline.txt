@@ -880,7 +880,6 @@ extensions/openai/openai-chatgpt-provider.ts	2
 extensions/openai/openai-provider.ts	5
 extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
-extensions/openai/realtime-quicksilver-bridge.ts	1
 extensions/openai/realtime-voice-bridge.ts	3
 extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
@@ -1427,7 +1426,7 @@ packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	3
 packages/ai/src/providers/anthropic.ts	6
 packages/ai/src/providers/azure-openai-responses.ts	1
-packages/ai/src/providers/clean-for-gemini.ts	15
+packages/ai/src/providers/clean-for-gemini.ts	12
 packages/ai/src/providers/google-shared.ts	3
 packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
@@ -3079,7 +3078,6 @@ src/infra/tailscale.ts	9
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	2
-src/infra/update-doctor-result.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
 src/infra/update-runner-install-surface.ts	1

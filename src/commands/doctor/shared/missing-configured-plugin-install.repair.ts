@@ -8,6 +8,7 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
+import { formatSourceBundledPluginNotice } from "../../../plugins/dev-source-root.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
@@ -214,6 +215,7 @@ async function repairMissingPluginInstallsWithLease(
     warnings.push(message);
     params.onWarning?.({ message, ...(pluginId ? { pluginId } : {}) });
   };
+  const sourceOutcomes: PluginUpdateOutcome[] = [];
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
@@ -256,6 +258,17 @@ async function repairMissingPluginInstallsWithLease(
   for (const [pluginId, record] of Object.entries(records)) {
     const bundled = bundledPluginsById.get(pluginId);
     if (!bundled || !recordMatchesBundledPackage(record, bundled)) {
+      continue;
+    }
+    if (bundled.preserveExternalInstallRecord) {
+      const message = formatSourceBundledPluginNotice(pluginId);
+      notices.push(message);
+      sourceOutcomes.push({
+        pluginId,
+        status: "unchanged",
+        code: "source-bundled-plugin",
+        message,
+      });
       continue;
     }
     if (nextRecords === records) {
@@ -489,7 +502,10 @@ async function repairMissingPluginInstallsWithLease(
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
   const pluginInventoryChanged = nextRecords !== persistedRecords || repairedPluginIds.size > 0;
-  const outcomes = [...failedPlugins.values()].filter((outcome) => outcome !== undefined);
+  const outcomes = [
+    ...sourceOutcomes,
+    ...[...failedPlugins.values()].filter((outcome) => outcome !== undefined),
+  ];
   return {
     changes,
     warnings,

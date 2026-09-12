@@ -128,7 +128,9 @@ export function normalizeCompatibilityConfigValues(
   const changes: string[] = [];
   const copilotConfig = removeLegacyCopilotDiscovery(cfg);
   if (copilotConfig !== cfg) {
-    changes.push("Removed retired GitHub Copilot discovery setting.");
+    changes.push(
+      "The GitHub Copilot discovery switch was retired and has been removed. Configured Copilot access now refreshes its model list automatically. Use the model allow list (agents.defaults.modelPolicy.allow) to hide Copilot models; it does not stop discovery requests.",
+    );
   }
   let contextBudgetConfig = copilotConfig;
   let contextBudgetWarnings: string[];

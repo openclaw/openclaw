@@ -20,6 +20,8 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     shell: string;
     host: HTMLDivElement;
     pendingOpen?: TerminalPanelOpenAction;
+    /** Retires only the queued intent that booted this placeholder. */
+    cancelPendingIntent?: () => void;
     /** Why an in-flight open/attach must not adopt this disposed terminal. */
     cancelled?: "close" | "lifecycle";
   };
@@ -33,6 +35,7 @@ export type TerminalOperation = {
   generation: number;
   client: TerminalGatewayClient;
   signal: AbortSignal;
+  cancelIntent?: () => void;
 };
 
 export type TerminalPanelCatalogReference = {

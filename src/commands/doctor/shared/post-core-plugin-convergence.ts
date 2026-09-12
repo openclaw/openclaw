@@ -263,7 +263,7 @@ export async function runPostCorePluginConvergence(params: {
     records,
     env,
   });
-  const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
+  const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records, env });
   const resolveInstallRecordPaths = (
     installRecords: Record<string, PluginInstallRecord>,
   ): Set<string> =>

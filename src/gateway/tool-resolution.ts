@@ -120,6 +120,7 @@ export function resolveGatewayScopedTools(
     providerProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
+    gatewayConfigReadAllowed,
   } = resolveEffectiveToolPolicy({
     config: params.cfg,
     sessionKey: runtimePolicySessionKey,
@@ -266,6 +267,7 @@ export function resolveGatewayScopedTools(
   ].some(hasRestrictiveAllowPolicy);
 
   const openClawTools = createOpenClawTools({
+    gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     runId: params.runId,
     execSession: params.execSession,
@@ -301,6 +303,7 @@ export function resolveGatewayScopedTools(
     onYield: params.onYield,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
+    requesterSenderId: senderId,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,

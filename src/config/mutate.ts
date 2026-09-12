@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -49,6 +50,7 @@ import {
 } from "./io.js";
 import {
   containsConfigIncludeDirective,
+  hashConfigRaw,
   rejectConfigNonFiniteNumbers,
   resolveManagedRuntimeEnvBaseline,
 } from "./io.read-helpers.js";
@@ -428,33 +430,35 @@ function resolveIncludeOwnedWriteCandidate(params: {
 }
 
 /**
- * Whether one authored $include file solely owns every changed path of this
+ * Resolve the authored $include file that solely owns every changed path of this
  * write. Callers that add root-level metadata before persisting (Doctor wizard
  * state) must consult this first: an extra root key would push the change set
  * outside the boundary and force the guarded root writer to reject the write.
  */
-export function configWriteTargetsIncludeBoundary(params: {
+export function resolveConfigIncludeWriteBoundary(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
   persistCanonicalAgentRoster?: boolean;
-}): boolean {
+  explicitSetPaths?: ConfigWriteOptions["explicitSetPaths"];
+}): IncludeWriteBoundary | null {
   const includeWrite = resolveIncludeOwnedWriteCandidate({
     snapshot: params.snapshot,
     nextConfig: params.nextConfig,
     writeOptions: {
       inputBase: "source",
       persistCanonicalAgentRoster: params.persistCanonicalAgentRoster,
+      explicitSetPaths: params.explicitSetPaths,
     },
   });
   // Eligibility must match the guarded writer: a canonical external target is
   // rejected there, so it must classify as manual repair rather than eligible.
-  return (
-    includeWrite !== null &&
+  return includeWrite &&
     isInternalIncludeWriteTarget({
       configPath: params.snapshot.path,
       includePath: includeWrite.includePath,
     })
-  );
+    ? { boundaryPath: includeWrite.boundaryPath, includePath: includeWrite.includePath }
+    : null;
 }
 
 function snapshotProvesBrokenInclude(snapshot: ConfigFileSnapshot, includePath: string): boolean {
@@ -1147,6 +1151,7 @@ async function replaceConfigFileUnlocked(
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   markActiveConfigMutationPath(snapshot.path);
+  assertUpdateDoctorConfigInputHash(snapshot.path, hashConfigRaw(snapshot.raw));
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,

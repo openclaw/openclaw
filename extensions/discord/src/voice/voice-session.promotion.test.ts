@@ -233,7 +233,7 @@ defineDiscordVoiceTests(
         }
         expect(await joining).toMatchObject({ ok: false });
         expect(await replacement).toMatchObject({ ok: true });
-        oldEntry.stop();
+        await oldEntry.stop();
         expect(oldConnection.destroy).toHaveBeenCalledOnce();
         expect(replacementConnection.destroy).not.toHaveBeenCalled();
         expectConnectedStatus(manager, "1002");

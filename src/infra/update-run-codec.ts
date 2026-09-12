@@ -7,6 +7,7 @@ import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
@@ -153,7 +154,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       for (const [pattern, replacement] of redactPaths) {
         text = text.replace(pattern, () => replacement);
       }
-      return truncateUtf16Safe(text, 1024);
+      return truncateUtf16Safe(text, UPDATE_RUN_TEXT_LIMIT);
     }),
   );
   record.origin = UpdateRunRecordSchema.shape.origin.parse({
