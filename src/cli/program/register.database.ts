@@ -1,9 +1,9 @@
 import type { Command } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
-import { preflightOpenClawAgentDatabasePath } from "../../state/openclaw-database-preflight.agent.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  preflightOpenClawAgentDatabasePath,
   preflightOpenClawStateDatabasePath,
 } from "../../state/openclaw-database-preflight.js";
 import { resolveDatabasePath } from "../../state/openclaw-state-db-maintenance.js";

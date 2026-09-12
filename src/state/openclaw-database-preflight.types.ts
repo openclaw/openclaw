@@ -57,3 +57,8 @@ export type OpenClawAgentSchemaPreflightResult = Omit<
   agentId: string;
   status: "exact" | "incompatible" | "indeterminate";
 };
+
+export type OpenClawDatabaseSchemaPreflightOperation =
+  | "doctor"
+  | "gateway-restart"
+  | "gateway-startup";
