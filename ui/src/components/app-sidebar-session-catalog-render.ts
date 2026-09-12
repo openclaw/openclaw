@@ -441,6 +441,8 @@ function renderCatalogHostGroup(
                 projectGroups.groups,
                 (group) => group.key,
                 (group) => {
+                  const label = group.labelKey ? t(group.labelKey) : group.label;
+                  const title = group.labelKey ? label : group.title;
                   const sectionId = `catalog-${group.kind}:${catalog.id}:${host.hostId}:${group.key}`;
                   const legacySectionId = group.legacySectionKey
                     ? `catalog-project:${catalog.id}:${host.hostId}:${group.legacySectionKey}`
@@ -458,13 +460,13 @@ function renderCatalogHostGroup(
                         class="sidebar-session-catalog-project__head"
                         data-session-catalog-project=${group.key}
                         aria-expanded=${String(!collapsed)}
-                        title=${group.title}
+                        title=${title}
                         @click=${() => params.onToggleSection(collapsedSectionId ?? sectionId)}
                       >
                         <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
                           >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                         >
-                        <span class="sidebar-session-catalog-project__label">${group.label}</span>
+                        <span class="sidebar-session-catalog-project__label">${label}</span>
                         <span class="sidebar-session-catalog-project__count" aria-hidden="true"
                           >${group.sessions.length}</span
                         >
@@ -475,7 +477,7 @@ function renderCatalogHostGroup(
                           : html`<div
                                 class="sidebar-session-catalog-project__sessions"
                                 role="list"
-                                aria-label=${`${host.label}: ${group.label}`}
+                                aria-label=${`${host.label}: ${label}`}
                               >
                                 ${renderVisibleRows(group.sessions, sectionId, true)}
                               </div>
