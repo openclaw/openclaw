@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 export type LineCredentialStatus = "available" | "configured_unavailable" | "missing";
@@ -25,8 +26,8 @@ interface LineThreadBindingsConfig {
 interface LineAccountBaseConfig {
   enabled?: boolean;
   joinIntro?: boolean;
-  channelAccessToken?: string;
-  channelSecret?: string;
+  channelAccessToken?: SecretInput;
+  channelSecret?: SecretInput;
   tokenFile?: string;
   secretFile?: string;
   name?: string;
