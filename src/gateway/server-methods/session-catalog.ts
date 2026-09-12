@@ -378,11 +378,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const requestEntries = createSessionCatalogRequestEntrySnapshot({
         cfg: currentConfig,
         fallbackAgentId: resolvedAgent.agentId,
-        sessionKeys: result.catalogs.flatMap((catalog) =>
-          catalog.hosts.flatMap((host) =>
-            host.sessions.flatMap((session) => (session.sessionKey ? [session.sessionKey] : [])),
-          ),
-        ),
+        sessionKeys: result.catalogs
+          .flatMap((catalog) => catalog.hosts)
+          .flatMap((host) => host.sessions)
+          .flatMap(({ sessionKey }) => (sessionKey ? [sessionKey] : [])),
       });
       return {
         catalogs: result.catalogs.map((catalog) => ({
