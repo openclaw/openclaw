@@ -112,11 +112,12 @@ export async function discoverLegacyHistoricalTranscripts(params: {
   target: { agentId: string; storePath: string };
   records: readonly LegacySessionRecord[];
   ownershipRecords?: readonly LegacySessionRecord[];
+  referencedPaths?: ReadonlySet<string>;
   archiveSources?: readonly SessionSqliteMigrationMove[];
   snapshot: ReadOnlySqliteValidationSnapshot;
   issues: DoctorSessionSqliteIssue[];
 }): Promise<LegacySessionRecord[]> {
-  const directory = path.dirname(params.target.storePath);
+  const directory = path.dirname(canonicalMigrationFilePath(params.target.storePath));
   assertSafeSessionSqliteMigrationDirectory(directory);
   const sources = new Map<
     string,
@@ -133,13 +134,23 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       if (
         item.isFile() &&
         isPrimarySessionTranscriptFileName(item.name) &&
-        !referenced.has(canonicalMigrationFilePath(filename))
+        !referenced.has(canonicalMigrationFilePath(filename)) &&
+        !params.referencedPaths?.has(canonicalMigrationFilePath(filename))
       ) {
         sources.set(filename, { path: filename, originalPath: filename });
       }
     }
   }
+  const archivedReferences = new Set(
+    (params.ownershipRecords ?? []).flatMap((record) =>
+      record.transcriptDependencies.map(canonicalMigrationFilePath),
+    ),
+  );
   for (const move of params.archiveSources ?? []) {
+    // Registered aliases belong to the original importer/recovery path, not orphan discovery.
+    if (archivedReferences.has(canonicalMigrationFilePath(move.sourcePath))) {
+      continue;
+    }
     sources.set(move.archivePath, {
       path: move.archivePath,
       originalPath: move.sourcePath,
@@ -162,6 +173,9 @@ export async function discoverLegacyHistoricalTranscripts(params: {
     });
     return [];
   }
+  const retainedSharedAliasIds = new Set(
+    [...owners].filter(([, keys]) => keys.size > 1).map(([id]) => id),
+  );
   const discovered: LegacySessionRecord[] = [];
   const candidates = new Map<string, LegacySessionRecord[]>();
   for (const source of sources.values()) {
@@ -175,7 +189,11 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       ) {
         throw new Error("Archived original changed since migration; retained without importing");
       }
-      const primary = readLegacyPrimaryTranscriptIdentity(source.path, source.originalPath);
+      const primary = readLegacyPrimaryTranscriptIdentity(
+        source.path,
+        source.originalPath,
+        source.archiveMove ? retainedSharedAliasIds : undefined,
+      );
       if (!primary) {
         continue;
       }

@@ -159,7 +159,9 @@ export async function runDoctorSessionSqlite(
       ? createSessionSqliteMigrationRun(env, targets.map(createMigrationTargetInput))
       : undefined;
   const coverage =
-    options.mode === "import" ? gatherLegacyArchiveCoverage(cfg, env, targets) : undefined;
+    options.mode === "import" || options.mode === "dry-run" || options.mode === "validate"
+      ? gatherLegacyArchiveCoverage(cfg, env, targets)
+      : undefined;
   const reports: DoctorSessionSqliteTargetReport[] = [];
   const archiveTargets: LegacyArchiveTarget[] = [];
   for (const target of targets) {
@@ -172,13 +174,13 @@ export async function runDoctorSessionSqlite(
         mode: options.mode,
         target,
         historicalArchives,
+        referencedPaths: coverage?.referencedPaths,
       }),
     );
   }
   if (activeRun && coverage) {
     await archiveLegacyArtifacts(archiveTargets, coverage, activeRun);
-    for (const [index, target] of targets.entries()) {
-      const report = reports[index]!;
+    for (const { target, report } of archiveTargets) {
       appendActiveSqliteTranscriptFileIssues(target, report);
       updateMigrationManifestTarget(activeRun, createMigrationTargetInput(target), report.issues);
     }
@@ -343,6 +345,7 @@ function filterLegacySessionStoreTargets(
 
 async function inspectOrMigrateTarget(params: {
   historicalArchives?: HistoricalArchiveSources;
+  referencedPaths?: ReadonlySet<string>;
   activeRun?: ActiveSessionSqliteMigrationRun;
   archiveTargets?: LegacyArchiveTarget[];
   cfg: OpenClawConfig;
@@ -413,6 +416,7 @@ async function inspectOrMigrateTarget(params: {
         target: params.target,
         records: allRecords,
         ownershipRecords,
+        referencedPaths: params.referencedPaths,
         archiveSources: archiveOwnershipVerified ? archiveSources?.transcripts : [],
         snapshot: snapshot.snapshot,
         issues,
@@ -469,6 +473,11 @@ async function inspectOrMigrateTarget(params: {
     }
     return report;
   }
+  // A retained but ineligible support artifact does not make an already migrated store work.
+  if (records.length === 0 && !fs.existsSync(params.target.storePath)) {
+    report.sqliteEntries = 0;
+    return report;
+  }
   if (params.mode === "import") {
     await importLegacySessionRecords(params.target, records, report);
   } else if (params.mode === "dry-run") {
@@ -511,16 +520,18 @@ async function inspectOrMigrateTarget(params: {
           : [],
       );
       // Receipt after verified import allows crash retry, but prevents resurrection after later deletion.
-      recordPlannedMigrationMoves(
-        params.activeRun,
-        createMigrationTargetInput(params.target),
-        recoveredMoves,
-      );
-      recordCompletedMigrationMoves(
-        params.activeRun,
-        createMigrationTargetInput(params.target),
-        recoveredMoves,
-      );
+      if (recoveredMoves.length > 0) {
+        recordPlannedMigrationMoves(
+          params.activeRun,
+          createMigrationTargetInput(params.target),
+          recoveredMoves,
+        );
+        recordCompletedMigrationMoves(
+          params.activeRun,
+          createMigrationTargetInput(params.target),
+          recoveredMoves,
+        );
+      }
     }
     if (validationPassed) {
       // Finalization enables incremental vacuum where needed and releases free pages.
@@ -1334,7 +1345,8 @@ async function archiveImportedLegacySessionStores(
     byStore.set(storePath, [...(byStore.get(storePath) ?? []), owner]);
   }
   for (const [storePath, entries] of byStore) {
-    if (!fs.existsSync(storePath)) {
+    // A historical-only target may never have had an index; losing an admitted index is a failure.
+    if (!coverage.indexIdentities.has(storePath) && !fs.existsSync(storePath)) {
       continue;
     }
     if (

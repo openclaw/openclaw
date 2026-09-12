@@ -109,6 +109,7 @@ export function resolveLegacyTranscriptPaths(
 export function readLegacyPrimaryTranscriptIdentity(
   filePath: string,
   originalPath: string,
+  retainedSharedAliasIds?: ReadonlySet<string>,
 ): { sessionId: string; updatedAt: number } | undefined {
   const filename = path.basename(originalPath);
   const filenameId =
@@ -130,6 +131,10 @@ export function readLegacyPrimaryTranscriptIdentity(
         return undefined;
       }
       if (id !== filenameId) {
+        // Shared aliases retained by an earlier migration are not unregistered primaries.
+        if (retainedSharedAliasIds?.has(id)) {
+          return undefined;
+        }
         throw new Error("Primary transcript header does not match its original filename");
       }
       version = typeof raw.version === "number" ? raw.version : 1;

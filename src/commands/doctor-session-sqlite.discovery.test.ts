@@ -384,3 +384,75 @@ it.each([1, 2, 3])(
     });
   },
 );
+
+it("preserves retained shared aliases after the old migration cleared their filenames", async () => {
+  await withOpenClawTestState({ label: "doctor-shared-archive" }, async (state) => {
+    const sessions = state.sessionsDir();
+    fs.mkdirSync(sessions, { recursive: true });
+    const store = path.join(sessions, "sessions.json");
+    const id = "shared-session";
+    const entries = {
+      "agent:main:shared-a": { sessionId: id, updatedAt: 42 },
+      "agent:main:shared-b": { sessionId: id, updatedAt: 43 },
+    };
+    fs.writeFileSync(store, JSON.stringify(entries));
+    for (const [sessionKey, entry] of Object.entries(entries)) {
+      await importSqliteSessionRows({ agentId: "main", storePath: store, sessionKey, entry });
+    }
+    const target = {
+      agentId: "main",
+      storePath: store,
+      sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
+    };
+    const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
+    fs.mkdirSync(archiveDir, { recursive: true });
+    const old = createSessionSqliteMigrationRun(state.env, [target]);
+    const originals = new Map<string, string>();
+    for (const name of ["sessions.json", "shared-a.jsonl", "shared-b.jsonl"]) {
+      const source = path.join(sessions, name);
+      if (name !== "sessions.json") {
+        fs.writeFileSync(source, transcript(id, "sharedaliasneedle"));
+      }
+      const archive = path.join(archiveDir, `archive-tier.${name}.imported-1`);
+      originals.set(archive, fs.readFileSync(source, "utf8"));
+      const move: SessionSqliteMigrationMove = {
+        kind: name === "sessions.json" ? "legacy-store" : "unreferenced-jsonl",
+        sourcePath: source,
+        archivePath: archive,
+        artifact: {
+          identity: readMigrationArtifactIdentity(source),
+          classification: "protected",
+          reason: "unreferenced-history",
+          dependencies: [],
+          disposal: { state: "retained" },
+        },
+      };
+      recordPlannedMigrationMoves(old, target, [move]);
+      await moveMigrationArtifact(source, archive, move.artifact!.identity);
+      recordCompletedMigrationMoves(old, target, [move]);
+    }
+    updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
+    old.manifest.completedAt = new Date().toISOString();
+    writeSessionSqliteMigrationManifest(old);
+    for (const mode of ["validate", "import"] as const) {
+      const report = await runDoctorSessionSqlite({ mode, store, env: state.env });
+      expect(report.totals).toMatchObject({
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+      });
+    }
+    for (const [archive, bytes] of originals) {
+      expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
+    }
+    for (const [sessionKey, entry] of Object.entries(entries)) {
+      expect(
+        loadExactSessionEntry({ agentId: "main", storePath: store, sessionKey })?.entry,
+      ).toMatchObject(entry);
+    }
+    expect(
+      searchSessionTranscripts({ agentId: "main", env: state.env, query: "sharedaliasneedle" })
+        .hits,
+    ).toEqual([]);
+  });
+});
