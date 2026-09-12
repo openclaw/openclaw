@@ -276,6 +276,44 @@ export function createProfileAvailability({
     signal,
     pageProbe,
   ) => {
+    if (capabilities.mode === "local-extension" && pageProbe) {
+      // Profile status must consume discovery metadata, never CDP target
+      // enumeration: the latter attaches Chrome's debugger even while idle.
+      const relay = await ensureExtensionRelay(signal);
+      if (!relay || state().extensionRelays?.get(profile.name) !== relay) {
+        return false;
+      }
+      if (relay.ownership === "owned") {
+        const ready = relay.bridge.extensionConnected;
+        pageProbe.onResult(ready ? relay.bridge.accessibleTabs().length : 0);
+        return ready;
+      }
+      const probeSignal = AbortSignal.any([
+        ...(signal ? [signal] : []),
+        AbortSignal.timeout(resolveTimeouts(timeoutMs).httpTimeoutMs),
+      ]);
+      const ready = await waitForProfileOperation(relay.client.status(), probeSignal);
+      if (state().extensionRelays?.get(profile.name) !== relay) {
+        return false;
+      }
+      let tabCount = 0;
+      if (ready.ready) {
+        const { countExtensionRelayTabs } = await import("./extension-relay/relay-tab-count.js");
+        relay.client.assertCurrent();
+        tabCount = await countExtensionRelayTabs({
+          port: relay.port,
+          token: relay.token,
+          signal: probeSignal,
+        });
+      }
+      probeSignal.throwIfAborted();
+      relay.client.assertCurrent();
+      if (state().extensionRelays?.get(profile.name) !== relay) {
+        return false;
+      }
+      pageProbe.onResult(tabCount);
+      return ready.ready;
+    }
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
