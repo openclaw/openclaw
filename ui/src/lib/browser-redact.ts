@@ -10,6 +10,8 @@ import {
 import { DEFAULT_REDACT_PATTERNS } from "../../../src/logging/redact-patterns.js";
 
 const URL_QUERY_PAIR_RE = /([?&])([^=&#\s]+)=([^&#\s"'<>]+)/gu;
+const PRIVATE_PATH_RE =
+  /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g;
 const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map((source) =>
   typeof source === "string" ? new RegExp(...parseRedactPatternSource(source)) : source,
 );
@@ -31,10 +33,6 @@ const SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
   [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     "[redacted private key]",
-  ],
-  [
-    /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g,
-    "$1[redacted path]",
   ],
 ];
 
@@ -75,15 +73,16 @@ function redactUrlQueryPairs(detail: string): string {
   );
 }
 
-export function redactToolDetail(detail: string): string {
+export function redactToolDetail(detail: string, options?: { preservePaths?: boolean }): string {
   let redacted = redactUrlQueryPairs(detail);
   for (const pattern of SECRET_DETAIL_PATTERNS) {
     redacted = replaceRedactPattern(redacted, pattern, redactMatch);
   }
-  return SENSITIVE_TEXT_PATTERNS.reduce(
+  redacted = SENSITIVE_TEXT_PATTERNS.reduce(
     (text, [pattern, replacement]) => text.replace(pattern, replacement),
     redacted,
   );
+  return options?.preservePaths ? redacted : redacted.replace(PRIVATE_PATH_RE, "$1[redacted path]");
 }
 
 export const redactToolPayloadText = redactToolDetail;

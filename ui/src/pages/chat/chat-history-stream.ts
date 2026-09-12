@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -170,6 +171,13 @@ export function applyHistoryRun(params: {
       // A copied row cannot reclaim retired display ownership. The pane retains
       // its accepted owner past active cleanup; unseen runs recover through the
       // reducer, whose full diagnostic wins over the bounded history summary.
+      const failureNotice = getChatSessionProjection(state).entries.findLast(
+        (entry) =>
+          entry.identity?.runId === terminalRunId &&
+          !entry.identity.isImported &&
+          entry.identity.role === "custom" &&
+          asOptionalRecord(entry.message)?.customType === "run-failed-before-reply",
+      );
       const projection = reduceChatSessionProjection(state, {
         type: "runTerminal",
         runId: terminalRunId,
@@ -179,7 +187,10 @@ export function applyHistoryRun(params: {
             : sessionInfo.status === "timeout"
               ? "timeout"
               : "error",
-        errorMessage: sessionInfo.lastRunError,
+        errorMessage:
+          sessionInfo.status === "failed" || sessionInfo.status === "timeout"
+            ? (extractText(failureNotice?.message) ?? sessionInfo.lastRunError)
+            : sessionInfo.lastRunError,
       });
       setChatRunOwner(state, terminalRunId);
       const terminal = projection.runs[terminalRunId];

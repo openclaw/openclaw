@@ -1,6 +1,7 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import {
   parseAssistantTextSignature,
@@ -506,6 +507,13 @@ export function sanitizeChatHistoryMessage(
     typeof entry.tool_call_id === "string";
 
   if ("details" in entry) {
+    if (role === "custom" && entry.customType === "run-failed-before-reply") {
+      const runId = normalizeOptionalString(readRecord(entry.details)?.runId);
+      if (runId) {
+        // Correlate the visible failure with its run without exposing private report details.
+        entry["__openclaw"] = { ...readRecord(entry["__openclaw"]), runId };
+      }
+    }
     const conflictDetails = projectWorkspaceConflictDetails(entry);
     const toolResultDetails =
       !conflictDetails && messageHasToolResultShape(entry)

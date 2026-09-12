@@ -74,7 +74,7 @@ describe("trusted transcript display metadata", () => {
       customType: "run-failed-before-reply",
       content: "This turn ended before a reply.",
       display: true,
-      details: { error: "PRIVATE_DIAGNOSTIC" },
+      details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
     };
     const timestamp = "2026-09-08T00:00:00.000Z";
     const history = projectTranscriptEntryMessage(
@@ -96,6 +96,7 @@ describe("trusted transcript display metadata", () => {
       expect(metadata?.transcriptPosition).toEqual(transcriptPosition);
       expect(metadata).toMatchObject({ id: "entry", seq: 2 });
       if (custom) {
+        expect(readSessionMessageIdentity(projected)?.runId).toBe("failed-run");
         expect(projected).toMatchObject({
           role: "custom",
           customType: "run-failed-before-reply",
