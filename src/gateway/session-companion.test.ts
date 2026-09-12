@@ -199,6 +199,38 @@ describe("session companion asks", () => {
     harness.service.dispose();
   });
 
+  it("revalidates read authorization after loading context", async () => {
+    vi.useFakeTimers();
+    let authorized = true;
+    const harness = createHarness({
+      readContext: async () => {
+        authorized = false;
+        return {
+          kind: "ready",
+          context: {
+            empty: false,
+            messages: [{ role: "user", text: "revoked context", ts: 1 }],
+            sessionId: "session-1",
+          },
+        };
+      },
+    });
+
+    await expect(
+      harness.service.ask({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        question: "What changed?",
+        connId: "conn-1",
+        authorize: () => authorized,
+      }),
+    ).rejects.toMatchObject({
+      reason: "session-missing",
+    } satisfies Partial<SessionCompanionAskError>);
+    expect(harness.run).not.toHaveBeenCalled();
+    harness.service.dispose();
+  });
+
   it("distinguishes a genuinely empty session from a missing session", async () => {
     vi.useFakeTimers();
     const empty = createHarness({

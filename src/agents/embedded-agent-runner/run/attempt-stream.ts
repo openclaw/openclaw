@@ -173,6 +173,14 @@ export function installEmbeddedAttemptStreamGuards(
         },
       )
     : undefined;
+  const assertRunAuthorization = attempt.assertRunAuthorization;
+  if (assertRunAuthorization) {
+    const authorizedStreamFn = session.agent.streamFn;
+    session.agent.streamFn = (model, context, options) => {
+      assertRunAuthorization();
+      return authorizedStreamFn(model, context, options);
+    };
+  }
   if (cacheTrace) {
     cacheTrace.recordStage("session:loaded", {
       messages: session.messages,
