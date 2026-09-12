@@ -108,6 +108,15 @@ type AgentEventState = {
 };
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
+const AGENT_EVENT_ROUTING_FIELDS = [
+  ["controlUiVisible", "isControlUiVisible"],
+  ["projectSessionLifecycle", "projectSessionLifecycle"],
+  ["projectSessionMessages", "projectSessionMessages"],
+  ["mainSessionRestartRecovery", "mainSessionRestartRecovery"],
+  ["isHeartbeat", "isHeartbeat"],
+  ["verboseLevel", "verboseLevel"],
+  ["registeredAt", "registeredAt"],
+] as const;
 
 function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
@@ -322,15 +331,8 @@ function enrichAgentEvent(
       enumerable: false,
     });
   }
-  for (const [key, value] of Object.entries({
-    controlUiVisible: routing?.isControlUiVisible,
-    projectSessionLifecycle: routing?.projectSessionLifecycle,
-    projectSessionMessages: routing?.projectSessionMessages,
-    mainSessionRestartRecovery: routing?.mainSessionRestartRecovery,
-    isHeartbeat: routing?.isHeartbeat,
-    verboseLevel: routing?.verboseLevel,
-    registeredAt: routing?.registeredAt,
-  })) {
+  for (const [key, source] of AGENT_EVENT_ROUTING_FIELDS) {
+    const value = routing?.[source];
     if (value !== undefined) {
       Object.defineProperty(enriched, key, { value, enumerable: false });
     }
@@ -357,8 +359,10 @@ function* iterateAgentEventListeners(
   let lastId = -1;
   let revision = -1;
   let runId: string | undefined;
-  let pending: AgentEventRegistration[] = [];
-  let index = 0;
+  let globalRegistrations: MapIterator<AgentEventRegistration> | undefined;
+  let runRegistrations: MapIterator<AgentEventRegistration> | undefined;
+  let global: AgentEventRegistration | undefined;
+  let scoped: AgentEventRegistration | undefined;
   while (true) {
     const currentRunId = enriched.runId;
     // Recheck even after the last yield: the original live Set sees additions,
@@ -366,29 +370,20 @@ function* iterateAgentEventListeners(
     if (revision !== state.listenerRevision || runId !== currentRunId) {
       revision = state.listenerRevision;
       runId = currentRunId;
-      // Registration IDs follow Map insertion order. Finish the merge before
-      // yielding, when callbacks can mutate either map.
-      const globalRegistrations = state.listeners.values();
-      const runRegistrations = state.runListeners.get(runId)?.values();
-      let global = globalRegistrations.next().value;
-      let scoped = runRegistrations?.next().value;
-      pending = [];
-      while (global || scoped) {
-        if (global && (!scoped || global.id <= scoped.id)) {
-          if (global.id > lastId) {
-            pending.push(global);
-          }
-          global = globalRegistrations.next().value;
-        } else if (scoped) {
-          if (scoped.id > lastId) {
-            pending.push(scoped);
-          }
-          scoped = runRegistrations?.next().value;
-        }
-      }
-      index = 0;
+      // Registration IDs follow Map insertion order. Restart both cursors when
+      // a callback mutates registration or selects a different run cohort.
+      globalRegistrations = state.listeners.values();
+      runRegistrations = state.runListeners.get(runId)?.values();
+      global = globalRegistrations.next().value;
+      scoped = runRegistrations?.next().value;
     }
-    const next = pending[index++];
+    while (global && global.id <= lastId) {
+      global = globalRegistrations?.next().value;
+    }
+    while (scoped && scoped.id <= lastId) {
+      scoped = runRegistrations?.next().value;
+    }
+    const next = global && (!scoped || global.id <= scoped.id) ? global : scoped;
     if (!next) {
       return;
     }
