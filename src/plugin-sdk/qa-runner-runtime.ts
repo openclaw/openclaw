@@ -209,6 +209,7 @@ export type QaRunnerCliRegistration = {
 
 /** Normalized options passed from live-transport QA CLIs into lane runners. */
 export type LiveTransportQaCommandOptions = {
+  concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: string;
@@ -242,6 +243,7 @@ export type LiveTransportQaSuiteCommandOptions = {
 };
 
 type LiveTransportQaCommanderOptions = {
+  concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: string;
@@ -271,6 +273,10 @@ export type LiveTransportQaCredentialCliOptions = {
 /** Declarative command metadata and runner used to install a live-transport QA CLI. */
 export type LiveTransportQaCliRegistrationOptions = {
   commandName: string;
+  concurrency?: {
+    help: string;
+    parse: (value: string) => number;
+  };
   credentialFileHelp?: string;
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   defaultProviderMode: string;
@@ -305,6 +311,7 @@ function mapLiveTransportQaCommanderOptions(
   opts: LiveTransportQaCommanderOptions,
 ): LiveTransportQaCommandOptions {
   return {
+    concurrency: opts.concurrency,
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -339,6 +346,10 @@ function registerLiveTransportQaCli(
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
     .option("--fast", "Enable provider fast mode where supported");
+
+  if (params.concurrency) {
+    command.option("--concurrency <count>", params.concurrency.help, params.concurrency.parse);
+  }
 
   if (params.allowFailuresHelp) {
     command.option("--allow-failures", params.allowFailuresHelp, false);
