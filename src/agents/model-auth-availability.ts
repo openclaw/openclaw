@@ -1103,12 +1103,22 @@ export function createModelAuthAvailabilityResolver(
     if (invalidProfilePin(provider, ref)) {
       return { availability: false, unavailableReason: "auth-failed", routeResolution: null };
     }
+    const modelLock = ref.requiredProfileId?.trim();
+    const configuredAuthMode = ref.pinnedProfileId
+      ? undefined
+      : resolveConfiguredOpenAIAuthMode(params.cfg);
+    const awsSdkTerminal = !modelLock && configuredAuthMode === "aws-sdk";
+    const baseTarget = prepareAuthTarget(provider, ref);
+    const basePolicy = directPolicy(provider, baseTarget);
+    const bindingProfileId =
+      !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
+        ? basePolicy.binding.profileId
+        : undefined;
+    const routeProfileId = modelLock || ref.pinnedProfileId || bindingProfileId;
     const routeResolution = resolveRoutes({
       ...ref,
       pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
-        ref.requiredProfileId || ref.pinnedProfileId
-          ? profileMode(ref.requiredProfileId ?? ref.pinnedProfileId ?? "")
-          : resolveConfiguredOpenAIAuthMode(params.cfg),
+        routeProfileId ? profileMode(routeProfileId) : configuredAuthMode,
       ),
     });
     if (!routeResolution) {
@@ -1123,20 +1133,9 @@ export function createModelAuthAvailabilityResolver(
       const rejection = automaticSourceRejection(provider, ref, prepareAuthTarget(provider, ref));
       return { ...(rejection ?? { availability: undefined }), routeResolution };
     }
-    const modelLock = ref.requiredProfileId?.trim();
-    const configuredAuthMode = ref.pinnedProfileId
-      ? undefined
-      : resolveConfiguredOpenAIAuthMode(params.cfg);
-    const awsSdkTerminal = !modelLock && configuredAuthMode === "aws-sdk";
-    const baseTarget = prepareAuthTarget(provider, ref);
-    const basePolicy = directPolicy(provider, baseTarget);
     if (!modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile-incompatible") {
       return { availability: false, unavailableReason: "auth-failed", routeResolution };
     }
-    const bindingProfileId =
-      !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
-        ? basePolicy.binding.profileId
-        : undefined;
     const orderResolution = profileOrder(
       provider,
       ref.modelId,

@@ -474,8 +474,8 @@ export function prepareAgentRuntimeAuth(
     pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
       sourcePlan.kind === "required"
         ? sourcePlan.source.mode
-        : sourcePlan.orderedProfiles.find((source) => source.profileId === userPinnedProfileId)
-            ?.mode,
+        : (sourcePlan.orderedProfiles.find((source) => source.profileId === userPinnedProfileId)
+            ?.mode ?? configuredAuthMode),
     ),
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,

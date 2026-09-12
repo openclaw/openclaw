@@ -650,7 +650,7 @@ export function resolveModelRoutes(
   }
   const intent = context.routeIntent;
   const requirement = intent?.authRequirement;
-  if (requirement) {
+  if (requirement && intent.source === "explicit") {
     const selected = resolution.routes.find(
       (candidate) => candidate.authRequirement === requirement,
     );
@@ -674,7 +674,7 @@ export function resolveModelRoutes(
     }
   }
   const preferredAuthRequirement =
-    intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription";
+    requirement ?? (intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription");
   return {
     ...resolution,
     preferredAuthRequirement,

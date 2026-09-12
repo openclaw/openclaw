@@ -123,7 +123,14 @@ describe("OpenAI billing route intent", () => {
       }),
     ).toMatchObject({
       kind: "routes",
-      routes: [{ api: "openai-completions", authRequirement: "api-key" }],
+      routes:
+        routeIntent.source === "explicit"
+          ? [{ api: "openai-completions", authRequirement: "api-key" }]
+          : [
+              { api: "openai-completions", authRequirement: "api-key" },
+              { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+            ],
+      ...(routeIntent.source === "inherited" ? { preferredAuthRequirement: "api-key" } : {}),
     });
   });
 
