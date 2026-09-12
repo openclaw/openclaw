@@ -93,7 +93,7 @@ describe("doctor lint state isolation", () => {
   });
 
   it.each([false, true])(
-    "classifies real Workshop targets during isolated lint (external=%s)",
+    "runDoctorLintCli --all classifies registered Workshop targets (external=%s)",
     async (external) => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-lint-workshop-" }, async (state) => {
         const customDir = state.path("custom-agent");
@@ -171,7 +171,7 @@ describe("doctor lint state isolation", () => {
   );
 
   it.each([false, true])(
-    "retains Workshop backup and automation findings in the snapshot (custom partition=%s)",
+    "runDoctorLintCli --all retains registered Workshop history findings (custom partition=%s)",
     async (customPartition) => {
       await withOpenClawTestState(
         { prefix: "openclaw-doctor-lint-workshop-history-" },
