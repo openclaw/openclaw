@@ -3,9 +3,19 @@ openclaw-sidebar-agent-roster {
   width: 100%;
 }
 
+.sidebar-workspace-header__main {
+  gap: 4px;
+  padding-inline-end: 0;
+}
+.sidebar-workspace-header .sidebar-agent-card__name-text {
+  padding-inline-end: 0;
+  mask-image: none;
+  text-overflow: ellipsis;
+}
+
 .sidebar-agent-roster__header {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto 52px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
   min-height: 48px;
@@ -126,9 +136,10 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__group {
   margin-bottom: 12px;
 }
-.sidebar-agent-roster__filter {
-  display: flex;
-  justify-content: flex-end;
+.sidebar-agent-roster__signals,
+.sidebar-agent-roster__actions {
+  grid-area: 1 / 3;
+  justify-self: end;
 }
 .sidebar-agent-roster__actions {
   display: flex;
@@ -144,11 +155,13 @@ openclaw-sidebar-agent-roster {
   opacity: 1;
   pointer-events: auto;
 }
+.sidebar-agent-roster__header:is(:hover, :focus-within, :has(wa-dropdown[open]))
+  .sidebar-agent-roster__signals {
+  visibility: hidden;
+}
 .sidebar-session-team-state {
-  display: grid;
-  grid-template-columns: 16px 16px 12px;
+  display: flex;
   gap: var(--team-slot-gap);
-  width: 52px;
   flex: none;
   align-items: center;
 }
@@ -182,9 +195,8 @@ openclaw-sidebar-agent-roster {
   background-position: 8px 0;
 }
 .sidebar-recent-session.sidebar-recent-session--team {
-  --session-row-actions-reserve: 0px;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 52px;
+  grid-template-columns: 20px minmax(0, 1fr);
   gap: 4px;
   min-height: 32px;
   padding: 0;
@@ -192,9 +204,8 @@ openclaw-sidebar-agent-roster {
 .sidebar-recent-session--team > .sidebar-recent-session__link {
   grid-column: 2;
   grid-row: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 4px;
+  display: flex;
+  gap: var(--team-slot-gap);
   min-height: 32px;
   padding: 0;
 }
@@ -203,25 +214,17 @@ openclaw-sidebar-agent-roster {
   display: contents;
 }
 .sidebar-recent-session--team .sidebar-recent-session__title-row {
-  grid-column: 1;
-  grid-row: 1;
   padding: 0;
   min-width: 0;
 }
-.sidebar-recent-session--team .sidebar-recent-session__subtitle {
-  grid-column: 1;
-  grid-row: 2;
-}
 .sidebar-recent-session--team .sidebar-recent-session__details-endcap {
-  grid-column: 2;
-  grid-row: 1 / span 2;
   align-self: center;
   height: auto;
   min-height: 24px;
   overflow: visible;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--team-slot-gap);
   margin: 0;
 }
 .sidebar-recent-session--team .sidebar-session-indicator {
@@ -229,7 +232,11 @@ openclaw-sidebar-agent-roster {
   min-width: 0;
   flex: none;
 }
-.sidebar-recent-session--team .sidebar-session-indicator:empty {
+.sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
+.sidebar-recent-session--team
+  .sidebar-recent-session__details-endcap:not(
+    :has(> :not(openclaw-viewer-facepile), .viewer-facepile)
+  ) {
   display: none;
 }
 .sidebar-recent-session--team > .sidebar-child-session-toggle {
@@ -246,11 +253,15 @@ openclaw-sidebar-agent-roster {
   height: 12px;
 }
 .sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
-  grid-column: 3;
+  grid-column: 2;
   grid-row: 1;
+  justify-self: end;
   position: static;
   transform: none;
   padding: 0;
+}
+.sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
+  padding-right: var(--session-row-actions-reserve);
 }
 .sidebar-recent-session--team .sidebar-recent-session__name {
   font-weight: 450;
@@ -259,8 +270,14 @@ openclaw-sidebar-agent-roster {
   .sidebar-recent-session.sidebar-recent-session--team {
     grid-template-columns: 20px minmax(0, 1fr) 92px;
   }
-  .sidebar-agent-roster__header {
-    grid-template-columns: 20px minmax(0, 1fr) auto 92px;
+  .sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
+    grid-column: 3;
+  }
+  .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
+    padding-right: 0;
+  }
+  .sidebar-agent-roster__signals {
+    visibility: hidden;
   }
   .sidebar-agent-roster__actions {
     opacity: 1;

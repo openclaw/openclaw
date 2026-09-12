@@ -163,7 +163,9 @@ suite.define(() => {
         expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(0);
         await expectWorkspace();
         expect(await sidebar.locator(".sidebar-session-toolbar").count()).toBe(0);
-        expect(await sidebar.locator(".sidebar-agent-roster__filter button").count()).toBe(1);
+        expect(await sidebar.locator(".sidebar-brand__actions .sidebar-session-sort").count()).toBe(
+          1,
+        );
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
           expect(await group.locator(".sidebar-recent-session").allTextContents()).toEqual([

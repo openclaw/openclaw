@@ -39,6 +39,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarSessionFilter } from "./app-sidebar-session-list-render.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -236,6 +237,11 @@ export function renderAppSidebarBrand(
             ${icons.search}
           </button>
         </openclaw-tooltip>
+        ${
+          host.sidebarAgentsMode === "roster"
+            ? renderSidebarSessionFilter(host, "sidebar-brand__icon sidebar-brand__header-control")
+            : nothing
+        }
         ${
           host.sidebarAgentsMode === "roster"
             ? teamNewSession

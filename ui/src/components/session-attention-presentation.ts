@@ -120,7 +120,7 @@ function renderCompactSessionAttention(attention: SidebarSessionAttention) {
   >`;
 }
 
-/** One fixed column for both rows and collapsed groups; attention outranks activity. */
+/** Share compact indicators between rows and collapsed groups; attention outranks activity. */
 export function renderTeamSessionSlots(
   rows: readonly SidebarRecentSession[],
   includeChildren: boolean,
@@ -175,13 +175,12 @@ export function renderTeamSessionSlots(
             : rows.length === 1 && rows[0]?.isChild
               ? renderSessionState(rows[0])
               : nothing;
+  if ((!includeChildren || childCount === 0) && unread === 0 && state === nothing) {
+    return nothing;
+  }
   return html`<span class="sidebar-session-team-state">
-    <span class="sidebar-session-team-state__children"
-      >${includeChildren && childCount > 0 ? html`<span class="sidebar-child-session-toggle__count" role="img" aria-label=${`${t("sessionsView.childSessions")}: ${childCount}`}>${childCount}</span>` : nothing}</span
-    >
-    <span class="sidebar-session-team-state__unread"
-      >${unread > 0 ? html`<span class=${unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"} role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread > 1 ? unread : nothing}</span>` : nothing}</span
-    >
-    <span class="sidebar-session-team-state__status">${state}</span>
+    ${includeChildren && childCount > 0 ? html`<span class="sidebar-child-session-toggle__count" role="img" aria-label=${`${t("sessionsView.childSessions")}: ${childCount}`}>${childCount}</span>` : nothing}
+    ${unread > 0 ? html`<span class=${unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"} role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread > 1 ? unread : nothing}</span>` : nothing}
+    ${state === nothing ? nothing : html`<span class="sidebar-session-team-state__status">${state}</span>`}
   </span>`;
 }

@@ -362,7 +362,7 @@ describe("AppSidebar agent roster", () => {
     },
   );
 
-  it("shows every agent beyond six with only a global filter above the groups", async () => {
+  it("shows every agent beyond six with the global filter in the header", async () => {
     const agents: AgentsListResult = {
       ...roster,
       agents: Array.from({ length: 8 }, (_, index) => ({ id: `agent-${index}` })),
@@ -378,8 +378,10 @@ describe("AppSidebar agent roster", () => {
       expect(agentIds(sidebar)).toEqual(agents.agents.map((agent) => agent.id)),
     );
     expect(sidebar.querySelector(".sidebar-session-toolbar")).toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-agent-roster__filter button")).toHaveLength(1);
-    expect(sidebar.querySelector(".sidebar-agent-roster__filter a")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-brand__actions .sidebar-session-sort")).toHaveLength(
+      1,
+    );
+    expect(sidebar.querySelector(".sidebar-sessions .sidebar-session-sort")).toBeNull();
   });
 
   it("remembers collapsed agents after remount and keeps chip mode scoped to one agent", async () => {

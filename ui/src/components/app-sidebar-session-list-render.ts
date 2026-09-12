@@ -568,39 +568,42 @@ function renderSessionListBody(params: {
   `;
 }
 
-function renderSessionListToolbar(host: SidebarSessionListHost) {
-  const team = host.sidebarAgentsMode === "roster";
-  const newSessionAccess = host.readNewSessionAccess();
+export function renderSidebarSessionFilter(
+  host: Pick<SessionListHost, "sidebarMenus" | "sessionOwnerFilterActive" | "sessionsStatusFilter">,
+  className: string,
+) {
   const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
-  return html`
-    <div class=${team ? "sidebar-agent-roster__filter" : "sidebar-session-toolbar"}>
-      ${team ? nothing : html`<span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>`}
-      <button
-        type="button"
-        class="sidebar-session-toolbar__button sidebar-session-sort ${
-          filtered ? "sidebar-session-sort--filtered" : ""
-        }"
-        title=${t("chat.sidebar.sortSessions")}
-        aria-label=${t("chat.sidebar.sortSessions")}
-        aria-haspopup="menu"
-        aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
-        @click=${(event: MouseEvent) =>
-          host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
-      >
-        ${icons.listFilter}
-      </button>
-      ${
-        host.sidebarAgentsMode === "roster"
-          ? nothing
-          : renderNewSessionLink({
-              basePath: host.basePath,
-              agentId: host.expandedAgentId(),
-              className: "sidebar-session-toolbar__button sidebar-new-session",
-              label: t("agentChip.newConversation"),
-              disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-              onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-            })
+  return html`<button
+    type="button"
+    class="${className} sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+    title=${t("chat.sidebar.sortSessions")}
+    aria-label=${t("chat.sidebar.sortSessions")}
+    aria-haspopup="menu"
+    aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
+    @click=${(event: MouseEvent) => {
+      if (event.currentTarget instanceof HTMLElement) {
+        host.sidebarMenus.toggleSessionSortMenu(event.currentTarget);
       }
+    }}
+  >
+    ${icons.listFilter}
+  </button>`;
+}
+
+function renderSessionListToolbar(host: SidebarSessionListHost) {
+  const newSessionAccess = host.readNewSessionAccess();
+  return html`
+    <div class="sidebar-session-toolbar">
+      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
+      ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
+      ${renderNewSessionLink({
+        basePath: host.basePath,
+        agentId: host.expandedAgentId(),
+        className: "sidebar-session-toolbar__button sidebar-new-session",
+        label: t("agentChip.newConversation"),
+        disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+      })}
     </div>
   `;
 }
@@ -649,7 +652,7 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
       @dragleave=${(event: DragEvent) => host.handleSessionListDragLeave(event)}
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
-      ${renderSessionListToolbar(host)}
+      ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
       ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${
         host.sessionData.sessionMutationError

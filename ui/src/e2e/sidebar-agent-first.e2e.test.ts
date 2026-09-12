@@ -34,6 +34,8 @@ const sessionRow = (
   ...extra,
 });
 const sessionRows = [
+  sessionRow("project", "Project next steps"),
+  sessionRow("weekly", "Weekly review"),
   sessionRow("parent", "Implement the navigation sidebar without losing independent outcomes", {
     lastMessagePreview: "A preview must not create a second line in team mode.",
   }),
@@ -65,11 +67,12 @@ const sessions: SessionsListResult = {
 
 suite.define(() => {
   it.each([
+    { mode: "light", width: 258, touch: false },
     { mode: "light", width: 334, touch: false },
     { mode: "dark", width: 286, touch: false },
     { mode: "light", width: 334, touch: true },
   ] as const)(
-    "keeps recursive trailing columns aligned in $mode at $width px (touch=$touch)",
+    "keeps recursive indicators right-aligned and names readable in $mode at $width px (touch=$touch)",
     async ({ mode, width, touch }) => {
       await suite.withPage(
         {
@@ -129,6 +132,47 @@ suite.define(() => {
           const group = sidebar.locator('[data-agent-group="main"]');
           const parent = group.locator('[data-session-key="agent:main:parent"]');
           await parent.waitFor({ state: "visible" });
+          expect(
+            await sidebar.evaluate((el) => el.parentElement?.getBoundingClientRect().width),
+          ).toBe(width);
+          const workspaceName = sidebar.locator(
+            ".sidebar-workspace-header .sidebar-agent-card__name-text",
+          );
+          expect(await workspaceName.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+          const headerControls = await sidebar
+            .locator(".sidebar-brand__actions .sidebar-brand__header-control")
+            .evaluateAll((elements) =>
+              elements.map((el) => {
+                const rect = el.getBoundingClientRect();
+                return { x: rect.x, width: rect.width, height: rect.height };
+              }),
+            );
+          expect(headerControls).toHaveLength(4);
+          for (const [index, control] of headerControls.entries()) {
+            expect(control.width).toBeCloseTo(28, 4);
+            expect(control.height).toBeCloseTo(28, 4);
+            expect(control.x).toBeCloseTo(headerControls[0]!.x + index * 28, 4);
+          }
+          for (const [id, label] of [
+            ["project", "Project next steps"],
+            ["weekly", "Weekly review"],
+          ]) {
+            const title = group.locator(
+              `[data-session-key="agent:main:${id}"] .sidebar-recent-session__name`,
+            );
+            expect(await title.textContent()).toBe(label);
+            expect.soft(await title.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+          }
+          await group.locator('[data-agent-collapse="main"]').click();
+          await page.locator("body").click({ position: { x: 1000, y: 800 } });
+          const name = group.locator(".sidebar-agent-roster__copy > span");
+          const nameWidth = (await name.boundingBox())?.width;
+          await group.locator(".sidebar-agent-roster__header").hover();
+          expect(await name.textContent()).toBe("Engineering");
+          expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+          expect((await name.boundingBox())?.width).toBe(nameWidth);
+          expect(await group.locator(".sidebar-agent-roster__signals").isVisible()).toBe(false);
+          await group.locator('[data-agent-collapse="main"]').click();
           await group.locator('[data-child-session-toggle="agent:main:parent"]').click();
           await group.locator('[data-child-session-toggle="agent:main:child"]').click();
           await group
@@ -148,6 +192,7 @@ suite.define(() => {
               .locator('[data-agent-group="writing"] .sidebar-agent-roster__avatar img')
               .getAttribute("src"),
           ).toBe(imageAvatar);
+          await page.locator("body").click({ position: { x: 1000, y: 800 } });
           const geometry = () =>
             group.evaluate((element) => {
               const avatar = element
@@ -162,20 +207,14 @@ suite.define(() => {
                   .querySelector(".sidebar-recent-session__name")!
                   .getBoundingClientRect();
                 const state = row
-                  .querySelector(".sidebar-session-team-state")!
-                  .getBoundingClientRect();
+                  .querySelector(".sidebar-session-team-state")
+                  ?.getBoundingClientRect();
                 return {
                   left: title.left,
-                  right: state.right,
-                  stateLeft: state.left,
-                  stateWidth: state.width,
+                  right: row.getBoundingClientRect().right,
+                  stateLeft: state?.left,
+                  stateRight: state?.right,
                   titleRight: title.right,
-                  slots: [...row.querySelectorAll(".sidebar-session-team-state > span")].map(
-                    (slot) => ({
-                      left: slot.getBoundingClientRect().left,
-                      width: slot.getBoundingClientRect().width,
-                    }),
-                  ),
                   height: row.getBoundingClientRect().height,
                 };
               });
@@ -195,9 +234,12 @@ suite.define(() => {
           for (const row of beforeFocus.rows) {
             expect(row.right).toBeCloseTo(beforeFocus.rows[0]!.right, 1);
             expect(row.height).toBe(touch ? 44 : 32);
-            expect(row.stateWidth).toBe(52);
-            expect(row.titleRight).toBeLessThanOrEqual(row.stateLeft);
-            expect(row.slots).toEqual(beforeFocus.rows[0]!.slots);
+            if (row.stateLeft !== undefined) {
+              expect(row.titleRight).toBeLessThanOrEqual(row.stateLeft);
+              expect(row.stateRight).toBeCloseTo(row.right - (touch ? 96 : 0), 1);
+            } else if (!touch) {
+              expect(row.titleRight).toBeCloseTo(row.right, 1);
+            }
           }
           for (const caret of await group
             .locator(".sidebar-child-session-toggle__icon svg")
@@ -236,12 +278,13 @@ suite.define(() => {
           await expect
             .poll(() => group.locator('[data-session-key="agent:main:child"]').count())
             .toBe(0);
+          await page.locator("body").click({ position: { x: 1000, y: 800 } });
           const collapsedSlots = parent.locator(".sidebar-session-team-state");
-          expect((await collapsedSlots.boundingBox())?.x).toBeCloseTo(
-            beforeFocus.rows[0]!.stateLeft,
+          const collapsedBounds = (await collapsedSlots.boundingBox())!;
+          expect(collapsedBounds.x + collapsedBounds.width).toBeCloseTo(
+            beforeFocus.rows[0]!.right - (touch ? 96 : 0),
             1,
           );
-          expect((await collapsedSlots.boundingBox())?.width).toBe(52);
           expect(
             await collapsedSlots.locator(".sidebar-child-session-toggle__count").textContent(),
           ).toBe("2");
@@ -263,8 +306,8 @@ suite.define(() => {
           const summary = group.locator(
             ".sidebar-agent-roster__signals .sidebar-session-team-state",
           );
-          expect((await summary.boundingBox())?.x).toBeCloseTo(beforeFocus.rows[0]!.stateLeft, 1);
-          expect((await summary.boundingBox())?.width).toBe(52);
+          const summaryBounds = (await summary.boundingBox())!;
+          expect(summaryBounds.x + summaryBounds.width).toBeCloseTo(beforeFocus.rows[0]!.right, 1);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-collapsed.png`);
         },
       );
