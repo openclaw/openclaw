@@ -267,6 +267,10 @@ class TalkModeManager internal constructor(
   private val status = MutableStateFlow(TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off))
   private val currentStatus: TalkStatus get() = status.value
   val statusText: StateFlow<String> = LocaleResolvingStateFlow(status) { it.text.resolveNativeText() }
+  val failureText: StateFlow<String?> =
+    LocaleResolvingStateFlow(status) { status ->
+      status.takeIf { it.state == TalkStatusState.TalkFailure }?.text?.resolveNativeText()
+    }
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
   private fun setStatus(

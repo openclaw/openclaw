@@ -4,6 +4,10 @@ import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.AndroidScreenshotScene
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayTalkSetupIssue
+import ai.openclaw.app.GatewayTalkSetupReadiness
+import ai.openclaw.app.GatewayTalkSetupState
+import ai.openclaw.app.GatewayTalkSetupTarget
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -22,6 +26,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.ui.FoldAwareContent
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.UnifiedChatShellScreen
@@ -29,6 +34,7 @@ import ai.openclaw.app.ui.WindowDisplayFeatureSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.testFold
+import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -1005,6 +1011,59 @@ class ChatComposerLayoutTest {
   @Test
   fun physicalEnterSendsTheDraftDuringANonTalkActiveRun() {
     assertPhysicalEnterDuringActiveRun(talkActive = false, expectedSends = 1)
+  }
+
+  @Test
+  fun talkProviderFailureRemainsVisibleWhileTalkIsOff() {
+    val viewModel = showChat(useChatShell = true)
+    val message = "Realtime provider authentication failed. Check the provider credentials and try again."
+    composeRule.runOnIdle {
+      val getter = NodeRuntime::class.java.getDeclaredMethod("getTalkMode")
+      getter.isAccessible = true
+      val manager = getter.invoke(runtime) as TalkModeManager
+      manager.stopAllCapture(failure = verbatimText(message))
+    }
+    composeRule.waitUntil {
+      composeRule.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty()
+    }
+    assertFalse(viewModel.talkModeEnabled.value)
+    composeRule.mainClock.advanceTimeBy(6_000)
+    composeRule.onNodeWithText(message).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("OK")).performClick()
+    composeRule.onNodeWithText(message).assertDoesNotExist()
+  }
+
+  @Test
+  fun missingTalkProviderShowsPersistentSetupMessageWithoutStartingCapture() {
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val viewModel = showChat(useChatShell = true)
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
+      )
+      @Suppress("UNCHECKED_CAST")
+      val readiness =
+        NodeRuntime::class.java
+          .getDeclaredField("_talkSetupReadiness")
+          .apply { isAccessible = true }
+          .get(runtime) as MutableStateFlow<GatewayTalkSetupReadiness>
+      readiness.value =
+        readiness.value.copy(
+          realtimeTalk =
+            GatewayTalkSetupState.NeedsSetup(
+              GatewayTalkSetupIssue.ConfigureProvider(GatewayTalkSetupTarget.REALTIME_TALK),
+            ),
+        )
+    }
+    composeRule.onNodeWithContentDescription(nativeString("Start Talk")).performClick()
+    composeRule.mainClock.advanceTimeBy(6_000)
+    composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertIsDisplayed()
+    assertFalse(viewModel.talkModeEnabled.value)
+    composeRule.onNodeWithText(nativeString("OK")).performClick()
+    composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Start Talk")).performClick()
+    composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertIsDisplayed()
   }
 
   @Test
