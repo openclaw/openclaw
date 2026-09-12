@@ -70,25 +70,6 @@ it("discards a worker hit forgotten before authoritative metadata enrichment", a
   }
 });
 
-it("stops keyword expansion when worker admission fails and recovers on the next search", async () => {
-  const manager = await fixture.getFreshManager(
-    fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
-    "cli",
-  );
-  await manager.sync({ reason: "test", force: true });
-  const search = vi
-    .spyOn(cpuRuntime, "runMemoryKeywordSearch")
-    .mockRejectedValueOnce(new Error("memory worker overloaded"));
-  try {
-    await expect(manager.search("alpha zebra memory", { lexicalOnly: true })).resolves.toEqual([]);
-    expect(search).toHaveBeenCalledTimes(1);
-    const results = await manager.search("alpha", { lexicalOnly: true });
-    expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
-  } finally {
-    search.mockRestore();
-  }
-});
-
 async function tryIndependentWriter(databasePath: string): Promise<string> {
   const result = await execFileAsync(process.execPath, [
     "--input-type=module",

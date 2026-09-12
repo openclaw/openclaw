@@ -3,10 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import type { EmbeddingProvider } from "./embeddings.js";
+import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
+import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
@@ -219,6 +222,83 @@ describe("memory index", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "rejects admitted keyword cancellation before embedding (lexicalOnly=%s)",
+    async (lexicalOnly) => {
+      const manager = await getPersistentManager(createCfg({ minScore: 0 }));
+      await manager.sync({ reason: "test" });
+      const caller = new AbortController();
+      const abortReason = new Error("caller stopped keyword memory search");
+      const runKeywordSearch = memoryCpuWorkerRuntime.runMemoryKeywordSearch;
+      const keywordSpy = vi
+        .spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch")
+        .mockImplementationOnce((...args) => {
+          const pending = runKeywordSearch(...args);
+          caller.abort(abortReason);
+          return pending;
+        });
+      const embeddingCalls = providerFixture.embedQueryCalls;
+
+      try {
+        await expect(manager.search("zebra", { signal: caller.signal, lexicalOnly })).rejects.toBe(
+          abortReason,
+        );
+        expect(keywordSpy).toHaveBeenCalledTimes(1);
+        expect(providerFixture.embedQueryCalls).toBe(embeddingCalls);
+        const results = await manager.search("zebra", { lexicalOnly });
+        expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+      } finally {
+        keywordSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["lexical", "hybrid", "vector"] as const)(
+    "rejects %s retrieval when shared worker admission is full and recovers after drain",
+    async (mode) => {
+      const cfg = createCfg({ vectorEnabled: false, minScore: 0 });
+      if (mode === "vector") {
+        cfg.memory = {
+          ...cfg.memory,
+          search: {
+            ...cfg.memory?.search,
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        };
+      }
+      const manager = await getPersistentManager(cfg);
+      await manager.sync({ reason: "test" });
+      const capacityOwner = new WorkerTaskPool({
+        workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
+        maxWorkers: 1,
+        sharedCompute: true,
+      });
+      const preparation = createDeferred<never>();
+      const accepted = Promise.allSettled(
+        Array.from({ length: 128 }, () => capacityOwner.run(() => preparation.promise, {})),
+      );
+      const embeddingCalls = providerFixture.embedQueryCalls;
+      try {
+        await expect(
+          manager.search("zebra", { lexicalOnly: mode === "lexical" }),
+        ).rejects.toMatchObject({
+          name: "WorkerTaskError",
+          code: "overloaded",
+        });
+        if (mode !== "vector") {
+          expect(providerFixture.embedQueryCalls).toBe(embeddingCalls);
+        }
+      } finally {
+        const closed = capacityOwner.close();
+        preparation.reject(new Error("release test capacity"));
+        await closed;
+        await accepted;
+      }
+      const results = await manager.search("zebra", { lexicalOnly: mode === "lexical" });
+      expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    },
+  );
+
   it("rejects caller cancellation during hybrid fallback scanning", async () => {
     const manager = await getPersistentManager(
       createCfg({
@@ -252,10 +332,20 @@ describe("memory index", () => {
 
     const caller = new AbortController();
     const abortReason = new Error("caller stopped hybrid memory search");
-    const pending = manager.search("alpha", { signal: caller.signal });
-    setImmediate(() => caller.abort(abortReason));
-
-    await expect(pending).rejects.toBe(abortReason);
+    const runVectorFallback = memoryCpuWorkerRuntime.runMemoryVectorFallback;
+    const vectorSpy = vi
+      .spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback")
+      .mockImplementationOnce((...args) => {
+        const pending = runVectorFallback(...args);
+        caller.abort(abortReason);
+        return pending;
+      });
+    try {
+      await expect(manager.search("alpha", { signal: caller.signal })).rejects.toBe(abortReason);
+      expect(vectorSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vectorSpy.mockRestore();
+    }
 
     const healthyResults = await manager.search("alpha");
     expect(healthyResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
@@ -314,37 +404,25 @@ describe("memory index", () => {
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
-    const db = (
-      manager as unknown as {
-        db: {
-          prepare: (sql: string) => unknown;
-        };
-      }
-    ).db;
-    const originalPrepare = db.prepare.bind(db);
-    let ftsSelects = 0;
-    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
-      if (
-        sql.includes("FROM memory_index_chunks_fts") &&
-        sql.includes("WHERE memory_index_chunks_fts MATCH ?")
-      ) {
-        ftsSelects += 1;
-      }
-      return originalPrepare(sql);
-    });
+    const keywordSpy = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
+    const partialResults = vi.fn();
 
     try {
       const results = await manager.search(
         "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
-        { maxResults: 5 },
+        { maxResults: 5, onPartialResults: partialResults },
       );
 
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.path).toContain("memory/2026-01-12.md");
-      expect(ftsSelects).toBeGreaterThan(1);
-      expect(ftsSelects).toBeLessThanOrEqual(7);
+      expect(results.length).toBeLessThanOrEqual(5);
+      expect(partialResults).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+      expect(keywordSpy.mock.calls.length).toBeGreaterThan(1);
+      expect(keywordSpy.mock.calls.length).toBeLessThanOrEqual(7);
     } finally {
-      prepareSpy.mockRestore();
+      keywordSpy.mockRestore();
     }
   });
 

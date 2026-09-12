@@ -1,5 +1,6 @@
 export function parseEmbedding(raw: string): number[] {
   try {
+    // SAFETY: Chunk and embedding-cache writers serialize number[]; malformed JSON/non-arrays fall back to [].
     const parsed = JSON.parse(raw) as number[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {

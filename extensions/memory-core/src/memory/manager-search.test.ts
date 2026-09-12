@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
+import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
 import { runVectorKnnQuery } from "./manager-search-knn.js";
 import { searchKeyword, searchPathKeyword, searchVector } from "./manager-search.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";

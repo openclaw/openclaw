@@ -60,7 +60,7 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
   }
   const row = db
     .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-    .get() as { agent_id?: unknown; role?: unknown; schema_version?: unknown } | undefined;
+    .get();
   if (!row) {
     return null;
   }

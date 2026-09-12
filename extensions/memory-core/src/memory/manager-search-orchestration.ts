@@ -12,6 +12,7 @@ import {
   type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -307,6 +308,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
                 { boostFallbackRanking: true, signal: opts?.signal },
                 sourceFilterList,
               ).catch((err: unknown) => {
+                opts?.signal?.throwIfAborted();
+                if (err instanceof WorkerTaskError && err.code === "overloaded") {
+                  throw err;
+                }
                 log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
                 return [];
               })
@@ -394,20 +399,22 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             const releaseFallbackProvider = this.acquireProviderUse(semanticProvider);
             try {
               keywordResults = await loadKeywordResults();
-              queryVec = await this.embedQueryWithRetry(
-                cleaned,
-                opts?.signal,
-                semanticProvider,
-                false,
-                semanticProviderRuntime,
-                opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
-              );
-            } catch (fallbackErr) {
-              releaseFallbackProvider();
-              if (!opts?.signal?.aborted) {
-                this.markLocalEmbeddingProviderDegraded(fallbackErr);
+              try {
+                queryVec = await this.embedQueryWithRetry(
+                  cleaned,
+                  opts?.signal,
+                  semanticProvider,
+                  false,
+                  semanticProviderRuntime,
+                  opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+                );
+              } catch (fallbackErr) {
+                releaseFallbackProvider();
+                if (!opts?.signal?.aborted) {
+                  this.markLocalEmbeddingProviderDegraded(fallbackErr);
+                }
+                throw fallbackErr;
               }
-              throw fallbackErr;
             } finally {
               releaseFallbackProvider();
             }
@@ -434,6 +441,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             opts?.signal,
           ).catch((err: unknown) => {
             opts?.signal?.throwIfAborted();
+            if (err instanceof WorkerTaskError && err.code === "overloaded") {
+              throw err;
+            }
             log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
             return [];
           })

@@ -59,7 +59,7 @@ type HybridKeywordResult<TSource extends HybridSource = HybridSource> = {
   provenance?: MemoryEntryProvenance;
 };
 
-export { buildFtsQuery, bm25RankToScore } from "./keyword-query.js";
+export { buildFtsQuery } from "./keyword-query.js";
 
 export function scoreExactPathTieForTemporalDecay(contentScore: number): number {
   return (1 + Math.max(0, Math.min(1, contentScore))) / 2;
