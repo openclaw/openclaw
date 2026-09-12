@@ -3,7 +3,7 @@ import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/co
 import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
-import { isChatControlCommand, parseSlashCommand } from "../../lib/chat/commands.ts";
+import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
@@ -158,7 +158,9 @@ export async function handleSendChat(
 ) {
   if (
     isInitialChatHistoryUnavailable(host) &&
-    (opts?.intent || !isChatControlCommand(messageOverride ?? host.chatMessage))
+    (opts?.intent ||
+      opts?.resumeQueuedMessageEditId ||
+      !canSubmitBeforeChatHistory(messageOverride ?? host.chatMessage))
   ) {
     return undefined;
   }
@@ -529,22 +531,19 @@ export async function handleSendChat(
     end: mention.end + mentionOffset,
   }));
 
-  const refreshSessions = Boolean(intent) || isChatResetCommand(message);
   // A row edit and a composer send may intentionally carry the same payload.
   // Keep their guards independent so submitting one cannot suppress the other.
-  const submitKind = requestedEditId ? "queued-edit" : intent ? "goal" : "message";
   const submitKey = chatSubmitKey(
     host,
-    submitKind,
+    requestedEditId ? "queued-edit" : intent ? "goal" : "message",
     effectiveMessage,
     attachmentsToSend,
     effectiveMentions,
   );
   let accepted = false;
   const submitMessage = async () => {
-    if (host.chatLoading) {
-      // A terminal event can render before its authoritative leaf arrives.
-      // Reuse the in-flight history request before fencing the follow-up send.
+    if (host.chatLoading && (intent || rawParsedCommand || isInlineEditSubmission)) {
+      // Commands and row edits retain their draft until history resolves.
       if (!(await loadChatHistory(host))) {
         return;
       }
@@ -568,8 +567,7 @@ export async function handleSendChat(
       setChatError(host, t("chat.goals.busy"));
       return;
     }
-    // History can await while the operator cancels or changes the row edit.
-    // Never admit a replacement captured from a stale row-local draft.
+    // History may settle after the operator cancels or changes the row edit.
     const resumedEditCandidate = activeQueuedMessageEdit(host);
     if (
       isInlineEditSubmission &&
@@ -601,7 +599,7 @@ export async function handleSendChat(
       host,
       effectiveMessage,
       deliveredAttachments.length ? deliveredAttachments : undefined,
-      refreshSessions,
+      Boolean(intent) || isChatResetCommand(message),
       submittedAtMs,
       waitingForSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
       replyToId,

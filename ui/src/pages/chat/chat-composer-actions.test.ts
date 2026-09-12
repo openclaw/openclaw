@@ -39,32 +39,35 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
-  it.each([true, false])("keeps submission gated while history is pending: %s", (pending) => {
-    const onSend = vi.fn();
-    const reason = pending ? "Loading chat" : "History failed. Retry to load the conversation.";
-    const { container } = renderComposer({
-      draft: "Keep this draft",
-      submitDisabledReason: reason,
-      submitPending: pending,
-      onSend,
-    });
-    const send = primaryButton(container);
-    expect(send.disabled).toBe(true);
-    expect(send.getAttribute("aria-label")).toBe(reason);
-    expect(send.getAttribute("aria-busy")).toBe(String(pending));
-    expect(send.querySelector(".btn__spinner") !== null).toBe(pending);
-    send.click();
-    pressComposerEnter(container);
-    expect(onSend).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
-  });
+  it.each([true, false])(
+    "keeps command submission gated while history is pending: %s",
+    (pending) => {
+      const onSend = vi.fn();
+      const reason = pending ? "Loading chat" : "History failed. Retry to load the conversation.";
+      const { container } = renderComposer({
+        draft: "/compact",
+        submitDisabledReason: reason,
+        submitPending: pending,
+        onSend,
+      });
+      const send = primaryButton(container);
+      expect(send.disabled).toBe(true);
+      expect(send.getAttribute("aria-label")).toBe(reason);
+      expect(send.getAttribute("aria-busy")).toBe(String(pending));
+      expect(send.querySelector(".btn__spinner") !== null).toBe(pending);
+      send.click();
+      pressComposerEnter(container);
+      expect(onSend).not.toHaveBeenCalled();
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/compact");
+    },
+  );
 
   it.each(
-    ["/stop", "/approve approval-123 allow-once", "ordinary draft"].flatMap((draft) =>
+    ["/stop", "/approve approval-123 allow-once", "ordinary draft", "/compact"].flatMap((draft) =>
       ["keyboard", "button"].map((submission) => ({ draft, submission })),
     ),
   )(
-    "preserves control dispatch while history loads: $draft via $submission",
+    "accepts ordinary messages and controls while holding commands during history loading: $draft via $submission",
     ({ draft, submission }) => {
       const onSend = vi.fn();
       const { container } = renderComposer({
@@ -77,7 +80,7 @@ describe("renderChatComposer controls", () => {
       } else {
         primaryButton(container).click();
       }
-      expect(onSend).toHaveBeenCalledTimes(draft === "ordinary draft" ? 0 : 1);
+      expect(onSend).toHaveBeenCalledTimes(draft === "/compact" ? 0 : 1);
       expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
     },
   );
@@ -133,46 +136,32 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("commits dictation before sending the complete composer draft", async () => {
-    const order: string[] = [];
-    const finishActive = vi.fn(async () => {
-      order.push("commit");
-      return true;
-    });
-    const onSend = vi.fn(() => order.push("send"));
-    const { cancelActive, container, handleClick } = renderActiveDictationActions({
-      finishActive,
-      onSend,
-    });
-    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+  it.each([undefined, "Loading chat"])(
+    "commits dictation before sending the complete draft with history hold %s",
+    async (submitDisabledReason) => {
+      const order: string[] = [];
+      const finishActive = vi.fn(async () => {
+        order.push("commit");
+        return true;
+      });
+      const onSend = vi.fn(() => order.push("send"));
+      const { cancelActive, container, handleClick } = renderActiveDictationActions({
+        finishActive,
+        onSend,
+        submitDisabledReason,
+      });
+      const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
 
-    expect(send?.getAttribute("aria-label")).toBe("Send");
-    send?.click();
-    await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+      expect(send?.getAttribute("aria-label")).toBe("Send");
+      send?.click();
+      await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 
-    expect(finishActive).toHaveBeenCalledOnce();
-    expect(order).toEqual(["commit", "send"]);
-    expect(cancelActive).not.toHaveBeenCalled();
-    expect(handleClick).not.toHaveBeenCalled();
-  });
-
-  it("does not begin dictation submission while initial history is loading", () => {
-    const finishActive = vi.fn().mockResolvedValue(true);
-    const { container, onSend } = renderActiveDictationActions({
-      finishActive,
-      submitDisabledReason: t("chat.thread.loading"),
-    });
-    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
-    send?.click();
-    expect(finishActive).not.toHaveBeenCalled();
-    expect(onSend).not.toHaveBeenCalled();
-    expect(send?.disabled).toBe(true);
-    expect(send?.getAttribute("aria-label")).toBe(t("chat.thread.loading"));
-
-    button(container, t("chat.composer.dictationStopAndKeep")).click();
-    expect(finishActive).toHaveBeenCalledOnce();
-    expect(onSend).not.toHaveBeenCalled();
-  });
+      expect(finishActive).toHaveBeenCalledOnce();
+      expect(order).toEqual(["commit", "send"]);
+      expect(cancelActive).not.toHaveBeenCalled();
+      expect(handleClick).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps Stop and Send visually stable while dictation finalizes", () => {
     const container = document.createElement("div");

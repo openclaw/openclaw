@@ -13,6 +13,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
+          const submittedMessage = "Send this when the conversation recovers.";
           await page.clock.install();
           if (method === "models.list") {
             await page.addInitScript(() => {
@@ -33,6 +34,16 @@ suite.define(() => {
           );
           await gateway.waitForRequest(method);
           const composer = page.locator("textarea:visible").first();
+          if (method === "chat.startup") {
+            await composer.fill(submittedMessage);
+            await page.getByRole("button", { name: "Send message", exact: true }).click();
+            await expect.poll(() => composer.inputValue()).toBe("");
+            await page
+              .locator(".chat-queue")
+              .getByText(submittedMessage, { exact: true })
+              .waitFor();
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          }
           await composer.fill(draft);
           await pauseVirtualClock(page);
           await page.clock.runFor(60_001);
@@ -48,8 +59,15 @@ suite.define(() => {
               await page.getByRole("button", { name: "Loading chat", exact: true }).count(),
             ).toBe(0);
             const send = page.locator(".chat-send-btn--send");
-            expect(await send.isDisabled()).toBe(true);
+            expect(await send.isEnabled()).toBe(true);
             expect(await send.getAttribute("aria-busy")).toBe("false");
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            expect(
+              await page
+                .locator(".chat-queue")
+                .getByText(submittedMessage, { exact: true })
+                .count(),
+            ).toBe(1);
           } else {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
               "Models unavailable",
@@ -65,6 +83,8 @@ suite.define(() => {
           await page.clock.runFor(1);
           if (method === "chat.startup") {
             expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            expect(await composer.inputValue()).toBe(draft);
             await page.getByRole("button", { name: "Retry", exact: true }).click();
           } else {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
@@ -76,9 +96,14 @@ suite.define(() => {
           await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
           if (method === "chat.startup") {
             await page.getByText(readyText, { exact: true }).waitFor();
-            expect(
-              await page.getByRole("button", { name: "Send message", exact: true }).isEnabled(),
-            ).toBe(true);
+            const sent = await gateway.waitForRequest("chat.send");
+            expect(sent.params).toMatchObject({
+              sessionKey: "agent:main:main",
+              sessionId: "session:agent:main:main",
+              message: submittedMessage,
+            });
+            expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+            expect(await page.locator(".chat-send-btn--send").isEnabled()).toBe(true);
           } else {
             expect(
               await page.locator('[data-chat-model-select="true"]').textContent(),
