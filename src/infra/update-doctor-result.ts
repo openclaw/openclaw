@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
+import { readRegularFile } from "./regular-file.js";
 import {
   resolvePreferredOpenClawTmpDir,
   type ResolvePreferredOpenClawTmpDirOptions,
@@ -25,6 +26,8 @@ export const UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV =
 export const UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE = 86;
 const UPDATE_POST_INSTALL_DOCTOR_RESULT_FILENAME_RE =
   /^openclaw-update-doctor-\d+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/iu;
+// Match the existing candidate JSON ceiling while bounding pre-activation IPC allocation.
+const UPDATE_POST_INSTALL_DOCTOR_RESULT_MAX_BYTES = 1024 * 1024;
 
 export type PackageUpdateStepAdvisory = {
   kind: "package-post-install-doctor";
@@ -282,8 +285,11 @@ export async function consumeUpdatePostInstallDoctorResult(
     return null;
   }
   try {
-    const raw = await fs.readFile(safeResultPath, "utf8");
-    return parseUpdatePostInstallDoctorResult(JSON.parse(raw));
+    const { buffer } = await readRegularFile({
+      filePath: safeResultPath,
+      maxBytes: UPDATE_POST_INSTALL_DOCTOR_RESULT_MAX_BYTES,
+    });
+    return parseUpdatePostInstallDoctorResult(JSON.parse(buffer.toString("utf8")));
   } catch {
     return null;
   } finally {

@@ -14,6 +14,7 @@ import {
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errors.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "./http-body.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import {
@@ -59,6 +60,9 @@ type CanaryResult = {
       reason: "doctor-failed" | "runtime-verification-failed";
     }
 );
+
+// Startup is a fixed small object; bound a malformed candidate before JSON decoding.
+const UPDATE_CANDIDATE_STARTUP_MAX_BYTES = 64 * 1024;
 
 async function waitBounded<T>(
   promise: Promise<T>,
@@ -485,16 +489,30 @@ export async function validateUpdateCandidateCanary(params: {
             throw new Error("Candidate gateway exited before readiness");
           }
           try {
+            const probeSignal = AbortSignal.any([
+              AbortSignal.timeout(Math.min(1_000, remaining())),
+              ...(params.signal ? [params.signal] : []),
+            ]);
             const response = await fetch(`http://127.0.0.1:${port}/${endpoint}`, {
-              signal: AbortSignal.any([
-                AbortSignal.timeout(Math.min(1_000, remaining())),
-                ...(params.signal ? [params.signal] : []),
-              ]),
+              signal: probeSignal,
             });
-            const payload: unknown = await response.json();
+            const startupPayload: unknown =
+              endpoint === "startupz"
+                ? JSON.parse(
+                    (
+                      await readResponseWithLimit(response, UPDATE_CANDIDATE_STARTUP_MAX_BYTES, {
+                        signal: probeSignal,
+                      })
+                    ).toString("utf8"),
+                  )
+                : undefined;
+            if (endpoint === "readyz") {
+              await cancelUnreadResponseBody(response);
+            }
             if (
               response.status === 200 &&
-              (endpoint === "readyz" || (isRecord(payload) && payload.status === "started"))
+              (endpoint === "readyz" ||
+                (isRecord(startupPayload) && startupPayload.status === "started"))
             ) {
               capture(
                 `${endpoint}: ${endpoint === "startupz" ? "started" : "ready"} (${Date.now() - started}ms)`,
