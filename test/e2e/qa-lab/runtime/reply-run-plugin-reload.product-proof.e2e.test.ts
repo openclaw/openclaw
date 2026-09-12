@@ -103,6 +103,12 @@ async function waitFor<T>(
   throw new Error(`timed out waiting for ${label}`);
 }
 
+type PatchOutcome = { ok: true; result: unknown } | { ok: false; error: string };
+
+// oxlint-disable-next-line no-control-regex -- terminal color escapes in Gateway logs
+const ANSI_ESCAPE = /\x1b\[[0-9;]*m/g;
+const stripAnsi = (line: string) => line.replace(ANSI_ESCAPE, "");
+
 function readLog(file: string): string {
   try {
     return fs.readFileSync(file, "utf8");
@@ -190,6 +196,7 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
         const { gateway } = harness;
         const stdoutLog = path.join(gateway.tempRoot, "gateway.stdout.log");
         const stderrLog = path.join(gateway.tempRoot, "gateway.stderr.log");
+        const readGatewayLogs = () => `${readLog(stdoutLog)}\n${readLog(stderrLog)}`;
         const record: Record<string, unknown> = { turnMs: TURN_MS, tempRoot: gateway.tempRoot };
 
         state.addInboundMessage({
@@ -232,28 +239,92 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
             { timeoutMs: 900_000 },
           )
           .then(
-            (result) => {
-              record.patchResult = result;
-              record.patchResolvedAt = new Date().toISOString();
-            },
-            (error: unknown) => {
-              record.patchError = String(error);
-              record.patchResolvedAt = new Date().toISOString();
-            },
-          );
+            (result): PatchOutcome => ({ ok: true, result }),
+            (error: unknown): PatchOutcome => ({ ok: false, error: String(error) }),
+          )
+          .then((outcome) => {
+            record.patchOutcome = outcome;
+            record.patchResolvedAt = new Date().toISOString();
+            return outcome;
+          });
         record.patchedAt = new Date().toISOString();
 
         await waitFor(
           "channel reload deferral log line",
           () =>
-            /requires channel reload|deferring until/.test(
-              `${readLog(stdoutLog)}\n${readLog(stderrLog)}`,
-            )
-              ? true
-              : undefined,
+            /requires channel reload|deferring until/.test(readGatewayLogs()) ? true : undefined,
           60_000,
         );
         record.deferralSeen = true;
+
+        // The reload must observably commit its plugin replacement before the CLI
+        // result exists; otherwise the turn never exercised retirement.
+        const turnFinishedPath = path.join(fakeDir, "turn-finished.json");
+        const appliedLine = await waitFor(
+          "committed plugin reload before the CLI result",
+          () => {
+            if (fs.existsSync(turnFinishedPath)) {
+              throw new Error(
+                "CLI turn finished before the plugin reload applied; retirement was not exercised",
+              );
+            }
+            const line = readGatewayLogs()
+              .split("\n")
+              .map(stripAnsi)
+              .find(
+                (candidate) =>
+                  candidate.includes("config hot reload applied (") &&
+                  candidate.includes("plugins.allow"),
+              );
+            return line ?? undefined;
+          },
+          TURN_MS + 60_000,
+          2_000,
+        );
+        record.appliedLine = appliedLine;
+        const configAfter = (await gateway.call("config.get", {})) as {
+          hash?: string;
+          appliedConfigHash?: string | null;
+          configRevisionHash?: string;
+          config?: {
+            plugins?: { allow?: string[] };
+            channels?: Record<string, { pollTimeoutMs?: number }>;
+          };
+        };
+        record.configAfter = {
+          hash: configAfter.hash,
+          appliedConfigHash: configAfter.appliedConfigHash,
+          configRevisionHash: configAfter.configRevisionHash,
+          allow: configAfter.config?.plugins?.allow,
+          pollTimeoutMs: configAfter.config?.channels?.[CHANNEL_ID]?.pollTimeoutMs,
+        };
+        // appliedConfigHash is published by the reload/restart publication; the
+        // forced qa-channel restart is refused under its own active turn, so a
+        // recovery restart stays pending and that hash is not asserted here. The
+        // committed content plus the applied log line are the replacement evidence.
+        expect(configAfter.hash).not.toBe(configBefore.hash);
+        expect(configAfter.config?.plugins?.allow).toContain("discord");
+        expect(configAfter.config?.channels?.[CHANNEL_ID]?.pollTimeoutMs).toBe(700);
+        // config.patch must settle before the CLI result. It may report that the
+        // committed change still needs a recovery restart (the forced qa-channel
+        // restart under its own active turn is refused), but a rejected or
+        // pending replacement fails the proof.
+        const patchOutcome = await Promise.race([
+          patchPromise,
+          delay(60_000).then((): PatchOutcome => ({
+            ok: false,
+            error: "config.patch still pending",
+          })),
+        ]);
+        if (fs.existsSync(turnFinishedPath)) {
+          throw new Error("CLI turn finished before config.patch settled");
+        }
+        if (
+          !patchOutcome.ok &&
+          !patchOutcome.error.includes("persisted and updated the active Gateway")
+        ) {
+          throw new Error(`config.patch did not commit the replacement: ${patchOutcome.error}`);
+        }
 
         const finished = await waitFor(
           "fake claude turn finish",
@@ -269,7 +340,7 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
           .getSnapshot()
           .messages.filter((message) => message.direction === "outbound")
           .map((message) => ({ accountId: message.accountId, text: message.text }));
-        const stdout = `${readLog(stdoutLog)}\n${readLog(stderrLog)}`;
+        const stdout = readGatewayLogs();
         const interesting = stdout
           .split("\n")
           .filter((line) =>
@@ -288,6 +359,12 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
         console.log(JSON.stringify(record, null, 2));
 
         expect(finished).toBe(true);
+        const cliTurnLine = interesting.find((line) => line.includes("] cli turn: "));
+        expect(cliTurnLine).toBeDefined();
+        const appliedAt = Date.parse(appliedLine.slice(0, 29));
+        const cliTurnAt = Date.parse((cliTurnLine ?? "").slice(0, 29));
+        expect(Number.isFinite(appliedAt) && Number.isFinite(cliTurnAt)).toBe(true);
+        expect(appliedAt).toBeLessThan(cliTurnAt);
         expect(interesting.some((line) => line.includes("reloading channels anyway"))).toBe(true);
         expect(
           interesting.some((line) =>
