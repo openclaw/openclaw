@@ -454,15 +454,14 @@ ${commandPathCases}
   const rootBody = completionBodies.join("");
   const choiceCompletion = [root, ...contexts]
     .filter(({ valueChoices }) => valueChoices.length > 0)
-    .flatMap(({ pathVariants, valueChoices }) =>
-      pathVariants.map((pathSegments) => {
-        const optionChoiceCases = valueChoices
-          .map(
-            ({
-              flags,
-              choices,
-              requiresValue,
-            }) => `        if ($choiceFlag -in ${formatPowerShellArray(flags)}) {
+    .flatMap(({ pathVariants, valueChoices }) => {
+      const optionChoiceCases = valueChoices
+        .map(
+          ({
+            flags,
+            choices,
+            requiresValue,
+          }) => `        if ($choiceFlag -in ${formatPowerShellArray(flags)}) {
             $matchingChoices = @(${formatPowerShellArray(choices)} | Where-Object {
                 $_.StartsWith($choicePrefix, [StringComparison]::OrdinalIgnoreCase)
             })
@@ -479,13 +478,16 @@ ${commandPathCases}
                 return
             }
         }`,
-          )
-          .join("\n");
-        return `    if ($commandPath -eq '${pathSegments.join(" ").replaceAll("'", "''")}') {
+        )
+        .join("\n");
+      return pathVariants.map(
+        (
+          pathSegments,
+        ) => `    if ($commandPath -eq '${pathSegments.join(" ").replaceAll("'", "''")}') {
 ${optionChoiceCases}
-    }`;
-      }),
-    )
+    }`,
+      );
+    })
     .join("\n");
 
   return `
