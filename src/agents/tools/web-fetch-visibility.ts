@@ -192,7 +192,7 @@ const readHidden = createAttributeReader("hidden");
 const readClass = createAttributeReader("class");
 const readStyle = createAttributeReader("style");
 const readEncoding = createAttributeReader("encoding");
-const VISIBILITY_ATTRIBUTE_HINT = /hidden|class|style|type|[^\x00-\x7f]/i;
+const VISIBILITY_ATTRIBUTE_HINT = /hidden|class|style|type|[\u0080-\uffff]/i;
 
 function shouldRemoveElement(tagName: string, attrs: string): boolean {
   if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
