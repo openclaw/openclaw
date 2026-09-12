@@ -16,5 +16,9 @@ export {
 } from "./account-core.js";
 
 export type { OpenClawConfig } from "../config/types.openclaw.js";
-export { resolveAccountEntry, resolveAccountKey } from "../routing/account-lookup.js";
+export {
+  resolveAccountEntry,
+  resolveAccountKey,
+  resolveChannelAccountKey,
+} from "../routing/account-lookup.js";
 export type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";

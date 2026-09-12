@@ -1,7 +1,24 @@
 // Account lookup tests cover account matching by id, alias, and chat metadata.
 import { describe, expect, it } from "vitest";
 import { normalizeAccountId as normalizeRoutingAccountId } from "./account-id.js";
-import { resolveAccountEntry, resolveNormalizedAccountEntry } from "./account-lookup.js";
+import {
+  resolveAccountEntry,
+  resolveAccountKey,
+  resolveNormalizedAccountEntry,
+} from "./account-lookup.js";
+
+describe("SDK resolveAccountKey creation targets", () => {
+  it.each(["__proto__", "constructor", "prototype"])(
+    "rejects reserved %s for both plain and policy-backed setup writers",
+    (accountId) => {
+      for (const policy of [undefined, { canonicalAliasesRequireOwnField: "account" }]) {
+        expect(() =>
+          resolveAccountKey(undefined, accountId, undefined, policy, { allowMissing: true }),
+        ).toThrow(`Account id "${accountId}" is reserved`);
+      }
+    },
+  );
+});
 
 function createAccountsWithPrototypePollution() {
   const inherited = { default: { id: "polluted" } };

@@ -1,18 +1,13 @@
-import { normalizeAccountId, resolveAccountKey } from "openclaw/plugin-sdk/account-resolution";
-import manifest from "../openclaw.plugin.json" with { type: "json" };
-
-export const signalAccountKeyPolicy = manifest.channelAccountKeyPolicies.signal;
+import {
+  normalizeAccountId,
+  resolveChannelAccountKey,
+} from "openclaw/plugin-sdk/account-resolution";
 
 export function resolveSignalAccountKey<T>(
   accounts: Record<string, T> | undefined,
   accountId: string,
 ): string | undefined {
-  return resolveAccountKey(
-    accounts,
-    normalizeAccountId(accountId),
-    normalizeAccountId,
-    signalAccountKeyPolicy,
-  );
+  return resolveChannelAccountKey(accounts, normalizeAccountId(accountId), "signal");
 }
 
 export function resolveSignalAccountEntry<T>(

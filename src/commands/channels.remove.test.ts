@@ -425,7 +425,7 @@ describe("channelsRemoveCommand", () => {
     expectNoRemoval('external-chat has no account "ghost" to remove.');
   });
 
-  it("stops an active gateway channel runtime before deleting a runtime-backed account", async () => {
+  it("channelsRemoveCommand validates deletion before stopping runtime and persisting it", async () => {
     const callOrder: string[] = [];
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
@@ -508,10 +508,10 @@ describe("channelsRemoveCommand", () => {
     });
     const writtenConfig = firstWrittenChannelsConfig();
     expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
-    expect(callOrder).toEqual(["stop", "delete", "lifecycle", "persist", "output"]);
+    expect(callOrder).toEqual(["delete", "stop", "lifecycle", "persist", "output"]);
   });
 
-  it("stops a runtime-backed account before reporting an unsupported delete", async () => {
+  it("channelsRemoveCommand leaves runtime running when deletion is unsupported", async () => {
     const callOrder: string[] = [];
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
@@ -564,8 +564,45 @@ describe("channelsRemoveCommand", () => {
       { hasFlags: true },
     );
 
-    expect(callOrder).toEqual(["stop", "error"]);
+    expect(callOrder).toEqual(["error"]);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("channelsRemoveCommand refuses a colliding delete before runtime, lifecycle, or config effects", async () => {
+    const plugin = installWorkAccountChannel();
+    const cfg = {
+      channels: {
+        "external-chat": {
+          accounts: { "Work Phone": { account: "shadow" }, "work-phone": { account: "selected" } },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
+    plugin.config.deleteAccount = (params) =>
+      deleteAccountFromConfigSection({
+        ...params,
+        sectionKey: "external-chat",
+        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+      });
+    plugin.gateway = { startAccount: vi.fn() };
+    const onAccountRemoved = vi.fn();
+    plugin.lifecycle = { onAccountRemoved };
+
+    await expect(
+      channelsRemoveCommand(
+        { channel: "external-chat", account: "work-phone", delete: true },
+        runtime,
+        { hasFlags: true },
+      ),
+    ).rejects.toThrow('stored keys "work-phone" and "Work Phone"');
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+    expect(onAccountRemoved).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(Object.keys(cfg.channels["external-chat"].accounts)).toEqual([
+      "Work Phone",
+      "work-phone",
+    ]);
   });
 });

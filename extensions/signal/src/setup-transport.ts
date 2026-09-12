@@ -6,7 +6,7 @@ import {
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSignalAccountEntry, signalAccountKeyPolicy } from "./account-selection.js";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   listSignalAccountIds,
@@ -313,7 +313,6 @@ export function writeSignalAccountTransport(params: {
     channel: "signal",
     accountId: params.accountId,
     patch: { transport },
-    setupSurface: { accountKeyPolicy: signalAccountKeyPolicy },
   });
   const canonical = clearLegacySignalTransportFieldsForAccount({
     cfg: next,

@@ -8,7 +8,6 @@ import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { signalAccountKeyPolicy } from "./account-selection.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -32,7 +31,6 @@ export const signalSetupWizard = createSignalSetupWizardProxy(
 
 const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
-  accountKeyPolicy: signalAccountKeyPolicy,
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
   resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
   defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),

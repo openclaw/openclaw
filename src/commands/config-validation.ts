@@ -44,7 +44,12 @@ export async function requireValidConfigFileSnapshot(
 /** Preserve native read-time ownership through commands that can write after awaits. */
 export async function requireValidConfigForWrite(runtime: RuntimeEnv) {
   const read = await readConfigFileSnapshotForWrite();
-  return validateConfigFileSnapshot(read.snapshot, runtime) ? read : null;
+  if (!validateConfigFileSnapshot(read.snapshot, runtime)) {
+    return null;
+  }
+  const { adoptCommandConfigSnapshotMetadata } = await import("../cli/command-config-snapshot.js");
+  adoptCommandConfigSnapshotMetadata(read.snapshot, read.writeOptions.basePluginMetadataSnapshot);
+  return read;
 }
 
 function validateConfigFileSnapshot(

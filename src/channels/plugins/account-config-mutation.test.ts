@@ -3,9 +3,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
   applyPreparedChannelAccountConfiguration,
-  applyPreparedChannelAccountRemoval,
+  applyChannelAccountRemoval,
   prepareChannelAccountConfiguration,
-  prepareChannelAccountRemoval,
 } from "./account-config-mutation.js";
 import { setAccountEnabledInConfigSection } from "./config-helpers.js";
 import { defineChannelSetupContract } from "./setup-contract.js";
@@ -18,6 +17,23 @@ const runtime = {
 } as never;
 
 describe("channel account config mutations", () => {
+  it("channels.add setup.resolveAccountId retains plugin defaults when --account is omitted", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "test-chat" }),
+      setup: {
+        resolveAccountId: ({ accountId }: { accountId?: string }) => accountId ?? "work",
+        applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+      },
+    };
+    const prepared = await prepareChannelAccountConfiguration({
+      cfg: {},
+      plugin,
+      resolveInput: () => ({}),
+      runtime,
+    });
+    expect(prepared).toMatchObject({ ok: true, value: { accountId: "work" } });
+  });
+
   it("prepares, validates, applies, and reports lifecycle changes in order", async () => {
     const callOrder: string[] = [];
     const beforePersistentEffect = vi.fn(async () => {
@@ -272,20 +288,15 @@ describe("channel account config mutations", () => {
       gateway: { startAccount: vi.fn() },
       lifecycle: { onAccountRemoved },
     } as ChannelPlugin;
-    const prepared = prepareChannelAccountRemoval({
+    const prepared = {
       plugin,
       accountId: "Work",
       action: "delete",
-    });
+    } as const;
 
-    expect(prepared).toMatchObject({
-      accountId: "work",
-      accountKey: "work",
-      shouldStopRuntime: true,
-    });
-    const result = await applyPreparedChannelAccountRemoval({
+    const result = await applyChannelAccountRemoval({
       cfg,
-      prepared,
+      ...prepared,
       runtime,
     });
 
@@ -319,9 +330,11 @@ describe("channel account config mutations", () => {
         }),
         lifecycle: { onAccountRemoved, onAccountConfigChanged },
       };
-      const result = await applyPreparedChannelAccountRemoval({
+      const result = await applyChannelAccountRemoval({
         cfg,
-        prepared: prepareChannelAccountRemoval({ plugin, accountId: "wrok", action }),
+        plugin,
+        accountId: "wrok",
+        action,
         runtime,
       });
 
@@ -355,9 +368,10 @@ describe("channel account config mutations", () => {
       }),
       lifecycle: { onAccountConfigChanged },
     };
-    const result = await applyPreparedChannelAccountRemoval({
+    const result = await applyChannelAccountRemoval({
       cfg,
-      prepared: prepareChannelAccountRemoval({ plugin, action: "disable" }),
+      plugin,
+      action: "disable",
       runtime,
     });
 
@@ -385,9 +399,10 @@ describe("channel account config mutations", () => {
       }),
       lifecycle: { onAccountRemoved },
     };
-    const result = await applyPreparedChannelAccountRemoval({
+    const result = await applyChannelAccountRemoval({
       cfg: {},
-      prepared: prepareChannelAccountRemoval({ plugin, action: "delete" }),
+      plugin,
+      action: "delete",
       runtime,
     });
 
@@ -404,15 +419,15 @@ describe("channel account config mutations", () => {
       ...createChannelTestPluginBase({ id: "test-chat" }),
       lifecycle: { onAccountConfigChanged },
     } as ChannelPlugin;
-    const prepared = prepareChannelAccountRemoval({
+    const prepared = {
       plugin,
       accountId: "default",
       action: "disable",
-    });
+    } as const;
 
-    const result = await applyPreparedChannelAccountRemoval({
+    const result = await applyChannelAccountRemoval({
       cfg: {},
-      prepared,
+      ...prepared,
       runtime,
     });
 

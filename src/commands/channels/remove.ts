@@ -1,9 +1,8 @@
 // Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  applyPreparedChannelAccountRemoval,
+  applyChannelAccountRemoval,
   type ChannelAccountMutationPlugin,
-  prepareChannelAccountRemoval,
 } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
@@ -206,24 +205,20 @@ export async function channelsRemoveCommand(
     return;
   }
   const resolvedChannelId: ChatChannel = resolvedChannel;
-  const preparedRemoval = prepareChannelAccountRemoval({
+  const removal = await applyChannelAccountRemoval({
+    cfg,
     plugin,
     accountId,
     action: deleteConfig ? "delete" : "disable",
-  });
-
-  await stopGatewayRuntimeBeforeRemove({
-    cfg,
-    channel: resolvedChannelId,
-    accountId: preparedRemoval.accountKey,
-    shouldStopRuntime: preparedRemoval.shouldStopRuntime,
     runtime,
-  });
-
-  const removal = await applyPreparedChannelAccountRemoval({
-    cfg,
-    prepared: preparedRemoval,
-    runtime,
+    beforeRemoval: () =>
+      stopGatewayRuntimeBeforeRemove({
+        cfg,
+        channel: resolvedChannelId,
+        accountId,
+        shouldStopRuntime: Boolean(plugin.gateway?.startAccount || plugin.gateway?.logoutAccount),
+        runtime,
+      }),
   });
   if (!removal.ok) {
     if (removal.error.kind !== "unsupported-action") {
@@ -231,10 +226,8 @@ export async function channelsRemoveCommand(
         formatAccountRemovalErrorMessage({
           channel: resolvedChannelId,
           kind: removal.error.kind,
-          accountId: preparedRemoval.accountKey,
-          requestedAccount: useWizard
-            ? preparedRemoval.accountKey
-            : normalizeOptionalString(opts.account),
+          accountId,
+          requestedAccount: useWizard ? accountId : normalizeOptionalString(opts.account),
           accountIds: removal.error.accountIds,
         }),
       );
@@ -259,14 +252,14 @@ export async function channelsRemoveCommand(
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
+        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`,
     );
   } else {
     runtime.log(
       deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
+        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`,
     );
   }
 }

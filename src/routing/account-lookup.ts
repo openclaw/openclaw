@@ -100,6 +100,13 @@ export function resolveAccountKey<T>(
 ): string | undefined {
   const normalizer = policy ? normalizeRoutingAccountId : normalizeAccountId;
   const normalize = normalizer ?? normalizeLowercaseStringOrEmpty;
+  if (
+    options?.allowMissing &&
+    (isBlockedObjectKey(normalizeLowercaseStringOrEmpty(accountId)) ||
+      isBlockedObjectKey(normalize(accountId)))
+  ) {
+    throw new Error(`Account id "${accountId}" is reserved. Choose a different account id.`);
+  }
   const targetId = policy ? normalize(accountId) : accountId;
   // Creation uses the owner's target id, never the spelling of a rejected alias.
   const missingKey = options?.allowMissing ? targetId : undefined;
