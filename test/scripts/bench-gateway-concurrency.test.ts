@@ -12,6 +12,7 @@ import {
   readGatewayHeapProfile,
 } from "../../scripts/lib/gateway-bench-heap.ts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { createDeferred } from "../helpers/promise.js";
 
 type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
 
@@ -440,8 +441,11 @@ describe("gateway concurrency benchmark script", () => {
   it("advances parallel sessions independently while serializing their own turns", async () => {
     const starts: Array<{ sessionKey: string; idempotencyKey: string; message: string }> = [];
     const startedSessions: string[] = [];
-    const issued = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
-    const completions = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
+    const createTurn = () => ({
+      issued: createDeferred<void>(),
+      completed: createDeferred<void>(),
+    });
+    const turns = [createTurn(), createTurn(), createTurn(), createTurn()] as const;
     const rpc = async <T>(method: string, params: unknown): Promise<T> => {
       if (method === "agent") {
         const request = params as (typeof starts)[number];
@@ -450,8 +454,12 @@ describe("gateway concurrency benchmark script", () => {
       }
       const { runId } = params as { runId: string };
       const index = starts.findIndex((request) => request.idempotencyKey === runId);
-      issued[index].resolve();
-      await completions[index].promise;
+      const turn = turns[index];
+      if (!turn) {
+        throw new Error(`Unexpected agent wait: ${runId}`);
+      }
+      turn.issued.resolve();
+      await turn.completed.promise;
       return { status: "ok" } as T;
     };
     const [fastSession, slowSession] = ["fast", "slow"].map((sessionKey, index) =>
@@ -462,19 +470,19 @@ describe("gateway concurrency benchmark script", () => {
         turnsPerSession: 2,
       }),
     );
-    await Promise.all([issued[0].promise, issued[1].promise]);
+    await Promise.all([turns[0].issued.promise, turns[1].issued.promise]);
     expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow"]);
 
-    completions[0].resolve();
-    await issued[2].promise;
+    turns[0].completed.resolve();
+    await turns[2].issued.promise;
     expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow", "fast"]);
-    completions[2].resolve();
+    turns[2].completed.resolve();
     expect(await fastSession).toBe(2);
     expect(startedSessions).toEqual(["fast", "slow"]);
 
-    completions[1].resolve();
-    await issued[3].promise;
-    completions[3].resolve();
+    turns[1].completed.resolve();
+    await turns[3].issued.promise;
+    turns[3].completed.resolve();
     expect(await slowSession).toBe(2);
     expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow", "fast", "slow"]);
     expect(startedSessions).toEqual(["fast", "slow"]);

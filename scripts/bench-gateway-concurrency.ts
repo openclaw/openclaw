@@ -1361,7 +1361,7 @@ async function runGatewaySample(options: {
       const timelineFrom = Date.now();
       const loadStartMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
       const turns = Promise.all(
-        Array.from({ length: options.concurrency }, (_, index) =>
+        turnSessionKeys.map((sessionKey, index) =>
           runSessionTurns(rpc, index, loadDeadlineAt, {
             onStarted: () => {
               startedTurnCount += 1;
@@ -1369,7 +1369,7 @@ async function runGatewaySample(options: {
                 resolveAllTurnsStarted();
               }
             },
-            sessionKey: turnSessionKeys[index],
+            sessionKey,
             toolEvents: options.toolEvents,
             turnsPerSession: options.turnsPerSession,
           }),
