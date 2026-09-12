@@ -339,7 +339,7 @@ describe("Git database admission", () => {
       let admissionFresh = false;
       const remoteFetches: boolean[] = [];
       const command: CommandRunner = async (argv, options) => {
-        if (argv[2] === state.install && ["fetch", "index-pack"].includes(argv[3])) {
+        if (argv[2] === state.install && (argv[3] === "fetch" || argv[3] === "index-pack")) {
           remoteFetches.push(admissionFinished);
           admissionFresh = false;
         }
