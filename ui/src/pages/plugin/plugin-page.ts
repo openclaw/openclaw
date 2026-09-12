@@ -24,6 +24,7 @@ import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
@@ -125,6 +126,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private externalAuthRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthRefreshedAt = 0;
+  private pluginThemeFrame: HTMLIFrameElement | null = null;
+  private releasePluginTheme: (() => void) | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
@@ -162,6 +165,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
 
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.syncPluginThemeFrame(null);
     this.clearExternalTabAuth();
     this.subscriptions.clear();
     this.stopBundledView();
@@ -234,6 +238,27 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     }
     this.syncExternalTabAuth(info, hasBundledDescriptor);
   }
+
+  override updated() {
+    this.syncPluginThemeFrame(this.querySelector<HTMLIFrameElement>(".plugin-tab-embed__frame"));
+  }
+
+  private syncPluginThemeFrame(frame: HTMLIFrameElement | null) {
+    if (frame === this.pluginThemeFrame) {
+      return;
+    }
+    this.releasePluginTheme?.();
+    this.pluginThemeFrame = frame;
+    this.releasePluginTheme = frame ? registerWidgetThemeFrame(frame, "*") : null;
+  }
+
+  private readonly handlePluginThemeLoad = (event: Event) => {
+    const frame = event.currentTarget;
+    if (!(frame instanceof HTMLIFrameElement) || frame !== this.pluginThemeFrame) {
+      return;
+    }
+    postWidgetTheme(frame);
+  };
 
   private externalTabAuthKey(
     info: GatewayControlUiPluginTab | undefined,
@@ -660,6 +685,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
             src=${info.path}
             title=${info.label}
             sandbox=${resolveEmbedSandbox(context.config.current.embedSandboxMode)}
+            @load=${this.handlePluginThemeLoad}
           ></iframe>
         </section>
       `;
