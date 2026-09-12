@@ -10744,6 +10744,225 @@ describe("update-cli", () => {
     expect(getErrorOutput()).toContain("native owner refused");
   });
 
+  async function setupDirtyDevCheckout(customLauncher = false) {
+    const base = tempDirs.make("openclaw-update-dirty-");
+    const root = path.join(base, "original");
+    const destination = path.join(base, "fresh");
+    const prefix = path.join(base, "prefix");
+    const bin = path.join(prefix, "bin");
+    const sha = "a".repeat(40);
+    const oldEntry = path.join(root, "dist", "entry.js");
+    await fs.mkdir(bin, { recursive: true });
+    await writeOpenClawPackageFixture(root, "2026.8.1", { git: true, builtSha: sha });
+    await fs.writeFile(path.join(root, "local.txt"), "operator edits\n");
+    const wrapper = customLauncher
+      ? "#!/usr/bin/env bash\necho custom launcher\n"
+      : `#!/usr/bin/env bash\nset -euo pipefail\nexec ${process.execPath} ${oldEntry} "$@"\n`;
+    await fs.writeFile(path.join(bin, "openclaw"), wrapper, { mode: 0o755 });
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
+    vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
+    mockFileBackedPathExists();
+    const gitStatus = (argv: string[]) => {
+      if (argv[0] === "git" && argv.includes("status")) {
+        return commandResult({ stdout: " M local.txt\n" });
+      }
+      if (argv[0] === "git" && argv.includes("rev-parse") && argv.includes("HEAD")) {
+        return commandResult({ stdout: sha });
+      }
+      return undefined;
+    };
+    return { root, destination, prefix, bin, sha, oldEntry, wrapper, gitStatus };
+  }
+
+  it.skipIf(process.platform === "win32").each(["preview", "custom launcher"] as const)(
+    "handles a separate dev installation for an edited checkout (%s)",
+    async (scenario) => {
+      const { root, destination, prefix, bin, wrapper, gitStatus } = await setupDirtyDevCheckout(
+        scenario === "custom launcher",
+      );
+      mockNpmGlobalCommands(path.join(prefix, "lib/node_modules"), async (argv) => gitStatus(argv));
+      await withEnvAsync({ PATH: bin, OPENCLAW_GIT_DIR: destination }, async () => {
+        const update = updateCommand({
+          channel: "dev",
+          yes: true,
+          json: true,
+          dryRun: scenario === "preview",
+          restart: false,
+        });
+        if (scenario === "preview") {
+          await update;
+          expect(lastWriteJsonCall()).toMatchObject({
+            dryRun: true,
+            switchToGit: true,
+            actions: expect.arrayContaining([expect.stringContaining(destination)]),
+          });
+        } else {
+          await expect(update).rejects.toEqual(new ExitError(1));
+          expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "dirty" });
+          expect(getErrorOutput()).toContain("custom or unrelated launcher");
+        }
+      });
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator edits\n");
+      expect(await fs.readFile(path.join(bin, "openclaw"), "utf8")).toBe(wrapper);
+      await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["success", "Doctor failure", "runtime preparation failure"] as const)(
+    "moves an edited dev installation through managed activation (%s)",
+    async (outcome) => {
+      const { root, destination, prefix, bin, sha, oldEntry, wrapper, gitStatus } =
+        await setupDirtyDevCheckout();
+      const nextSha = "b".repeat(40);
+      const newEntry = path.join(destination, "dist", "entry.js");
+      mockNoopPostUpdatePluginConvergence();
+      mockRunningManagedGateway(["node", oldEntry, "gateway", "run"]);
+      mockGatewayHealth("2026.8.1", "original-checkout", "fixture-original-build");
+      readPackageVersion.mockImplementation(async (packageRoot: string) => {
+        const manifest = await fs
+          .readFile(path.join(packageRoot, "package.json"), "utf8")
+          .catch(() => null);
+        return manifest ? (JSON.parse(manifest) as { version: string }).version : null;
+      });
+      serviceReadCommand.mockImplementation(async () => ({
+        programArguments: [
+          "node",
+          gatewayCommandCall(newEntry, "install") ? newEntry : oldEntry,
+          "gateway",
+          "run",
+        ],
+      }));
+      vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
+        const stagingRoot = requireValue(options?.cwd, "staged update root");
+        expect(stagingRoot).not.toBe(root);
+        await options?.inspectGitTarget?.({});
+        await options?.prepareGitExposure?.(stagingRoot, nextSha, undefined);
+        await options?.validateCandidate?.(stagingRoot);
+        expect(serviceStop).not.toHaveBeenCalled();
+        await options?.beforeGitMutation?.({});
+        expect(serviceStop).toHaveBeenCalledOnce();
+        expect(await options?.publishGitCheckout?.()).toBe(destination);
+        if (outcome === "runtime preparation failure") {
+          await fs.rm(path.join(destination, "dist"), { recursive: true });
+          return {
+            ...makeOkUpdateResult({ mode: "git", root: destination }),
+            status: "error",
+            reason: "runtime-promotion-failed",
+            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+            steps: [
+              {
+                name: "runtime promotion",
+                command: "copy runtime",
+                cwd: destination,
+                durationMs: 1,
+                exitCode: 1,
+                stderrTail: "ENOSPC: no space left on device",
+              },
+            ],
+          };
+        }
+        return makeOkUpdateResult({
+          mode: "git",
+          root: destination,
+          after: { sha: nextSha, version: "2026.9.4", buildId: "updated-build" },
+        });
+      });
+      mockNpmGlobalCommands(path.join(prefix, "lib/node_modules"), async (argv) => {
+        if (outcome === "Doctor failure" && argv[2] === "doctor") {
+          return commandResult({ code: 1, stderr: "synthetic update Doctor failure" });
+        }
+        if (argv[2] === "gateway" && (argv[3] === "install" || argv[3] === "restart")) {
+          const entry = requireValue(argv[1], "gateway activation entry");
+          await fs.access(entry);
+          const activatedRoot = path.dirname(path.dirname(entry));
+          const manifest = JSON.parse(
+            await fs.readFile(path.join(activatedRoot, "package.json"), "utf8"),
+          ) as { version: string };
+          const build = JSON.parse(
+            await fs.readFile(path.join(activatedRoot, "dist/build-info.json"), "utf8"),
+          ) as { buildId: string };
+          serviceLoaded.mockResolvedValue(true);
+          serviceReadRuntime.mockResolvedValue({
+            status: "running",
+            pid: gatewayFixturePid,
+            state: "running",
+          });
+          mockGatewayHealth(manifest.version, "activated-checkout", build.buildId);
+          return commandResult();
+        }
+        if (argv[0] === "git" && argv[1] === "clone") {
+          const stagingRoot = requireValue(argv.at(-1), "clone destination");
+          await writeOpenClawPackageFixture(stagingRoot, "2026.9.4", {
+            git: true,
+            builtSha: nextSha,
+          });
+          await fs.writeFile(
+            path.join(stagingRoot, "dist/build-info.json"),
+            JSON.stringify({ commit: nextSha, buildId: "updated-build" }),
+          );
+          return commandResult();
+        }
+        if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
+          const stagePrefix = requireValue(argv[argv.indexOf("--prefix") + 1], "package stage");
+          const stagingRoot = requireValue(
+            vi.mocked(runGatewayUpdate).mock.calls[0]?.[0]?.cwd,
+            "staged source",
+          );
+          await fs.mkdir(path.join(stagePrefix, "lib/node_modules"), { recursive: true });
+          await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
+          await fs.symlink(stagingRoot, path.join(stagePrefix, "lib/node_modules/openclaw"));
+          await fs.symlink(
+            "../lib/node_modules/openclaw/openclaw.mjs",
+            path.join(stagePrefix, "bin/openclaw"),
+          );
+          return commandResult();
+        }
+        return gitStatus(argv);
+      });
+      await withEnvAsync({ PATH: bin, OPENCLAW_GIT_DIR: destination }, async () => {
+        const update = updateCommand({ channel: "dev", yes: true, json: true });
+        if (outcome === "success") {
+          await update.catch((error: unknown) => {
+            throw new Error(getErrorOutput() + getLogOutput(), { cause: error });
+          });
+          expect(lastWriteJsonCall()).toMatchObject({ status: "ok", root: destination });
+          expect(gatewayCommandCall(newEntry, "install")).toBeDefined();
+          expect(await fs.realpath(path.join(bin, "openclaw"))).toBe(
+            path.join(destination, "openclaw.mjs"),
+          );
+        } else {
+          await expect(update).rejects.toEqual(new ExitError(1));
+          expect(lastWriteJsonCall()).toMatchObject({
+            status: "error",
+            root,
+            recovery: {
+              serviceRestartSafe: true,
+              ...(outcome === "Doctor failure" ? { packageRollbackVerified: true } : {}),
+              service: "healthy",
+            },
+          });
+          expect(await fs.readFile(path.join(bin, "openclaw"), "utf8")).toBe(wrapper);
+          expect(gatewayCommandCall(newEntry, "install")).toBeUndefined();
+          if (outcome === "runtime preparation failure") {
+            expect(gatewayCommandCall(oldEntry, "restart")).toBeDefined();
+            await expect(
+              fs.lstat(path.join(prefix, "lib/node_modules/openclaw")),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        }
+      });
+      expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator edits\n");
+      expect(
+        JSON.parse(await fs.readFile(path.join(root, "dist/build-info.json"), "utf8")),
+      ).toMatchObject({ commit: sha, buildId: "fixture-original-build" });
+    },
+  );
+
   it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
     const prefix = createCaseDir("openclaw-update-package-root");
     const { nodeModules } = await setupInstalledPackageAtNodeModules(
@@ -12943,34 +13162,37 @@ describe("update-cli", () => {
     },
   );
 
-  it("explains why git updates cannot run with edited files", async () => {
-    vi.mocked(defaultRuntime.log).mockClear();
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "skipped",
-      mode: "git",
-      reason: "dirty",
-      steps: [],
-      durationMs: 100,
-    } satisfies UpdateRunResult);
+  it.each(["error", "skipped"] as const)(
+    "explains preserved local edits for dirty status %s",
+    async (status) => {
+      vi.mocked(defaultRuntime.log).mockClear();
+      vi.mocked(defaultRuntime.error).mockClear();
+      vi.mocked(defaultRuntime.exit).mockClear();
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status,
+        mode: "git",
+        reason: "dirty",
+        steps: [],
+        durationMs: 100,
+      } satisfies UpdateRunResult);
 
-    await expect(updateCommand({ channel: "dev" })).rejects.toEqual(new ExitError(1));
+      await expect(updateCommand({ channel: "dev" })).rejects.toEqual(new ExitError(1));
 
-    const logs = getLogOutput();
-    expect(logs).toContain("OpenClaw update skipped: dirty.");
-    expect(logs).toContain(
-      "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
-    );
-    expect(logs).toContain(
-      "Commit, stash, or discard the local changes, then rerun `openclaw update`.",
-    );
-    expect(listUpdateRuns({ limit: 1 })[0]?.origin.nextAction).toContain(
-      "Commit, stash, or discard the local changes",
-    );
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
+      const logs = getLogOutput();
+      expect(logs).toContain(
+        `OpenClaw update ${status === "error" ? "failed" : "skipped"}: dirty.`,
+      );
+      expect(logs).toContain(
+        "Local changes prevented this update before installation. Your checkout was preserved.",
+      );
+      expect(logs).not.toContain("could not prove a runnable installation");
+      expect(listUpdateRuns({ limit: 1 })[0]?.origin.nextAction).toContain(
+        "Commit your changes and retry",
+      );
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
   it.each([
     {
       name: "refreshes service env when already installed",

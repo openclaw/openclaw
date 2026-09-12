@@ -1,5 +1,6 @@
 // Public contracts shared by package activation and its existing callers.
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
+import type { GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { NpmGlobalPrefixLayout, ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
@@ -44,6 +45,7 @@ export type StagedPackageSwapParams = {
   onLiveMutation?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   timeoutMs?: number;
+  previousGitCheckout?: GitRuntimeIdentity;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
   onLocalOverrides?: (result: LocalPackageOverridesResult) => void;
 };

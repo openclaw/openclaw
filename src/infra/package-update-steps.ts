@@ -702,6 +702,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   beforeActivate?: () => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   expectedGitCheckout?: GitRuntimeIdentity;
+  previousGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
 }): Promise<PackageUpdateStepsResult> {
@@ -1244,6 +1245,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               steps[previous] = report;
             }
           },
+          previousGitCheckout: params.previousGitCheckout,
         });
         steps.push(swap.step);
         if (swap.postVerifyStep) {

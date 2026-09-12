@@ -138,12 +138,45 @@ it.each<{
   const context = resolveAutomaticUpdateTriage({ ...failedUpdate, ...trial.result }, undefined, {
     root: "/installation",
     mutationStarted: trial.mutationStarted ?? true,
-    installKindChanged: false,
     gateway: "preserve",
     preManagedServiceStop: { serviceMutationAllowed: trial.serviceMutationAllowed ?? true },
   });
   expect(Boolean(context)).toBe(trial.allowed);
 });
+
+it.each(["retained update", "restored original", "verified rollback"] as const)(
+  "selects automatic repair from the settled installation (%s)",
+  (outcome) => {
+    const root = outcome === "retained update" ? "/fresh-install" : "/original-install";
+    const context = resolveAutomaticUpdateTriage(
+      {
+        ...failedUpdate,
+        mode: "git",
+        root,
+        recovery:
+          outcome === "retained update"
+            ? { serviceRestartSafe: false, reason: "state-migration-started" }
+            : {
+                serviceRestartSafe: true,
+                packageRollbackVerified: true,
+                version: "2026.8.1",
+                service: outcome === "verified rollback" ? "healthy" : "failed",
+              },
+      },
+      undefined,
+      {
+        root: "/original-install",
+        mutationStarted: true,
+        gateway: "preserve",
+      },
+    );
+    if (outcome === "verified rollback") {
+      expect(context).toBeUndefined();
+    } else {
+      expect(context?.installationRoot).toBe(root);
+    }
+  },
+);
 
 async function createInstalledTriage(exitCode = 0) {
   const root = await fs.realpath(tempDirs.make("openclaw-update-triage-"));

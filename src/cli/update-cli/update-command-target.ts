@@ -41,6 +41,7 @@ import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
+import { prepareDirtyGitUpdateRelocation } from "./update-command-git-relocation.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import {
   failUpdateCommandRun,
@@ -125,9 +126,30 @@ export async function resolveUpdateCommandTarget(
   // package-target override, so it keeps a stored-dev package install on the
   // package path; only an explicitly requested dev channel outranks it.
   const explicitTag = normalizeTag(opts.tag);
+  let gitRelocation: Awaited<ReturnType<typeof prepareDirtyGitUpdateRelocation>>;
+  if (installKind === "git" && requestedChannel === "dev") {
+    try {
+      gitRelocation = await prepareDirtyGitUpdateRelocation({
+        root,
+        timeoutMs: updateStepTimeoutMs,
+      });
+    } catch (error) {
+      if (!(error instanceof UpdatePreMutationError)) {
+        throw error;
+      }
+      await refuseUpdate(error.reason, error.message);
+      return undefined;
+    }
+  }
+  if (gitRelocation && !opts.json && !opts.dryRun) {
+    defaultRuntime.log(
+      `Preserving local edits in ${root}; installing dev in ${gitRelocation.directory}.`,
+    );
+  }
   const switchToGit =
-    installKind !== "git" &&
-    (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
+    Boolean(gitRelocation) ||
+    (installKind !== "git" &&
+      (requestedChannel === "dev" || (channel === "dev" && explicitTag === null)));
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
@@ -348,6 +370,7 @@ export async function resolveUpdateCommandTarget(
     channel,
     explicitTag,
     switchToGit,
+    gitRelocation,
     switchToPackage,
     tag,
     currentVersion,

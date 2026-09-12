@@ -188,7 +188,6 @@ export function resolveAutomaticUpdateTriage(
   params: {
     mutationStarted: boolean;
     root: string;
-    installKindChanged: boolean;
     expectedVersion?: string;
     gateway: TriageFailureContext["gateway"];
     preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceMutationAllowed">;
@@ -216,11 +215,8 @@ export function resolveAutomaticUpdateTriage(
         kind: "update",
         phase,
         error: detail ?? failedStep?.stderrTail ?? failedStep?.stdoutTail ?? phase,
-        // Global exposure, not the candidate checkout, identifies a package-to-Git target.
-        installationRoot:
-          params.installKindChanged && result.mode === "git"
-            ? params.root
-            : (result.root ?? params.root),
+        // Publication and retained rollback settle the active root before triage.
+        installationRoot: result.root ?? params.root,
         expectedVersion: params.expectedVersion ?? result.after?.version ?? undefined,
         gateway: params.gateway,
       }

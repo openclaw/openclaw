@@ -378,10 +378,18 @@ export async function ensureGitCheckout(params: {
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   useStagedCheckout?: StagedGitCheckout;
+  freshCheckoutOnly?: boolean;
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
-  if (!dirExists) {
+  // Relocation owns a fresh destination, never an existing checkout that appeared while staging.
+  if (params.freshCheckoutOnly && dirExists && !(await isEmptyDir(params.dir))) {
+    throw new UpdatePreMutationError(
+      "invalid-git-directory",
+      `Update requires a fresh checkout destination: ${params.dir}. The existing path was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
+    );
+  }
+  if (!dirExists || params.freshCheckoutOnly) {
     return await cloneGitCheckoutTransactionally({
       dir: params.dir,
       env: gitEnv,

@@ -466,7 +466,7 @@ describe("Git candidate activation", () => {
     await fs.mkdir(stale);
     await fs.writeFile(path.join(stale, "candidate"), "operator-owned");
     const result = await update();
-    expect(result).toMatchObject({ status: "skipped", reason: "dirty" });
+    expect(result).toMatchObject({ status: "error", reason: "dirty" });
     expect(events).toEqual([]);
     expect(await fs.readFile(path.join(stale, "candidate"), "utf8")).toBe("operator-owned");
   });
@@ -501,7 +501,7 @@ describe("Git candidate activation", () => {
           }
         },
       });
-      expect(result).toMatchObject({ status: "skipped", reason: "dirty" });
+      expect(result).toMatchObject({ status: "error", reason: "dirty" });
       expect(stopped).toBe(false);
       if (mutation === "untracked") {
         expect(

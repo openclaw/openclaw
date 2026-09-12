@@ -154,6 +154,28 @@ describe("update CLI shared helpers", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it("does not adopt another checkout when a fresh destination was required", async () => {
+    await withTestDir({ prefix: "openclaw-update-fresh-owner-" }, async (base) => {
+      const checkoutDir = path.join(base, "claimed");
+      await fs.mkdir(path.join(checkoutDir, ".git"), { recursive: true });
+      await fs.writeFile(
+        path.join(checkoutDir, "package.json"),
+        JSON.stringify({ name: "openclaw" }),
+      );
+      await fs.writeFile(path.join(checkoutDir, "local.txt"), "other owner\n");
+      await expect(
+        ensureGitCheckout({
+          dir: checkoutDir,
+          timeoutMs: 1000,
+          env: process.env,
+          freshCheckoutOnly: true,
+        }),
+      ).rejects.toThrow("fresh checkout");
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(checkoutDir, "local.txt"), "utf8")).toBe("other owner\n");
+    });
+  });
+
   it("publishes a successful fresh clone only after the clone completes", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-success-" }, async (base) => {
       const checkoutDir = path.join(base, "nested", "openclaw");

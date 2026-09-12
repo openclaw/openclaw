@@ -17,6 +17,7 @@ import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import {
   resolveGitDoctorEntry,
+  runGitCleanCheckStep,
   runGitDoctorStep,
   runGitUpstreamStep,
 } from "./update-runner-git-steps.js";
@@ -370,12 +371,11 @@ export async function updateGitCheckout(params: {
     return tags.exitCode === 0;
   };
 
-  const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
+  const { result: statusCheck, dirty } = await runGitCleanCheckStep(
+    step("clean check", gitCleanCheckArgs(gitRoot), gitRoot),
+  );
   if (statusCheck.exitCode !== 0) {
-    return buildError("clean-check-failed");
-  }
-  if (statusCheck.stdoutTail?.trim()) {
-    return buildError("dirty", "skipped");
+    return buildError(dirty ? "dirty" : "clean-check-failed");
   }
   const checkSourceUnchanged = async () => {
     const currentHead = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
@@ -390,14 +390,11 @@ export async function updateGitCheckout(params: {
       return { status: "error" as const, reason: "clean-check-failed" as const };
     }
     const currentBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
-    if (
-      currentHead.stdout.trim() !== beforeSha ||
+    return currentHead.stdout.trim() !== beforeSha ||
       currentBranch !== branch ||
       currentStatus.stdout.trim()
-    ) {
-      return { status: "skipped" as const, reason: "dirty" as const };
-    }
-    return undefined;
+      ? { status: "error" as const, reason: "dirty" as const }
+      : undefined;
   };
 
   try {

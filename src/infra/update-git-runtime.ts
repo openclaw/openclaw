@@ -8,7 +8,7 @@ import { readPackageVersion } from "./package-json.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 
 // The Git updater passes the canonical checkout and its successfully built HEAD.
-export type GitRuntimeIdentity = { root: string; sha: string | null };
+export type GitRuntimeIdentity = { root: string; sha: string | null; buildId?: string };
 
 export async function collectGitRuntimeErrors(params: GitRuntimeIdentity): Promise<string[]> {
   const distRoot = path.join(params.root, "dist");
@@ -66,7 +66,10 @@ export async function verifyGitUpdateRecovery(params: GitRuntimeIdentity): Promi
     readBuiltGatewayBuildId(params.root),
     collectGitRuntimeErrors(params),
   ]);
-  return version && buildId && errors.length === 0
+  return version &&
+    buildId &&
+    errors.length === 0 &&
+    (params.buildId === undefined || params.buildId === buildId)
     ? { serviceRestartSafe: true, version, buildId }
     : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
 }

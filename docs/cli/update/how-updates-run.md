@@ -381,6 +381,21 @@ the sentinel.
 
 ## Git checkout flow
 
+When you explicitly run `openclaw update --channel dev` from a checkout with
+local edits, OpenClaw can install dev in a separate directory and switch its
+managed CLI launcher after validation. Your original files and branch stay in
+place. `--yes` supports this flow without a prompt. `OPENCLAW_GIT_DIR` can select
+an empty destination outside the original checkout; otherwise the updater uses
+an available default location or a new sibling of that location.
+
+This requires an installer-generated launcher or a verified npm-managed
+launcher. Custom launchers, unrelated installations in the launcher prefix, and
+unverified previous builds stop the update before activation with repair
+guidance. The updater does not stash or reset local edits. Normal in-place
+updates still require a clean checkout. If activation fails and rollback is safe, the existing
+transaction restores the previous launcher and verifies the preserved runtime;
+state and configuration rollback safeguards still apply.
+
 ### Channel selection
 
 - `stable`: select the latest non-beta tag.

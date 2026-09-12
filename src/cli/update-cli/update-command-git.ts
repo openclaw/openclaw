@@ -12,6 +12,8 @@ import {
   resolveDevUpdateTargetRevision,
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
+import { matchesStandaloneGitWrapper } from "../../infra/update-git-launcher.js";
+import { verifyGitUpdateRecovery } from "../../infra/update-git-runtime.js";
 import {
   createGlobalInstallEnv,
   verifyPackageUpdateRecovery,
@@ -36,7 +38,6 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
-import { splitShellArgs } from "../../utils/shell-argv.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -48,6 +49,7 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
+import type { GitUpdateRelocation } from "./update-command-git-relocation.js";
 import {
   prepareGitPackageExposure,
   readPackageUpdateIdentity,
@@ -69,10 +71,6 @@ export async function retireStandaloneGitWrapper(params: {
   const platform = params.platform ?? process.platform;
   const wrapperName = platform === "win32" ? "openclaw.cmd" : "openclaw";
   const searchDirs = params.searchDirs ?? (process.env.PATH ?? "").split(path.delimiter);
-  const expectedEntry =
-    platform === "win32"
-      ? path.win32.join(params.previousRoot, "dist", "entry.js")
-      : path.join(params.previousRoot, "dist", "entry.js");
   const seen = new Set<string>();
 
   for (const directory of searchDirs) {
@@ -109,23 +107,7 @@ export async function retireStandaloneGitWrapper(params: {
     } catch (error) {
       return { error: `Could not inspect ${wrapperPath}: ${String(error)}` };
     }
-    const lines = contents.trimEnd().split(/\r?\n/u);
-    const matchesWindows =
-      platform === "win32" &&
-      lines.length === 2 &&
-      lines[0] === "@echo off" &&
-      lines[1] === `node "${expectedEntry}" %*`;
-    const execArgs =
-      platform === "win32" || lines.length !== 3 ? null : splitShellArgs(lines[2] ?? "");
-    const matchesPosix =
-      platform !== "win32" &&
-      lines[0] === "#!/usr/bin/env bash" &&
-      lines[1] === "set -euo pipefail" &&
-      execArgs?.length === 4 &&
-      execArgs[0] === "exec" &&
-      execArgs[2] === expectedEntry &&
-      execArgs[3] === "$@";
-    if (!matchesWindows && !matchesPosix) {
+    if (!(await matchesStandaloneGitWrapper(contents, params.previousRoot, platform))) {
       continue;
     }
     try {
@@ -439,6 +421,7 @@ export function createBeforeGitMutation(params: {
 export async function updateGitInstall(params: {
   root: string;
   switchToGit: boolean;
+  gitRelocation?: GitUpdateRelocation;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number | undefined;
   startedAt: number;
@@ -458,11 +441,14 @@ export async function updateGitInstall(params: {
   allowGatewayServiceRepair: boolean;
   allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
-  let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+  let updateRoot = params.switchToGit
+    ? (params.gitRelocation?.directory ?? resolveGitInstallDir())
+    : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
   const installTarget = params.switchToGit
-    ? await resolveGlobalInstallTarget({
+    ? (params.gitRelocation?.installTarget ??
+      (await resolveGlobalInstallTarget({
         manager: await resolveGlobalManager({
           root: params.root,
           installKind: params.installKind,
@@ -471,7 +457,7 @@ export async function updateGitInstall(params: {
         runCommand: runCommandWithTimeout,
         timeoutMs: effectiveTimeout,
         pkgRoot: params.root,
-      })
+      })))
     : null;
   const npmLifecycleGate = installTarget
     ? resolveNpmLifecyclePolicyGate(installTarget)
@@ -510,7 +496,10 @@ export async function updateGitInstall(params: {
       deferConfiguredPluginInstallRepair: true,
       allowGatewayServiceRepair: params.allowGatewayServiceRepair,
       allowGatewayActivation: params.allowGatewayActivation,
-      beforeGitMutation: params.beforeGitMutation,
+      beforeGitMutation: async (target) => {
+        await params.gitRelocation?.assertCurrent();
+        return params.beforeGitMutation?.(target);
+      },
       inspectGitTarget: params.inspectGitTarget,
       publishGitCheckout,
       validateCandidate: params.validateCandidate,
@@ -528,6 +517,7 @@ export async function updateGitInstall(params: {
             const packageName =
               (await readPackageName(installTarget.packageRoot ?? params.root)) ??
               DEFAULT_PACKAGE_NAME;
+            await params.gitRelocation?.assertCurrent();
             exposure = await prepareGitPackageExposure({
               installTarget,
               installSpec: candidateRoot,
@@ -540,6 +530,7 @@ export async function updateGitInstall(params: {
               installCwd: candidateRoot,
               expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
               activateGitRoot: updateRoot,
+              previousGitCheckout: params.gitRelocation?.previousGitCheckout,
               onTransaction: params.onTransaction,
               postVerifyStep: (root: string) =>
                 runPackageUpdateDoctor({
@@ -554,9 +545,11 @@ export async function updateGitInstall(params: {
     });
   let stagedUpdateResult: UpdateRunResult | undefined;
   try {
+    await params.gitRelocation?.assertCurrent({ requireFreshDestination: true });
     const checkout = params.switchToGit
       ? await ensureGitCheckout({
           dir: updateRoot,
+          freshCheckoutOnly: Boolean(params.gitRelocation),
           env: installEnv,
           timeoutMs: effectiveTimeout,
           progress: params.progress,
@@ -569,7 +562,9 @@ export async function updateGitInstall(params: {
               stagedUpdateResult = {
                 ...stagedUpdateResult,
                 root: params.root,
-                recovery: await verifyPackageUpdateRecovery(params.root),
+                recovery: await (params.installKind === "git"
+                  ? readCurrentGitUpdateRecovery(params.root)
+                  : verifyPackageUpdateRecovery(params.root)),
               };
             }
           },
@@ -593,9 +588,15 @@ export async function updateGitInstall(params: {
     }
 
     const updateResult = stagedUpdateResult ?? (await runUpdate(updateRoot));
-    const before = previousPackage ?? updateResult.before;
+    const before = params.gitRelocation
+      ? {
+          ...(await readPackageUpdateIdentity(params.root)),
+          sha: params.gitRelocation.previousGitCheckout.sha,
+        }
+      : (previousPackage ?? updateResult.before);
     const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
     if (exposure && updateResult.status === "ok") {
+      await params.gitRelocation?.assertCurrent();
       const packageUpdate = await exposure.activate();
       return {
         ...updateResult,
@@ -630,6 +631,14 @@ export async function updateGitInstall(params: {
         updateResult.recovery = cancelled.recovery;
       }
       steps.push(...cancelled.steps);
+    }
+    if (params.gitRelocation) {
+      // Publishing the checkout does not activate its launcher. Until exposure
+      // commits, migrations have not run and recovery must use the preserved runtime.
+      updateResult.root = params.root;
+      updateResult.recovery = await verifyGitUpdateRecovery(
+        params.gitRelocation.previousGitCheckout,
+      );
     }
     return { ...updateResult, before, steps, durationMs: Date.now() - params.startedAt };
   } finally {

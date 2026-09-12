@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -6,6 +7,51 @@ import {
   type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
 } from "./package-update-integrity.js";
+import { matchesStandaloneGitWrapper } from "./update-git-launcher.js";
+import { verifyGitUpdateRecovery, type GitRuntimeIdentity } from "./update-git-runtime.js";
+
+/** Retain a Git runtime identity only after its package link or launcher backup proves ownership. */
+export async function verifyRetainedNpmGitRuntime(params: {
+  previous?: GitRuntimeIdentity;
+  native: boolean;
+  targetSwapRoot: string;
+  previousRoot?: PackageRootIntegrityFingerprint;
+  shims: ReadonlyArray<{ backup: string | null }>;
+}): Promise<GitRuntimeIdentity | undefined> {
+  const previous = params.previous;
+  if (!previous) {
+    return undefined;
+  }
+  const sourceLink =
+    params.previousRoot?.kind === "link" &&
+    path.resolve(path.dirname(params.targetSwapRoot), params.previousRoot.target) === previous.root;
+  const sourceWrappers = await Promise.all(
+    params.shims.map(async (shim) => {
+      if (!shim.backup) {
+        return false;
+      }
+      const stat = await fs.lstat(shim.backup);
+      return (
+        stat.isFile() &&
+        stat.size <= 4096 &&
+        (await matchesStandaloneGitWrapper(
+          await fs.readFile(shim.backup, "utf8"),
+          previous.root,
+          process.platform,
+          process.execPath,
+        ))
+      );
+    }),
+  );
+  if (
+    params.native ||
+    (!sourceLink && !sourceWrappers.some(Boolean)) ||
+    !(await verifyGitUpdateRecovery(previous)).serviceRestartSafe
+  ) {
+    throw new Error("Previous Git runtime does not own the retained CLI launcher.");
+  }
+  return previous;
+}
 
 export function createNpmPackageRootLinkLifecycle(params: {
   liveRoot: string;

@@ -209,10 +209,13 @@ async function finishFailedUpdate(
   );
 }
 
-async function finishSkippedUpdate(reason: string): Promise<UpdateCommandFailure> {
+async function finishSkippedUpdate(
+  reason: string,
+  status: "error" | "skipped",
+): Promise<UpdateCommandFailure> {
   return await finishFailedUpdate(
     {
-      status: "skipped",
+      status,
       mode: reason === "dirty" || reason === "no-upstream" ? "git" : "unknown",
       reason,
       steps: [],
@@ -231,12 +234,19 @@ describe("skipped update exit status", () => {
   });
 
   it.each([
-    ["dirty", 1],
-    ["no-upstream", 1],
-    ["not-git-install", 1],
-    ["already-current", 0],
-  ] as const)("handles %s with exit %i", async (reason, exitCode) => {
-    const failure = await finishSkippedUpdate(reason);
+    ["dirty", "error", 1],
+    ["dirty", "skipped", 1],
+    ["no-upstream", "skipped", 1],
+    ["not-git-install", "skipped", 1],
+    ["already-current", "skipped", 0],
+  ] as const)("handles %s (%s) with exit %i", async (reason, status, exitCode) => {
+    const failure = await finishSkippedUpdate(reason, status);
+    if (reason === "dirty") {
+      const nextAction = mocks.printResult.mock.lastCall?.[2]?.nextAction;
+      expect(nextAction).toContain("before installation");
+      expect(nextAction).not.toContain("could not prove");
+      expect(mocks.restart).not.toHaveBeenCalled();
+    }
     expect(failure.exitCode).toBe(exitCode);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });

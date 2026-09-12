@@ -31,6 +31,9 @@ export function resolveUpdateResultNextAction(params: {
   env: NodeJS.ProcessEnv;
 }): string | undefined {
   const { result, env } = params;
+  if (result.reason === "dirty") {
+    return `Local changes prevented this update before installation. Your checkout was preserved. Commit your changes and retry, or run \`${formatCliCommand("openclaw triage", env)}\` for help.`;
+  }
   if (
     result.status === "skipped" &&
     result.reason &&
@@ -73,9 +76,6 @@ export function resolveUpdateResultNextAction(params: {
     return `${configRefusal ? `${configRefusal} ` : ""}${state}${deployment}${resolveUnsafeUpdateRecoveryGuidance(reason, env)}`;
   }
   const command = (value: string) => formatCliCommand(value, env);
-  if (result.reason === "dirty") {
-    return `Git-based updates need a clean working tree before they can switch commits, fetch, or rebase. Commit, stash, or discard the local changes, then rerun \`${command("openclaw update")}\`.`;
-  }
   if (result.reason === "not-git-install") {
     return `This OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${command("openclaw doctor")}\` and \`${command("openclaw gateway restart")}\`. Examples: \`npm i -g openclaw@latest\` or \`pnpm add -g openclaw@latest\`.`;
   }

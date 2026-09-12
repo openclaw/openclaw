@@ -9,6 +9,7 @@ import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-datab
 import { printResult } from "./progress.js";
 import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { GitUpdateRelocation } from "./update-command-git-relocation.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 
 export async function handleDryRunPreflightError(
@@ -99,6 +100,7 @@ export function printUpdateDryRun(params: {
   updateInstallKind: "git" | "package" | "unknown";
   mode: UpdateRunResult["mode"];
   switchToGit: boolean;
+  gitRelocation?: GitUpdateRelocation;
   switchToPackage: boolean;
   shouldRestart: boolean;
   requestedChannel: UpdateChannel | null;
@@ -121,7 +123,11 @@ export function printUpdateDryRun(params: {
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
     actions.push(`Persist update.channel=${params.requestedChannel} in config`);
   }
-  if (params.switchToGit) {
+  if (params.gitRelocation) {
+    actions.push(
+      `Install dev in ${params.gitRelocation.directory} and update the managed CLI launcher; preserve the original checkout.`,
+    );
+  } else if (params.switchToGit) {
     actions.push("Switch install mode from package to git checkout (dev channel)");
   } else if (params.switchToPackage) {
     actions.push(`Switch install mode from git to package manager (${params.mode})`);

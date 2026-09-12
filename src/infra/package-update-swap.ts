@@ -27,6 +27,7 @@ import { preparePackageSwapLocalOverrides } from "./package-update-local-overrid
 import {
   createNpmPackageRootLinkLifecycle,
   verifyNpmRootRecovery,
+  verifyRetainedNpmGitRuntime,
 } from "./package-update-npm-root.js";
 import {
   PackageUpdateActivationError,
@@ -35,6 +36,7 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
+import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   verifyPackageUpdateRecovery,
@@ -134,6 +136,7 @@ export async function swapStagedPackageInstall(
   }> = [];
   const rollback: Array<(assertCurrent: () => void) => Promise<void>> = [];
   let packageRollbackVerified = false;
+  let previousGitCheckout: StagedPackageSwapParams["previousGitCheckout"];
   let retained = false;
   let projectActivated = false;
   let activationCompleted = false;
@@ -207,7 +210,14 @@ export async function swapStagedPackageInstall(
             "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
           );
         }
-        if (previousRoot?.kind === "link" && messages.length === 0) {
+        if (!packageRollbackVerified && previousGitCheckout && messages.length === 0) {
+          packageRollbackVerified = (await verifyGitUpdateRecovery(previousGitCheckout))
+            .serviceRestartSafe;
+          if (packageRollbackVerified) {
+            activePackageRoot = previousGitCheckout.root;
+          }
+        }
+        if (!packageRollbackVerified && previousRoot?.kind === "link" && messages.length === 0) {
           messages.push(
             `${rollback.length > 0 ? "Restored" : "Verified"} the npm package link and affected launchers; external checkout runtime integrity is unverified.`,
           );
@@ -379,6 +389,13 @@ export async function swapStagedPackageInstall(
     // The optional tree scan must not consume the launcher backup's deadline.
     const launcherReader = createPackageIntegrityReader(params.timeoutMs);
     await launcherReader.observe("baseline", () => readLaunchers(launcherReader));
+    previousGitCheckout = await verifyRetainedNpmGitRuntime({
+      previous: params.previousGitCheckout,
+      native: Boolean(native),
+      targetSwapRoot,
+      previousRoot,
+      shims,
+    });
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.
     const assertProjectUnchanged = native
@@ -389,10 +406,8 @@ export async function swapStagedPackageInstall(
     } catch (error) {
       throw new PackageUpdateActivationError(error);
     }
-    if (native) {
-      // Service preparation can wait for drain; revalidate the project copied before that wait.
-      await native.assertUnchanged();
-    }
+    // Service preparation can wait for drain; revalidate the project copied before that wait.
+    await native?.assertUnchanged();
     if (params.onTransaction) {
       retained = true;
       let retirement: Promise<UpdateStepResult | void> | undefined;
@@ -512,26 +527,20 @@ export async function swapStagedPackageInstall(
             if (linkRetention) {
               return { ...step(1, null, linkRetention), name: "global install backup retention" };
             }
-            if (hadPackage && previousRoot?.kind !== "link") {
-              const message = await discardPackageUpdateBackup(
-                backupRoot,
-                "old package",
-                targetLayout.globalRoot,
-                assertRetirementCurrent,
-              );
-              if (message) {
-                messages.push(message);
-              }
-            }
-            if (shimBackupDir) {
-              const message = await discardPackageUpdateBackup(
-                shimBackupDir,
-                "shim backup",
-                targetLayout.globalRoot,
-                assertRetirementCurrent,
-              );
-              if (message) {
-                messages.push(message);
+            for (const [root, label] of [
+              [hadPackage && previousRoot?.kind !== "link" ? backupRoot : undefined, "old package"],
+              [shimBackupDir, "shim backup"],
+            ] as const) {
+              if (root) {
+                const message = await discardPackageUpdateBackup(
+                  root,
+                  label,
+                  targetLayout.globalRoot,
+                  assertRetirementCurrent,
+                );
+                if (message) {
+                  messages.push(message);
+                }
               }
             }
             // Capture authority loss during the final filesystem await in the
@@ -653,17 +662,12 @@ export async function swapStagedPackageInstall(
     activationCompleted = true;
     let postVerifyStep: UpdateStepResult | null = null;
     if (params.postVerifyStep) {
+      let failure =
+        "Required post-install verification did not produce a result; Gateway activation is unsafe.";
       try {
         postVerifyStep = await params.postVerifyStep(targetPackageRoot);
       } catch (error) {
-        postVerifyStep = {
-          name: "post-install verification",
-          command: "verify installed package",
-          cwd: targetPackageRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: formatErrorMessage(error),
-        };
+        failure = formatErrorMessage(error);
       }
       postVerifyStep ??= {
         name: "post-install verification",
@@ -671,8 +675,7 @@ export async function swapStagedPackageInstall(
         cwd: targetPackageRoot,
         durationMs: 0,
         exitCode: 1,
-        stderrTail:
-          "Required post-install verification did not produce a result; Gateway activation is unsafe.",
+        stderrTail: failure,
       };
     }
     if (postVerifyStep && isBlockingPackageUpdateStep(postVerifyStep) && !retained) {

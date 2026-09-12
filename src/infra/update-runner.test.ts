@@ -863,7 +863,7 @@ describe("runGatewayUpdate", () => {
       code: 0,
       stdout: " M README.md",
       stderr: "",
-      status: "skipped",
+      status: "error",
       reason: "dirty",
     },
     {
@@ -892,7 +892,11 @@ describe("runGatewayUpdate", () => {
         [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { code, stdout, stderr },
       });
 
-      const result = await runWithRunner(runner, { beforeGitMutation });
+      const onStepComplete = vi.fn();
+      const result = await runWithCommand(runner, {
+        beforeGitMutation,
+        progress: { onStepComplete },
+      });
 
       expect(result.status).toBe(status);
       expect(result.reason).toBe(reason);
@@ -904,11 +908,18 @@ describe("runGatewayUpdate", () => {
       expect(result.steps).toMatchObject([
         {
           name: "clean check",
-          exitCode: code,
+          exitCode: reason === "dirty" ? 1 : code,
           stdoutTail: stdout || null,
-          stderrTail: stderr || null,
+          stderrTail:
+            reason === "dirty" ? expect.stringContaining("local changes") : stderr || null,
         },
       ]);
+      expect(onStepComplete).toHaveBeenCalledTimes(1);
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          exitCode: reason === "dirty" ? 1 : code,
+        }),
+      );
       expect(beforeGitMutation).not.toHaveBeenCalled();
       expect(calls.some((call) => call.includes(" fetch "))).toBe(false);
       expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
