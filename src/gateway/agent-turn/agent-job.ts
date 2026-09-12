@@ -37,6 +37,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   AgentRunTerminalReceiptValidationError,
   deleteAgentRunTerminalReceipt,
@@ -324,11 +325,11 @@ export function readDurableAgentJobTerminalReceipt(
   runId: string,
   owner?: AgentRunTerminalReceiptOwner,
 ): { owner: AgentRunTerminalReceiptOwner; terminal: AgentJobTerminalSnapshot } | undefined {
-  if (agentRunDurabilityFences.has(runId)) {
+  if (agentRunDurabilityFences.has(runId) || isIncognitoSessionKey(owner?.sessionKey)) {
     return undefined;
   }
   const receipt = readAgentRunTerminalReceipt({ runId, ...(owner ? { owner } : {}) });
-  if (!receipt) {
+  if (!receipt || isIncognitoSessionKey(receipt.owner.sessionKey)) {
     return undefined;
   }
   try {
@@ -597,6 +598,9 @@ function clearPendingAgentRunTerminals(runId: string) {
 function resolveAgentRunReceiptOwner(runId: string): AgentRunTerminalReceiptOwner | undefined {
   const context = getAgentRunContext(runId);
   const sessionKey = readNonBlankString(context?.sessionKey);
+  if (isIncognitoSessionKey(sessionKey)) {
+    return undefined;
+  }
   const explicitAgentId = readNonBlankString(context?.agentId);
   const agentId = explicitAgentId ?? /^agent:([^:]+):/u.exec(sessionKey ?? "")?.[1];
   if (!agentId) {
@@ -626,15 +630,21 @@ function beginAgentJob(runId: string, startedAt?: number) {
   } else {
     agentRunOwners.delete(runId);
   }
-  try {
-    if (forceTerminalPersistenceFailureForTest) {
-      throw new Error("forced terminal receipt persistence failure");
-    }
-    deleteAgentRunTerminalReceipt({ runId });
+  if (isIncognitoSessionKey(getAgentRunContext(runId)?.sessionKey)) {
     agentRunDurabilityFences.delete(runId);
-  } catch (error) {
-    agentRunDurabilityFences.add(runId);
-    agentJobLog.warn(`terminal receipt ownership fence pending for run ${runId}: ${String(error)}`);
+  } else {
+    try {
+      if (forceTerminalPersistenceFailureForTest) {
+        throw new Error("forced terminal receipt persistence failure");
+      }
+      deleteAgentRunTerminalReceipt({ runId });
+      agentRunDurabilityFences.delete(runId);
+    } catch (error) {
+      agentRunDurabilityFences.add(runId);
+      agentJobLog.warn(
+        `terminal receipt ownership fence pending for run ${runId}: ${String(error)}`,
+      );
+    }
   }
   agentRunStarts.set(runId, startedAt ?? Date.now());
 }

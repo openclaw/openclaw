@@ -43,6 +43,10 @@ function boundedString(value: unknown, maxLength: number): string | undefined {
   return normalized && normalized.length <= maxLength ? normalized : undefined;
 }
 
+function opaqueNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function normalizeModelRef(value: unknown): AgentRunTerminalModelRef | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -82,7 +86,7 @@ function normalizeAgentRunAcceptedDelegationReceipts(
       }
       // SAFETY: the object/non-array guard above narrows the runtime shape to an indexable record.
       const record = entry as Record<string, unknown>;
-      const runId = boundedString(record.runId, 256);
+      const runId = opaqueNonEmptyString(record.runId);
       const childSessionKey = boundedString(record.childSessionKey, 1_024);
       if (!runId || !childSessionKey || typeof record.completionWatch !== "boolean") {
         return [];
@@ -137,9 +141,9 @@ export function normalizeAgentRunTerminalReceiptDraft(
   }
   // SAFETY: the object/non-array guard above narrows the runtime shape to an indexable record.
   const receipt = value as Record<string, unknown>;
-  const runId = boundedString(receipt.runId, 256);
+  const runId = opaqueNonEmptyString(receipt.runId);
   const sessionId = boundedString(receipt.sessionId, 256);
-  const turnId = boundedString(receipt.turnId, 256);
+  const turnId = opaqueNonEmptyString(receipt.turnId);
   const requested = normalizeModelRef(receipt.requested);
   const effectiveBase = normalizeModelRef(receipt.effective);
   // SAFETY: `normalizeModelRef` has already accepted `receipt.effective` as a record-like object.

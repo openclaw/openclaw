@@ -141,6 +141,31 @@ describe("normalizeAgentRunTerminalReceipt", () => {
     });
   });
 
+  it("preserves opaque run and turn identifiers without trimming or per-field truncation", () => {
+    const runId = ` ${"r".repeat(300)} `;
+    const turnId = ` ${"t".repeat(300)} `;
+    const delegatedRunId = ` ${"d".repeat(300)} `;
+
+    expect(
+      normalizeAgentRunTerminalReceipt({
+        ...visibleRerouteReceipt,
+        runId,
+        turnId,
+        acceptedDelegations: [
+          {
+            runId: delegatedRunId,
+            childSessionKey: "agent:main:child",
+            completionWatch: true,
+          },
+        ],
+      }),
+    ).toMatchObject({
+      runId,
+      turnId,
+      acceptedDelegations: [{ runId: delegatedRunId }],
+    });
+  });
+
   it("omits absent optional linkage", () => {
     const normalized = normalizeAgentRunTerminalReceipt(visibleRerouteReceipt);
     expect(normalized).not.toHaveProperty("acceptedDelegations");

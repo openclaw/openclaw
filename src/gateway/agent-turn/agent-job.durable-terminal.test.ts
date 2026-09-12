@@ -132,6 +132,7 @@ describe("durable agent job terminal receipts", () => {
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "ok",
       endedAt: 20,
+      terminalReceipt: { runId, turnId: `turn-${runId}` },
     });
     expect(vi.getTimerCount()).toBe(0);
 
@@ -139,6 +140,7 @@ describe("durable agent job terminal receipts", () => {
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "ok",
       endedAt: 20,
+      terminalReceipt: { runId, turnId: `turn-${runId}` },
     });
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -388,6 +390,43 @@ describe("durable agent job terminal receipts", () => {
       status: "ok",
       endedAt: 20,
     });
+  });
+
+  it("keeps incognito terminal outcomes process-local", async () => {
+    const runId = `run-incognito-${runSequence++}`;
+    const incognitoOwner = {
+      ...owner,
+      sessionKey: "agent:agent-a:dashboard:incognito-private",
+      sessionId: "incognito-session",
+    };
+    startRun(runId, incognitoOwner);
+    finishRun(runId);
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20,
+    });
+    expect(readAgentRunTerminalReceipt({ runId, owner: incognitoOwner })).toBeUndefined();
+
+    resetAgentJobStateForTest();
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
+  });
+
+  it("does not recover an incognito receipt written by an older gateway", async () => {
+    const runId = `run-legacy-incognito-${runSequence++}`;
+    const incognitoOwner = {
+      ...owner,
+      sessionKey: "agent:agent-a:dashboard:incognito-legacy",
+      sessionId: "incognito-session",
+    };
+    writeAgentRunTerminalReceipt({
+      runId,
+      owner: incognitoOwner,
+      terminalJson: JSON.stringify({ status: "ok", executionSettled: true, endedAt: 20 }),
+    });
+
+    resetAgentJobStateForTest();
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
   });
 
   it("keeps the first terminal write authoritative across conflicting late events", async () => {
