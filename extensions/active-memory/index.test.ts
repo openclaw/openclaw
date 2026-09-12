@@ -1851,6 +1851,7 @@ describe("active-memory plugin", () => {
     // prettier-ignore
     [
     ["does not run for non-interactive contexts", undefined, { trigger: "heartbeat" }, "skip", undefined, undefined, undefined, undefined],
+    ["does not run for hidden internal-session-effects keys", undefined, { sessionKey: "agent:main:internal-session-effects:skill-workshop-review_test" }, "skip", undefined, undefined, undefined, undefined],
     ["does not run for dreaming-narrative cron session keys", undefined, { sessionKey: "agent:main:dreaming-narrative-light-abc123" }, "skip", undefined, undefined, undefined, undefined],
     ["does not run when a session id resolves to a dreaming-narrative cron session key", undefined, { sessionId: "dreaming-session" }, "skip", undefined, undefined, undefined, {
         sessionKey: "agent:main:dreaming-narrative-light-abc123",
@@ -1858,6 +1859,7 @@ describe("active-memory plugin", () => {
       }],
     ["allows non-canonical session keys that merely contain the dreaming-narrative substring", undefined, { sessionKey: "agent:main:webchat:dreaming-narrative-room" }, "defined", undefined, undefined, undefined, undefined],
     ["allows real webchat session keys whose peer id starts with a phased dreaming-narrative prefix", undefined, { sessionKey: "agent:main:webchat:dreaming-narrative-light-room" }, "defined", undefined, undefined, undefined, undefined],
+    ["allows webchat peer ids that merely contain the internal-session-effects segment", undefined, { sessionKey: "agent:main:webchat:internal-session-effects-room" }, "defined", undefined, undefined, undefined, undefined],
     ["defaults to direct-style sessions only", undefined, {
         sessionKey: "agent:main:telegram:group:-100123",
         messageProvider: "telegram",
