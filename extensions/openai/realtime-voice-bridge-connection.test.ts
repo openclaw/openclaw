@@ -687,6 +687,13 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it.each([
     {
+      $name: "automatic audio turn responses disabled with speech interruption enabled",
+      autoRespondToAudio: false,
+      interruptResponseOnInputAudio: true,
+      expectedCreateResponse: false,
+      expectedInterruptResponse: true,
+    },
+    {
       $name: "automatic audio turn responses disabled",
       autoRespondToAudio: false,
       interruptResponseOnInputAudio: false,

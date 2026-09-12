@@ -2669,7 +2669,10 @@ describe("talk realtime gateway relay", () => {
     });
     await Promise.resolve();
 
-    expectRecordFields(bridgeRequest, { autoRespondToAudio: false });
+    expectRecordFields(bridgeRequest, {
+      autoRespondToAudio: false,
+      interruptResponseOnInputAudio: true,
+    });
 
     bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("Can you check this?");
@@ -2807,6 +2810,37 @@ describe("talk realtime gateway relay", () => {
     });
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
   });
+
+  it.each([false, true])(
+    "respects disabled speech interruption with forced consult routing %s",
+    (forceAgentConsultOnFinalTranscript) => {
+      let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+      const provider: RealtimeVoiceProviderPlugin = {
+        id: "relay-test",
+        label: "Relay Test",
+        isConfigured: () => true,
+        createBridge: (request) => {
+          bridgeRequest = request;
+          return makeRelayTransport();
+        },
+      };
+
+      createTalkRealtimeRelaySession({
+        context: { broadcastToConnIds: vi.fn() } as never,
+        connId: "conn-1",
+        provider,
+        providerConfig: { interruptResponseOnInputAudio: false },
+        instructions: "be brief",
+        tools: [],
+        forceAgentConsultOnFinalTranscript,
+      });
+
+      expectRecordFields(bridgeRequest, {
+        autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
+        interruptResponseOnInputAudio: false,
+      });
+    },
+  );
 
   it("uses the actual forced result when one native call cannot suppress responses", async () => {
     const fixture = await createSuppressionUnsupportedForcedConsultFixture(["native-call"]);
