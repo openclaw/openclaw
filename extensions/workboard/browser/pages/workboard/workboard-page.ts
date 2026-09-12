@@ -290,7 +290,8 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
             sessions,
             sessionResolution,
             scopeAgentId: scope,
-            showAgentFilter: scope === null,
+            onClearAgentScope: () => host.agents.setScope(null),
+            showAgentFilter: false,
             onOpenSession: host.sessions.open,
             onRefresh: () => {
               void refreshMetadata();

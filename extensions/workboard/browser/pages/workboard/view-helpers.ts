@@ -37,6 +37,7 @@ export type WorkboardProps = {
   sessions: GatewaySessionRow[];
   sessionResolution?: WorkboardSessionResolution;
   scopeAgentId?: string | null;
+  onClearAgentScope?: () => void;
   showAgentFilter?: boolean;
   onOpenSession: ControlUiHost["sessions"]["open"];
   onBoardFilterChange?: (boardFilter: string) => void;

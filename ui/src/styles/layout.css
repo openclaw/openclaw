@@ -4386,6 +4386,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding-inline-start: var(--space-7);
   padding-bottom: 16px;
 }
 

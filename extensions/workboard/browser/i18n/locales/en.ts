@@ -42,6 +42,7 @@ export default {
     emptyColumnsShow: "Show",
     clearFilters: "Clear filters",
     allStatuses: "All",
+    allWork: "All work",
     widget: {
       boardLabel: "Workboard board",
       cardLabel: "Workboard card",

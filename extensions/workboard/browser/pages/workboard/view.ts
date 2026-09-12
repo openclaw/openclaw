@@ -17,6 +17,7 @@ import {
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
 import {
+  agentDisplayName,
   buildAgentFilterOptions,
   matchesAgentFilter,
   matchesAgentScope,
@@ -34,6 +35,7 @@ import {
   multiFilterLabel,
   renderActiveFilters,
   renderStatusTabs,
+  renderMobileStatusPicker,
   renderFilterSelect,
   renderFilterChoices,
   renderMultiFilter,
@@ -234,6 +236,36 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
           },
         })
       : nothing);
+  const activeAgent =
+    props.scopeAgentId || (props.showAgentFilter === false ? "all" : state.agentFilter);
+  const agentSummary =
+    activeAgent === "all"
+      ? t("workboard.allAgents")
+      : activeAgent === "default"
+        ? (agentOptions.find((option) => option.id === "default")?.label ??
+          t("workboard.defaultAgent"))
+        : agentDisplayName(
+            props.agentsList?.agents.find((agent) => agent.id === activeAgent),
+            activeAgent,
+          );
+  const clearAgentFilter = props.scopeAgentId
+    ? props.onClearAgentScope
+    : props.showAgentFilter !== false
+      ? () => {
+          state.agentFilter = "all";
+        }
+      : undefined;
+  if (activeAgent !== "all" && clearAgentFilter) {
+    activeFilters.push({
+      id: "agent",
+      label: t("workboard.filterChipValue", {
+        field: t("workboard.fieldAgent"),
+        value: agentSummary,
+      }),
+      clear: clearAgentFilter,
+      mobileOnly: true,
+    });
+  }
   const refreshStatus = state.loading ? t("common.refreshing") : refreshStatusLabel(state);
   // The active dialog owns the error alert while the board is inert.
   const dialogOpen = props.overlayOpen || state.draftOpen || Boolean(getVisibleDetailCard(state));
@@ -243,7 +275,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
         <header class="workboard-heading">
           ${props.heading}
           <div class="workboard-heading__actions settings-section__actions">
-            <span title=${refreshStatus || t("common.refresh")}>
+            <span class="workboard-refresh-control" title=${refreshStatus || t("common.refresh")}>
               <button
                 class="btn btn--icon btn--ghost workboard-refresh ${
                   state.lastRefreshError ? "workboard-refresh--error" : ""
@@ -313,6 +345,11 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
           <div class="workboard-toolbar__filters">
             <div class="workboard-toolbar__navigation">
               ${renderStatusTabs(state, props.onRequestUpdate)}
+              ${renderMobileStatusPicker(
+                state,
+                cardsForFilters("status"),
+                props.onRequestUpdate,
+              )}
             </div>
           </div>
           <div class="workboard-toolbar__tools">
@@ -458,6 +495,16 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                     ${icons.x}
                   </button>
                 </div>
+                ${
+                  agentControl === nothing
+                    ? nothing
+                    : html`<div class="workboard-filter-agent workboard-filter-choice">
+                        <span class="workboard-filter-section__label"
+                          >${t("workboard.fieldAgent")}</span
+                        >
+                        ${agentControl}
+                      </div>`
+                }
                 <div class="workboard-filter-display">
                   ${renderFilterChoices({
                     label: t("workboard.filterDensity"),
@@ -492,7 +539,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                       {
                         value: "collapse",
                         label: t("workboard.emptyColumnsCollapse"),
-                        icon: "chevronLeft",
+                        icon: "minimize",
                         title: t("workboard.collapseEmptyColumns"),
                       },
                       {

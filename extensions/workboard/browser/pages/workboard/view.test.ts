@@ -797,27 +797,47 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("filters cards by multiple selected statuses", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({ id: "ready", title: "Ready card", status: "ready" }),
-      createWorkboardCard({ id: "blocked", title: "Blocked card", status: "blocked" }),
-      createWorkboardCard({ id: "done", title: "Done card", status: "done" }),
-    ];
-    renderView();
-    statusButton(container, "Ready").click();
-    renderView();
-    expect(container.querySelector(".workboard-board")?.textContent).toContain("Ready card");
-    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Blocked card");
-    statusButton(container, "Blocked").click();
-    renderView();
-    expect(state.statusFilter).toEqual(new Set(["ready", "blocked"]));
-    expect(statusButton(container, "Ready").getAttribute("aria-pressed")).toBe("true");
-    expect(statusButton(container, "Blocked").getAttribute("aria-pressed")).toBe("true");
-    expect(statusButton(container, "All").getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector(".workboard-board")?.textContent).toContain("Blocked card");
-    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Done card");
-  });
+  it.each(["tabs", "menu"] as const)(
+    "filters cards by multiple selected statuses from %s",
+    (surface) => {
+      const { state, container, renderView } = createWorkboardView();
+      state.cards = [
+        createWorkboardCard({ id: "ready", title: "Ready card", status: "ready" }),
+        createWorkboardCard({ id: "blocked", title: "Blocked card", status: "blocked" }),
+        createWorkboardCard({ id: "done", title: "Done card", status: "done" }),
+      ];
+      renderView();
+      const selectStatus = (label: string) =>
+        surface === "tabs"
+          ? statusButton(container, label)
+          : expectDefined(
+              buttonByText(
+                expectDefined(
+                  container.querySelector('[role="dialog"][aria-label="Status"]'),
+                  "status menu",
+                ),
+                label === "All" ? "All work" : label,
+              ),
+              `${label} status option`,
+            );
+      selectStatus("Ready").click();
+      renderView();
+      expect(container.querySelector(".workboard-board")?.textContent).toContain("Ready card");
+      expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Blocked card");
+      selectStatus("Blocked").click();
+      renderView();
+      expect(state.statusFilter).toEqual(new Set(["ready", "blocked"]));
+      expect(selectStatus("Ready").getAttribute("aria-pressed")).toBe("true");
+      expect(selectStatus("Blocked").getAttribute("aria-pressed")).toBe("true");
+      expect(selectStatus("All").getAttribute("aria-pressed")).toBe("false");
+      expect(container.querySelector(".workboard-board")?.textContent).toContain("Blocked card");
+      expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Done card");
+      selectStatus("All").click();
+      renderView();
+      expect(selectStatus("All").getAttribute("aria-pressed")).toBe("true");
+      expect(container.querySelector(".workboard-board")?.textContent).toContain("Done card");
+    },
+  );
 
   it("keeps zero-result status filters selectable and clearable", () => {
     const { state, container, renderView } = createWorkboardView();
@@ -912,6 +932,16 @@ describe("renderWorkboard", () => {
       buttonByLabel(container, "Remove filter: Search: “release”"),
       "search chip",
     );
+    const visibleRect = new DOMRect(0, 0, 120, 32);
+    const visibleRects = Object.assign([visibleRect], {
+      item: (index: number) => (index === 0 ? visibleRect : null),
+    });
+    // This DOM harness has no layout; model the chips visible in the desktop toolbar.
+    for (const chip of container.querySelectorAll<HTMLButtonElement>(
+      ".workboard-filter-chip__remove",
+    )) {
+      vi.spyOn(chip, "getClientRects").mockReturnValue(visibleRects);
+    }
     removeSearch.focus();
     removeSearch.click();
     renderView();
@@ -964,6 +994,51 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Writer card");
     expect(container.textContent).not.toContain("Ops card");
     expect(container.querySelectorAll(".workboard-filter-section")).toHaveLength(2);
+  });
+
+  it("clears the mobile agent chip through global scope without clearing other filters", () => {
+    const onClearAgentScope = vi.fn();
+    const { state, container, renderView } = createWorkboardView({
+      scopeAgentId: "writer",
+      agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
+      onClearAgentScope,
+    });
+    state.priorityFilter = new Set(["high"]);
+    state.statusFilter = new Set(["ready"]);
+    state.cards = [
+      createWorkboardCard({
+        id: "writer-card",
+        title: "Writer card",
+        agentId: "writer",
+        status: "ready",
+        priority: "high",
+      }),
+      createWorkboardCard({
+        id: "main-card",
+        title: "Main card",
+        agentId: "main",
+        status: "ready",
+        priority: "high",
+      }),
+      createWorkboardCard({
+        id: "low-card",
+        title: "Low priority",
+        agentId: "main",
+        status: "ready",
+        priority: "low",
+      }),
+    ];
+    renderView();
+    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Main card");
+    expectDefined(buttonByLabel(container, "Remove filter: Agent: writer"), "agent chip").click();
+    expect(onClearAgentScope).toHaveBeenCalledOnce();
+    renderView({ scopeAgentId: null });
+    expect(buttonByLabel(container, "Remove filter: Agent: writer")).toBeNull();
+    expect(container.querySelector(".workboard-board")?.textContent).toContain("Main card");
+    expect(container.querySelector(".workboard-board")?.textContent).toContain("Writer card");
+    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Low priority");
+    expect(state.priorityFilter).toEqual(new Set(["high"]));
+    expect(state.statusFilter).toEqual(new Set(["ready"]));
   });
 
   it("labels status, priority and attention filter groups", () => {

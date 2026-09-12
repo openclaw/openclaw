@@ -12,6 +12,13 @@ function strokeIcon(body: SVGTemplateResult) {
   </svg>`;
 }
 export const icons = {
+  check: strokeIcon(svg`<path d="M20 6 9 17l-5-5" />`),
+  chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
+    <path d="m7 9 5-5 5 5" />`),
+  minimize: strokeIcon(svg`<polyline points="4 14 10 14 10 20" />
+    <polyline points="20 10 14 10 14 4" />
+    <line x1="14" x2="21" y1="10" y2="3" />
+    <line x1="3" x2="10" y1="21" y2="14" />`),
   alertTriangle: strokeIcon(svg` <path
       d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"
     />

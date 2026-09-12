@@ -2,6 +2,7 @@ import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
   ControlUiAgentPickerProps,
+  ControlUiComponents,
   ControlUiSessionListResult,
 } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -15,6 +16,8 @@ import {
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { createViewContext } from "../../test/host.ts";
 import { createWorkboardPage } from "./workboard-page.ts";
+
+type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -131,6 +134,177 @@ it("keeps a historical scope recoverable after the roster shrinks to one agent",
   await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
   expect(page.fixture.host.agents.scopeId).toBeNull();
   expect(page.container.querySelector(".workboard-scope")).toBeNull();
+});
+
+it.each([false, true])(
+  "offers global agent scope only for multiple selectable agents: %s",
+  async (multiple) => {
+    const page = mountPage();
+    page.agents([
+      { id: "main" },
+      ...(multiple ? [{ id: "writer" }] : []),
+      { id: "system", kind: "system" },
+    ]);
+    page.cards([
+      createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
+      createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
+    ]);
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    await vi.waitFor(() => expect(page.fixture.host.agents.rows).toHaveLength(multiple ? 3 : 2));
+    await vi.waitFor(() =>
+      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
+    );
+    const pickers = page.container.querySelectorAll<HTMLElement & ControlUiAgentPickerProps>(
+      "[data-test-agent-picker]",
+    );
+    expect(pickers).toHaveLength(multiple ? 2 : 0);
+    expect(
+      [
+        ...page.container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
+          "[data-test-select-picker]",
+        ),
+      ].some((picker) => picker.accessibleLabel === "Agent"),
+    ).toBe(false);
+    if (!multiple) {
+      return;
+    }
+    for (const surface of [".workboard-agent-filter", ".workboard-filter-agent"]) {
+      const picker = expectDefined(
+        page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+          `${surface} [data-test-agent-picker]`,
+        ),
+        `${surface} global scope picker`,
+      );
+      expect(picker.options.map((option) => option.value)).toEqual(["", "main", "writer"]);
+      picker.onSelect("writer");
+      expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith("writer");
+      await vi.waitFor(() => {
+        expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
+        expect(page.container.querySelector(".workboard-card")?.textContent).toContain(
+          "Writer agent task",
+        );
+        for (const control of page.container.querySelectorAll<
+          HTMLElement & ControlUiAgentPickerProps
+        >("[data-test-agent-picker]")) {
+          expect(control.value).toBe("writer");
+        }
+        expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
+        expect(
+          page.container.querySelector(
+            '.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: writer"]',
+          ),
+        ).not.toBeNull();
+      });
+      picker.onSelect("");
+      expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
+      await vi.waitFor(() => {
+        expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2);
+        expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
+        expect(page.container.querySelector(".workboard-filter-chip--mobile")).toBeNull();
+        for (const control of page.container.querySelectorAll<
+          HTMLElement & ControlUiAgentPickerProps
+        >("[data-test-agent-picker]")) {
+          expect(control.value).toBe("");
+        }
+      });
+    }
+  },
+);
+
+it("clears filters without changing the global agent context", async () => {
+  const page = mountPage();
+  page.agents([
+    { id: "main", name: "Molty" },
+    { id: "writer", name: "Writer" },
+  ]);
+  page.cards([
+    createWorkboardCard({
+      id: "main-high",
+      title: "Molty high task",
+      agentId: "main",
+      priority: "high",
+    }),
+    createWorkboardCard({
+      id: "writer-urgent",
+      title: "Writer urgent task",
+      agentId: "writer",
+      priority: "urgent",
+    }),
+    createWorkboardCard({
+      id: "writer-low",
+      title: "Writer low task",
+      agentId: "writer",
+      priority: "low",
+    }),
+  ]);
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  await vi.waitFor(() =>
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(3),
+  );
+  for (const priority of ["High", "Urgent"]) {
+    expectDefined(
+      page.container.querySelector<HTMLInputElement>(
+        `.workboard-filter-section__options[aria-label="Priority"] label[title="${priority}"] input`,
+      ),
+      `${priority} priority filter`,
+    ).click();
+    await vi.waitFor(() =>
+      expect(page.workboard.state.priorityFilter.size).toBe(priority === "High" ? 1 : 2),
+    );
+  }
+  const picker = expectDefined(
+    page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+      ".workboard-agent-filter [data-test-agent-picker]",
+    ),
+    "global agent filter",
+  );
+  picker.onSelect("main");
+  await vi.waitFor(() => {
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
+    expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).not.toBeNull();
+    expect(
+      page.container.querySelector(
+        '.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: Molty"]',
+      ),
+    ).not.toBeNull();
+  });
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>(".workboard-filter-clear"),
+    "clear filters",
+  ).click();
+  expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith("main");
+  await vi.waitFor(() => {
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
+    expect(page.container.querySelector(".workboard-board")?.textContent).toContain(
+      "Molty high task",
+    );
+    expect(page.container.querySelector(".workboard-board")?.textContent).not.toContain(
+      "Writer urgent task",
+    );
+    expect(page.container.querySelector(".workboard-board")?.textContent).not.toContain(
+      "Writer low task",
+    );
+    expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
+    expect(
+      page.container.querySelector(
+        '.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: Molty"]',
+      ),
+    ).not.toBeNull();
+  });
+  expect(page.workboard.state.priorityFilter.size).toBe(0);
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove filter: Agent: Molty"]',
+    ),
+    "remove mobile agent scope",
+  ).click();
+  expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
+  await vi.waitFor(() => {
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(3);
+    expect(page.container.querySelector(".workboard-filter-chip--mobile")).toBeNull();
+  });
 });
 
 it.each([
