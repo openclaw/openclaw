@@ -118,12 +118,7 @@ export {
   requireRegisteredProvider,
   type RegisteredProviderCollections,
 } from "../test-utils/plugin-registration.js";
-export {
-  createNonExitingRuntimeEnv,
-  createNonExitingTypedRuntimeEnv,
-  createRuntimeEnv,
-  createTypedRuntimeEnv,
-} from "../test-utils/plugin-runtime-env.js";
+export { createNonExitingRuntimeEnv, createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 export {
   createPluginSetupWizardAdapter,
   createPluginSetupWizardConfigure,
