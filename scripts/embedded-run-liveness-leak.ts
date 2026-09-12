@@ -31,7 +31,9 @@ function joinPendingDelivery(
 ): Promise<void> {
   const attempt = new AttemptContext();
   const controller = new AbortController();
-  const delivery = new Promise<void>((resolve) => releases.push(resolve));
+  const delivery = new Promise<void>((resolve) => {
+    releases.push(resolve);
+  });
   tracked.push(new WeakRef(attempt));
   // The two callbacks share a lexical scope, as they do in stream settlement.
   return joinWithRunLivenessDeadline({
