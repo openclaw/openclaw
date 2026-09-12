@@ -231,8 +231,9 @@ Being allowed to chat does not grant owner permissions. If your account is not
 an owner, the reply explains how the Gateway operator can connect it. Channel
 setup and [pairing](/channels/pairing) distinguish owner access from chat access;
 existing allowed users are not automatically promoted.
-`/update` also requires `commands.restart` (enabled by default), and command
-access restrictions still apply. Chat updates use the hosting installation's
+External-chat updates through `/update` or the tool require `commands.restart`
+(enabled by default), including managed installations. The slash command also
+follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
 configured update channel and install method.
 Agents must never run `npm install -g openclaw` or stop the Gateway service
 from a chat shell; use `/update` or the update action so restart and notification

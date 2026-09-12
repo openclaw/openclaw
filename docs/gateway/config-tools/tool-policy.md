@@ -29,8 +29,9 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 The `minimal`, `coding`, and `messaging` profiles include `gateway` with only the
 `update.run` action. This lets owners request an OpenClaw update through the
 existing tool without granting configuration reads. Updates use the same Gateway
-handler as `/update` and the Control UI; current owner authorization and
-`commands.restart` still apply.
+handler as `/update` and the Control UI. External-chat updates require current
+owner authorization and `commands.restart`; Control UI updates retain their
+operator authorization.
 
 The `full` profile and an unset profile retain the tool's configuration-read
 actions. In a limited profile, explicitly add `gateway` to `tools.alsoAllow` to
