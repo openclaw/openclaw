@@ -51,6 +51,7 @@ export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
   getPluginStateCapacity,
+  MAX_PLUGIN_STATE_VALUE_BYTES,
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
   pluginStateDeleteEntriesIfUnchanged,
   pluginStateDoctorEntriesInKeyRange,
