@@ -962,4 +962,36 @@ describe("read tool", () => {
     expect(readAccess).toHaveBeenCalled();
     expect(textContent(result)).toContain("normalized snapshot");
   });
+
+  it("removes the abort listener immediately when a queued read is cancelled", async () => {
+    const tempDir = tempDirs.make("openclaw-read-abort-cleanup-");
+    const filePath = path.join(tempDir, "queued.txt");
+    await fs.writeFile(filePath, "queued");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker = withFileMutationQueue(filePath, async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+
+    const controller = new AbortController();
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    const read = createReadToolDefinition(tempDir).execute(
+      "queued-abort",
+      { path: filePath },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+    void read.catch(() => {});
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    controller.abort();
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    releaseBlocker.resolve();
+    await blocker;
+    await expect(read).rejects.toThrow("Operation aborted");
+  });
 });
