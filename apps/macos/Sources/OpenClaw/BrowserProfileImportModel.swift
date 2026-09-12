@@ -76,6 +76,7 @@ final class BrowserProfileImportModel {
 
     enum ForceRefreshOutcome: Equatable {
         case offering
+        case superseded
         case unavailable(title: String, message: String)
     }
 
@@ -85,8 +86,8 @@ final class BrowserProfileImportModel {
 
     private(set) var phase: Phase = .hidden
     private(set) var importAvailable = false
-    /// Bumped by setPhase; see refresh(force:) for the staleness contract.
     @ObservationIgnored private var phaseGeneration = 0
+    @ObservationIgnored private var availabilityGeneration = 0
     /// A dismissal must stick for this app session even while its
     /// fire-and-forget persistence write is pending or lost — otherwise the
     /// next automatic poll reads the still-null server state and re-offers.
@@ -113,19 +114,20 @@ final class BrowserProfileImportModel {
 
     /// Read availability without changing the banner or overriding a remembered dismissal.
     func refreshAvailability() async {
+        self.availabilityGeneration += 1
+        let generation = self.availabilityGeneration
         guard self.isLocalMode() else {
             self.importAvailable = false
             return
         }
         let status: BrowserProfileImportStatus? = try? await self.request(
             method: "GET", path: "/system-profile-import/status", timeoutMs: 5000)
+        guard self.availabilityGeneration == generation else { return }
         self.importAvailable = self.isLocalMode() && status.map { Self.shouldOffer(status: $0, force: true) } == true
     }
 
-    /// Every phase change goes through here. The generation lets an awaited
-    /// status poll detect that a dismissal, import, or fresher poll happened
-    /// while it was in flight — "phase is .hidden again" alone cannot tell a
-    /// just-dismissed banner apart from one that never appeared.
+    /// Phase changes and refresh starts invalidate earlier presentation work,
+    /// even when a mode switch or dismissal leaves the banner hidden again.
     private func setPhase(_ phase: Phase) {
         self.phase = phase
         self.phaseGeneration += 1
@@ -176,26 +178,19 @@ final class BrowserProfileImportModel {
                         localized: "Switch this Mac app to a local Gateway before importing browser cookies.")),
                 false)
         }
+        if case .importing = self.phase { return (.offering, false) }
+        guard shouldApply() else { return (.superseded, false) }
+        self.phaseGeneration += 1
         let generation = self.phaseGeneration
+        self.availabilityGeneration += 1
+        let availabilityGeneration = self.availabilityGeneration
         do {
             let status: BrowserProfileImportStatus = try await self.request(
                 method: "GET",
                 path: "/system-profile-import/status")
-            self.importAvailable = self.isLocalMode() && Self.shouldOffer(status: status, force: true)
-            // The status await interleaves with user actions. Idle polls apply
-            // only if nothing changed since they started (a dismissal mid-poll
-            // must stay dismissed); a forced refresh wins over everything
-            // except an import that is already running.
-            if force {
-                if case .importing = self.phase { return (.offering, true) }
-            } else {
-                // The sidebar may close while the host-local status request is
-                // in flight. Never surface its automatic offer after that UI
-                // owner has gone away.
-                guard self.phaseGeneration == generation, shouldApply() else {
-                    return (.offering, false)
-                }
-            }
+            guard self.phaseGeneration == generation, self.availabilityGeneration == availabilityGeneration,
+                  self.isOnboarded(), self.isLocalMode(), shouldApply() else { return (.superseded, false) }
+            self.importAvailable = Self.shouldOffer(status: status, force: true)
             guard Self.shouldOffer(status: status, force: force) else {
                 self.setPhase(.hidden)
                 let message = status.enabled
@@ -210,10 +205,9 @@ final class BrowserProfileImportModel {
             self.setPhase(.offering(status))
             return (.offering, true)
         } catch {
-            // Same interleaving rule: a failed poll only clears state it owns.
-            if force, self.phaseGeneration == generation {
-                if case .importing = self.phase {} else { self.setPhase(.hidden) }
-            }
+            guard self.phaseGeneration == generation, self.availabilityGeneration == availabilityGeneration,
+                  self.isOnboarded(), self.isLocalMode(), shouldApply() else { return (.superseded, false) }
+            if force { self.setPhase(.hidden) }
             return (
                 .unavailable(
                     title: String(localized: "Browser import unavailable"),
@@ -223,8 +217,9 @@ final class BrowserProfileImportModel {
     }
 
     func importProfile(_ profile: BrowserSystemProfile) async {
-        guard case let .offering(status) = self.phase else { return }
+        guard self.isOnboarded(), self.isLocalMode(), case let .offering(status) = self.phase else { return }
         self.setPhase(.importing(profile: profile, target: status.suggestedTarget))
+        let generation = self.phaseGeneration
         do {
             let body: [String: AnyCodable] = [
                 "browser": AnyCodable(profile.browser),
@@ -237,14 +232,17 @@ final class BrowserProfileImportModel {
                 path: "/profiles/import",
                 body: body,
                 timeoutMs: 120_000)
+            // The Gateway import may finish after its banner context has gone away.
+            guard self.phaseGeneration == generation, self.isOnboarded(), self.isLocalMode() else { return }
             self.setPhase(.imported(result))
         } catch {
+            guard self.phaseGeneration == generation, self.isOnboarded(), self.isLocalMode() else { return }
             self.setPhase(.failed(message: error.localizedDescription, retry: status))
         }
     }
 
     func retry() {
-        guard case let .failed(_, status) = self.phase else { return }
+        guard self.isOnboarded(), self.isLocalMode(), case let .failed(_, status) = self.phase else { return }
         self.setPhase(.offering(status))
     }
 
@@ -270,6 +268,7 @@ final class BrowserProfileImportModel {
     /// import system profiles, so the banner withdraws on mode switches.
     func handleConnectionModeChange() {
         guard !self.isLocalMode() else { return }
+        self.availabilityGeneration += 1
         self.importAvailable = false
         self.setPhase(.hidden)
     }
@@ -302,11 +301,3 @@ final class BrowserProfileImportModel {
             timeoutMs: request.timeoutMs)
     }
 }
-
-#if DEBUG
-extension BrowserProfileImportModel {
-    func _testSetPhase(_ phase: Phase) {
-        self.setPhase(phase)
-    }
-}
-#endif
