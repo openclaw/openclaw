@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,11 +14,17 @@ const mocks = vi.hoisted(() => ({
   removeProfiles: vi.fn(),
   progressUpdate: vi.fn(),
   hardware: vi.fn(),
+  downloadFetch: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   removeProviderAuthProfilesWithLock: mocks.removeProfiles,
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: mocks.downloadFetch,
 }));
 
 vi.mock("./managed-server.js", async (importOriginal) => ({
@@ -39,6 +46,7 @@ vi.mock("./hardware.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./hardware.js")>()),
   detectLlamaCppHardware: mocks.hardware,
 }));
+import { downloadVerifiedFile, type LlamaDownloadProgress } from "./llama-server-install.js";
 import { resolveLlamaCppCatalogArtifact, resolveLlamaCppModelCandidates } from "./model-catalog.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
@@ -81,6 +89,7 @@ beforeEach(async () => {
   });
   mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
   mocks.progressUpdate.mockReset();
+  mocks.downloadFetch.mockReset();
 });
 
 afterEach(async () => {
@@ -169,6 +178,139 @@ const externalChatRoutes: Array<{
 ];
 
 describe("llama.cpp managed setup", () => {
+  it.each([
+    {
+      label: "initial shared tick",
+      times: [1000, 1000, 1010],
+      rates: [0, 0, 300_000_000],
+      mb: [0, 0, 300],
+    },
+    {
+      label: "established shared tick",
+      times: [1010, 1010, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+      mb: [100, 100, 100],
+    },
+    {
+      label: "distinct ticks",
+      times: [1010, 1020, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+      mb: [100, 100, 100],
+    },
+  ])(
+    "reports producer download rates during setup across $label",
+    async ({ label, times, rates, mb }) => {
+      vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
+      const ctx = authContext(true);
+      requestUnconfiguredLocalMemory(ctx);
+      ctx.config.memory = {
+        search: { provider: "local", local: { modelPath: CUSTOM_EMBEDDING_MODEL } },
+      };
+      const stopped = vi.fn();
+      vi.mocked(ctx.prompter.progress).mockReturnValue({
+        update: mocks.progressUpdate,
+        stop: stopped,
+      });
+      const destination = path.join(tempRoot, "rate-embedding.gguf");
+      const chunks = [1, 2, 3].map((value) => Buffer.alloc(1_000_000, value));
+      const payload = Buffer.concat(chunks);
+      const observations: Array<Parameters<LlamaDownloadProgress>[0] & { text: string }> = [];
+      const release = vi.fn();
+      const existingEnsure = mocks.ensureModel.getMockImplementation()!;
+      mocks.ensureModel.mockImplementation(
+        async (
+          options: Parameters<typeof import("./managed-server.js").ensureLlamaCppModel>[0],
+        ) => {
+          if (!options.download || options.source !== CUSTOM_EMBEDDING_MODEL) {
+            return existingEnsure(options);
+          }
+          const report = options.onProgress;
+          if (!report) {
+            throw new Error("Selected setup download has no progress callback");
+          }
+          mocks.downloadFetch.mockResolvedValueOnce({
+            response: new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  for (const chunk of chunks) {
+                    controller.enqueue(chunk);
+                  }
+                  controller.close();
+                },
+              }),
+            ),
+            release,
+          });
+          const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+          const actualOpen = fs.open.bind(fs);
+          let written = 0;
+          const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await actualOpen(...args);
+            const writeFile = handle.writeFile.bind(handle);
+            handle.writeFile = async (...writeArgs) => {
+              await writeFile(...writeArgs);
+              clock.mockReturnValue(times[written++]!);
+            };
+            return handle;
+          });
+          try {
+            await downloadVerifiedFile({
+              url: "https://downloads.example/rate-embedding.gguf",
+              destination,
+              expectedSize: payload.byteLength,
+              expectedSha256: createHash("sha256").update(payload).digest("hex"),
+              onProgress: (progress) => {
+                expect(stopped).not.toHaveBeenCalled();
+                report(progress);
+                const text = mocks.progressUpdate.mock.lastCall?.[0];
+                expect(typeof text).toBe("string");
+                observations.push({ ...progress, text });
+              },
+            });
+          } finally {
+            opened.mockRestore();
+            clock.mockRestore();
+          }
+          return destination;
+        },
+      );
+
+      await runLlamaCppSetup(ctx);
+
+      expect(await fs.readFile(destination)).toEqual(payload);
+      expect(release).toHaveBeenCalledOnce();
+      expect(stopped).toHaveBeenCalledExactlyOnceWith("Managed llama.cpp server prepared");
+      expect(mocks.downloadFetch).toHaveBeenCalledOnce();
+      expect(observations.map((progress) => progress.downloadedSize)).toEqual([
+        1_000_000, 2_000_000, 3_000_000,
+      ]);
+      expect(observations.map((progress) => progress.totalSize)).toEqual([
+        3_000_000, 3_000_000, 3_000_000,
+      ]);
+      console.info(
+        "[llama-rate-proof] " +
+          JSON.stringify({
+            label,
+            execPath: process.execPath,
+            version: process.version,
+            observations,
+            fileVerified: true,
+            releaseCount: release.mock.calls.length,
+            stoppedCount: stopped.mock.calls.length,
+          }),
+      );
+      expect(observations.map((progress) => progress.bytesPerSecond)).toEqual(rates);
+      expect(
+        observations.map((progress) => Number(progress.text.match(/, (\d+) MB\/s\)$/u)?.[1])),
+      ).toEqual(mb);
+      expect(
+        observations.every((progress) =>
+          progress.text.startsWith("Downloading configured embedding model…"),
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("reuses a downloaded recommendation after cancelled activation with little free disk", async () => {
     mocks.hardware.mockResolvedValue({
       platform: "darwin",

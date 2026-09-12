@@ -204,9 +204,9 @@ export async function downloadVerifiedFile(params: {
               rollingBytesPerSecond === 0
                 ? currentRate
                 : rollingBytesPerSecond * 0.75 + currentRate * 0.25;
+            previousSize = downloadedSize;
+            previousAt = now;
           }
-          previousSize = downloadedSize;
-          previousAt = now;
           params.onProgress?.({ downloadedSize, totalSize, bytesPerSecond: rollingBytesPerSecond });
         }
         if (params.expectedSize && downloadedSize !== params.expectedSize) {
