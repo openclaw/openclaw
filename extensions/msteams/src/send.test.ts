@@ -597,12 +597,6 @@ describe("sendMessageMSTeams", () => {
   });
 });
 
-describe("MSTeams continueConversation failure handling", () => {
-  beforeEach(() => {
-    mockState.resolveMSTeamsSendContext.mockReset();
-  });
-});
-
 describe("editMessageMSTeams", () => {
   beforeEach(() => {
     mockState.resolveMSTeamsSendContext.mockReset();

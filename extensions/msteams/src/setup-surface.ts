@@ -1,7 +1,7 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 // Msteams plugin module implements setup surface behavior.
 import {
   mergeAllowFromEntries,
-  patchChannelConfigForAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
@@ -12,7 +12,12 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { createAccountScopedGroupAccessSection } from "openclaw/plugin-sdk/setup-runtime";
 import type { MSTeamsTeamConfig } from "../runtime-api.js";
-import { resolveMSTeamsAccountConfig } from "./accounts.js";
+import {
+  resolveDefaultMSTeamsAccountId,
+  resolveMSTeamsAccount,
+  resolveMSTeamsAccountConfig,
+  resolveMSTeamsAccountEntryKey,
+} from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
@@ -41,7 +46,7 @@ async function promptMSTeamsAllowFrom(params: {
   accountId?: string;
   prompter: WizardPrompter;
 }): Promise<OpenClawConfig> {
-  const accountId = params.accountId ?? "default";
+  const accountId = params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg);
   const existing = resolveMSTeamsAccountConfig(params.cfg, accountId).allowFrom ?? [];
   await params.prompter.note(
     [
@@ -86,11 +91,11 @@ async function promptMSTeamsAllowFrom(params: {
         continue;
       }
       const unique = mergeAllowFromEntries(existing, ids);
-      return patchChannelConfigForAccount({
+      return patchMSTeamsAccountConfig({
         cfg: params.cfg,
-        channel,
         accountId,
         patch: { dmPolicy: "allowlist", allowFrom: unique },
+        scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(params.cfg, accountId),
       });
     }
 
@@ -107,11 +112,11 @@ async function promptMSTeamsAllowFrom(params: {
 
     const ids = resolved.flatMap((item) => (item.id ? [item.id] : []));
     const unique = mergeAllowFromEntries(existing, ids);
-    return patchChannelConfigForAccount({
+    return patchMSTeamsAccountConfig({
       cfg: params.cfg,
-      channel,
       accountId,
       patch: { dmPolicy: "allowlist", allowFrom: unique },
+      scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(params.cfg, accountId),
     });
   }
 }
@@ -126,6 +131,13 @@ function withMSTeamsAccountConfig(cfg: OpenClawConfig, accountId?: string | null
         accountId && accountId !== "default" ? { ...msteams, defaultAccount: accountId } : msteams,
     },
   };
+}
+
+function shouldScopeMSTeamsDefaultToAccounts(cfg: OpenClawConfig, accountId: string): boolean {
+  if (accountId !== "default") {
+    return false;
+  }
+  return resolveMSTeamsAccountEntryKey(cfg.channels?.msteams?.accounts, accountId) !== undefined;
 }
 
 function setMSTeamsTeamsAllowlist(
@@ -249,48 +261,66 @@ async function resolveMSTeamsGroupAllowlist(params: {
   }
 }
 
-const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> =
-  createAccountScopedGroupAccessSection({
-    channel,
-    label: t("wizard.msteams.channelsLabel"),
-    placeholder: "Team Name/Channel Name, teamId/conversationId",
-    currentPolicy: ({ cfg, accountId }) =>
-      resolveMSTeamsAccountConfig(cfg, accountId).groupPolicy ?? "allowlist",
-    currentEntries: ({ cfg, accountId }) => listMSTeamsGroupEntries(cfg, accountId),
-    updatePrompt: ({ cfg, accountId }) =>
-      Boolean(resolveMSTeamsAccountConfig(cfg, accountId).teams),
-    resolveAllowlist: async ({ cfg, accountId, entries, prompter }) =>
-      await resolveMSTeamsGroupAllowlist({ cfg, accountId, entries, prompter }),
-    fallbackResolved: (entries) =>
-      entries.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean) as Array<{
-        teamKey: string;
-        channelKey?: string;
-      }>,
-    applyAllowlist: ({ cfg, accountId, resolved }) =>
-      setMSTeamsTeamsAllowlist(
-        cfg,
-        accountId,
-        resolved as Array<{ teamKey: string; channelKey?: string }>,
-      ),
-  });
+const msteamsGroupAccessBase = createAccountScopedGroupAccessSection({
+  channel,
+  label: t("wizard.msteams.channelsLabel"),
+  placeholder: "Team Name/Channel Name, teamId/conversationId",
+  currentPolicy: ({ cfg, accountId }) =>
+    resolveMSTeamsAccountConfig(cfg, accountId).groupPolicy ?? "allowlist",
+  currentEntries: ({ cfg, accountId }) => listMSTeamsGroupEntries(cfg, accountId),
+  updatePrompt: ({ cfg, accountId }) => Boolean(resolveMSTeamsAccountConfig(cfg, accountId).teams),
+  resolveAllowlist: async ({ cfg, accountId, entries, prompter }) =>
+    await resolveMSTeamsGroupAllowlist({ cfg, accountId, entries, prompter }),
+  fallbackResolved: (entries) =>
+    entries.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean) as Array<{
+      teamKey: string;
+      channelKey?: string;
+    }>,
+  applyAllowlist: ({ cfg, accountId, resolved }) =>
+    setMSTeamsTeamsAllowlist(
+      cfg,
+      accountId,
+      resolved as Array<{ teamKey: string; channelKey?: string }>,
+    ),
+});
 
-const msteamsDmPolicy: ChannelSetupDmPolicy = {
+const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
+  ...msteamsGroupAccessBase,
+  setPolicy: ({ cfg, accountId, policy }) =>
+    patchMSTeamsAccountConfig({
+      cfg,
+      accountId,
+      patch: { groupPolicy: policy },
+      scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(cfg, accountId),
+    }),
+};
+
+const msteamsDmPolicy: ChannelSetupDmPolicy = createChannelDmPolicy({
   label: "MS Teams",
   channel,
   policyKey: "channels.msteams.dmPolicy",
   allowFromKey: "channels.msteams.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) => {
+  resolveAccount: (cfg, accountId) => resolveMSTeamsAccount({ cfg, accountId }),
+  resolveConfigKeys: ({ cfg, account }) => {
+    const rawAccountKey = resolveMSTeamsAccountEntryKey(
+      cfg.channels?.msteams?.accounts,
+      account.accountId,
+    );
     const base =
-      accountId && accountId !== "default"
-        ? `channels.msteams.accounts.${accountId}`
+      account.accountId !== "default" || rawAccountKey
+        ? `channels.msteams.accounts.${rawAccountKey ?? account.accountId}`
         : "channels.msteams";
     return { policyKey: `${base}.dmPolicy`, allowFromKey: `${base}.allowFrom` };
   },
-  getCurrent: (cfg, accountId) => resolveMSTeamsAccountConfig(cfg, accountId).dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy, accountId = "default") =>
-    patchMSTeamsAccountConfig({ cfg, accountId, patch: { dmPolicy: policy } }),
+  applyPatch: ({ cfg, account, patch }) =>
+    patchMSTeamsAccountConfig({
+      cfg,
+      accountId: account.accountId,
+      patch,
+      scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(cfg, account.accountId),
+    }),
   promptAllowFrom: promptMSTeamsAllowFrom,
-};
+});
 
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 

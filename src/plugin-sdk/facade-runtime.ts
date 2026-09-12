@@ -8,17 +8,17 @@ import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-load
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   loadBundledPluginPublicSurfaceModuleSyncCore as loadBundledPluginPublicSurfaceModuleSyncLight,
-  loadFacadeModuleAtLocationSync as loadFacadeModuleAtLocationSyncShared,
+  loadFacadeModuleAtLocationSync,
   resetFacadeLoaderStateForTest,
   type FacadeModuleLocation,
 } from "./facade-loader.js";
 import {
   createFacadeResolutionKey as createFacadeResolutionKeyShared,
   resolveBundledFacadeModuleLocation,
+  resolveBundledMetadataManifestRecord,
   resolveRegistryPluginModuleLocationFromRecords,
 } from "./facade-resolution-shared.js";
 export {
-  createLazyFacadeArrayValue,
   createLazyFacadeObjectValue,
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
@@ -30,11 +30,7 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-function createFacadeResolutionKey(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
+function createFacadeResolutionKey(params: BundledPluginPublicSurfaceParams): string {
   const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
   return createFacadeResolutionKeyShared({
     ...params,
@@ -43,22 +39,9 @@ function createFacadeResolutionKey(params: {
   });
 }
 
-function resolveRegistryPluginModuleLocation(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): { modulePath: string; boundaryRoot: string } | null {
-  return loadFacadeActivationCheckRuntime().resolveRegistryPluginModuleLocation({
-    ...params,
-    resolutionKey: createFacadeResolutionKey(params),
-  });
-}
-
-function resolveFacadeModuleLocationUncached(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): { modulePath: string; boundaryRoot: string } | null {
+function resolveFacadeModuleLocationUncached(
+  params: BundledPluginPublicSurfaceParams,
+): { modulePath: string; boundaryRoot: string } | null {
   const env = params.env ?? process.env;
   if (!areBundledPluginsDisabled(env)) {
     const bundledPluginsDir = resolveBundledPluginsDir(env);
@@ -72,14 +55,12 @@ function resolveFacadeModuleLocationUncached(params: {
       return bundledLocation;
     }
   }
-  return resolveRegistryPluginModuleLocation(params);
+  return loadFacadeActivationCheckRuntime().resolveRegistryPluginModuleLocation(params);
 }
 
-function resolveFacadeModuleLocation(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): { modulePath: string; boundaryRoot: string } | null {
+function resolveFacadeModuleLocation(
+  params: BundledPluginPublicSurfaceParams,
+): { modulePath: string; boundaryRoot: string } | null {
   // Custom environments may select different installed-plugin profiles, so
   // their facade locations must not enter the process-wide gateway cache.
   if (params.env !== undefined && params.env !== process.env) {
@@ -128,7 +109,6 @@ function getFacadeActivationCheckRuntimeSourceLoader(modulePath: string) {
     modulePath,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
-    aliasMap: {},
   });
 }
 
@@ -145,6 +125,10 @@ function loadFacadeActivationCheckRuntimeFromCandidates(
     }
   }
   return undefined;
+}
+
+function throwFacadeActivationCheckRuntimeUnavailable(): never {
+  throw new Error("Unable to load facade activation check runtime");
 }
 
 function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
@@ -166,7 +150,7 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
     setFacadeActivationCheckRuntimeModule(facadeActivationCheckRuntimeModule);
     return facadeActivationCheckRuntimeModule;
   }
-  throw new Error("Unable to load facade activation check runtime");
+  return throwFacadeActivationCheckRuntimeUnavailable();
 }
 
 // Async twin of loadFacadeActivationCheckRuntime for async call sites: dynamic
@@ -184,18 +168,6 @@ function setFacadeActivationCheckRuntimeForTest(module: FacadeActivationCheckRun
   setFacadeActivationCheckRuntimeModule(module);
 }
 
-function loadFacadeModuleAtLocationSync<T extends object>(params: {
-  location: FacadeModuleLocation;
-  trackedPluginId: string | (() => string);
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
-  loadModule?: (modulePath: string) => T;
-}): T {
-  return loadFacadeModuleAtLocationSyncShared(params);
-}
-
 function buildFacadeActivationCheckParams(
   params: BundledPluginPublicSurfaceParams,
   location: FacadeModuleLocation | null = resolveFacadeModuleLocation(params),
@@ -204,7 +176,6 @@ function buildFacadeActivationCheckParams(
     ...params,
     location,
     sourceExtensionsRoot: OPENCLAW_SOURCE_EXTENSIONS_ROOT,
-    resolutionKey: createFacadeResolutionKey(params),
   };
 }
 
@@ -214,10 +185,11 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   params: BundledPluginPublicSurfaceParams,
 ): T {
   const location = resolveFacadeModuleLocation(params);
+  const trackingParams = buildFacadeActivationCheckParams(params, location);
+  // Bundled identity is metadata; only registry fallback needs the activation runtime.
   const trackedPluginId = () =>
-    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(
-      buildFacadeActivationCheckParams(params, location),
-    );
+    resolveBundledMetadataManifestRecord(trackingParams)?.id ??
+    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(trackingParams);
   if (!location) {
     return loadBundledPluginPublicSurfaceModuleSyncLight<T>({
       ...params,
@@ -227,32 +199,28 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   return loadFacadeModuleAtLocationSync<T>({
     location,
     trackedPluginId,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
   });
-}
-
-/** Check whether an activated bundled plugin public surface may be loaded. */
-export function canLoadActivatedBundledPluginPublicSurface(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  return loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
-    buildFacadeActivationCheckParams(params),
-  ).allowed;
 }
 
 /** Load an activated plugin public surface or throw when activation policy blocks access. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
-export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): T {
+export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(
+  params: BundledPluginPublicSurfaceParams,
+): T {
   loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
+    buildFacadeActivationCheckParams(params),
+  );
+  return loadBundledPluginPublicSurfaceModuleSync<T>(params);
+}
+
+/** Load activation asynchronously; allowed public artifacts still use the synchronous loader. */
+export async function loadActivatedBundledPluginPublicSurfaceModule<T extends object>(
+  params: BundledPluginPublicSurfaceParams,
+): Promise<T> {
+  const runtime = await loadFacadeActivationCheckRuntimeAsync().catch(
+    throwFacadeActivationCheckRuntimeUnavailable,
+  );
+  runtime.resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
     buildFacadeActivationCheckParams(params),
   );
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
@@ -260,11 +228,9 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
 
 /** Load an activated plugin public surface, returning null when activation policy blocks access. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
-export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): T | null {
+export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(
+  params: BundledPluginPublicSurfaceParams,
+): T | null {
   const access = loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
     buildFacadeActivationCheckParams(params),
   );
@@ -275,11 +241,9 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 }
 
 /** Async variant of tryLoadActivatedBundledPluginPublicSurfaceModuleSync for async call sites. */
-export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<T | null> {
+export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends object>(
+  params: BundledPluginPublicSurfaceParams,
+): Promise<T | null> {
   const runtime = await loadFacadeActivationCheckRuntimeAsync();
   const access = runtime.resolveBundledPluginPublicSurfaceAccess(
     buildFacadeActivationCheckParams(params),
@@ -301,43 +265,4 @@ export const testing = {
   loadFacadeModuleAtLocationSync,
   resolveRegistryPluginModuleLocationFromRegistry: resolveRegistryPluginModuleLocationFromRecords,
   resolveFacadeModuleLocation,
-  evaluateBundledPluginPublicSurfaceAccess: ((
-    ...args: Parameters<
-      FacadeActivationCheckRuntimeModule["evaluateBundledPluginPublicSurfaceAccess"]
-    >
-  ) =>
-    loadFacadeActivationCheckRuntime().evaluateBundledPluginPublicSurfaceAccess(
-      ...args,
-    )) as FacadeActivationCheckRuntimeModule["evaluateBundledPluginPublicSurfaceAccess"],
-  throwForBundledPluginPublicSurfaceAccess: ((
-    ...args: Parameters<
-      FacadeActivationCheckRuntimeModule["throwForBundledPluginPublicSurfaceAccess"]
-    >
-  ) =>
-    loadFacadeActivationCheckRuntime().throwForBundledPluginPublicSurfaceAccess(
-      ...args,
-    )) as FacadeActivationCheckRuntimeModule["throwForBundledPluginPublicSurfaceAccess"],
-  resolveActivatedBundledPluginPublicSurfaceAccessOrThrow: ((
-    params: BundledPluginPublicSurfaceParams,
-  ) =>
-    loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
-      buildFacadeActivationCheckParams(params),
-    )) as (params: BundledPluginPublicSurfaceParams) => {
-    allowed: boolean;
-    pluginId?: string;
-    reason?: string;
-  },
-  resolveBundledPluginPublicSurfaceAccess: ((params: BundledPluginPublicSurfaceParams) =>
-    loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
-      buildFacadeActivationCheckParams(params),
-    )) as (params: BundledPluginPublicSurfaceParams) => {
-    allowed: boolean;
-    pluginId?: string;
-    reason?: string;
-  },
-  resolveTrackedFacadePluginId: ((params: BundledPluginPublicSurfaceParams) =>
-    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(
-      buildFacadeActivationCheckParams(params),
-    )) as (params: BundledPluginPublicSurfaceParams) => string,
 };
-export { testing as __testing };

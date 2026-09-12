@@ -330,6 +330,8 @@ describe("msTeamsApprovalNativeRuntime", () => {
       cfg,
       accountId: "default",
       entry,
+      request,
+      approvalKind: "exec",
       payload: final.payload,
       phase: "resolved",
     });
@@ -475,6 +477,8 @@ describe("msTeamsApprovalNativeRuntime", () => {
       cfg,
       accountId: "default",
       entry,
+      request,
+      approvalKind: "plugin",
       payload: final.payload,
       phase: "expired",
     });

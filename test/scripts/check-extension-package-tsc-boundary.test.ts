@@ -1,20 +1,19 @@
 // Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  appendBoundedStepOutput,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
   formatSkippedCompileProgress,
   formatStepFailure,
   installCanaryArtifactCleanup,
-  isBoundaryCompileFresh,
   resolveCompileConcurrency,
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
@@ -24,10 +23,10 @@ import {
   isProcessAlive,
   waitForChildClose,
   waitForDead,
-  waitForFile,
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const tempRoots = new Set<string>();
 
@@ -54,14 +53,98 @@ afterEach(() => {
 });
 
 describe("check-extension-package-tsc-boundary", () => {
-  it("keeps a bounded tail of captured step output", () => {
-    const first = appendBoundedStepOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    const second = appendBoundedStepOutput(first, "ghij", 5);
-
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  it("reruns the real compiler after an inherited paths change in the CLI", () => {
+    const root = fs.realpathSync.native(createTempExtensionRoot().rootDir);
+    const write = (file: string, contents: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, contents);
+      fs.utimesSync(target, new Date(1000), new Date(1000));
+    };
+    write("package.json", '{"type":"module"}');
+    write("pnpm-workspace.yaml", "packages: []\n");
+    write("tsconfig.json", '{"compilerOptions":{"module":"NodeNext","strict":true,"types":[]}}');
+    const pathsConfig = "extensions/tsconfig.package-boundary.paths.json";
+    const config = {
+      extends: "../tsconfig.json",
+      compilerOptions: {
+        paths: { "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"] },
+      },
+    };
+    write(pathsConfig, JSON.stringify(config));
+    write(
+      "extensions/tsconfig.package-boundary.base.json",
+      '{"extends":"./tsconfig.package-boundary.paths.json","compilerOptions":{"rootDir":"${configDir}"}}',
+    );
+    write(
+      "extensions/demo/tsconfig.json",
+      '{"extends":"../tsconfig.package-boundary.base.json","include":["index.ts"]}',
+    );
+    write(
+      "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
+      "export type DemoContract = { ok: boolean };\n",
+    );
+    write(
+      "extensions/demo/index.ts",
+      'import type { DemoContract } from "openclaw/plugin-sdk/core";\nexport const demo: DemoContract = { ok: true };\n',
+    );
+    // Hold preparation fixed; scheduling, config parsing, and compilation remain real.
+    write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
+    for (const file of [
+      "check-extension-package-tsc-boundary.mts",
+      "tsx.mjs",
+      "windows-cmd-helpers.mjs",
+    ]) {
+      write(`scripts/${file}`, fs.readFileSync(path.resolve("scripts", file), "utf8"));
+    }
+    materializeNativeCompiler(root);
+    for (const file of [
+      "scripts/lib",
+      "packages/normalization-core/src",
+      "packages/normalization-core/package.json",
+    ]) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });
+    }
+    for (const name of ["tsx", "@openclaw/fs-safe", "p-map"]) {
+      const file = `node_modules/${name}`;
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.symlinkSync(path.resolve(file), path.join(root, file));
+    }
+    const run = () =>
+      spawnSync(
+        process.execPath,
+        ["scripts/check-extension-package-tsc-boundary.mts", "--mode=compile"],
+        { cwd: root, encoding: "utf8", timeout: 20_000 },
+      );
+    const cold = run();
+    expect(cold.error, cold.stderr).toBeUndefined();
+    expect(cold.status, cold.stdout + cold.stderr).toBe(0);
+    expect(cold.stdout).toContain("compiled plugins: 1");
+    const warm = run();
+    expect(warm.status, warm.stdout + warm.stderr).toBe(0);
+    expect(warm.stdout).toContain("compiled plugins: 0");
+    expect(warm.stdout).toContain("skipped plugins: 1");
+    config.compilerOptions.paths["openclaw/plugin-sdk/*"] = ["../missing-sdk/*.d.ts"];
+    write(pathsConfig, JSON.stringify(config));
+    const changed = run();
+    expect(changed.error, changed.stderr).toBeUndefined();
+    expect(changed.status, changed.stdout + changed.stderr).toBe(1);
+    expect(changed.stderr).toContain("TS2307");
+    expect(
+      fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/compile/demo.json")),
+    ).toBe(false);
+  }, 30_000);
+  it("keeps matching canary diagnostics classified as a timeout when the compiler never exits", async () => {
+    const diagnostic = "TS6059 src/plugins/contracts/rootdir-boundary-canary.ts";
+    await expect(
+      runNodeStepAsync(
+        "canary fixture",
+        ["-e", `console.log(${JSON.stringify(diagnostic)});setInterval(()=>{},1000);`],
+        2000,
+      ),
+    ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
   });
-
   it("removes stale canary artifacts across extensions", () => {
     const { rootDir } = createTempExtensionRoot();
     const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
@@ -222,85 +305,6 @@ describe("check-extension-package-tsc-boundary", () => {
         limit: 2,
       }),
     ).toBe(["slowest plugin compiles:", "- slow: 900ms", "- medium: 250ms", ""].join("\n"));
-  });
-
-  it("treats a plugin compile as fresh only when its outputs are newer than plugin and shared sdk inputs", () => {
-    const { rootDir, extensionRoot } = createTempExtensionRoot();
-    const extensionSourcePath = path.join(extensionRoot, "index.ts");
-    const extensionTsconfigPath = path.join(extensionRoot, "tsconfig.json");
-    const stampPath = path.join(extensionRoot, "dist", ".boundary-tsc.stamp");
-    const rootSdkTypePath = path.join(rootDir, "dist", "plugin-sdk", "core.d.ts");
-    const packageSdkTypePath = path.join(
-      rootDir,
-      "packages",
-      "plugin-sdk",
-      "dist",
-      "src",
-      "plugin-sdk",
-      "core.d.ts",
-    );
-
-    fs.mkdirSync(path.dirname(extensionSourcePath), { recursive: true });
-    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-    fs.mkdirSync(path.dirname(rootSdkTypePath), { recursive: true });
-    fs.mkdirSync(path.dirname(packageSdkTypePath), { recursive: true });
-
-    fs.writeFileSync(extensionSourcePath, "export const demo = 1;\n", "utf8");
-    fs.writeFileSync(
-      extensionTsconfigPath,
-      '{ "extends": "../tsconfig.package-boundary.base.json" }\n',
-      "utf8",
-    );
-    fs.writeFileSync(stampPath, "ok\n", "utf8");
-    fs.writeFileSync(rootSdkTypePath, "export {};\n", "utf8");
-    fs.writeFileSync(packageSdkTypePath, "export {};\n", "utf8");
-
-    fs.utimesSync(extensionSourcePath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(extensionTsconfigPath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(rootSdkTypePath, new Date(500), new Date(500));
-    fs.utimesSync(packageSdkTypePath, new Date(2_000), new Date(2_000));
-    fs.utimesSync(stampPath, new Date(3_000), new Date(3_000));
-
-    expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(true);
-
-    fs.utimesSync(rootSdkTypePath, new Date(500), new Date(500));
-    fs.utimesSync(packageSdkTypePath, new Date(500), new Date(500));
-
-    expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(true);
-
-    fs.utimesSync(rootSdkTypePath, new Date(4_000), new Date(4_000));
-
-    expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(false);
-  });
-
-  it("accepts cached input mtimes for freshness checks", () => {
-    const { rootDir, extensionRoot } = createTempExtensionRoot();
-    const extensionSourcePath = path.join(extensionRoot, "index.ts");
-    const stampPath = path.join(extensionRoot, "dist", ".boundary-tsc.stamp");
-
-    fs.mkdirSync(path.dirname(extensionSourcePath), { recursive: true });
-    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-    fs.writeFileSync(extensionSourcePath, "export const demo = 1;\n", "utf8");
-    fs.writeFileSync(stampPath, "ok\n", "utf8");
-
-    fs.utimesSync(extensionSourcePath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(stampPath, new Date(3_000), new Date(3_000));
-
-    expect(
-      isBoundaryCompileFresh("demo", {
-        rootDir,
-        extensionNewestInputMtimeMs: 1_000,
-        sharedNewestInputMtimeMs: 2_000,
-      }),
-    ).toBe(true);
-
-    expect(
-      isBoundaryCompileFresh("demo", {
-        rootDir,
-        extensionNewestInputMtimeMs: 1_000,
-        sharedNewestInputMtimeMs: 4_000,
-      }),
-    ).toBe(false);
   });
 
   it("keeps full failure output on the thrown error for canary detection", async () => {
@@ -526,11 +530,10 @@ describe("check-extension-package-tsc-boundary", () => {
 
   it.skipIf(process.platform === "win32")(
     "cleans active async node step descendants before forwarding parent SIGTERM",
-    async () => {
+    async ({ signal }) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-signal-"));
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
-      const readyPath = path.join(root, "child.ready");
       const scriptUrl = pathToFileURL(
         path.resolve("scripts/check-extension-package-tsc-boundary.mts"),
       ).href;
@@ -549,26 +552,35 @@ describe("check-extension-package-tsc-boundary", () => {
       ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        `require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
         "process.on('SIGTERM', () => process.exit(0));",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'inherit'] });`,
         "setInterval(() => {}, 1000);",
       ].join("");
       const runnerScript = [
         `import { runNodeStepAsync } from ${JSON.stringify(scriptUrl)};`,
+        // Exercise cold startup beyond the former two-second readiness deadline.
+        "await new Promise((resolve) => setTimeout(resolve, 3100));",
         `try { await runNodeStepAsync('parent-signal-step-group', ['--eval', ${JSON.stringify(
           parentScript,
-        )}], 60_000); } catch { if (process.exitCode !== 143) process.exitCode = 1; }`,
+        )}], 60_000); } catch (error) { if (process.exitCode !== 143) { console.error(error); process.exitCode = 1; } }`,
       ].join("\n");
 
+      const runnerEnded = new AbortController();
+      const readinessSignal = AbortSignal.any([signal, runnerEnded.signal]);
       try {
         runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
           cwd: process.cwd(),
-          stdio: ["ignore", "ignore", "pipe"],
+          stdio: ["ignore", "ignore", "inherit"],
         });
+        runner.once("exit", () => runnerEnded.abort(new Error("Runner exited before readiness")));
+        runner.once("error", (error) => runnerEnded.abort(error));
 
-        await waitForFile(readyPath, 2_000);
-        childPid = await waitForPidFile(childPidPath, 2_000);
+        // The child publishes readiness after both signal handlers are installed.
+        // Observe that state under the test/runner lifetime, not delayed FS notices.
+        childPid = await waitForPidFile(childPidPath, Number.POSITIVE_INFINITY, (ms) =>
+          delay(ms, undefined, { signal: readinessSignal }),
+        );
+        readinessSignal.throwIfAborted();
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");

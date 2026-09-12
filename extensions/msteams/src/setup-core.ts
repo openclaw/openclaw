@@ -15,6 +15,7 @@ import type { MSTeamsConfig } from "../runtime-api.js";
 import {
   resolveDefaultMSTeamsAccountId,
   resolveMSTeamsAccountConfig,
+  resolveMSTeamsAccountEntryKey,
   type MSTeamsMultiAccountConfig,
 } from "./accounts.js";
 import { normalizeSecretInputString } from "./secret-input.js";
@@ -79,17 +80,6 @@ function resolveMSTeamsSetupChannelConfig(
   return cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined; // SAFETY: the public config contract owns these optional fields.
 }
 
-function resolveRawMSTeamsAccountKey(
-  accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
-  accountId: string,
-): string | undefined {
-  const normalized = normalizeAccountId(accountId);
-  if (!accounts) {
-    return undefined;
-  }
-  return Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-}
-
 function resolveRawMSTeamsAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -99,7 +89,7 @@ function resolveRawMSTeamsAccountConfig(
   if (normalized === DEFAULT_ACCOUNT_ID) {
     return msteams;
   }
-  const rawAccountKey = resolveRawMSTeamsAccountKey(msteams.accounts, normalized);
+  const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
   return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? {};
 }
 
@@ -137,7 +127,10 @@ export function patchMSTeamsAccountConfig(params: {
   const accountId = normalizeAccountId(params.accountId);
   const msteams = (params.cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig; // SAFETY: the public config contract owns these optional fields.
   const ensureEnabled = params.ensureEnabled ?? true;
-  const scopeDefaultToAccounts = params.scopeDefaultToAccounts ?? false;
+  const scopeDefaultToAccounts =
+    params.scopeDefaultToAccounts ??
+    (accountId === DEFAULT_ACCOUNT_ID &&
+      resolveMSTeamsAccountEntryKey(msteams.accounts, DEFAULT_ACCOUNT_ID) !== undefined);
   if (accountId === DEFAULT_ACCOUNT_ID && !scopeDefaultToAccounts) {
     return {
       ...params.cfg,
@@ -156,7 +149,7 @@ export function patchMSTeamsAccountConfig(params: {
   const baseAccounts = baseMsteams.accounts ?? {};
   const hasPromotedDefaultIdentity = Object.keys(defaultAccount).length > 0;
   const promotedDefaultKey =
-    resolveRawMSTeamsAccountKey(baseAccounts, DEFAULT_ACCOUNT_ID) ?? DEFAULT_ACCOUNT_ID;
+    resolveMSTeamsAccountEntryKey(baseAccounts, DEFAULT_ACCOUNT_ID) ?? DEFAULT_ACCOUNT_ID;
   const accounts =
     hasPromotedDefaultIdentity && accountId !== DEFAULT_ACCOUNT_ID
       ? {
@@ -167,7 +160,8 @@ export function patchMSTeamsAccountConfig(params: {
           },
         }
       : baseAccounts;
-  const rawAccountKey = resolveRawMSTeamsAccountKey(accounts, accountId) ?? accountId;
+  // Preserve the authored key when an existing account normalizes to this ID.
+  const rawAccountKey = resolveMSTeamsAccountEntryKey(accounts, accountId) ?? accountId;
   const existing =
     accountId === DEFAULT_ACCOUNT_ID
       ? ({ ...defaultAccount, ...accounts[rawAccountKey] } as MSTeamsSetupAccountConfig) // SAFETY: both are account fragments.
@@ -323,7 +317,7 @@ function enableMSTeamsAccount(cfg: OpenClawConfig, accountId: string): OpenClawC
   const accounts = resolveMSTeamsSetupChannelConfig(cfg)?.accounts;
   const hasScopedDefault =
     resolvedAccountId === DEFAULT_ACCOUNT_ID &&
-    resolveRawMSTeamsAccountKey(accounts, DEFAULT_ACCOUNT_ID) !== undefined;
+    resolveMSTeamsAccountEntryKey(accounts, DEFAULT_ACCOUNT_ID) !== undefined;
   return patchMSTeamsAccountConfig({
     cfg,
     accountId: resolvedAccountId,

@@ -1,4 +1,3 @@
-// Msteams plugin module dispatches prepared inbound turns and owns reply lifecycle handling.
 import {
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
@@ -140,9 +139,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
             }).allowed,
         })
       : true;
-  const bodyForAgent = threadContext
-    ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${agentBody}`
-    : agentBody;
   // Teams channel actions need both the AAD group and Graph channel ids.
   const nativeChannelId =
     isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
@@ -166,6 +162,19 @@ export async function dispatchMSTeamsInboundTurn(params: {
     channel: "msteams",
     contextVisibility: contextVisibilityMode,
     supplemental: {
+      // The capped Graph thread slice supplements the pending channel backlog;
+      // it cannot claim to replace that history or become sender command text.
+      channelStructuredContext: threadContext.length
+        ? [
+            {
+              label: "Thread history",
+              source: "msteams",
+              type: "chat_window",
+              sessionTranscriptMode: "preserve",
+              payload: { order: "chronological", messages: threadContext },
+            },
+          ]
+        : undefined,
       quote: quoteInfo
         ? {
             id: quoteInfo.id ?? activity.replyToId ?? undefined,
@@ -210,7 +219,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     },
     message: {
       body: combinedBody,
-      bodyForAgent,
+      bodyForAgent: agentBody,
       inboundHistory,
       rawBody,
       commandBody,
@@ -281,7 +290,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           id: activity.id ?? `${teamsFrom}:${Date.now()}`,
           timestamp: timestamp?.getTime(),
           rawText: rawBody,
-          textForAgent: bodyForAgent,
+          textForAgent: agentBody,
           textForCommands: commandBody,
           raw: activity,
         }),

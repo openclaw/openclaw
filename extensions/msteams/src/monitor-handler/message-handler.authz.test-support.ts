@@ -128,10 +128,11 @@ export function createAttackerPersonalActivity(id: string): HandlerInput {
 export function createChannelThreadActivity(params?: {
   attachments?: TestAttachment[];
   parentMessageId?: string;
+  text?: string;
 }): HandlerInput {
   return createMessageActivity({
     id: "current-msg",
-    text: "Current message",
+    text: params?.text ?? "Current message",
     from: {
       id: "alice-botframework-id",
       aadObjectId: "alice-aad",

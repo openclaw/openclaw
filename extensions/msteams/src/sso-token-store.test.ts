@@ -1,11 +1,10 @@
 // Msteams tests cover sso token store plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 import {
   createMSTeamsSsoTokenStoreFs,
@@ -14,6 +13,13 @@ import {
 } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(() => {
+    resetPluginStateStoreForTests();
+    cleanup();
+  }),
+);
+
 describe("msteams sso token store (plugin state)", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
@@ -21,7 +27,7 @@ describe("msteams sso token store (plugin state)", () => {
   });
 
   it("keeps distinct tokens when connectionName and userId contain the legacy delimiter", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-"));
+    const stateDir = tempDirs.make("openclaw-msteams-sso-");
     const storePath = path.join(stateDir, "msteams-sso-tokens.json");
     const store = createMSTeamsSsoTokenStoreFs({ storePath });
 
@@ -45,13 +51,11 @@ describe("msteams sso token store (plugin state)", () => {
     expect(await store.get(second)).toEqual(second);
 
     await expect(fs.access(storePath)).rejects.toThrow();
-    await expect(
-      fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("ignores legacy flat-key token files at runtime", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-legacy-"));
+    const stateDir = tempDirs.make("openclaw-msteams-sso-legacy-");
     const storePath = path.join(stateDir, "msteams-sso-tokens.json");
     await fs.writeFile(
       storePath,
@@ -80,7 +84,7 @@ describe("msteams sso token store (plugin state)", () => {
         userId: "user-1",
       }),
     ).toBeNull();
-    await expect(fs.access(storePath)).resolves.toBeUndefined();
+    await fs.access(storePath);
   });
 
   it("keeps default and named account tokens separate", async () => {
@@ -159,7 +163,7 @@ describe("msteams sso token store (plugin state)", () => {
   });
 
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-long-"));
+    const stateDir = tempDirs.make("openclaw-msteams-sso-long-");
     const store = createMSTeamsSsoTokenStoreFs({ stateDir });
     const token = {
       connectionName: `conn-${"c".repeat(1000)}`,
