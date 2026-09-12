@@ -17,6 +17,26 @@ import { createSubsystemLogger } from "./subsystem.js";
 const paths = createSuiteLogPathTracker("openclaw-plugin-jsonl-");
 const token = "synthetic-credential-123456";
 const message = `--token "${token}"`;
+const headers = Object.fromEntries(
+  [
+    "Authorization",
+    "Proxy-Authorization",
+    "Cookie",
+    "Set-Cookie",
+    "SetCookie",
+    "set_cookie",
+    "X-Api-Key",
+    "X-Auth-Token",
+    "X-Goog-Api-Key",
+    "Api-Key",
+    "apikey",
+    "X-Api-Token",
+    "X-Access-Token",
+    "X-OpenClaw-Token",
+    "x-pomerium-jwt-assertion",
+  ].map((key) => [key, "opaque-value"]),
+);
+const maskedHeaders = Object.fromEntries(Object.keys(headers).map((key) => [key, "***"]));
 let rawConsole: typeof loggingState.rawConsole;
 beforeAll(async () => await paths.setup());
 beforeEach(() => {
@@ -47,7 +67,7 @@ it.each([
   },
   { name: "copied-defaults", custom: false, patterns: getDefaultRedactPatterns() },
 ])(
-  "Gateway plugin service logger preserves JSONL and pattern reload ($name)",
+  "Gateway plugin service logger preserves JSONL, credential headers, and pattern reload ($name)",
   async ({ custom, patterns }) => {
     vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
     vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
@@ -103,7 +123,12 @@ it.each([
           omitted: Object.fromEntries([["__proto__", () => undefined]]),
           unchanged: 42,
         });
-        logger.info("abcd-efgh-ijkl-mnop", { token: "opaque-value", [keySecret]: true });
+        logger.info("abcd-efgh-ijkl-mnop", {
+          token: "opaque-value",
+          [keySecret]: true,
+          "Proxy-Authorization": "Basic dXNlcjpwYXNz",
+          headers,
+        });
         api.logger.info("CUSTOM_ONLY_VALUE");
         applyLoggingConfig({ ...config, redactPatterns: ["RELOADED_[A-Z]+"] });
         api.logger.info("CUSTOM_ONLY_VALUE RELOADED_VALUE");
@@ -131,6 +156,10 @@ it.each([
       omitted: {},
       unchanged: 42,
     });
+    expect(records[2][1]).toMatchObject({
+      "Proxy-Authorization": "Basic …YXNz",
+      headers: maskedHeaders,
+    });
     expect(accessorReads).toBe(1);
     expect(raw).not.toContain(token);
     expect(raw).not.toContain(keySecret);
@@ -139,13 +168,20 @@ it.each([
     expect(consoleRecords[1]).toMatchObject({
       token: "***",
       message: "abcd-e…mnop",
+      "Proxy-Authorization": "Basic …YXNz",
+      headers: maskedHeaders,
     });
     expect(JSON.stringify(consoleRecords)).not.toContain(keySecret);
     expect(consoleRecords[2].message).toBe(custom ? "***" : "CUSTOM_ONLY_VALUE");
     expect(consoleRecords[3].message).toBe("CUSTOM_ONLY_VALUE ***");
     expect(records.at(-1).message).toBe("CUSTOM_ONLY_VALUE ***");
     const tail = await readConfiguredLogTail();
-    expect(tail.lines.map((line) => JSON.parse(line))).toEqual(records);
+    expect(tail.lines.map((line) => JSON.parse(line))).toEqual(
+      records.with(2, {
+        ...records[2],
+        "1": { ...records[2][1], "Proxy-Authorization": "***" },
+      }),
+    );
   },
 );
 
