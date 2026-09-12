@@ -74,7 +74,7 @@ suite.define(() => {
         await page.screenshot({ path: path.join(proofDir, "restarting-error-cleared.png") });
       }
 
-      const recovered: GatewaySessionRow = {
+      const recovered = {
         ...session,
         placement: {
           state: "local",
@@ -83,7 +83,7 @@ suite.define(() => {
           updatedAtMs: 3,
           stateChangedAtMs: 3,
         },
-      };
+      } satisfies GatewaySessionRow;
       await gateway.setSessionsListResponse(chatSessionListResponse([recovered]));
       await gateway.resolveDeferred("sessions.reclaim", {
         ok: true,

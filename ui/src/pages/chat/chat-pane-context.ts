@@ -124,7 +124,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return;
     }
     const onRestartingChange = (restartingKey: string | null) => {
-      if (restartingKey !== null) {
+      if (restartingKey !== null && this.state) {
         dismissChatError(this.state);
         this.state.chatRunError = null;
       }
