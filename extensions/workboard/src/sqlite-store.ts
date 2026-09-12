@@ -1299,11 +1299,16 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
         );
       for (const row of iterateSqliteQuerySync(this.db, candidates)) {
         const card = {
+          // SAFETY: insertCard persists WorkboardCard.status; this keeps readCard's required-string boundary.
           status: requiredString(row, "status") as WorkboardCard["status"],
           agentId: stringValue(row, "agent_id"),
+          // SAFETY: insertCard serializes WorkboardMetadata.claim; this keeps readMetadata's optional JSON boundary.
           metadata: { claim: parseJson(row.claim_json) as WorkboardMetadata["claim"] },
           execution: stringValue(row, "execution_id")
-            ? { status: requiredString(row, "execution_status") as WorkboardExecution["status"] }
+            ? {
+                // SAFETY: insertCard persists WorkboardExecution.status; this keeps readExecution's required-string boundary.
+                status: requiredString(row, "execution_status") as WorkboardExecution["status"],
+              }
             : undefined,
         };
         if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
