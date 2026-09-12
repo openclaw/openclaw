@@ -45,6 +45,7 @@ BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SUR
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL:-stable}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
 COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
@@ -1092,6 +1093,10 @@ resolve_candidate_version() {
 }
 
 candidate_update_spec() {
+  if [ "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL" = "extended-stable" ]; then
+    printf '%s\n' "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL"
+    return 0
+  fi
   if [ "$CANDIDATE_KIND" != "tarball" ]; then
     printf '%s\n' "$CANDIDATE_SPEC"
     return 0
@@ -1135,7 +1140,10 @@ update_candidate() {
   echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
   local update_start=""
   local update_end=""
-  local update_args=(update --tag "$update_spec" --yes --json)
+  local update_args=(update --channel extended-stable --yes --json)
+  if [ "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL" != "extended-stable" ]; then
+    update_args=(update --tag "$update_spec" --yes --json)
+  fi
   local update_env=(
     env
     -u OPENCLAW_GATEWAY_TOKEN
@@ -1150,6 +1158,13 @@ update_candidate() {
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
+  if [ "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL" = "extended-stable" ]; then
+    # Extended-stable resolution is deliberately pinned to public npm unless
+    # the updater receives this explicit loopback-only integration seam.
+    update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
+  fi
+  printf '%q ' openclaw "${update_args[@]}" >"$ARTIFACT_ROOT/update-command.args"
+  printf '\n' >>"$ARTIFACT_ROOT/update-command.args"
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
     echo "openclaw update failed" >&2
     openclaw_e2e_print_log "$UPDATE_ERR" >&2

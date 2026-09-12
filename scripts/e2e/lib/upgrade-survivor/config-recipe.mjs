@@ -9,6 +9,10 @@ import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windo
 
 const args = process.argv.slice(2);
 const command = args.shift();
+const updateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL || "stable";
+if (updateChannel !== "stable" && updateChannel !== "extended-stable") {
+  throw new Error(`unsupported upgrade survivor update channel: ${updateChannel}`);
+}
 export const CONFIG_COMMAND_TIMEOUT_MS = 120_000;
 export const CONFIG_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
@@ -169,7 +173,7 @@ const recipe = [
   {
     id: "update-channel",
     intent: "update",
-    argv: ["config", "set", "update.channel", "stable"],
+    argv: ["config", "set", "update.channel", updateChannel],
   },
   configSetJsonFile("gateway", "gateway", "gateway", "gateway.json"),
   ...representativeConfigSteps,

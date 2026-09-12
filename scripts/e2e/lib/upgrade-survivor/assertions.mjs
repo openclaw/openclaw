@@ -258,7 +258,12 @@ function assertConfigSurvived() {
   const coverage = getCoverage();
 
   if (acceptsIntent(coverage, "update")) {
-    assert(config.update?.channel === "stable", "update.channel was not preserved");
+    const expectedChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL || "stable";
+    assert(
+      expectedChannel === "stable" || expectedChannel === "extended-stable",
+      "upgrade survivor update channel was invalid",
+    );
+    assert(config.update?.channel === expectedChannel, "update.channel was not preserved");
   }
   if (acceptsIntent(coverage, "gateway")) {
     assert(config.gateway?.auth?.mode === "token", "gateway auth mode was not preserved");
