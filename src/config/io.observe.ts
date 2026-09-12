@@ -52,6 +52,10 @@ function createObservedFingerprint(snapshot: ConfigFileSnapshot, stat: fs.Stats 
   });
 }
 
+export type ConfigObservationOptions = {
+  recordSuspiciousSignature?: boolean;
+};
+
 function resolveObservation(params: {
   snapshot: ConfigFileSnapshot;
   current: ConfigHealthFingerprint;
@@ -93,6 +97,7 @@ function updateHealthyObservation(params: {
 export async function observeConfigSnapshot(
   deps: NormalizedConfigIoDeps,
   snapshot: ConfigFileSnapshot,
+  options?: ConfigObservationOptions,
 ): Promise<void> {
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return;
@@ -138,6 +143,9 @@ export async function observeConfigSnapshot(
       backup,
     }),
   });
+  if (options?.recordSuspiciousSignature === false) {
+    return;
+  }
   healthState = updateConfigHealthEntry(healthState, snapshot.path, {
     ...entry,
     lastObservedSuspiciousSignature: signature,
@@ -148,6 +156,7 @@ export async function observeConfigSnapshot(
 export function observeConfigSnapshotSync(
   deps: NormalizedConfigIoDeps,
   snapshot: ConfigFileSnapshot,
+  options?: ConfigObservationOptions,
 ): void {
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return;
@@ -191,6 +200,9 @@ export function observeConfigSnapshotSync(
       backup,
     }),
   });
+  if (options?.recordSuspiciousSignature === false) {
+    return;
+  }
   healthState = updateConfigHealthEntry(healthState, snapshot.path, {
     ...entry,
     lastObservedSuspiciousSignature: signature,

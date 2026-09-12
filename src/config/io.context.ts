@@ -12,7 +12,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
-import { observeConfigSnapshotSync } from "./io.observe.js";
+import { type ConfigObservationOptions, observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "./io.plugin-metadata.js";
 import {
@@ -50,7 +50,10 @@ export type ConfigIoContext = {
   pathResolution: { env: NodeJS.ProcessEnv; homedir?: () => string };
   configPath: string;
   options: ConfigIoFactoryOptions;
-  observeLoadConfigSnapshot: (snapshot: ConfigFileSnapshot) => ConfigFileSnapshot;
+  observeLoadConfigSnapshot: (
+    snapshot: ConfigFileSnapshot,
+    observation?: ConfigObservationOptions,
+  ) => ConfigFileSnapshot;
   finalizeLoadedRuntimeConfig: (config: OpenClawConfig) => OpenClawConfig;
   createValidationPluginMetadataSnapshotLoader: (params: {
     effectiveConfigRaw: unknown;
@@ -70,9 +73,12 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
   // resolvers need the original OS-home fallback or relative overrides expand twice.
   const pathResolution = { env: deps.env, homedir: options.homedir };
 
-  function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
+  function observeLoadConfigSnapshot(
+    snapshot: ConfigFileSnapshot,
+    observation?: ConfigObservationOptions,
+  ): ConfigFileSnapshot {
     if (deps.observe) {
-      observeConfigSnapshotSync(deps, snapshot);
+      observeConfigSnapshotSync(deps, snapshot, observation);
     }
     return snapshot;
   }

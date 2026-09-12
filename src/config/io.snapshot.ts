@@ -294,6 +294,7 @@ export async function readConfigFileSnapshotInternal(
       warnIfConfigFromFuture(validated.config, deps.logger);
     }
     let callerRejectedSuspiciousRecovery = false;
+    let retrySuspiciousRecovery = false;
     if (
       options.recoverSuspicious === true &&
       deps.observe &&
@@ -326,6 +327,7 @@ export async function readConfigFileSnapshotInternal(
             : {}),
         }),
       );
+      retrySuspiciousRecovery = recovery.retrySuspiciousRecovery === true;
       if (recovery.raw !== raw) {
         restoreEnvChangesIfUnchanged({
           env: deps.env,
@@ -375,7 +377,10 @@ export async function readConfigFileSnapshotInternal(
           includeFileTargetsForWrite,
           pluginMetadataSnapshot: pluginMetadata.getSnapshot(),
         },
-        { observe: !callerRejectedSuspiciousRecovery },
+        {
+          observe: !callerRejectedSuspiciousRecovery,
+          recordSuspiciousSignature: !retrySuspiciousRecovery,
+        },
       ),
     );
   } catch (error) {
