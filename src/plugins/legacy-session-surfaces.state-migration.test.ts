@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { prepareLegacySessionSurfaces } from "./legacy-session-surfaces.js";
 import { clearPluginRegistryLoadCache } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -150,8 +150,12 @@ describe("installed channel legacy session surfaces", () => {
       },
     } as OpenClawConfig;
 
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      env,
+      config,
+      reason: "source-changed",
+      installRecords: {
         "fixture-session-owner": {
           source: "npm",
           spec: "@fixture/fixture-session-owner@1.0.0",
@@ -163,8 +167,7 @@ describe("installed channel legacy session surfaces", () => {
           installPath: blocked.pluginDir,
         },
       },
-      { stateDir, env, config },
-    );
+    });
     clearPluginMetadataLifecycleCaches();
     const persisted = loadPluginMetadataSnapshot({
       config,
@@ -248,16 +251,19 @@ describe("installed channel legacy session surfaces", () => {
         entries: { "enabled-only-session-owner": { enabled: true } },
       },
     } as OpenClawConfig;
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      env,
+      config,
+      reason: "source-changed",
+      installRecords: {
         "enabled-only-session-owner": {
           source: "npm",
           spec: "@fixture/enabled-only-session-owner@1.0.0",
           installPath: fixture.pluginDir,
         },
       },
-      { stateDir, env, config },
-    );
+    });
     clearPluginMetadataLifecycleCaches();
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -323,16 +329,19 @@ export const legacySessionSurface = {
         entries: { "broken-session-owner": { enabled: true } },
       },
     } as OpenClawConfig;
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      env,
+      config,
+      reason: "source-changed",
+      installRecords: {
         "broken-session-owner": {
           source: "npm",
           spec: "@fixture/broken-session-owner@1.0.0",
           installPath: fixture.pluginDir,
         },
       },
-      { stateDir, env, config },
-    );
+    });
     clearPluginMetadataLifecycleCaches();
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     fs.mkdirSync(path.dirname(storePath), { recursive: true });

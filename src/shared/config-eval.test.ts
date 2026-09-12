@@ -9,10 +9,6 @@ import {
   isConfigPathTruthyWithDefaults,
 } from "./config-eval.js";
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -87,7 +83,7 @@ describe("config-eval helpers", () => {
   });
 
   it("returns the active runtime platform", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     expect(
       evaluateRuntimeEligibility({
         os: ["darwin"],
@@ -99,7 +95,7 @@ describe("config-eval helpers", () => {
   });
 
   it("caches binary lookups until PATH changes", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
     vi.stubEnv("PATH", ["/missing/bin", "/found/bin"].join(path.delimiter));
     const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
       if (String(candidate) === path.join("/found/bin", "tool")) {
@@ -123,7 +119,7 @@ describe("config-eval helpers", () => {
   });
 
   it("checks PATHEXT candidates and invalidates cached hits when PATHEXT changes", () => {
-    setPlatform("win32");
+    mockProcessPlatform("win32");
     const toolsDir = path.join(path.sep, "tools");
     vi.stubEnv("PATH", toolsDir);
     vi.stubEnv("PATHEXT", ".EXE;.CMD");
@@ -158,7 +154,7 @@ describe("config-eval helpers", () => {
     "finds a newly installed binary on unchanged $platform PATH",
     ({ platform, suffix }) => {
       withTempDirSync({ prefix: "openclaw-binary-probe-" }, (binDir) => {
-        setPlatform(platform);
+        mockProcessPlatform(platform);
         vi.stubEnv("PATH", binDir);
         vi.stubEnv("PATHEXT", ".EXE;.CMD");
         expect(hasBinary("fixture-tool")).toBe(false);
@@ -229,7 +225,7 @@ describe("evaluateRuntimeEligibility", () => {
   });
 
   it("accepts entries when remote platform satisfies OS requirements", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     const result = evaluateRuntimeEligibility({
       os: ["linux"],
       remotePlatforms: ["linux"],

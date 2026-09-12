@@ -94,9 +94,7 @@ describe("installed plugin index read state", () => {
       expect(inspectPersistedInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
         status: "missing",
       });
-      await expect(
-        readPersistedInstalledPluginIndexInstallRecords({ stateDir }),
-      ).resolves.toBeNull();
+      expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toBeNull();
       await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
       expect(missing === "database" ? fs.existsSync(filePath) : fs.readFileSync(filePath)).toEqual(
         before ?? false,
@@ -196,9 +194,7 @@ describe("installed plugin index read state", () => {
       expect(inspectPersistedInstalledPluginIndexInstallRecordsSync({ stateDir }).status).toBe(
         recordStatus,
       );
-      await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual(
-        records,
-      );
+      expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual(records);
       await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
     },
   );

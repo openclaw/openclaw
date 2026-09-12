@@ -176,9 +176,15 @@ If you want ACPX-backed sessions to see OpenClaw plugin tools or selected built-
 
 If you want a coding agent such as Codex or Claude Code to talk to your OpenClaw bot over ACP, use `acpx` with its built-in `openclaw` target.
 
+`acpx` here is the separate `acpx` CLI from npm, installed on the machine that
+runs the coding agent. It is not the same thing as the `@openclaw/acpx` OpenClaw
+plugin described in [ACP Agents](/tools/acp-agents-setup#plugin-setup-for-acpx-backend),
+which embeds the ACP runtime in the Gateway and installs no `acpx` binary.
+
 Typical flow:
 
-1. Run the Gateway and make sure the ACP bridge can reach it.
+1. Install the `acpx` CLI on the coding agent's machine and run the Gateway,
+   making sure the ACP bridge can reach it.
 2. Point `acpx openclaw` at `openclaw acp`.
 3. Target the OpenClaw session key you want the coding agent to use.
 

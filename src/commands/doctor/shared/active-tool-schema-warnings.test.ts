@@ -2,6 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 
 const toolState = vi.hoisted(() => ({
@@ -183,6 +186,70 @@ describe("active tool schema doctor warnings", () => {
         modelId: "llama-3.1-8b-instant",
         modelApi: "openai-completions",
       }),
+    );
+  });
+
+  it("uses the selected primary model metadata for active tool diagnostics", async () => {
+    const realRuntime = await vi.importActual<
+      typeof import("../../../agents/embedded-agent-runner/model.js")
+    >("../../../agents/embedded-agent-runner/model.js");
+    const provider = "doctor-selected";
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: provider,
+          providers: [provider],
+          modelIdNormalization: {
+            providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
+          },
+        },
+      ],
+    });
+    const stores = realRuntime.createEmptyAgentDiscoveryStores();
+    stores.modelRegistry.registerProvider(provider, {
+      api: "openai-completions",
+      baseUrl: "https://doctor-selected.example/v1",
+      models: [
+        {
+          id: "middle",
+          name: "middle",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32000,
+          maxTokens: 4096,
+        },
+        {
+          id: "final",
+          name: "final",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 4096,
+          maxTokens: 4096,
+        },
+      ],
+    });
+    const selected: string[] = [];
+    toolState.resolveModelAsync.mockImplementation(
+      async (...args: Parameters<typeof realRuntime.resolveModelAsync>) => {
+        selected.push(args[1]);
+        return await realRuntime.resolveModelAsync(args[0], args[1], args[2], args[3], {
+          ...args[4],
+          ...stores,
+          skipProviderRuntimeHooks: true,
+        });
+      },
+    );
+    const cfg: OpenClawConfig = { agents: { defaults: { model: `${provider}/entry` } } };
+    expect(
+      await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+        collectActiveToolSchemaProjectionWarnings({ cfg, env: { HOME: "/tmp/doctor-selected" } }),
+      ),
+    ).toEqual([]);
+    expect(selected).toEqual(["middle"]);
+    expect(toolState.createTools).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "middle", modelContextWindowTokens: 32000 }),
     );
   });
 

@@ -260,6 +260,7 @@ describe("current attachments in an active remote placement", () => {
             currentManifestRef: manifestRef,
             base: base.manifest,
             current,
+            acceptance: { kind: "reconcile" },
             journal: request.source.journal,
           });
           workerManifestPaths = JSON.parse(raw).entries.map(

@@ -162,11 +162,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    // Detection is read-only and may load native provider code. Keep it outside
-    // the mutation lane and off the Gateway event loop so health stays live.
-    const { detectSetupInferenceIsolated } =
-      await import("../../system-agent/setup-inference-detection.js");
-    respond(true, await detectSetupInferenceIsolated(params), undefined);
+    const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
+    respond(true, await detectSetupInference({}, params.agentId), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond, context }) => {
@@ -337,7 +334,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      await runExclusiveSystemAgentSetupActivation(async () => {
+      const result = await runExclusiveSystemAgentSetupActivation(async () => {
         const runtime = {
           ...defaultRuntime,
           // Setup runs inside the gateway process; a failing sub-step must reject
@@ -346,7 +343,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             throw new Error(`setup step exited with code ${String(code)}`);
           },
         };
-        const result = await activateGatewaySetupInference({
+        return await activateGatewaySetupInference({
           kind: params.kind,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
@@ -359,8 +356,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           surface: "gateway",
           runtime,
         });
-        respond(true, result, undefined);
       });
+      respond(true, result, undefined);
     } catch (error) {
       if (!(error instanceof SetupAdmissionBusyError)) {
         throw error;

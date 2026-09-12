@@ -14,6 +14,111 @@ import {
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 describe("worker placement maintenance admission", () => {
+  it.each(["active", "incomplete", "stale-generation"] as const)(
+    "holds input for its exact recovery owner (%s)",
+    async (outcome) => {
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const active = {
+        ...ACTIVE_PLACEMENT,
+        sessionId: PROVISIONING_PLACEMENT.sessionId,
+        generation: PROVISIONING_PLACEMENT.generation + 1,
+      };
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          resumeProvisioning: async (_placement, _core, report, admit) => {
+            if (!admit) {
+              throw new Error("Recovery fixture requires admission");
+            }
+            return await admit(async () => {
+              entered.resolve();
+              await finish.promise;
+              if (outcome === "incomplete") {
+                return undefined;
+              }
+              report?.(active);
+              return active;
+            });
+          },
+        }),
+        (_request, run) => run(),
+      );
+      const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
+      await entered.promise;
+      const waiting = coordinated.waitForInitialPlacement({
+        ...PROVISIONING_PLACEMENT,
+        generation: PROVISIONING_PLACEMENT.generation + (outcome === "stale-generation" ? 1 : 0),
+      });
+      void waiting.catch(() => undefined);
+      try {
+        if (outcome === "stale-generation") {
+          await expect(waiting).rejects.toThrow("no matching live dispatch owner");
+        }
+        finish.resolve();
+        await recovery;
+        if (outcome === "active") {
+          await expect(waiting).resolves.toEqual(active);
+        }
+        if (outcome === "incomplete") {
+          await expect(waiting).rejects.toThrow("did not publish a ready placement");
+        }
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([waiting, recovery]);
+      }
+    },
+  );
+
+  it("reclaims an idle session before a disjoint dispatch finishes while preserving its fence", async () => {
+    const cloudStarted = createDeferredCore();
+    const releaseCloud = createDeferredCore();
+    let reclaimed = false;
+    const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => {
+      if (request.sessionId === "cloud") {
+        cloudStarted.resolve();
+        await releaseCloud.promise;
+      }
+      return { ...ACTIVE_PLACEMENT, ...request };
+    });
+    const service = createCoordinatorTestService({
+      dispatch,
+      reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
+        if (!serialize) {
+          throw new Error("Reclaim fixture requires the placement fence");
+        }
+        return await serialize(async () => {
+          reclaimed = true;
+          return { ...ACTIVE_PLACEMENT, state: "reclaimed" };
+        });
+      },
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
+    const cloud = coordinated.dispatch({
+      ...REQUEST,
+      sessionId: "cloud",
+      sessionKey: "agent:main:cloud",
+    });
+    await cloudStarted.promise;
+    const stop = coordinated.reclaim(REQUEST);
+    let later: Promise<unknown> | undefined;
+    try {
+      await setImmediatePromise();
+      expect(reclaimed).toBe(true);
+      expect((await stop).state).toBe("reclaimed");
+      later = coordinated.dispatch({
+        ...REQUEST,
+        sessionId: "later",
+        sessionKey: "agent:main:later",
+      });
+      await setImmediatePromise();
+      expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["cloud"]);
+    } finally {
+      releaseCloud.resolve();
+      await Promise.all([cloud, stop, later]);
+    }
+    expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["cloud", "later"]);
+  });
+
   it.each(["full", "targeted", "recovery"] as const)(
     "bounds dispatch joins to the original provider cohort before %s maintenance",
     async (kind) => {

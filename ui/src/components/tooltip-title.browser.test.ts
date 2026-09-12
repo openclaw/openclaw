@@ -141,6 +141,29 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       },
     );
 
+    it("preserves an icon-only GitHub link name while its title hint is reserved for a preview", async () => {
+      const provider = document.createElement("openclaw-github-link-hovercard-provider");
+      const link = document.createElement("a");
+      link.href = "https://github.com/openclaw/openclaw/pull/99816";
+      link.title = "Issue details";
+      link.innerHTML = '<svg aria-hidden="true" width="20" height="20"></svg>';
+      provider.append(link);
+      document.body.append(provider);
+      const namedLink = page.getByRole("link", { name: "Issue details", exact: true });
+      expect(namedLink.elements()).toEqual([link]);
+      await namedLink.hover();
+      expect(link.title).toBe("");
+      expect(link.getAttribute("aria-label")).toBe("Issue details");
+      expect(link.hasAttribute("aria-expanded")).toBe(false);
+      expect(namedLink.elements()).toEqual([link]);
+      await page.elementLocator(link).unhover();
+      link.blur();
+      expect(link.title).toBe("Issue details");
+      expect(link.hasAttribute("aria-label")).toBe(false);
+      expect(namedLink.elements()).toEqual([link]);
+      expect(link.href).toBe("https://github.com/openclaw/openclaw/pull/99816");
+    });
+
     it("preserves an explicit name supplied while the tooltip owns a temporary name", async () => {
       const button = document.createElement("button");
       button.title = "Edit configuration as text";

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -181,18 +182,7 @@ describe("executeAgentTurn: command events", () => {
       } as unknown as TemplateContext,
       opts: { onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onCommandOutput).toHaveBeenCalledWith({
@@ -238,18 +228,7 @@ describe("executeAgentTurn: command events", () => {
       } as unknown as TemplateContext,
       opts: { onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onCommandOutput).toHaveBeenCalledWith(
@@ -300,18 +279,7 @@ describe("executeAgentTurn: command events", () => {
       } as unknown as TemplateContext,
       opts: { onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onCommandOutput).toHaveBeenCalledTimes(1);

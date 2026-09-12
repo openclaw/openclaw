@@ -2,14 +2,16 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MigrationProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 
-const ensureStandaloneMigrationProviderRegistryLoaded = vi.hoisted(() => vi.fn());
-const resolvePluginMigrationProviders = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+const migrationProviders = vi.hoisted(() => vi.fn<() => MigrationProviderPlugin[]>(() => []));
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded,
-  resolvePluginMigrationProviders,
+  withPluginMigrationProviders: async (
+    _params: unknown,
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run(migrationProviders()),
 }));
 
 const resolveManifestContractRuntimePluginResolution = vi.hoisted(() =>
@@ -44,16 +46,12 @@ import { offerPostInstallMigrations } from "./setup.post-install-migration.js";
 
 const originalStdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
-type ProviderMock = {
-  id: string;
-  label: string;
-  detect: ReturnType<typeof vi.fn>;
-};
-
-function buildProvider(overrides: Partial<ProviderMock> = {}): ProviderMock {
+function buildProvider(overrides: Partial<MigrationProviderPlugin> = {}): MigrationProviderPlugin {
   return {
     id: "codex",
     label: "Codex",
+    plan: vi.fn<MigrationProviderPlugin["plan"]>(),
+    apply: vi.fn<MigrationProviderPlugin["apply"]>(),
     detect: vi.fn(async () => ({ found: true, source: "/home/user/.codex" })),
     ...overrides,
   };
@@ -68,8 +66,8 @@ function setOwnership(providerId: string, owningPluginIds: string[]): void {
   });
 }
 
-function setProviders(providers: ProviderMock[]): void {
-  resolvePluginMigrationProviders.mockReturnValue(providers as unknown[]);
+function setProviders(providers: MigrationProviderPlugin[]): void {
+  migrationProviders.mockReturnValue(providers);
 }
 
 function setTTY(isTTY: boolean): void {
@@ -95,8 +93,7 @@ describe("offerPostInstallMigrations", () => {
   beforeEach(() => {
     // clearAllMocks only resets call history; reset the implementations each
     // test would customize so prior cases don't leak across this suite.
-    ensureStandaloneMigrationProviderRegistryLoaded.mockReset();
-    resolvePluginMigrationProviders.mockReset().mockReturnValue([]);
+    migrationProviders.mockReset().mockReturnValue([]);
     resolveManifestContractRuntimePluginResolution.mockReset().mockReturnValue({
       pluginIds: [],
       bundledCompatPluginIds: [],
@@ -131,7 +128,7 @@ describe("offerPostInstallMigrations", () => {
     const result = await offerPostInstallMigrations(
       buildBaseArgs({ config, installedPluginIds: [] }),
     );
-    expect(resolvePluginMigrationProviders).not.toHaveBeenCalled();
+    expect(migrationProviders).not.toHaveBeenCalled();
     expect(migrateDefaultCommand).not.toHaveBeenCalled();
     expect(result.config).toBe(config);
   });
@@ -199,6 +196,7 @@ describe("offerPostInstallMigrations", () => {
         configPatchMode: "return",
         suppressPlanLog: true,
       }),
+      provider,
     );
     expect(result.config).toEqual({});
   });
@@ -273,6 +271,7 @@ describe("offerPostInstallMigrations", () => {
         configOverride: inputConfig,
         configPatchMode: "return",
       }),
+      provider,
     );
     expect(result.config).not.toBe(inputConfig);
     expect(result.config.plugins?.entries?.codex?.config).toEqual({

@@ -39,7 +39,7 @@ import {
   resolveDisplayedLeafEntryId,
 } from "./chat-send-request.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost } from "./chat-state-contract.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
@@ -50,7 +50,11 @@ import {
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
 
-function applyChatSendError(state: ChatState, err: unknown, canApplyError: () => boolean): string {
+function applyChatSendError(
+  state: ChatHistoryHost,
+  err: unknown,
+  canApplyError: () => boolean,
+): string {
   const error = isActiveLeafChangedError(err)
     ? t("chat.sendErrors.activeLeafChanged")
     : formatConnectError(err);
@@ -64,7 +68,7 @@ function applyChatSendError(state: ChatState, err: unknown, canApplyError: () =>
 }
 
 export async function sendChatMessageWithGeneratedRunId(
-  state: ChatState,
+  state: ChatHistoryHost,
   message: string,
   attachments?: ChatAttachment[],
   options: {

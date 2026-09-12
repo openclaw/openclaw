@@ -336,6 +336,7 @@ export async function completeSubagentRunAttempt(
         }
         entry.killReconciliation = {
           killedAt: killIntent.requestedAt,
+          taskCancellationAccepted: killOwnsCurrentLifecycle ? true : undefined,
           suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
         };
       }

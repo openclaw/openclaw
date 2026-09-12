@@ -1,6 +1,10 @@
 // Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
-import type { ErrorShape, SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  ErrorShape,
+  QuestionResolveParams,
+  SessionsPatchResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
@@ -12,7 +16,6 @@ import {
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -20,15 +23,19 @@ import {
   resolveSessionAgentId,
 } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
-import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
-import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
-  buildAllowedModelSet,
-  buildConfiguredModelCatalog,
-  resolveThinkingDefault,
-} from "../agents/model-selection.js";
+  claimPendingEmbeddedAgentQuestionAnswer,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+} from "../agents/embedded-agent-runner/runs.js";
+import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
+import { resolveThinkingDefault } from "../agents/model-selection.js";
+import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
+import {
+  readPreparedModelCatalog,
+  withPreparedModelCatalogOwner,
+} from "../agents/prepared-model-catalog.js";
+import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -67,7 +74,7 @@ import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat.js";
-import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
@@ -93,6 +100,11 @@ import {
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
+import {
+  clearEmbeddedQuestionBroker,
+  EmbeddedQuestionBroker,
+  setEmbeddedQuestionBroker,
+} from "../infra/embedded-question-broker.js";
 import { logInfo, logWarn } from "../logger.js";
 import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -181,16 +193,6 @@ const embeddedSessionStartupMigrationLog = {
   warn: (message: string) => logWarn(message, silentRuntime),
 };
 
-function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
-  const modelMaps = [
-    cfg.agents?.defaults?.models,
-    ...listAgentEntries(cfg).map((agent) => agent.models),
-  ];
-  return modelMaps.some((models) =>
-    Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
-  );
-}
-
 function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
   cfg: OpenClawConfig;
   sessionAgentId: string;
@@ -205,19 +207,6 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
   } catch (err) {
     return { status: "failed", error: formatTuiErrorMessage(err) };
   }
-}
-
-async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig, agentId?: string) {
-  const replaceMode = cfg.models?.mode === "replace";
-  const fullDiscovery = replaceMode && hasProviderWildcardModelAllowlist(cfg);
-  if (replaceMode && !fullDiscovery) {
-    return buildConfiguredModelCatalog({ cfg });
-  }
-  return await loadGatewayModelCatalog({
-    agentId,
-    getConfig: () => cfg,
-    ...(fullDiscovery ? { readOnly: false } : {}),
-  });
 }
 
 function resolveBtwQuestion(message: string): string | undefined {
@@ -368,8 +357,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
+  private readonly questionBroker = new EmbeddedQuestionBroker();
   private readonly preparedModelRuntime = new EmbeddedPreparedModelRuntimeHost();
   private unsubscribePluginApprovals?: () => void;
+  private unsubscribeQuestions?: () => void;
   private unsubscribeConfigWrites?: () => void;
   // Resolves once the one-time session-key migration has run; store methods await it.
   private ready: Promise<void> = Promise.resolve();
@@ -390,6 +381,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribe = onAgentEvent((evt) => this.handleAgentEvent(evt));
     setEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals = this.pluginApprovalBroker.subscribe((event) => {
+      this.emit(event.event, event.payload);
+    });
+    setEmbeddedQuestionBroker(this.questionBroker);
+    this.unsubscribeQuestions = this.questionBroker.subscribe((event) => {
       this.emit(event.event, event.payload);
     });
     const config = getRuntimeConfig();
@@ -418,6 +413,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals?.();
     this.unsubscribePluginApprovals = undefined;
+    clearEmbeddedQuestionBroker(this.questionBroker);
+    this.unsubscribeQuestions?.();
+    this.unsubscribeQuestions = undefined;
     const maintenancePromises: Promise<void>[] = [];
     for (const [runId, run] of this.runs) {
       if (run.finishing || run.lifecycleEnded) {
@@ -430,6 +428,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.controller.abort();
     }
     this.pluginApprovalBroker.stop();
+    this.questionBroker.stop();
     const maintenanceCompleted = await waitForLocalRunShutdown(maintenancePromises);
     if (!maintenanceCompleted) {
       for (const run of this.runs.values()) {
@@ -483,13 +482,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
       const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+      const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
+      if (activeSessionId) {
+        const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
+          activeSessionId,
+          opts.message,
+        );
+        if (claimed) {
+          return claimed;
+        }
+      }
       let queueSettings = resolveQueueSettingsCore({
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
         sessionEntry: entry,
       });
       if (queueSettings.mode === "steer") {
-        const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
         if (activeSessionId) {
           const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
             activeSessionId,
@@ -627,6 +635,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId: sessionAgentId,
       storePath,
       store,
+      readSource,
       entry,
       canonicalKey,
     } = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
@@ -644,7 +653,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       typeof opts.limit === "number" ? opts.limit : 200,
     );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
+    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
     const historyPage = await readChatHistoryPage({
       entry,
       provider: resolvedSessionModel.provider,
@@ -687,7 +696,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadEmbeddedTuiModelCatalog(cfg, sessionAgentId);
+      const catalog = await readPreparedModelCatalog({
+        config: cfg,
+        agentId: sessionAgentId,
+        readOnly: true,
+      });
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,
@@ -701,6 +714,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       storePath,
       store,
+      readSource,
       key: canonicalKey,
       entry,
       agentId: sessionAgentId,
@@ -774,7 +788,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           storeKey: primaryKey,
           agentId: target.agentId,
           patch: opts,
-          loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg, target.agentId),
+          loadGatewayModelCatalog: () =>
+            readPreparedModelCatalog({ config: cfg, agentId: target.agentId, readOnly: true }),
         }),
     });
     if (!applied.ok) {
@@ -826,10 +841,15 @@ export class EmbeddedTuiBackend implements TuiBackend {
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
       loadGatewayModelCatalog: () =>
-        loadEmbeddedTuiModelCatalog(
-          cfg,
-          resolveSessionAgentId({ sessionKey: opts.key, config: cfg, agentId: opts.agentId }),
-        ),
+        readPreparedModelCatalog({
+          config: cfg,
+          agentId: resolveSessionAgentId({
+            sessionKey: opts.key,
+            config: cfg,
+            agentId: opts.agentId,
+          }),
+          readOnly: true,
+        }),
     });
     if (!result.ok) {
       throw new Error(result.error.message);
@@ -907,6 +927,18 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return this.pluginApprovalBroker.listPending();
   }
 
+  async listQuestions() {
+    return this.questionBroker.list();
+  }
+
+  async getQuestion(id: string) {
+    return this.questionBroker.get({ id });
+  }
+
+  async resolveQuestion(params: QuestionResolveParams) {
+    return this.questionBroker.resolve(params);
+  }
+
   async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
     return { ok: this.pluginApprovalBroker.resolve(id, decision) };
   }
@@ -915,20 +947,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     const cfg = getRuntimeConfig();
-    const catalog = await loadEmbeddedTuiModelCatalog(cfg, opts?.agentId);
-    const { allowedCatalog } = buildAllowedModelSet({
-      cfg,
-      catalog,
-      defaultProvider: DEFAULT_PROVIDER,
-      agentId: opts?.agentId,
-    });
-    return allowedCatalog.map((entry) => ({
-      id: entry.id,
-      name: entry.name ?? entry.id,
-      provider: entry.provider,
-      contextWindow: entry.contextWindow,
-      reasoning: entry.reasoning,
-    }));
+    const agentId = opts?.agentId ?? resolveDefaultAgentId(cfg);
+    return await withPreparedModelCatalogOwner(
+      { config: cfg, agentId, readOnly: true },
+      async (snapshot) =>
+        (
+          await buildModelsListResult({
+            source: {
+              kind: "published",
+              owner: {
+                ...resolvePublishedModelCatalogOwner(snapshot),
+                authMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
+              },
+            },
+            agentId,
+            params: { includeDetails: true },
+          })
+        ).models,
+    );
   }
 
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {

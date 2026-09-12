@@ -1,5 +1,6 @@
 {
   "id": "oc-path",
+  "categories": ["tools"],
   "name": "OC Path",
   "description": "Adds the openclaw path CLI for oc:// workspace file addressing.",
   "cliCommands": [

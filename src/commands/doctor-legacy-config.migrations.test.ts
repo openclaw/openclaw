@@ -1479,7 +1479,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "claude-cli/claude-opus-4-7": { alias: "Opus" },
       "anthropic/claude-opus-4-7": {
         alias: "Anthropic Opus",
         agentRuntime: { id: "claude-cli" },
@@ -1609,7 +1608,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("preserves selected legacy keys outside the migrated allowlist runtime", () => {
+  it("retires selected legacy keys while preserving each model runtime", () => {
     const res = normalizeCompatibilityConfigValues(
       legacyConfig({
         agents: {
@@ -1632,7 +1631,6 @@ describe("normalizeCompatibilityConfigValues", () => {
         alias: "Claude CLI",
         agentRuntime: { id: "claude-cli" },
       },
-      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini CLI",
         agentRuntime: { id: "google-gemini-cli" },
@@ -1760,7 +1758,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.5": { alias: "Codex CLI" },
       "openai/gpt-5.5": { alias: "OpenAI GPT", agentRuntime: { id: "codex" } },
       "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
     });
@@ -1788,7 +1785,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       fallbacks: ["openai/gpt-5.4"],
     });
     expect(res.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
       "openai/gpt-5.4": {
         alias: "Legacy CLI fallback",
         agentRuntime: { id: "codex" },
@@ -1810,7 +1806,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(res.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
       "openai/gpt-5.4": {
         alias: "Legacy CLI fallback",
         agentRuntime: { id: "codex" },
@@ -1948,7 +1943,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini API",
         agentRuntime: { id: "google-gemini-cli" },
@@ -1959,7 +1953,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("preserves legacy runtime fallback-only refs because runtime is container-scoped", () => {
+  it("migrates fallback-only refs with model-scoped runtime intent", () => {
     const input = legacyConfig({
       agents: {
         defaults: {
@@ -1976,8 +1970,17 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     const res = normalizeCompatibilityConfigValues(input);
 
-    expect(res.config).toEqual(input);
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {
+        alias: "CLI fallback",
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(normalizeCompatibilityConfigValues(res.config).changes).toStrictEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {

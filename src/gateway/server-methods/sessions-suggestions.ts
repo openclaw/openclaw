@@ -582,10 +582,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       ...(params.typing && params.preview ? { preview: params.preview } : {}),
       now,
     });
-    if (!params.typing && effectiveTyping) {
-      respond(true, { ok: true, broadcast: false });
-      return;
-    }
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,

@@ -32,6 +32,7 @@ import {
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
 import { createRepositoryWorkspaceMutationService } from "../worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "../worker-environments/service.js";
 import {
@@ -256,8 +257,12 @@ afterEach(() => {
 });
 
 async function withCheckpointAcceptance(failCapture = false) {
-  const placements = createWorkerSessionPlacementStore({
-    database: openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") }),
+  const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
+  const placements = createWorkerSessionPlacementStore({ database });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: identity.environmentId,
+    sessionId: identity.sessionId,
+    ownerEpoch: identity.generation,
   });
   let placement = placements.startDispatch({
     sessionId: identity.sessionId,

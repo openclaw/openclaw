@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import {
@@ -203,10 +204,18 @@ describe("PDF tool native provider paths", () => {
         }),
       );
 
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
+      const work = new AsyncWorkScope();
+      let result: Awaited<ReturnType<typeof tool.execute>>;
+      try {
+        result = await work.track(() =>
+          tool.execute("t1", {
+            prompt: "summarize",
+            pdf: "/tmp/doc.pdf",
+          }),
+        );
+      } finally {
+        await work.drain();
+      }
 
       expect(geminiSpy).toHaveBeenCalledWith(
         expect.objectContaining({ modelId: "gemini-2.5-pro" }),

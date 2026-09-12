@@ -1,7 +1,6 @@
 // Xai provider module implements model/runtime integration.
 import {
   buildLiveModelProviderConfig,
-  getCachedLiveProviderModelRows,
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogStringField,
@@ -18,134 +17,40 @@ import {
   XAI_DEFAULT_CONTEXT_WINDOW,
   XAI_IMAGE_MODELS,
   XAI_DEFAULT_MAX_TOKENS,
+  XAI_UNKNOWN_MODEL_COST,
 } from "./model-definitions.js";
-import { XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODELS_ENDPOINT = `${XAI_BASE_URL}/models`;
-export const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
+const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 const XAI_GROK_OAUTH_MODELS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/models`;
-const XAI_GROK_OAUTH_SETTINGS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/settings`;
 const XAI_MODELS_CACHE_TTL_MS = 60_000;
 const XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS = 60_000;
 // Composer emits replayable Responses reasoning, but the OAuth catalog omits that capability.
 // Keep it classified here or the stream wrapper will omit encrypted reasoning from replay.
 const XAI_GROK_OAUTH_REASONING_MODEL_IDS = new Set(["grok-composer-2.5-fast"]);
-const XAI_UNKNOWN_MODEL_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} satisfies ModelDefinitionConfig["cost"];
+
+export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
+  } catch {
+    return false;
+  }
+}
 
 export function buildXaiProvider(
   api: ModelProviderConfig["api"] = "openai-responses",
+  authMode?: "oauth" | "token",
 ): ModelProviderConfig {
   return {
-    baseUrl: XAI_BASE_URL,
-    api,
+    baseUrl: authMode ? XAI_GROK_OAUTH_BASE_URL : XAI_BASE_URL,
+    api: authMode ? "openai-responses" : api,
+    ...(authMode ? { auth: authMode } : {}),
     models: buildXaiCatalogModels(),
   };
-}
-
-function buildXaiOAuthFallbackProvider(): ModelProviderConfig {
-  return {
-    baseUrl: XAI_GROK_OAUTH_BASE_URL,
-    api: "openai-responses",
-    auth: "oauth",
-    models: buildXaiCatalogModels(),
-  };
-}
-
-function normalizeXaiOAuthModelSelector(value: string): string {
-  return value.trim().toLowerCase().replace(/[._]+/g, "-");
-}
-
-function resolveXaiOAuthAutoTarget(
-  models: readonly ModelDefinitionConfig[],
-  preferredModelId: string | undefined,
-): ModelDefinitionConfig | undefined {
-  const candidates = models.filter((model) => model.id !== XAI_OAUTH_AUTO_MODEL_ID);
-  if (preferredModelId) {
-    const exact = candidates.find((model) => model.id === preferredModelId);
-    if (exact) {
-      return exact;
-    }
-    const selector = normalizeXaiOAuthModelSelector(preferredModelId);
-    const normalizedMatches = candidates.filter(
-      (model) => normalizeXaiOAuthModelSelector(model.id) === selector,
-    );
-    if (normalizedMatches.length === 1) {
-      return normalizedMatches[0];
-    }
-  }
-  // Match Grok Build's fallback when its remote default is absent or stale:
-  // use the first auth-visible model returned by the provider catalog.
-  return candidates[0];
-}
-
-function withXaiOAuthAutoModel(
-  provider: ModelProviderConfig,
-  preferredModelId: string | undefined,
-): ModelProviderConfig {
-  const target = resolveXaiOAuthAutoTarget(provider.models, preferredModelId);
-  if (!target) {
-    return provider;
-  }
-  return {
-    ...provider,
-    models: [
-      {
-        ...target,
-        id: XAI_OAUTH_AUTO_MODEL_ID,
-        params: {
-          ...target.params,
-          canonicalModelId: target.id,
-        },
-      },
-      ...provider.models.filter((model) => model.id !== XAI_OAUTH_AUTO_MODEL_ID),
-    ],
-  };
-}
-
-function readXaiOAuthDefaultModelId(value: unknown): string | undefined {
-  return readLiveModelCatalogStringField(value, "default_model");
-}
-
-async function fetchXaiOAuthDefaultModelId(params: {
-  discoveryApiKey: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-}): Promise<string | undefined> {
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: PROVIDER_ID,
-      endpoint: XAI_GROK_OAUTH_SETTINGS_ENDPOINT,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
-      auditContext: "xai-grok-oauth-settings-discovery",
-      cacheKeyParts: [
-        PROVIDER_ID,
-        "grok-oauth-settings",
-        XAI_GROK_OAUTH_SETTINGS_ENDPOINT,
-        params.discoveryApiKey,
-      ],
-      readRows: (body) => {
-        if (!body || typeof body !== "object" || Array.isArray(body)) {
-          throw new Error("xAI OAuth settings response must be an object");
-        }
-        return [body];
-      },
-      shouldCacheRows: (candidateRows) =>
-        readXaiOAuthDefaultModelId(candidateRows[0]) !== undefined,
-    });
-    return readXaiOAuthDefaultModelId(rows[0]);
-  } catch {
-    // Remote settings are advisory. Catalog order remains the provider-owned fallback.
-    return undefined;
-  }
 }
 
 export async function buildLiveXaiProvider(params: {
@@ -246,38 +151,34 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
 export async function buildLiveXaiOAuthProvider(params: {
   discoveryApiKey: string;
+  authMode?: "oauth" | "token";
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  const fallback = buildXaiOAuthFallbackProvider();
-  const [provider, preferredModelId] = await Promise.all([
-    buildLiveModelProviderConfig({
-      discoveryMode: "strict",
-      providerId: PROVIDER_ID,
-      endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
-      providerConfig: {
-        baseUrl: fallback.baseUrl,
-        api: fallback.api,
-        auth: fallback.auth,
-      },
-      models: fallback.models,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
-      auditContext: "xai-grok-oauth-model-discovery",
-      cacheKeyParts: [
-        PROVIDER_ID,
-        "grok-oauth-model-rows",
-        XAI_GROK_OAUTH_MODELS_ENDPOINT,
-        params.discoveryApiKey,
-      ],
-      projectRows: (rows) =>
-        rows
-          .map(buildXaiOauthModelFromLiveRow)
-          .filter((model): model is ModelDefinitionConfig => Boolean(model)),
-    }),
-    fetchXaiOAuthDefaultModelId(params),
-  ]);
-  return withXaiOAuthAutoModel(provider, preferredModelId);
+  const { models, ...providerConfig } = buildXaiProvider(
+    "openai-responses",
+    params.authMode ?? "oauth",
+  );
+  return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
+    providerId: PROVIDER_ID,
+    endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
+    providerConfig,
+    models,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
+    auditContext: "xai-grok-oauth-model-discovery",
+    cacheKeyParts: [
+      PROVIDER_ID,
+      "grok-oauth-model-rows",
+      XAI_GROK_OAUTH_MODELS_ENDPOINT,
+      params.discoveryApiKey,
+    ],
+    projectRows: (rows) =>
+      rows
+        .map(buildXaiOauthModelFromLiveRow)
+        .filter((model): model is ModelDefinitionConfig => Boolean(model)),
+  });
 }

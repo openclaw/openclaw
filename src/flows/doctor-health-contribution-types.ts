@@ -11,8 +11,8 @@ import type {
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
+import type { HealthCheckContext } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
@@ -55,7 +55,7 @@ export type DoctorHealthFlowContext = {
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
-  configWriteRefusal?: "validation" | "cron-owner-safety";
+  configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership";
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
@@ -72,6 +72,7 @@ export type DoctorHealthFlowContext = {
   gatewayStatus?: import("../status/types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+  updateWarnings?: string[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
 };
@@ -85,19 +86,15 @@ export type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
   required?: true;
-  healthChecks: readonly HealthCheckInput[];
+  /** Diagnostics with no update migration or readiness dependency stay in standalone Doctor. */
+  updatePolicy?: "standalone";
+  healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
-export type DoctorContributionHealthCheck =
-  | (Omit<HealthCheck, "id" | "kind" | "source"> & {
-      readonly id?: string;
-      readonly kind?: "core";
-      readonly source?: string;
-    })
-  | (Omit<RunnableHealthCheck, "id" | "kind" | "source" | "sourceContract"> & {
-      readonly id?: string;
-      readonly kind?: "core";
-      readonly source?: string;
-    });
+export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
+  readonly id?: string;
+  readonly kind?: "core";
+  readonly source?: string;
+};

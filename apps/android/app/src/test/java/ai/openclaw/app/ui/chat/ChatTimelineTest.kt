@@ -8,13 +8,134 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSubagentActivity
+import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.ChatTranscriptMarker
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatTimelineTest {
+  @Test
+  fun groupsContiguousToolOnlyMessagesWithoutSwallowingAssistantText() {
+    val call = ChatToolActivity("call-1", "read", "path: README.md", null, false)
+    val result = ChatToolActivity("call-1", "read", null, "contents", false)
+    val messages =
+      listOf(
+        textMessage(id = "assistant-before", role = "assistant", text = "I will inspect it."),
+        ChatMessage("call", "assistant", listOf(ChatMessageContent(type = "toolCall", toolActivity = call)), 2),
+        ChatMessage("result", "toolresult", listOf(ChatMessageContent(type = "toolResult", toolActivity = result)), 3),
+        textMessage(id = "assistant-after", role = "assistant", text = "Done."),
+      )
+
+    val timeline = buildChatTimeline(messages, 0, emptyList(), null)
+
+    assertEquals(
+      listOf("message:assistant-after", "completed-tools:call", "message:assistant-before"),
+      timeline.items.map(::chatTimelineItemKey),
+    )
+    val group = timeline.items.filterIsInstance<ChatTimelineItem.CompletedTools>().single()
+    assertEquals(listOf(ChatToolActivity("call-1", "read", "path: README.md", "contents", false)), group.tools)
+  }
+
+  @Test
+  fun mixedAssistantMessageKeepsVisibleTextBesideItsToolGroup() {
+    val mixed =
+      ChatMessage(
+        id = "mixed",
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(type = "text", text = "Checking now."),
+            ChatMessageContent(type = "toolCall", toolActivity = ChatToolActivity("call-1", "exec", "command: pwd", null, false)),
+          ),
+        timestampMs = 1,
+        entryId = "mixed",
+        truncated = true,
+      )
+
+    val timeline = buildChatTimeline(listOf(mixed), 0, emptyList(), null)
+
+    assertEquals(listOf("completed-tools:mixed", "message:mixed"), timeline.items.map(::chatTimelineItemKey))
+    assertTrue((timeline.items[1] as ChatTimelineItem.Message).message.matchesFullRead(mixed))
+    assertEquals(
+      "Checking now.",
+      (timeline.items[1] as ChatTimelineItem.Message)
+        .message.content
+        .filter { it.toolActivity == null }
+        .single()
+        .text,
+    )
+  }
+
+  @Test
+  fun completedToolResultChangesLatestContentVersion() {
+    fun timeline(result: String) =
+      buildChatTimeline(
+        messages =
+          listOf(
+            ChatMessage(
+              "result",
+              "toolresult",
+              listOf(ChatMessageContent(type = "toolResult", toolActivity = ChatToolActivity("call-1", "exec", null, result, false))),
+              1,
+            ),
+          ),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+
+    assertTrue(timeline("partial").latestContentVersion != timeline("complete").latestContentVersion)
+  }
+
+  @Test
+  fun completedToolMetadataChangesOnlyTheLiveEdgeVersion() {
+    val original = ChatToolActivity("call-1", "exec", "command: pwd", "output", false)
+
+    fun toolMessage(tool: ChatToolActivity) =
+      ChatMessage(
+        "result",
+        "toolresult",
+        listOf(ChatMessageContent(type = "toolResult", toolActivity = tool)),
+        1,
+      )
+
+    fun timeline(history: List<ChatMessage>) = buildChatTimeline(history, 0, emptyList(), null)
+    val originalVersion = timeline(listOf(toolMessage(original))).latestContentVersion
+    val final = textMessage(id = "final", role = "assistant", text = "Done.")
+    val historyVersion = timeline(listOf(toolMessage(original), final)).latestContentVersion
+    for (changed in listOf(
+      original.copy(detail = "command: ls"),
+      original.copy(isError = true),
+      original.copy(arguments = buildJsonObject { put("command", "pwd") }),
+    )) {
+      assertTrue(originalVersion != timeline(listOf(toolMessage(changed))).latestContentVersion)
+      assertEquals(historyVersion, timeline(listOf(toolMessage(changed), final)).latestContentVersion)
+    }
+  }
+
+  @Test
+  fun hiddenTurnBoundaryChangesTheLiveEdgeVersion() {
+    val message = textMessage(id = "reply", role = "assistant", text = "Completed")
+    val original = buildChatTimeline(listOf(message), 0, emptyList(), null)
+    val changed = buildChatTimeline(listOf(message.copy(turnBoundary = true)), 0, emptyList(), null)
+    assertTrue(original.latestContentVersion != changed.latestContentVersion)
+  }
+
+  @Test
+  fun canonicalReplacementPreservesAnIdempotencyBackedUserAnchor() {
+    val optimistic = textMessage(id = "optimistic", role = "user", text = "Send this").copy(idempotencyKey = "input:user")
+    val canonical = optimistic.copy(id = "canonical", content = listOf(ChatMessageContent(text = "Canonical text")), timestampMs = 2)
+    val first = buildChatTimeline(listOf(optimistic), 0, emptyList(), null)
+    val second = buildChatTimeline(listOf(canonical), 0, emptyList(), null)
+    assertEquals(first.latestUserMessageVersion, second.latestUserMessageVersion)
+    assertTrue(second.containsUserMessageVersion(requireNotNull(first.latestUserMessageVersion)))
+    assertTrue(first.latestContentVersion != second.latestContentVersion)
+  }
+
   @Test
   fun activeRunAnchorsNewestUserPromptInsteadOfThinkingRow() {
     val user = textMessage(id = "user-1", role = "user", text = "hello")

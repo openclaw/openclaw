@@ -1,5 +1,6 @@
 {
   "id": "policy",
+  "categories": ["security", "tools"],
   "name": "Policy",
   "description": "Adds policy-backed doctor checks for workspace conformance.",
   "cliCommands": [

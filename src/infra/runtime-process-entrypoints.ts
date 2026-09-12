@@ -1,6 +1,8 @@
 // Runtime launchers and the package build share these subprocess locations.
 const currentModuleUrl = import.meta.url;
 
+export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
+
 export const runtimeProcessEntrypoints = {
   stateMigrationSnapshot: {
     currentModuleUrl,
@@ -21,6 +23,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "sqlite-integrity.worker",
     distWorkerPath: "infra/sqlite-integrity.worker.js",
+  },
+  preparedModelCatalog: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/prepared-model-catalog.worker",
+    distWorkerPath: "agents/prepared-model-catalog.worker.js",
   },
   updateRepair: {
     currentModuleUrl,
@@ -67,6 +74,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../process/supervisor/service-child-relay",
     distWorkerPath: "process/supervisor/service-child-relay.js",
   },
+  terminalPty: {
+    currentModuleUrl,
+    sourceWorkerName: "../process/terminal-pty-worker",
+    distWorkerPath: "process/terminal-pty-worker.js",
+  },
   serviceChildGroupAnchor: {
     currentModuleUrl,
     sourceWorkerName: "../process/supervisor/service-child-group-anchor",
@@ -76,5 +88,12 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../process/supervisor/service-child-windows-job-anchor",
     distWorkerPath: "process/supervisor/service-child-windows-job-anchor.js",
+  },
+  // Not a launcher: the daemon runtime probe requires this module inside candidate Bun
+  // executables so they select the same SQLite library the Gateway will run with.
+  bunSqliteLibrary: {
+    currentModuleUrl,
+    sourceWorkerName: "bun-sqlite-library",
+    distWorkerPath: "infra/bun-sqlite-library.js",
   },
 } as const;

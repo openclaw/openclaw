@@ -8,6 +8,7 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -117,12 +118,18 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
-    pluginFrameGrants: (parsed.pluginFrameGrants ?? []).filter(
-      (grant): grant is ControlUiPluginFrameGrantAck =>
-        typeof grant?.pluginId === "string" &&
-        typeof grant.path === "string" &&
-        (grant.match === "exact" || grant.match === "prefix"),
-    ),
+    pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
+      .filter(
+        (grant): grant is ControlUiPluginFrameGrantAck =>
+          typeof grant?.pluginId === "string" &&
+          typeof grant.path === "string" &&
+          (grant.match === "exact" || grant.match === "prefix"),
+      )
+      .map((grant) => ({
+        pluginId: grant.pluginId,
+        path: uiDevGatewayResourceUrl(grant.path),
+        match: grant.match,
+      })),
   };
 }
 

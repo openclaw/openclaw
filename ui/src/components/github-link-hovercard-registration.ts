@@ -1,6 +1,7 @@
 import type { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
+  GITHUB_HOVERCARD_PROVIDER_TAG,
   githubLinkAnchorFromEvent,
   parseGitHubLinkTarget,
 } from "./github-link-target.ts";
@@ -11,10 +12,8 @@ import {
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
 
-const HOVERCARD_TAG = "openclaw-github-link-hovercard-provider";
-
 const bootstrap = new LazyHovercardBootstrap<GitHubLinkHovercardProvider>({
-  tag: HOVERCARD_TAG,
+  tag: GITHUB_HOVERCARD_PROVIDER_TAG,
   load: async () =>
     (await import("./github-link-hovercard.runtime.ts")).GitHubLinkHovercardProvider,
 });

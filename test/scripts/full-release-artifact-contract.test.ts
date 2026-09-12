@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -89,6 +90,169 @@ function fullMatrixDecision(children = fullMatrixChildren()) {
 
 describe("full release artifact contract", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  function runDispatchWitness(event: unknown, rawEvent?: string) {
+    const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+    const steps = workflow.jobs.resolve_target.steps;
+    const writer = steps.find((step: { id?: string }) => step.id === "dispatch_witness");
+    const dir = tempDirs.make("full-release-dispatch-inputs-");
+    const eventPath = join(dir, "event.json");
+    writeFileSync(eventPath, rawEvent ?? JSON.stringify(event));
+    const context = {
+      serverUrl: "https://github.com",
+      repository: "openclaw/openclaw",
+      workflowRef:
+        "openclaw/openclaw/.github/workflows/full-release-validation.yml@refs/heads/release-ci/test",
+      event: "workflow_dispatch",
+      ref: "refs/heads/release-ci/test",
+      sha: SHA,
+      runId: "123",
+      runAttempt: "2",
+    };
+    const result = spawnSync("bash", ["-c", writer.run], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        RUNNER_TEMP: dir,
+        GITHUB_EVENT_PATH: eventPath,
+        DISPATCH_SERVER_URL: context.serverUrl,
+        DISPATCH_WORKFLOW_REF: context.workflowRef,
+        GITHUB_REPOSITORY: context.repository,
+        GITHUB_EVENT_NAME: context.event,
+        GITHUB_REF: context.ref,
+        GITHUB_SHA: context.sha,
+        GITHUB_RUN_ID: context.runId,
+        GITHUB_RUN_ATTEMPT: context.runAttempt,
+      },
+    });
+    const artifactPath = join(dir, "full-release-dispatch-inputs/dispatch-inputs.json");
+    const bytes = existsSync(artifactPath) ? readFileSync(artifactPath, "utf8") : "";
+    return { result, bytes, context, dir, workflow, writer, steps };
+  }
+
+  it.each([false, true])("writes only a full-input digest and safe context (soak=%s)", (soak) => {
+    const privateValue = "/private/example/operator/candidate.tgz";
+    const secretValue = "synthetic-private-dispatch-value";
+    const shellValue = 'line one\n$(touch unexpected) "quoted"';
+    const { result, bytes, context, dir, workflow, writer, steps } = runDispatchWitness({
+      inputs: {
+        text: shellValue,
+        secret: secretValue,
+        package: privateValue,
+        run_release_soak: String(soak),
+        count: 3,
+        empty: "",
+      },
+    });
+    const canonical = JSON.stringify({
+      count: "3",
+      empty: "",
+      package: privateValue,
+      run_release_soak: String(soak),
+      secret: secretValue,
+      text: shellValue,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(bytes)).toEqual({
+      kind: "openclaw.full-release-dispatch-inputs/v1",
+      ...context,
+      inputsDigest: `sha256:${createHash("sha256").update(canonical).digest("hex")}`,
+    });
+    for (const value of [privateValue, secretValue, shellValue]) {
+      expect(bytes + result.stdout + result.stderr + JSON.stringify(writer.env)).not.toContain(
+        value,
+      );
+    }
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+    expect(JSON.stringify(writer.env)).not.toMatch(/inputs|github\.event/u);
+    expect(writer.run).not.toContain("${{");
+    expect(existsSync(join(dir, "unexpected"))).toBe(false);
+    expect(workflow.env.FULL_RELEASE_DISPATCH_WITNESS_CONTRACT).toBe("1");
+    expect(steps.indexOf(writer)).toBeLessThan(
+      steps.findIndex((step: { id?: string }) => step.id === "tooling_identity"),
+    );
+    expect(
+      steps.find((step: { name?: string }) => step.name === "Upload root dispatch inputs").with,
+    ).toMatchObject({
+      name: "full-release-dispatch-inputs-${{ github.run_id }}-${{ github.run_attempt }}",
+      "if-no-files-found": "error",
+      "retention-days": 7,
+    });
+  });
+
+  it("binds every declared input and default independently of event key order", () => {
+    const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+    const definitions = workflow.on.workflow_dispatch.inputs as Record<
+      string,
+      { default?: unknown }
+    >;
+    const inputs = Object.fromEntries(
+      Object.entries(definitions).map(([key, definition]) => {
+        const value = definition.default ?? "";
+        if (typeof value !== "string" && typeof value !== "boolean" && typeof value !== "number") {
+          throw new Error("Workflow input default must be a primitive");
+        }
+        return [key, String(value)];
+      }),
+    );
+    const original = runDispatchWitness({ inputs });
+    expect(original.result.status, original.result.stderr).toBe(0);
+    const reordered = runDispatchWitness({
+      inputs: Object.fromEntries(Object.entries(inputs).toReversed()),
+    });
+    expect(reordered.result.status, reordered.result.stderr).toBe(0);
+    expect(reordered.bytes).toBe(original.bytes);
+    for (const key of Object.keys(inputs)) {
+      const changed = runDispatchWitness({
+        inputs: { ...inputs, [key]: `${inputs[key]}-changed` },
+      });
+      expect(changed.result.status, changed.result.stderr).toBe(0);
+      expect(JSON.parse(changed.bytes).inputsDigest, key).not.toBe(
+        JSON.parse(original.bytes).inputsDigest,
+      );
+    }
+    expect(runDispatchWitness({ inputs: { value: false, count: 3 } }).bytes).toBe(
+      runDispatchWitness({ inputs: { count: "3", value: "false" } }).bytes,
+    );
+    expect(runDispatchWitness({ inputs: { value: "" } }).bytes).not.toBe(
+      runDispatchWitness({ inputs: {} }).bytes,
+    );
+  });
+
+  it.each([
+    {
+      name: "oversized event",
+      event: { inputs: {}, padding: "x".repeat(1024 * 1024) },
+      error: "Invalid or oversized root dispatch event",
+    },
+    {
+      name: "oversized inputs",
+      event: { inputs: { payload: "x".repeat(129 * 1024) } },
+      error: "Root dispatch inputs exceed their byte limit",
+    },
+    {
+      name: "nested inputs",
+      event: { inputs: { payload: { private: "synthetic-private-dispatch-value" } } },
+      error: "Invalid root dispatch inputs",
+    },
+    {
+      name: "malformed event",
+      event: {},
+      rawEvent: '{"inputs":"synthetic-private-dispatch-value',
+      error: "Invalid or oversized root dispatch event",
+    },
+  ])(
+    "refuses $name without a partial artifact or raw values in logs",
+    ({ event, rawEvent, error }) => {
+      const { result, bytes } = runDispatchWitness(event, rawEvent);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(error);
+      expect(result.stderr + result.stdout).not.toContain("synthetic-private-dispatch-value");
+      expect(bytes).toBe("");
+    },
+  );
 
   it.each([false, true])(
     "writes all matrix evidence with reuse=%s without argv size limits",
