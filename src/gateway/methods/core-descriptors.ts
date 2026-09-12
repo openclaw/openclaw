@@ -672,6 +672,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.storage.status", "sessions-read", "operator.admin", "2026.9"],
   ["sessions.storage.run", "sessions-read", "operator.admin", "2026.9"],
   ["plugins.reload", "plugins-mutations", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["claws.packages.remove", "claws-packages", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

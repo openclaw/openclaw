@@ -72,6 +72,7 @@ import type {
   ClawsStatusOptions,
 } from "./claws-cli.js";
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
+import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -594,6 +595,7 @@ export async function runClawsRemoveCommand(
   try {
     const result = await applyClawRemovePlan(plan, {
       monitorGateway: clawMonitorCleanupGateway,
+      packageGateway: clawPackageRemovalGateway,
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
       cronGateway: {
@@ -605,7 +607,7 @@ export async function runClawsRemoveCommand(
       writeRuntimeJson(runtime, result);
     } else {
       logClawExperimentalWarning(runtime);
-      runtime.log(`Removed agent: ${result.agentId}`);
+      runtime.log(`${result.agentRemoved ? "Removed agent" : "Agent"}: ${result.agentId}`);
       runtime.log(`Status: ${result.status}`);
       for (const pkg of result.packages) {
         runtime.log(
@@ -613,6 +615,17 @@ export async function runClawsRemoveCommand(
         );
       }
       runtime.log(`Package references released: ${result.packageRefsReleased}`);
+      if (result.error) {
+        runtime.error(result.error.message);
+      }
+      for (const warning of result.warnings ?? []) {
+        runtime.log(`Warning: ${warning}`);
+      }
+      if (result.pluginRuntime) {
+        runtime.log(
+          `Plugin runtime changed in Gateway generation ${result.pluginRuntime.generation}.`,
+        );
+      }
     }
     if (result.status !== "complete") {
       runtime.exit(1);
