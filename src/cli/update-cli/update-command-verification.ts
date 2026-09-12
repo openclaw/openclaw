@@ -52,6 +52,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       port,
       expectedVersion,
       expectedBuildId: expectedBuildId ?? undefined,
+      requirePluginHealth: false,
     }),
     waitForGatewayHttpReadiness({
       config,

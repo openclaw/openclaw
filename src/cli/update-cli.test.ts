@@ -3313,117 +3313,136 @@ describe("update-cli", () => {
     }
   });
 
-  it("keeps the candidate stopped through plugin convergence and only restarts the verified previous version after errors", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
-    resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
-    const root = await mockPackageInstallAtCaseDir();
-    const entryPath = path.join(root, "dist", "index.js");
-    vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(entryPath);
-    serviceLoaded.mockResolvedValue(true);
-    primeServiceCommand(["node", entryPath, "gateway", "run"]);
-    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
-    const activations: Array<{ version: string; afterPlugin: boolean }> = [];
-    const runFixtureCommand = requireValue(
-      vi.mocked(runCommandWithTimeout).getMockImplementation(),
-      "staged package commands",
-    );
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
-      if (argv[2] === "gateway" && ["install", "restart"].includes(argv[3] ?? "")) {
-        const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
-        activations.push({ version: manifest.version, afterPlugin: spawn.mock.calls.length > 0 });
-      }
-      return runFixtureCommand(argv, options);
-    });
-    spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
-      const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
-        ?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
-      if (!resultPath) {
-        throw new Error("missing post-core result path");
-      }
-      queueMicrotask(() => {
-        void fs.writeFile(
-          resultPath,
-          JSON.stringify({
-            status: "error",
-            changed: false,
-            warnings: [
-              {
-                pluginId: "demo",
-                reason: "missing-extension-entry: ./dist/index.js",
-                message:
-                  'Plugin "demo" failed post-core payload smoke check (missing-extension-entry): ./dist/index.js',
-                guidance: ["Run openclaw update repair to retry post-update plugin repair."],
+  it.each([false, true])(
+    "keeps the candidate stopped through plugin convergence and only restarts the verified previous version after errors (previous plugin error: %s)",
+    async (previousPluginError) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+      resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+      const root = await mockPackageInstallAtCaseDir();
+      const entryPath = path.join(root, "dist", "index.js");
+      vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(entryPath);
+      serviceLoaded.mockResolvedValue(true);
+      primeServiceCommand(["node", entryPath, "gateway", "run"]);
+      pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
+      if (previousPluginError) {
+        callGateway.mockImplementation(
+          gatewayHealthResponse({
+            server: { version: "1.0.0", connId: "previous-gateway", bootId: "previous-boot" },
+            health: {
+              ok: true,
+              plugins: {
+                errors: [{ id: "demo", origin: "global", activated: true, error: "load failed" }],
               },
-            ],
-            sync: {
-              changed: false,
-              switchedToBundled: [],
-              switchedToNpm: [],
-              warnings: [],
-              errors: [],
             },
-            npm: {
+          }),
+        );
+      }
+      const activations: Array<{ version: string; afterPlugin: boolean }> = [];
+      const runFixtureCommand = requireValue(
+        vi.mocked(runCommandWithTimeout).getMockImplementation(),
+        "staged package commands",
+      );
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+        if (argv[2] === "gateway" && ["install", "restart"].includes(argv[3] ?? "")) {
+          const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+          activations.push({ version: manifest.version, afterPlugin: spawn.mock.calls.length > 0 });
+        }
+        return runFixtureCommand(argv, options);
+      });
+      spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
+        const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
+          ?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+        if (!resultPath) {
+          throw new Error("missing post-core result path");
+        }
+        queueMicrotask(() => {
+          void fs.writeFile(
+            resultPath,
+            JSON.stringify({
+              status: "error",
               changed: false,
-              outcomes: [
+              warnings: [
                 {
                   pluginId: "demo",
-                  status: "error",
-                  message: "Plugin extension entry missing",
+                  reason: "missing-extension-entry: ./dist/index.js",
+                  message:
+                    'Plugin "demo" failed post-core payload smoke check (missing-extension-entry): ./dist/index.js',
+                  guidance: ["Run openclaw update repair to retry post-update plugin repair."],
                 },
               ],
-            },
-            integrityDrifts: [],
-          }),
-          "utf-8",
-        );
-      });
-      const child = new EventEmitter() as EventEmitter & {
-        kill: () => boolean;
-        once: EventEmitter["once"];
-      };
-      child.kill = vi.fn(() => {
-        queueMicrotask(() => {
-          child.emit("exit", null, "SIGTERM");
-          child.emit("close", null, "SIGTERM");
+              sync: {
+                changed: false,
+                switchedToBundled: [],
+                switchedToNpm: [],
+                warnings: [],
+                errors: [],
+              },
+              npm: {
+                changed: false,
+                outcomes: [
+                  {
+                    pluginId: "demo",
+                    status: "error",
+                    message: "Plugin extension entry missing",
+                  },
+                ],
+              },
+              integrityDrifts: [],
+            }),
+            "utf-8",
+          );
         });
-        return true;
+        const child = new EventEmitter() as EventEmitter & {
+          kill: () => boolean;
+          once: EventEmitter["once"];
+        };
+        child.kill = vi.fn(() => {
+          queueMicrotask(() => {
+            child.emit("exit", null, "SIGTERM");
+            child.emit("close", null, "SIGTERM");
+          });
+          return true;
+        });
+        return child;
       });
-      return child;
-    });
 
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-    platformSpy.mockRestore();
+      await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      platformSpy.mockRestore();
 
-    expect(serviceStop).toHaveBeenCalled();
-    expectNoSideEffects(serviceRestart, runDaemonRestart);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(getLogOutput()).not.toContain("Update Result: OK");
-    expect(spawn).toHaveBeenCalled();
-    expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
-    const pluginStartOrder = requireValue(spawn.mock.invocationCallOrder[0], "plugin child start");
-    const starts = vi
-      .mocked(runCommandWithTimeout)
-      .mock.calls.flatMap(([argv], index) =>
-        argv[2] === "gateway" && ["install", "restart"].includes(argv[3] ?? "")
-          ? [
-              requireValue(
-                vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[index],
-                "gateway activation order",
-              ),
-            ]
-          : [],
+      expect(serviceStop).toHaveBeenCalled();
+      expectNoSideEffects(serviceRestart, runDaemonRestart);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(getLogOutput()).not.toContain("Update Result: OK");
+      expect(spawn).toHaveBeenCalled();
+      expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
+      const pluginStartOrder = requireValue(
+        spawn.mock.invocationCallOrder[0],
+        "plugin child start",
       );
-    expect(starts.length).toBeGreaterThan(0);
-    expect(activations.filter((entry) => !entry.afterPlugin)).toEqual([]);
-    expect(activations.filter((entry) => entry.afterPlugin)).toEqual([
-      { version: "1.0.0", afterPlugin: true },
-      { version: "1.0.0", afterPlugin: true },
-    ]);
-    expect(resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0]).toBeGreaterThan(
-      pluginStartOrder,
-    );
-  });
+      const starts = vi
+        .mocked(runCommandWithTimeout)
+        .mock.calls.flatMap(([argv], index) =>
+          argv[2] === "gateway" && ["install", "restart"].includes(argv[3] ?? "")
+            ? [
+                requireValue(
+                  vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[index],
+                  "gateway activation order",
+                ),
+              ]
+            : [],
+        );
+      expect(starts.length).toBeGreaterThan(0);
+      expect(activations.filter((entry) => !entry.afterPlugin)).toEqual([]);
+      expect(activations.filter((entry) => entry.afterPlugin)).toEqual([
+        { version: "1.0.0", afterPlugin: true },
+        { version: "1.0.0", afterPlugin: true },
+      ]);
+      expect(resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0]).toBeGreaterThan(
+        pluginStartOrder,
+      );
+    },
+  );
 
   it("passes pre-update plugin install records into the post-core update process", async () => {
     setupUpdatedRootRefresh({ admitMutation: true });
