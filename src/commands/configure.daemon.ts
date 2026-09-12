@@ -35,10 +35,21 @@ export async function maybeInstallDaemon(params: {
     }
     loaded = false;
   }
+  // isLoaded means enabled on systemd. A stopped and disabled unit still has
+  // an installed definition; route it to the action menu so preparation never
+  // silently re-enables and restarts it (issue 83354).
+  let hasDefinition = false;
+  if (!loaded) {
+    try {
+      hasDefinition = (await service.hasInstalledDefinition?.({ env: process.env })) ?? false;
+    } catch {
+      hasDefinition = false;
+    }
+  }
   let shouldCheckLinger = false;
   let shouldInstall = true;
   let daemonRuntime = params.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
-  if (loaded) {
+  if (loaded || hasDefinition) {
     const action = guardCancel(
       await select({
         message: "Gateway service already installed",

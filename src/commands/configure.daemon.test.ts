@@ -15,6 +15,7 @@ const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const serviceHasInstalledDefinition = vi.hoisted(() => vi.fn(async () => false));
 const serviceReadCommand = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceUninstall = vi.hoisted(() => vi.fn(async () => {}));
@@ -60,6 +61,7 @@ vi.mock("../daemon/service.js", async () => {
     ...actual,
     resolveGatewayService: vi.fn(() => ({
       isLoaded: serviceIsLoaded,
+      hasInstalledDefinition: serviceHasInstalledDefinition,
       readCommand: serviceReadCommand,
       install: serviceInstall,
       uninstall: serviceUninstall,
@@ -75,8 +77,8 @@ vi.mock("./systemd-linger.js", () => ({
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    progressSetLabel.mockReset();
     serviceIsLoaded.mockResolvedValue(false);
+    serviceHasInstalledDefinition.mockResolvedValue(false);
     serviceReadCommand.mockResolvedValue(null);
     serviceInstall.mockResolvedValue(undefined);
     serviceUninstall.mockReset();
@@ -255,6 +257,54 @@ describe("maybeInstallDaemon", () => {
       port: 18789,
     });
 
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the action menu instead of reinstalling a stopped disabled unit", async () => {
+    serviceIsLoaded.mockResolvedValue(false);
+    serviceHasInstalledDefinition.mockResolvedValue(true);
+    select.mockResolvedValueOnce("skip");
+
+    const outcome = await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
+
+    expect(outcome).toBe("skipped");
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway service already installed" }),
+    );
+    expect(serviceInstall).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
+  });
+
+  it("restarts without reinstalling when a stopped disabled unit is kept", async () => {
+    serviceIsLoaded.mockResolvedValue(false);
+    serviceHasInstalledDefinition.mockResolvedValue(true);
+    select.mockResolvedValueOnce("restart");
+
+    const outcome = await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
+
+    expect(outcome).toBe("succeeded");
+    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
+  it("installs fresh when no service definition exists", async () => {
+    serviceIsLoaded.mockResolvedValue(false);
+    serviceHasInstalledDefinition.mockResolvedValue(false);
+
+    await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
+
+    expect(select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway service already installed" }),
+    );
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
