@@ -850,6 +850,71 @@ describe("model-selection", () => {
 
   describe("buildConfiguredModelCatalog", () => {
     it.each([
+      { name: "captured route", api: "anthropic-messages", baseUrl: undefined, inherits: true },
+      { name: "API override", api: "openai-completions", baseUrl: undefined, inherits: false },
+      {
+        name: "endpoint override",
+        api: "anthropic-messages",
+        baseUrl: "https://proxy.example/v1",
+        inherits: false,
+      },
+      {
+        name: "equivalent endpoint",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com/",
+        inherits: true,
+      },
+    ] as const)(
+      "inherits context choices only for the same route: $name",
+      ({ api, baseUrl, inherits }) => {
+        const contextWindows = [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ];
+        const cfg = createConfiguredModelRefConfig({
+          providers: {
+            anthropic: {
+              api: "openai-completions",
+              baseUrl: "https://provider-default.example/v1",
+              models: [
+                {
+                  id: "claude-fable-5-1",
+                  name: "Claude Fable 5.1",
+                  api,
+                  baseUrl,
+                  contextWindow: 1_000_000,
+                },
+              ],
+            },
+          },
+        });
+
+        const [entry] = buildConfiguredModelCatalog({
+          cfg,
+          catalog: [
+            {
+              provider: "anthropic",
+              id: "claude-fable-5-1",
+              name: "Claude Fable 5.1",
+              api: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com",
+              contextWindow: 1_000_000,
+              contextWindows,
+              contextWindowDefault: "1m",
+            },
+          ],
+        });
+
+        expect(entry).toMatchObject({
+          provider: "anthropic",
+          id: "claude-fable-5-1",
+        });
+        expect(entry?.contextWindows).toEqual(inherits ? contextWindows : undefined);
+        expect(entry?.contextWindowDefault).toBe(inherits ? "1m" : undefined);
+      },
+    );
+
+    it.each([
       {
         name: "emits canonical Google Gemini 3.1 provider model ids",
         provider: "google",

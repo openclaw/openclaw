@@ -137,11 +137,40 @@ describe("configured catalog registry composition", () => {
         agentFacts,
         workspaceFacts,
         templateModelRegistry: registry,
-        configuredRuntimeModels: [],
+        configuredRuntimeModels: [
+          {
+            provider: configured.provider,
+            modelId: configured.id,
+            model: {
+              id: configured.id,
+              name: configured.name,
+              provider: configured.provider,
+              api: "openai-completions",
+              baseUrl: "https://fixture.invalid/v1",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32000,
+              maxTokens: 4096,
+              contextWindows: [{ id: "32k", label: "32K", contextWindow: 32000 }],
+              contextWindowDefault: "32k",
+            },
+          },
+        ],
       });
 
       expect(modelCatalog.entries.map((entry) => entry.id)).toEqual(expectedIds);
-      expect(modelCatalog.entries[0]).toEqual({ ...configured, baseUrl: expectedBaseUrl });
+      const inheritsChoices = mode === "merge" && expectedBaseUrl === "https://fixture.invalid/v1";
+      expect(modelCatalog.entries[0]).toEqual({
+        ...configured,
+        baseUrl: expectedBaseUrl,
+        ...(inheritsChoices
+          ? {
+              contextWindows: [{ id: "32k", label: "32K", contextWindow: 32000 }],
+              contextWindowDefault: "32k",
+            }
+          : {}),
+      });
       expect(modelCatalog.routeVariants).toEqual(modelCatalog.entries);
     },
   );

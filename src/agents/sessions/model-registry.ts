@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
@@ -849,6 +850,8 @@ export class ModelRegistry {
           input: runtimeInput,
           cost: normalizeResolvedPricing(modelDef.cost ?? {}),
           contextWindow: modelDef.contextWindow ?? 128000,
+          contextWindows: modelDef.contextWindows,
+          contextWindowDefault: modelDef.contextWindowDefault,
           maxTokens: modelDef.maxTokens ?? 16384,
           ...(modelDef.maxTokens !== undefined
             ? { maxTokensSource: modelDef.maxTokensSource }
@@ -1194,6 +1197,8 @@ export class ModelRegistry {
           input: modelDef.input,
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
+          contextWindows: modelDef.contextWindows,
+          contextWindowDefault: modelDef.contextWindowDefault,
           maxTokens: modelDef.maxTokens,
           params: modelDef.params,
           headers: undefined,
@@ -1240,6 +1245,8 @@ export interface ProviderConfigInput {
     input: ("text" | "image")[];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
+    contextWindows?: ModelCatalogContextWindowOption[];
+    contextWindowDefault?: string;
     maxTokens: number;
     params?: Record<string, unknown>;
     headers?: Record<string, string>;

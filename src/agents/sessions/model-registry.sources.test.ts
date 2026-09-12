@@ -80,6 +80,46 @@ function createRegistry(
 }
 
 describe("ModelRegistry source composition", () => {
+  it("preserves captured context choices in runtime rows", () => {
+    const contextWindows = [
+      { id: "200k", label: "200K", contextWindow: 200000 },
+      { id: "1m", label: "1M", contextWindow: 1000000 },
+    ];
+    const registry = createRegistry({
+      authored: null,
+      generated: {
+        ...generated,
+        models: [{ id: "shared", contextWindows, contextWindowDefault: "1m" }],
+      },
+    });
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find(provider, "shared")).toMatchObject({
+      contextWindows,
+      contextWindowDefault: "1m",
+    });
+  });
+
+  it.each([rootUrl, catalogUrl])(
+    "keeps context choices on their catalog route at %s",
+    (baseUrl) => {
+      const contextWindows = [{ id: "200k", label: "200K", contextWindow: 200000 }];
+      const registry = createRegistry({
+        authored: { ...authored, baseUrl },
+        generated: {
+          ...generated,
+          models: [{ id: "shared", contextWindows, contextWindowDefault: "200k" }],
+        },
+      });
+      const model = registry.find(provider, "shared");
+      if (baseUrl === catalogUrl) {
+        expect(model).toMatchObject({ contextWindows, contextWindowDefault: "200k" });
+      } else {
+        expect(model).not.toHaveProperty("contextWindows", contextWindows);
+        expect(model).toHaveProperty("contextWindowDefault", undefined);
+      }
+    },
+  );
+
   it.each([rootUrl, catalogUrl])(
     "preserves source compatibility without mixing provider defaults at %s",
     (baseUrl) => {

@@ -188,7 +188,7 @@ function cloneManifestCatalogMediaInput(
 function buildManifestCatalogModel(
   model: ModelCatalogModel,
   options: { providerId?: string; filterDocument?: boolean } = {},
-): ModelDefinitionConfig {
+): ModelDefinitionConfig & Pick<ModelCatalogModel, "contextWindows" | "contextWindowDefault"> {
   if (model.contextWindow === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
   }
@@ -207,6 +207,10 @@ function buildManifestCatalogModel(
     input: buildManifestCatalogModelInput(model, options.filterDocument),
     cost: cloneManifestCatalogCost(model.cost ?? {}),
     contextWindow: model.contextWindow,
+    ...(model.contextWindows
+      ? { contextWindows: model.contextWindows.map((option) => ({ ...option })) }
+      : {}),
+    ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     maxTokens: model.maxTokens,
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),

@@ -318,56 +318,104 @@ describe("prepared model catalog builder", () => {
     });
   });
 
-  it("drops a base context-window default when an overlay replaces the options list", async () => {
-    const plugin = createPluginManifestRecordFixture({
-      id: "anthropic",
-      origin: "bundled",
-      providers: ["anthropic"],
-      modelCatalog: {
-        providers: {
-          anthropic: {
-            models: [
-              {
-                id: "claude-fable-5",
-                contextWindow: 1_000_000,
-                contextWindows: [
-                  { id: "200k", label: "200K", contextWindow: 200_000 },
-                  { id: "1m", label: "1M", contextWindow: 1_000_000 },
-                ],
-                contextWindowDefault: "1m",
-              },
-            ],
+  it.each([false, true])(
+    "drops stale context choices after discovery (configured: %s)",
+    async (configured) => {
+      const plugin = createPluginManifestRecordFixture({
+        id: "anthropic",
+        origin: "bundled",
+        providers: ["anthropic"],
+        modelCatalog: {
+          providers: {
+            anthropic: {
+              models: [
+                {
+                  id: "claude-fable-5",
+                  contextWindow: 1_000_000,
+                  contextWindows: [
+                    { id: "200k", label: "200K", contextWindow: 200_000 },
+                    { id: "1m", label: "1M", contextWindow: 1_000_000 },
+                  ],
+                  contextWindowDefault: "1m",
+                },
+              ],
+            },
           },
+          discovery: { anthropic: "refreshable" },
         },
-        discovery: { anthropic: "refreshable" },
-      },
-    });
-    // Live provider discovery overlays the manifest row but replaces the
-    // options list without restating a default.
-    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
-      {
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-        provider: "anthropic",
-        contextWindow: 200_000,
-        contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
-      },
-    ]);
-    const snapshot = await build({
-      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
-      entries: [{ id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" }],
-      readOnly: false,
-    });
+      });
+      // Live provider discovery overlays the manifest row but replaces the
+      // options list without restating a default.
+      mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          contextWindow: 200_000,
+          contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
+        },
+      ]);
+      const snapshot = await build({
+        config: configured
+          ? {
+              plugins: { enabled: false },
+              models: {
+                providers: {
+                  anthropic: {
+                    api: "anthropic-messages",
+                    baseUrl: "https://api.anthropic.com",
+                    models: [
+                      {
+                        id: "claude-fable-5",
+                        name: "Claude Fable 5",
+                        reasoning: true,
+                        input: ["text"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        maxTokens: 8192,
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : undefined,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
+        entries: [
+          {
+            id: "claude-fable-5",
+            name: "Claude Fable 5",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            contextWindows: [
+              { id: "200k", label: "200K", contextWindow: 200_000 },
+              { id: "1m", label: "1M", contextWindow: 1_000_000 },
+            ],
+            contextWindowDefault: "1m",
+          },
+        ],
+        readOnly: false,
+      });
 
-    const merged = findModelCatalogEntry(snapshot.entries, {
-      provider: "anthropic",
-      modelId: "claude-fable-5",
-    });
-    // Options + default are one normalized unit: the overlay owns both, so the
-    // base "1m" default absent from the replacement list must not leak through.
-    expect(merged?.contextWindows).toEqual([{ id: "200k", label: "200K", contextWindow: 200_000 }]);
-    expect(merged?.contextWindowDefault).toBeUndefined();
-  });
+      const merged = findModelCatalogEntry(snapshot.entries, {
+        provider: "anthropic",
+        modelId: "claude-fable-5",
+      });
+      // Options + default are one normalized unit: the overlay owns both, so the
+      // base "1m" default absent from the replacement list must not leak through.
+      expect(merged?.contextWindows).toEqual([
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+      ]);
+      expect(merged?.contextWindowDefault).toBeUndefined();
+      const route = snapshot.routeVariants.find(
+        (entry) => entry.provider === "anthropic" && entry.api === "anthropic-messages",
+      );
+      expect(route?.contextWindows).toEqual(merged?.contextWindows);
+      expect(route?.contextWindowDefault).toBeUndefined();
+    },
+  );
 
   it("keeps an account's runtime-discovered model list authoritative", async () => {
     const snapshot = await build({

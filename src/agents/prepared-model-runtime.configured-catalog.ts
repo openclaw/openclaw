@@ -5,6 +5,7 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
@@ -28,6 +29,23 @@ function createConfiguredModelCatalogSnapshot(params: {
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): ModelCatalogSnapshot {
   const replace = params.agentFacts.input.config.models?.mode === "replace";
+  const runtimeEntries = params.configuredRuntimeModels.map(({ model }) =>
+    modelCatalogRowToEntry(model),
+  );
+  const capturedEntries = params.templateModelRegistry.getAll().map(modelCatalogRowToEntry);
+  const catalog = capturedEntries.map((entry) => {
+    const donor = runtimeEntries.find(
+      (candidate) =>
+        resolveModelCatalogIdentityKey(candidate) === resolveModelCatalogIdentityKey(entry) &&
+        modelTransportRoutesMatch(candidate, entry),
+    );
+    return entry.contextWindows || !donor
+      ? entry
+      : Object.assign({}, entry, {
+          contextWindows: donor.contextWindows,
+          contextWindowDefault: donor.contextWindowDefault,
+        });
+  });
   const configuredEntries = dedupeByKey(
     [
       ...buildConfiguredModelCatalog({
@@ -35,7 +53,7 @@ function createConfiguredModelCatalogSnapshot(params: {
         catalog:
           params.agentFacts.input.config.models?.mode === "replace"
             ? []
-            : params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
+            : [...catalog, ...runtimeEntries],
         manifestPlugins: params.workspaceFacts.pluginMetadataSnapshot,
       }),
       ...(replace
