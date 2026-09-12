@@ -17,8 +17,6 @@ import { resolveStateDir } from "./state-dir.js";
  * error on either side.
  */
 
-const ORIGINAL_ENV = { ...process.env };
-
 let sandbox: string | undefined;
 
 beforeEach(() => {
