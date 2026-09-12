@@ -1,6 +1,7 @@
 // Msteams tests cover polls plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   createPluginStateKeyedStoreForTests,
@@ -167,6 +168,45 @@ describe("state poll store", () => {
         selections: ["0"],
       }),
     ).resolves.toBeNull();
+  });
+
+  it("keeps each account's poll retention quota independent", async () => {
+    // openclaw-temp-dir: allow plugin tests cannot import core test helpers; cleanup is explicit.
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    try {
+      const defaultStore = createMSTeamsPollStoreState({ stateDir });
+      const busyStore = createMSTeamsPollStoreState({ stateDir, accountId: "busy" });
+      const createdAtMs = Date.now();
+      await defaultStore.createPoll({
+        id: "default-poll",
+        question: "Default?",
+        options: ["A", "B"],
+        maxSelections: 1,
+        createdAt: new Date(createdAtMs).toISOString(),
+        votes: {},
+      });
+
+      for (let index = 0; index <= 1000; index += 1) {
+        await busyStore.createPoll({
+          id: `busy-poll-${String(index).padStart(4, "0")}`,
+          question: "Busy?",
+          options: ["A", "B"],
+          maxSelections: 1,
+          createdAt: new Date(createdAtMs + index).toISOString(),
+          votes: {},
+        });
+      }
+
+      await expect(defaultStore.getPoll("default-poll")).resolves.toMatchObject({
+        id: "default-poll",
+      });
+      await expect(busyStore.getPoll("busy-poll-0000")).resolves.toBeNull();
+      await expect(busyStore.getPoll("busy-poll-1000")).resolves.toMatchObject({
+        id: "busy-poll-1000",
+      });
+    } finally {
+      await fs.promises.rm(stateDir, { force: true, recursive: true });
+    }
   });
 
   it("serializes concurrent votes for the same poll", async () => {

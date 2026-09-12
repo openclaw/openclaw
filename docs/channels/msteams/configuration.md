@@ -10,9 +10,57 @@ sidebarTitle: "Configuration"
 
 The `channels.msteams` settings, the environment variables that stand in for the auth keys, and the history context rules.
 
+## Multiple bot accounts
+
+Use `channels.msteams.accounts.<id>` for each Teams bot registration, then route
+that account with `bindings[].match.accountId`. Root settings are shared
+defaults; account settings override them.
+
+```json5
+{
+  bindings: [
+    { agentId: "main", match: { channel: "msteams", accountId: "default" } },
+    { agentId: "support", match: { channel: "msteams", accountId: "support" } },
+  ],
+  channels: {
+    msteams: {
+      enabled: true,
+      tenantId: "<TENANT_ID>",
+      webhook: { path: "/api/messages" },
+      dmPolicy: "allowlist",
+      allowFrom: ["00000000-0000-0000-0000-000000000000"],
+      defaultAccount: "default",
+      accounts: {
+        default: {
+          appId: "<PRIMARY_CLIENT_ID>",
+          appPassword: "<PRIMARY_CLIENT_SECRET>",
+          webhook: { port: 3978 },
+        },
+        support: {
+          appId: "<SUPPORT_CLIENT_ID>",
+          appPassword: "<SUPPORT_CLIENT_SECRET>",
+          webhook: { port: 3979 },
+          allowFrom: ["11111111-1111-1111-1111-111111111111"],
+        },
+      },
+    },
+  },
+}
+```
+
+- Enabled accounts must use unique `appId` values and webhook ports.
+- Named accounts must define `appId`, the selected authentication credentials,
+  and `webhook.port`; those identity fields do not inherit from the root.
+- `tenantId`, `webhook.path`, access policy, team/channel allowlists, streaming,
+  SSO, delegated auth, and delivery settings inherit from the root unless an
+  account overrides them.
+- Existing root-level single-bot credentials remain the default account for
+  compatibility. Configure either that root identity or `accounts.default`,
+  not both.
+
 ## Environment variables
 
-These auth-related config keys can be set via environment variables instead of `openclaw.json` (other config keys, such as `groupPolicy` or `historyLimit`, are config-only):
+These auth-related config keys can be set via environment variables instead of `openclaw.json` for the default account only. Named accounts must define their bot identity in config (other keys, such as `groupPolicy` or `historyLimit`, are config-only):
 
 | Env var                              | Config key                | Notes                               |
 | ------------------------------------ | ------------------------- | ----------------------------------- |
@@ -37,6 +85,9 @@ These auth-related config keys can be set via environment variables instead of `
 Key settings (see [/gateway/configuration](/gateway/configuration) for shared channel patterns):
 
 - `channels.msteams.enabled`: enable/disable the channel.
+- `channels.msteams.defaultAccount`: account used when `accountId` is omitted.
+- `channels.msteams.accounts.<id>.enabled`: enable/disable one Teams bot account.
+- `channels.msteams.accounts.<id>.appId`, `channels.msteams.accounts.<id>.appPassword`, `channels.msteams.accounts.<id>.webhook.port`: per-bot identity, secret, and local listener port.
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
 - `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing ships.
 - `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.
