@@ -51,7 +51,11 @@ with Codex native code mode enabled (code-mode-only stays off by default), so
 native workspace/code capabilities remain available alongside OpenClaw
 dynamic tools routed through the app-server `item/tool/call` bridge. An
 ordinary OpenClaw sandbox or restricted tool policy disables native code mode
-unless you opt into the experimental sandbox exec-server path. Node-backed
+unless you opt into the experimental sandbox exec-server path. The effective
+tool profile must allow all native shell and filesystem capabilities: `coding`
+and `full` do, while `messaging` and `minimal` disable the native surface. Agent
+and provider profile overrides and explicit tool restrictions still apply.
+The sandbox exec-server option does not bypass those tool restrictions. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
 placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection. Ending the connection removes that Codex state and preserves the prepared project home.
 

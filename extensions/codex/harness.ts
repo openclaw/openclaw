@@ -9,6 +9,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -116,6 +117,7 @@ export function createCodexAppServerAgentHarness(
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+    conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_REQUIREMENTS,
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },
