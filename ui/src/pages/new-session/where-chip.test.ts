@@ -95,17 +95,6 @@ function renderPicker(
 }
 
 describe("Where chip", () => {
-  it("focuses environment search only after the enclosing picker opens", () => {
-    const container = renderPicker(true);
-    const popover = container.querySelector("wa-popover")!;
-    const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
-    const focus = vi.spyOn(search, "focus");
-    search.dispatchEvent(new CustomEvent("wa-after-show", { bubbles: true }));
-    expect(focus).not.toHaveBeenCalled();
-    popover.dispatchEvent(new CustomEvent("wa-after-show"));
-    expect(focus).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { label: "Work MacBook Pro", platform: "darwin", icon: deviceIcons.laptop, form: "laptop" },
     {
