@@ -139,7 +139,7 @@ export function recordUpdateGatewayHealth(
 }
 
 /** Keep readiness proof and its live authority bound to the original admission. */
-export function captureUpdateGatewayReadinessOwner(params: {
+function captureUpdateGatewayReadinessOwner(params: {
   opts: UpdateCommandOptions;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -195,7 +195,7 @@ type UpdateGatewayReadinessParams = {
 };
 
 /** Observe one ready generation before activation or after restart, without recording a verdict. */
-export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams) {
+async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams) {
   // The canary measures this host's startup; leave tenfold IO headroom without shortening
   // the existing startup watchdog or overriding an operator's explicit allowance.
   const timeoutMs =
