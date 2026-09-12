@@ -5,7 +5,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -132,6 +136,40 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
     directories[0],
   );
 });
+
+it.each([
+  { name: "step count", count: 130, prefix: "progress:", detail: undefined },
+  { name: "diagnostic bytes", count: 30, prefix: "progress:", detail: "界".repeat(1_024) },
+  { name: "retained step bytes", count: 30, prefix: "finalize:", detail: "界".repeat(1_024) },
+])(
+  "retains the recovery receipt across the $name limit and database reopen",
+  ({ count, prefix, detail }) => {
+    const f = seededOrphans();
+    const options = { env: f.env };
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const directories = fs
+      .readdirSync(path.dirname(f.filename))
+      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
+    expect(directories).toHaveLength(1);
+    for (let index = 0; index < count; index++) {
+      recordUpdateRunStep(
+        run.runId,
+        { step: `${prefix}${index}`, status: "completed", detail },
+        options,
+      );
+    }
+    closeOpenClawStateDatabaseForTest();
+    const persisted = getUpdateRun(run.runId, options)!;
+    const receipt = persisted.steps.find((step) => step.step === "task-delivery-recovery");
+    expect(receipt).toMatchObject({
+      status: "completed",
+      detail: expect.stringContaining("18 orphan task delivery rows"),
+    });
+    expect(receipt?.detail).toContain(directories[0]);
+    expect(persisted.steps.length).toBeLessThanOrEqual(128);
+    expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+  },
+);
 
 it.each(["non-cascade", "structural"] as const)(
   "refuses %s damage without admission or recovery",
