@@ -24,7 +24,7 @@ interface FuzzyBoundary {
 
 interface FuzzyNormalizedFile {
   text: string;
-  boundaries: Array<FuzzyBoundary | undefined>;
+  boundaries: Array<FuzzyBoundary | undefined> | undefined;
 }
 
 const fuzzyGraphemeSegmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
@@ -95,7 +95,10 @@ function buildNfkcBoundaries(
   return boundaries;
 }
 
-function buildFuzzyNormalizedFile(text: string): FuzzyNormalizedFile | undefined {
+function buildFuzzyBoundaries(
+  text: string,
+  normalizedText: string,
+): FuzzyNormalizedFile["boundaries"] {
   const authoritativeNfkc = text.normalize("NFKC");
   const nfkcBoundaries = buildNfkcBoundaries(text, authoritativeNfkc);
   if (!nfkcBoundaries) {
@@ -139,11 +142,10 @@ function buildFuzzyNormalizedFile(text: string): FuzzyNormalizedFile | undefined
     sourceLineStart = sourceLineEnd + 1;
   }
 
-  const normalizedText = normalizeForFuzzyMatch(text);
   if (boundaries.length > normalizedText.length + 1) {
     return undefined;
   }
-  return { text: normalizedText, boundaries };
+  return boundaries;
 }
 
 function translateFuzzySpan(
@@ -152,8 +154,8 @@ function translateFuzzySpan(
   fuzzyLength: number,
 ): { originalStart: number; originalLength: number } | undefined {
   const fuzzyEnd = fuzzyStart + fuzzyLength;
-  const originalStart = normalized.boundaries[fuzzyStart]?.start;
-  const originalEnd = normalized.boundaries[fuzzyEnd]?.end;
+  const originalStart = normalized.boundaries?.[fuzzyStart]?.start;
+  const originalEnd = normalized.boundaries?.[fuzzyEnd]?.end;
   if (originalStart === undefined || originalEnd === undefined) {
     return undefined;
   }
@@ -244,6 +246,10 @@ function fuzzyFindText(
     };
   }
 
+  // Source boundaries matter only after normalized text actually matches.
+  if (normalizedFile && !normalizedFile.boundaries) {
+    normalizedFile.boundaries = buildFuzzyBoundaries(content, normalizedFile.text);
+  }
   const translated = normalizedFile
     ? translateFuzzySpan(normalizedFile, fuzzyIndex, fuzzyOldText.length)
     : undefined;
@@ -502,7 +508,9 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   const needsFuzzyMapping = normalizedEdits.some(
     (edit) => !normalizedContent.includes(edit.oldText),
   );
-  const fuzzyFile = needsFuzzyMapping ? buildFuzzyNormalizedFile(normalizedContent) : undefined;
+  const fuzzyFile: FuzzyNormalizedFile | undefined = needsFuzzyMapping
+    ? { text: normalizeForFuzzyMatch(normalizedContent), boundaries: undefined }
+    : undefined;
   const replacementBaseContent = normalizedContent;
 
   const matchedEdits: MatchedEdit[] = [];

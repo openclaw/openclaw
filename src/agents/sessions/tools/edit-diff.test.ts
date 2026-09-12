@@ -244,18 +244,22 @@ describe("fuzzy edit source-span mapping", () => {
     expect(result.finalContent).toBe("const value = 2;\r\nnext\r\n");
   });
 
-  it("keeps exact and fuzzy replacements in original coordinates", () => {
-    const result = applyEditsPreservingLineEndings(
-      "const a\u00A0= 1;\nconst b = 2;\n",
-      [
+  it.each(["fuzzy first", "exact first"])(
+    "keeps mixed replacements in original coordinates with %s",
+    (order) => {
+      const edits = [
         { oldText: "const a = 1;", newText: "const a = 3;" },
         { oldText: "const b = 2;", newText: "const b = 4;" },
-      ],
-      "test.ts",
-    );
+      ];
+      const result = applyEditsPreservingLineEndings(
+        "const a\u00A0= 1;\nconst b = 2;\n",
+        order === "exact first" ? edits.toReversed() : edits,
+        "test.ts",
+      );
 
-    expect(result.finalContent).toBe("const a = 3;\nconst b = 4;\n");
-  });
+      expect(result.finalContent).toBe("const a = 3;\nconst b = 4;\n");
+    },
+  );
 });
 
 describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
