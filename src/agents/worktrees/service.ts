@@ -79,6 +79,7 @@ import {
   finalizeWorktreeRemoval,
   hasLiveWorktreeRunLease,
 } from "./run-lease.js";
+import { listTemplates } from "./template-registry.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeBranch,
@@ -1750,12 +1751,20 @@ export class ManagedWorktreeService {
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
-    await this.withAllocationLease({}, async (guard) => {
-      await collectWorktreeTemplates(this.env, now - IDLE_GC_MS, {
-        signal: guard.signal,
-        commitGuard: () => guard.commitGuard?.(),
-      });
-    });
+    try {
+      // Empty caches must not wait behind checkout creation. Collection rereads
+      // the templates under the lease before retiring any artifacts.
+      if (listTemplates(this.env).length > 0) {
+        await this.withAllocationLease({}, async (guard) => {
+          await collectWorktreeTemplates(this.env, now - IDLE_GC_MS, {
+            signal: guard.signal,
+            commitGuard: () => guard.commitGuard?.(),
+          });
+        });
+      }
+    } catch (error) {
+      log.warn(`worktree template cleanup deferred: ${String(error)}`);
+    }
     removed = removed.concat(await this.enforceCleanupLimits(params));
     const orphansDeleted = await this.reconcileOrphans(records);
     let snapshotsPruned = 0;

@@ -6,11 +6,12 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as stateLease from "../../state/openclaw-state-lease.js";
 import {
   detectWorktreeFilesystemBackend,
   type WorktreeFilesystemBackend,
 } from "./filesystem-backend.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { listTemplates } from "./template-registry.js";
 
@@ -181,6 +182,24 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await git(created.path, "symbolic-ref", "--short", "HEAD")).toBe(created.branch);
     expect((await service.list()).map((entry) => entry.id)).toEqual([created.id]);
   });
+
+  it.each([false, true])(
+    "prunes expired snapshots despite an unavailable allocation lease with acceleration %s",
+    async (enabled) => {
+      acceleration = enabled;
+      const created = await service.create({ repoRoot: repo, name: "expired", baseRef: "HEAD" });
+      const removed = await service.remove({ id: created.id, reason: "retention" });
+      now += SNAPSHOT_RETENTION_MS + 1;
+      vi.spyOn(stateLease, "withOpenClawStateLease").mockRejectedValue(
+        new Error("allocation lease unavailable"),
+      );
+
+      expect((await service.gc()).snapshotsPruned).toBe(1);
+      expect(service.listRegistryRecords()).toEqual([]);
+      await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
+      expect(listTemplates(env)).toHaveLength(enabled ? 1 : 0);
+    },
+  );
 
   it("removes its registration and branch when snapshot and native fallback both fail", async () => {
     vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("snapshot unavailable"));
