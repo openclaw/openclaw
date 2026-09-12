@@ -33,6 +33,7 @@ type ClaudeCliSession = {
   handle: CliBackendLiveSessionHandle;
   capability?: CliBackendLiveSessionCapability;
   transport?: ReturnType<typeof createClaudeCliTransport>;
+  transportCleanup?: () => void;
   currentTurn?: ClaudeCliTurn;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasBackgroundTasks: boolean;
@@ -175,6 +176,9 @@ function closeSession(
     turn.events.end();
   }
   session.transport?.close();
+  const transportCleanup = session.transportCleanup;
+  session.transportCleanup = undefined;
+  transportCleanup?.();
 }
 
 function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
@@ -298,50 +302,58 @@ export async function* executeClaudeCli(
     // Adopt the process's exact MCP capture before prompt dispatch or native tool callbacks.
     capability?.activate(session.handle);
     if (!session.transport) {
-      const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
-      session.transport = createClaudeCliTransport({
-        context,
-        args,
-        secretInput,
-        currentContext: () => session.currentTurn?.context,
-        initialize: {
-          appendSystemPrompt: context.systemPrompt,
-          excludeDynamicSections,
-          hooks: {
-            UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
-            PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+      const { args, excludeDynamicSections, cleanup } = prepareClaudeCliTransportArgs(context);
+      session.transportCleanup = cleanup;
+      try {
+        session.transport = createClaudeCliTransport({
+          context,
+          args,
+          secretInput,
+          currentContext: () => session.currentTurn?.context,
+          initialize: {
+            appendSystemPrompt: context.systemPrompt,
+            excludeDynamicSections,
+            hooks: {
+              UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
+              PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+            },
           },
-        },
-        onMessage: (message) => acceptMessage(session, message),
-        onRequest: async (request, signal) => {
-          // No interactive MCP elicitation handler is registered; preserve its declined outcome.
-          if (request.subtype === "elicitation") {
-            return () => ({ action: "decline" });
-          }
-          const admittedTurn = activeTurn(session);
-          const response = await handleRequest(session, request, signal);
-          // The transport invokes this synchronously at its final write, after all awaits.
-          return () => {
-            if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
-              return response;
+          onMessage: (message) => acceptMessage(session, message),
+          onRequest: async (request, signal) => {
+            // No interactive MCP elicitation handler is registered; preserve its declined outcome.
+            if (request.subtype === "elicitation") {
+              return () => ({ action: "decline" });
             }
-            const message = "The OpenClaw run is no longer active.";
-            if (request.subtype === "can_use_tool") {
-              return { behavior: "deny", message, toolUseID: request.tool_use_id };
-            }
-            return request.callback_id === "PreToolUse"
-              ? {
-                  hookSpecificOutput: {
-                    hookEventName: "PreToolUse",
-                    permissionDecision: "deny",
-                    permissionDecisionReason: message,
-                  },
-                }
-              : {};
-          };
-        },
-        onError: (error) => session.handle.close("abort", error),
-      });
+            const admittedTurn = activeTurn(session);
+            const response = await handleRequest(session, request, signal);
+            // The transport invokes this synchronously at its final write, after all awaits.
+            return () => {
+              if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
+                return response;
+              }
+              const message = "The OpenClaw run is no longer active.";
+              if (request.subtype === "can_use_tool") {
+                return { behavior: "deny", message, toolUseID: request.tool_use_id };
+              }
+              return request.callback_id === "PreToolUse"
+                ? {
+                    hookSpecificOutput: {
+                      hookEventName: "PreToolUse",
+                      permissionDecision: "deny",
+                      permissionDecisionReason: message,
+                    },
+                  }
+                : {};
+            };
+          },
+          onError: (error) => session.handle.close("abort", error),
+        });
+      } catch (error) {
+        const transportCleanup = session.transportCleanup;
+        session.transportCleanup = undefined;
+        transportCleanup?.();
+        throw error;
+      }
       await session.transport.initialize();
     }
     context.assertCurrent?.();
