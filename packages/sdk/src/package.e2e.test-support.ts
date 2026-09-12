@@ -52,38 +52,22 @@ function createCommandEnv(): NodeJS.ProcessEnv {
   };
 }
 
-export function signalCommandProcess(
-  child: ReturnType<typeof spawn>,
-  signal: NodeJS.Signals,
-  runTaskkill: typeof spawnSync = spawnSync,
-): void {
+function killCommandProcess(child: ReturnType<typeof spawn>): void {
   if (process.platform === "win32") {
     if (typeof child.pid === "number") {
-      const args = ["/PID", String(child.pid), "/T"];
-      if (signal === "SIGKILL") {
-        args.push("/F");
-      }
+      const args = ["/PID", String(child.pid), "/T", "/F"];
       const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
-      const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
+      const result = spawnSync(taskkillPath, args, { stdio: "ignore", windowsHide: true });
       if (!result.error && result.status === 0) {
         return;
       }
-      if (signal !== "SIGKILL") {
-        const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
-          stdio: "ignore",
-          windowsHide: true,
-        });
-        if (!forceResult.error && forceResult.status === 0) {
-          return;
-        }
-      }
     }
-    child.kill(signal);
+    child.kill("SIGKILL");
     return;
   }
   if (typeof child.pid === "number") {
     try {
-      process.kill(-child.pid, signal);
+      process.kill(-child.pid, "SIGKILL");
       return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ESRCH") {
@@ -91,7 +75,7 @@ export function signalCommandProcess(
       }
     }
   }
-  child.kill(signal);
+  child.kill("SIGKILL");
 }
 
 function runCommand(
@@ -114,7 +98,7 @@ function runCommand(
       windowsVerbatimArguments: options.windowsVerbatimArguments,
     });
     const timer = setTimeout(() => {
-      signalCommandProcess(child, "SIGKILL");
+      killCommandProcess(child);
       reject(
         new Error(
           `command timed out after ${options.timeoutMs ?? 120_000}ms: ${[command, ...args].join(
