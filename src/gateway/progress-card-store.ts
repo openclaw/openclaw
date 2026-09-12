@@ -16,6 +16,7 @@ export type ProgressCardStore = {
       steps?: ProgressCardStep[];
       expectedRevision?: number;
       // The storage owner checks authority inside its write transaction.
+      allowIncomplete?: boolean;
       assertCurrent?: () => void;
     },
     agentId?: string,

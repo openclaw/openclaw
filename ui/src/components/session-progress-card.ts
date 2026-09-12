@@ -379,8 +379,12 @@ export function renderSessionProgressCard(
     : "sessionProgressCard.activity.updated";
   const accessibleLabel = countLabel;
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
+  // Durable progress can outlive an interrupted run. The Gateway clears an unfinished
+  // checklist only when the session has no active run, even if a later run does not own it.
   const dismissible = Boolean(
-    onDismiss && card.steps?.length && card.steps.every((step) => step.status === "completed"),
+    onDismiss &&
+    card.steps?.length &&
+    (!hasActiveRun || card.steps.every((step) => step.status === "completed")),
   );
   const dismiss = dismissible
     ? html`<button

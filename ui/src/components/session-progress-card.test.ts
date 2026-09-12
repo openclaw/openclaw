@@ -322,6 +322,29 @@ describe("renderSessionProgressCard", () => {
     expect(container.querySelector(".session-progress-card__chevron svg")).not.toBeNull();
   });
 
+  it("offers dismissal for an incomplete checklist only after its run is inactive", () => {
+    const container = document.createElement("div");
+    const renderCard = (hasActiveRun: boolean) =>
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "composer",
+          () => undefined,
+          undefined,
+          undefined,
+          undefined,
+          hasActiveRun,
+        ),
+        container,
+      );
+
+    renderCard(true);
+    expect(container.querySelector(".session-progress-card__dismiss")).toBeNull();
+
+    renderCard(false);
+    expect(container.querySelector(".session-progress-card__dismiss")).not.toBeNull();
+  });
+
   it("opens active composer progress as a native disclosure without a progress bar", () => {
     const container = document.createElement("div");
     render(
@@ -576,6 +599,25 @@ describe("renderSessionProgressCard", () => {
     const pausedStep = container.querySelector(".session-progress-card__step--paused");
     expect(pausedStep).not.toBeNull();
     expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
+  });
+
+  it("keeps a stale unfinished checklist undismissable while a later run is active", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "composer",
+        () => undefined,
+        "running",
+        RUN_STARTED_MS,
+        undefined,
+        true,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
+    expect(container.querySelector(".session-progress-card__dismiss")).toBeNull();
   });
 
   it("falls back safely for timestamps outside the Date range", () => {

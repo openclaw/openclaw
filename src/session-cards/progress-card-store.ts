@@ -124,7 +124,13 @@ export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: s
 export function writeSessionProgressCard(
   dbPathOrDb: ProgressCardDatabaseInput,
   sessionKey: string,
-  input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
+  input: {
+    markdown?: string;
+    steps?: ProgressCardStep[];
+    expectedRevision?: number;
+    /** Callers set this only after proving no run can still update the checklist. */
+    allowIncomplete?: boolean;
+  },
 ): { card: ProgressCard | null } | { cleared: true } {
   return withProgressCardDatabase(dbPathOrDb, false, (db, label) => {
     const write = (): { card: ProgressCard | null } | { cleared: true } => {
@@ -140,7 +146,7 @@ export function writeSessionProgressCard(
             !previous ||
             previous.revision !== input.expectedRevision ||
             !current?.steps?.length ||
-            current.steps.some((step) => step.status !== "completed")
+            (!input.allowIncomplete && current.steps.some((step) => step.status !== "completed"))
           ) {
             return { card: current };
           }
