@@ -342,6 +342,67 @@ describe("subagent announce seam flow", () => {
     outputTesting.setDepsForTest();
   });
 
+  it("does not recursively announce synthetic announce-run completions", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:announce-delivery",
+      childRunId: "announce:requester-settle:main:agent:main:main:run-a:yield-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "completion delivered",
+    });
+
+    expect(didAnnounce).toBe("delivered");
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcomeMock).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
+  it("delivers descendant wake completions upward", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:descendant-wake",
+      childRunId: "announce:v1:agent:main:subagent:parent:run-parent:wake",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue after descendants settled",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "descendant work completed",
+    });
+
+    expect(didAnnounce).toBe("delivered");
+    expect(agentSpy).toHaveBeenCalledOnce();
+    expect(queueEmbeddedAgentMessageWithOutcomeMock).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
+  it("delivers adopted requester-settle completions upward", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:requester-settle",
+      childRunId: "announce:requester-settle:main:agent:main:main:run-a:yield-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue after requester settlement",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "settled work completed",
+      isCompletionTaskContinuation: () => true,
+    });
+
+    expect(didAnnounce).toBe("delivered");
+    expect(agentSpy).toHaveBeenCalledOnce();
+    expect(queueEmbeddedAgentMessageWithOutcomeMock).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
   it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
     loadSessionStoreMock.mockReturnValue({
       "agent:main:subagent:test": {
