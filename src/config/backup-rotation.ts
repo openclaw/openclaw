@@ -1,80 +1,31 @@
 // Rotates config backup files while preserving recent recovery points.
+import type fs from "node:fs";
 import path from "node:path";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 const CONFIG_BACKUP_COUNT = 5;
 
-interface BackupRotationFs {
-  unlink: (path: string) => Promise<void>;
-  rename: (from: string, to: string) => Promise<void>;
-  chmod?: (path: string, mode: number) => Promise<void>;
+interface BackupMaintenanceFs<T> {
+  unlink: (path: string) => T;
+  rename: (from: string, to: string) => T;
+  chmod?: (path: string, mode: number) => T;
+  copyFile: (from: string, to: string) => T;
 }
 
-interface BackupMaintenanceFs extends BackupRotationFs {
-  copyFile: (from: string, to: string) => Promise<void>;
-}
-
-/**
- * Advances the config `.bak` ring before a new primary backup is copied in.
- *
- * Missing slots are ignored so interrupted writes or first-run configs do not
- * block the next config write.
- */
-async function rotateConfigBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-  assertCurrent: () => void,
-): Promise<void> {
-  if (CONFIG_BACKUP_COUNT <= 1) {
-    return;
-  }
+/** One operation order for asynchronous include adapters and synchronous root publication. */
+function* configBackupOperations<T>(configPath: string, ioFs: BackupMaintenanceFs<T>) {
   const backupBase = `${configPath}.bak`;
-  const maxIndex = CONFIG_BACKUP_COUNT - 1;
-  assertCurrent();
-  await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
-    assertCurrent();
-    // best-effort
-  });
-  for (let index = maxIndex - 1; index >= 1; index -= 1) {
-    assertCurrent();
-    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
-      assertCurrent();
-      // best-effort
-    });
+  yield () => ioFs.unlink(`${backupBase}.${CONFIG_BACKUP_COUNT - 1}`);
+  for (let index = CONFIG_BACKUP_COUNT - 2; index >= 0; index--) {
+    const from = index === 0 ? backupBase : `${backupBase}.${index}`;
+    yield () => ioFs.rename(from, `${backupBase}.${index + 1}`);
   }
-  assertCurrent();
-  await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
-    assertCurrent();
-    // best-effort
-  });
-}
-
-/**
- * Sets owner-only permissions on every backup slot when chmod exists.
- *
- * Backups are copied on mixed filesystems, so copy mode preservation is not a
- * portable security guarantee.
- */
-async function hardenBackupPermissions(
-  configPath: string,
-  ioFs: BackupRotationFs,
-  assertCurrent: () => void,
-): Promise<void> {
-  if (!ioFs.chmod) {
-    return;
-  }
-  const backupBase = `${configPath}.bak`;
-  assertCurrent();
-  await ioFs.chmod(backupBase, 0o600).catch(() => {
-    assertCurrent();
-    // best-effort
-  });
-  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
-    assertCurrent();
-    await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch(() => {
-      assertCurrent();
-      // best-effort
-    });
+  yield () => ioFs.copyFile(configPath, backupBase);
+  if (ioFs.chmod) {
+    const chmod = ioFs.chmod;
+    for (let index = 0; index < CONFIG_BACKUP_COUNT; index++) {
+      yield () => chmod(index === 0 ? backupBase : `${backupBase}.${index}`, 0o600);
+    }
   }
 }
 
@@ -126,7 +77,7 @@ export async function createPreUpdateConfigSnapshot(params: {
 /** Runs rotation, primary copy, and permission hardening. */
 export async function maintainConfigBackups(
   configPath: string,
-  ioFs: BackupMaintenanceFs,
+  ioFs: BackupMaintenanceFs<Promise<void>>,
   assertConfigPathForWrite?: () => void,
 ): Promise<void> {
   const sourceGuard = captureConfigWriteLockGuard(configPath);
@@ -134,11 +85,32 @@ export async function maintainConfigBackups(
     sourceGuard?.();
     assertConfigPathForWrite?.();
   };
-  await rotateConfigBackups(configPath, ioFs, assertCurrent);
-  assertCurrent();
-  await ioFs.copyFile(configPath, `${configPath}.bak`).catch(() => {
+  for (const operation of configBackupOperations(configPath, ioFs)) {
     assertCurrent();
-    // best-effort
-  });
-  await hardenBackupPermissions(configPath, ioFs, assertCurrent);
+    await operation().catch(() => {
+      // Missing slots and backup I/O failures remain best effort.
+      assertCurrent();
+    });
+  }
+}
+
+export function maintainConfigBackupsSync(
+  configPath: string,
+  ioFs: typeof fs,
+  assertCurrent?: () => void,
+): void {
+  for (const operation of configBackupOperations(configPath, {
+    unlink: ioFs.unlinkSync,
+    rename: ioFs.renameSync,
+    copyFile: ioFs.copyFileSync,
+    chmod: ioFs.chmodSync,
+  })) {
+    assertCurrent?.();
+    try {
+      operation();
+    } catch {
+      // Match asynchronous backup maintenance without yielding during publication.
+      assertCurrent?.();
+    }
+  }
 }

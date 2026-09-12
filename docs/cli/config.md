@@ -566,6 +566,11 @@ Effective changes to `plugins.entries` (or any subpath) require a restart, since
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
 
+If staging a root config save fails, the existing backup ring is left untouched. If a
+copy fallback removes the root before a conflict, OpenClaw restores the original
+root when it still owns the missing destination. Otherwise, the error reports
+partial publication and the backup location to inspect before another save.
+
 If the file is saved but later processing fails, the error names the written file
 and reports whether the write was rolled back. This can name an included file
 when that file owns the edited setting. If rollback did not happen or could not

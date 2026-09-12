@@ -231,7 +231,7 @@ describe("writeConfigFile canonical reread", () => {
     { writer: "runtime", authority: "explicit" },
     { writer: "runtime", authority: "ambient" },
   ] as const)(
-    "preserves the compensation fallback policy for $writer writes with $authority authority",
+    "restores through guarded copy fallback for $writer writes with $authority authority",
     async ({ writer, authority }) => {
       await withTempHome(async (home) => {
         const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -249,6 +249,10 @@ describe("writeConfigFile canonical reread", () => {
         let compensationDenied = false;
         const renameSync = fsNode.renameSync;
         vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {
+          if (destination === configPath && committed) {
+            compensationDenied = true;
+            throw Object.assign(new Error("compensation rename denied"), { code: "EPERM" });
+          }
           renameSync(source, destination);
           if (destination === configPath) {
             committed = true;
@@ -256,14 +260,6 @@ describe("writeConfigFile canonical reread", () => {
               env.OPENCLAW_CONFIG_PATH = `${configPath}.replacement`;
             }
           }
-        });
-        const rename = fsNode.promises.rename.bind(fsNode.promises);
-        vi.spyOn(fsNode.promises, "rename").mockImplementation(async (source, destination) => {
-          if (destination === configPath && committed) {
-            compensationDenied = true;
-            throw Object.assign(new Error("compensation rename denied"), { code: "EPERM" });
-          }
-          await rename(source, destination);
         });
         if (writer !== "direct") {
           setRuntimeConfigSnapshotRefreshHandler({
@@ -293,7 +289,7 @@ describe("writeConfigFile canonical reread", () => {
           expect(failure).toMatchObject({
             name: "ConfigWritePostCommitError",
             configPath,
-            rollbackStatus: authority === "ordinary" ? "restored" : "unknown",
+            rollbackStatus: "restored",
           });
           expect(failure).toHaveProperty(
             "message",
@@ -327,11 +323,7 @@ describe("writeConfigFile canonical reread", () => {
           });
         }
         expect(compensationDenied).toBe(true);
-        if (authority === "ordinary") {
-          expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        } else {
-          expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19001);
-        }
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
       });
     },
   );

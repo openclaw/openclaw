@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isMissingPathError } from "../infra/errors.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
@@ -21,6 +21,7 @@ export function createGuardedConfigFileSystem(
   publication?: {
     snapshot: ConfigFileSnapshot;
     includeGraph: { hashes: Record<string, string>; targets: Record<string, string> };
+    onRootRemoved?: () => void;
   },
 ): typeof fs {
   if (!assertCurrent && !publication) {
@@ -65,6 +66,9 @@ export function createGuardedConfigFileSystem(
       }
       fsModule.rmSync(filePath, options);
       if (filePath === configPath && expectedPublication) {
+        if (expectedPublication.snapshot.exists) {
+          expectedPublication.onRootRemoved?.();
+        }
         // Only this successful removal advances the captured root expectation.
         expectedPublication = {
           ...expectedPublication,
@@ -213,14 +217,17 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
     return false;
   }
   if (params.previousSnapshot.exists && typeof params.previousSnapshot.raw === "string") {
-    await replaceFileAtomic({
+    replaceFileAtomicSync({
       filePath: params.configPath,
       content: params.previousSnapshot.raw,
       dirMode: 0o700,
       mode: 0o600,
       tempPrefix: path.basename(params.configPath),
-      copyFallbackOnPermissionError: !assertCurrent,
-      fileSystem: createGuardedConfigFileSystem(params.configPath, params.fsModule, assertCurrent),
+      copyFallbackOnPermissionError: true,
+      fileSystem: createGuardedConfigFileSystem(params.configPath, params.fsModule, assertCurrent, {
+        snapshot: { ...params.previousSnapshot, exists: currentRaw !== null, raw: currentRaw },
+        includeGraph: { hashes: {}, targets: {} },
+      }),
     });
     return true;
   }

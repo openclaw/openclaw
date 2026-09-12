@@ -489,7 +489,7 @@ async function persistProviderAuthResult(params: {
         configSnapshot: params.configSnapshot,
         configPatch,
         credentialsSaved: persistedProfiles.length > 0,
-        beforeCommit: params.assertCurrent,
+        writeOptions: { assertCurrent: params.assertCurrent },
         finalizeConfig: (replayed, cfg) => {
           const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
           const next = restorePriorAgentsDefaultsModelUnlessOptIn({

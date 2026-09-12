@@ -167,11 +167,8 @@ export async function completeProviderModelAccess(params: {
       return config;
     },
     undefined,
-    () => {
-      params.assertCurrent?.();
-      params.beforeCommit?.();
-    },
-    attachRuntimeConfigWriteApplication({}, application),
+    params.beforeCommit,
+    attachRuntimeConfigWriteApplication({ assertCurrent: params.assertCurrent }, application),
   );
   const status = application.claimed ? await application.result : "unclaimed";
   logConfigUpdated(params.runtime);

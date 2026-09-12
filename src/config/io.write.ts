@@ -12,7 +12,7 @@ import {
   recordUpdateDoctorConfigWrite,
 } from "../infra/update-doctor-result.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
-import { maintainConfigBackups } from "./backup-rotation.js";
+import { maintainConfigBackupsSync } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
   configSnapshotAuditRecordMatchesPath,
@@ -479,17 +479,12 @@ export async function writeConfigFileFromContext(
     });
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
-  let committed = false;
+  const publication: { phase: "unpublished" | "removed" | "published" | "accepted" } = {
+    phase: "unpublished",
+  };
   let rollbackStatus: ConfigWriteRollbackStatus = "not-restored";
   try {
-    const hasCapturedIncludes = Object.keys(includeFileHashes).length > 0;
     options.assertConfigPathForWrite?.();
-    if (options.baseSnapshot) {
-      assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
-    }
-    if (deps.fs.existsSync(configPath)) {
-      await maintainConfigBackups(configPath, deps.fs.promises, options.assertConfigPathForWrite);
-    }
     if (options.baseSnapshot) {
       assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
     }
@@ -507,9 +502,13 @@ export async function writeConfigFileFromContext(
       configPath,
       deps.fs,
       options.assertConfigPathForWrite,
-      options.baseSnapshot || hasCapturedIncludes
-        ? { snapshot, includeGraph: { hashes: includeFileHashes, targets: includeFileTargets } }
-        : undefined,
+      {
+        snapshot,
+        includeGraph: { hashes: includeFileHashes, targets: includeFileTargets },
+        onRootRemoved: () => {
+          publication.phase = "removed";
+        },
+      },
     );
     // Keep rename and copy publication in one turn after asynchronous preparation.
     const result = replaceFileAtomicSync({
@@ -520,32 +519,15 @@ export async function writeConfigFileFromContext(
       tempPrefix: path.basename(configPath),
       copyFallbackOnPermissionError: true,
       fileSystem: guardedFs,
+      beforeRename: () => {
+        if (deps.fs.existsSync(configPath)) {
+          maintainConfigBackupsSync(configPath, deps.fs, options.assertConfigPathForWrite);
+        }
+      },
     });
-    committed = true;
-    try {
-      options.assertConfigPathForWrite?.();
-    } catch (error) {
-      try {
-        // A post-publication refusal cannot grant a stale executor compensation.
-        sourceGuard?.();
-        const rolledBack = await rollbackConfigFileWriteIfUnchanged({
-          configPath,
-          previousSnapshot: snapshot,
-          committedHash: nextHash,
-          fsModule: deps.fs,
-          assertCurrent: sourceGuard,
-        });
-        rollbackStatus = rolledBack ? "restored" : "not-restored";
-      } catch (rollbackError) {
-        rollbackStatus = "unknown";
-        throw new AggregateError(
-          [error, rollbackError],
-          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-          { cause: rollbackError },
-        );
-      }
-      throw error;
-    }
+    publication.phase = "published";
+    options.assertConfigPathForWrite?.();
+    publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
     try {
       recordConfigWriteMetadata(new Date().toISOString(), options.lastTouchedVersionOverride);
@@ -639,6 +621,25 @@ export async function writeConfigFileFromContext(
     };
   } catch (error) {
     let failure = error;
+    if (publication.phase === "removed" || publication.phase === "published") {
+      try {
+        rollbackStatus = (await rollbackConfigFileWriteIfUnchanged({
+          configPath,
+          previousSnapshot: snapshot,
+          committedHash: publication.phase === "published" ? nextHash : hashConfigRaw(null),
+          fsModule: deps.fs,
+          assertCurrent: sourceGuard,
+        }))
+          ? "restored"
+          : "not-restored";
+      } catch (rollbackError) {
+        rollbackStatus = "unknown";
+        failure = new AggregateError(
+          [error, rollbackError],
+          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+        );
+      }
+    }
     try {
       try {
         sourceGuard?.();
@@ -670,9 +671,14 @@ export async function writeConfigFileFromContext(
     } catch (failureDuringAudit) {
       failure = failureDuringAudit;
     }
-    if (!committed) {
+    if (publication.phase === "unpublished") {
       throw failure;
     }
-    throw new ConfigWritePostCommitError({ configPath, rollbackStatus, cause: failure });
+    throw new ConfigWritePostCommitError({
+      configPath,
+      rollbackStatus,
+      cause: failure,
+      publication: publication.phase === "removed" ? "partial" : "complete",
+    });
   }
 }

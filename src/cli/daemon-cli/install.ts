@@ -373,8 +373,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         ...configWriteOptions,
         ...(isUpdateOwnedGatewayServiceCommand()
           ? {
-              beforeCommit: async () => {
-                await configWriteOptions.beforeCommit?.();
+              assertCurrent: () => {
+                configWriteOptions.assertCurrent?.();
                 assertGatewayServiceUpdateCurrent();
               },
             }

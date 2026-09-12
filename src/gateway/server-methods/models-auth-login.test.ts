@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -296,6 +297,72 @@ describe("models.authLogin ownership", () => {
           claim?.settle("failed");
           stop();
           await response;
+        }
+      });
+    },
+  );
+
+  it.each(["preparation", "staging"])(
+    "does not publish model access after a disconnect during %s",
+    async (boundary) => {
+      await withOpenClawTestState({ label: "wizard-policy-disconnect" }, async (state) => {
+        const config = structuredClone(modelConfig);
+        await state.writeConfig(config);
+        const before = await fs.readFile(state.configPath, "utf8");
+        const shared = await vi.importActual<typeof import("../../commands/models/shared.js")>(
+          "../../commands/models/shared.js",
+        );
+        hooks.writeConfig.mockImplementation((...args) => shared.updateConfig(...args));
+        hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+          requestModelAccess(options);
+          return result;
+        });
+        const h = harness(config);
+        await h.start();
+        const prompt = await h.next();
+        const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+        const lockCancellation = session.lockCancellation.bind(session);
+        const lockSpy = vi.spyOn(session, "lockCancellation").mockImplementation(() => {
+          lockCancellation();
+          if (boundary === "preparation") {
+            queueMicrotask(() => h.controller.abort());
+          }
+        });
+        const openSync = syncFs.openSync;
+        let stagedFd: number | undefined;
+        const openSpy = vi.spyOn(syncFs, "openSync").mockImplementation((file, flags, mode) => {
+          const fd = openSync(file, flags, mode);
+          if (
+            typeof file === "string" &&
+            file.startsWith(`${state.configPath}.`) &&
+            file.endsWith(".tmp")
+          ) {
+            stagedFd = fd;
+          }
+          return fd;
+        });
+        const writeFileSync = syncFs.writeFileSync;
+        const writeSpy = vi
+          .spyOn(syncFs, "writeFileSync")
+          .mockImplementation((file, data, options) => {
+            writeFileSync(file, data, options);
+            if (boundary === "staging" && file === stagedFd) {
+              h.controller.abort();
+            }
+          });
+        try {
+          const terminal = await h.next({
+            stepId: expectDefined(prompt.step, "model access question").id,
+            value: "all",
+          });
+          await whenAdmittedWizardSessionSettled(session);
+          expect(h.controller.signal.aborted).toBe(true);
+          expect(terminal.status).toBe("error");
+          expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+        } finally {
+          writeSpy.mockRestore();
+          openSpy.mockRestore();
+          lockSpy.mockRestore();
         }
       });
     },

@@ -11,11 +11,14 @@ export type ConfigWriteRollbackStatus = "restored" | "not-restored" | "unknown";
 export class ConfigWritePostCommitError extends Error {
   readonly configPath: string;
   readonly rollbackStatus: ConfigWriteRollbackStatus;
+  readonly publication: "complete" | "partial";
+  readonly recoveryBackupPath?: string;
 
   constructor(params: {
     configPath: string;
     rollbackStatus: ConfigWriteRollbackStatus;
     cause: unknown;
+    publication?: "complete" | "partial";
   }) {
     const recovery = {
       restored: "The config write was rolled back.",
@@ -23,12 +26,17 @@ export class ConfigWritePostCommitError extends Error {
       unknown: "Rollback could not be confirmed. Inspect the current config before retrying.",
     }[params.rollbackStatus];
     super(
-      `Config was written to ${params.configPath}, but post-write processing failed: ${formatErrorMessage(params.cause)}\n${recovery}`,
+      params.publication === "partial"
+        ? `Config publication failed after removing ${params.configPath}: ${formatErrorMessage(params.cause)}\n${recovery} Inspect recovery backups at ${params.configPath}.bak.`
+        : `Config was written to ${params.configPath}, but post-write processing failed: ${formatErrorMessage(params.cause)}\n${recovery}`,
       { cause: params.cause },
     );
     this.name = "ConfigWritePostCommitError";
     this.configPath = params.configPath;
     this.rollbackStatus = params.rollbackStatus;
+    this.publication = params.publication ?? "complete";
+    this.recoveryBackupPath =
+      params.publication === "partial" ? `${params.configPath}.bak` : undefined;
   }
 }
 
