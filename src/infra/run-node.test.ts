@@ -1238,59 +1238,71 @@ describe("run-node script", () => {
     expect(runRuntimePostBuild).toHaveBeenCalledOnce();
   });
 
-  it("serializes runtime postbuild restaging across concurrent clean launchers", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+  it.for(["stamp", "overlay"])(
+    "serializes concurrent runtime restaging with a missing %s",
+    async (missing, { tmp }) => {
+      await setupStampedProject(tmp, {
+        files:
+          missing === "overlay"
+            ? {
+                [DIST_EXTENSION_INDEX]: "export default {};\n",
+                [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+              }
+            : {},
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+      });
 
-    let activePostbuilds = 0;
-    let maxActivePostbuilds = 0;
-    let markPostbuildStarted!: () => void;
-    let releasePostbuild!: () => void;
-    const postbuildStarted = new Promise<void>((resolve) => {
-      markPostbuildStarted = resolve;
-    });
-    const postbuildRelease = new Promise<void>((resolve) => {
-      releasePostbuild = resolve;
-    });
-    const runRuntimePostBuild = vi.fn(async () => {
-      activePostbuilds += 1;
-      maxActivePostbuilds = Math.max(maxActivePostbuilds, activePostbuilds);
-      markPostbuildStarted();
-      await postbuildRelease;
-      activePostbuilds -= 1;
-    });
-    const { spawn, spawnSync } = createCurrentGitSpawnRecorder();
+      let markPostbuildStarted!: () => void;
+      let releasePostbuild!: () => void;
+      const postbuildStarted = new Promise<void>((resolve) => {
+        markPostbuildStarted = resolve;
+      });
+      const postbuildRelease = new Promise<void>((resolve) => {
+        releasePostbuild = resolve;
+      });
+      let markWaiting!: () => void;
+      const waitingForLock = new Promise<void>((resolve) => {
+        markWaiting = resolve;
+      });
+      const runRuntimePostBuild = vi.fn(async () => {
+        markPostbuildStarted();
+        await postbuildRelease;
+        if (missing === "overlay") {
+          const runtimePath = resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX);
+          await fs.mkdir(path.dirname(runtimePath), { recursive: true });
+          await fs.copyFile(resolvePath(tmp, DIST_EXTENSION_INDEX), runtimePath);
+        }
+      });
+      const { spawn, spawnSync } = createCurrentGitSpawnRecorder();
 
-    const runs = Promise.all([
-      runStatusCommand({
-        tmp,
+      const options = {
         spawn,
         spawnSync,
         env: {
+          OPENCLAW_RUNNER_LOG: "1",
           OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
         },
-        runRuntimePostBuild,
-      }),
-      runStatusCommand({
-        tmp,
-        spawn,
-        spawnSync,
-        env: {
-          OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+        stderr: {
+          write: (chunk: string | Uint8Array) => {
+            if (String(chunk).includes("Waiting for TypeScript/runtime artifact lock")) {
+              markWaiting();
+            }
+            return true;
+          },
         },
         runRuntimePostBuild,
-      }),
-    ]);
+      };
+      const runs = Promise.all([runNodeCommand(tmp, options), runNodeCommand(tmp, options)]);
 
-    await postbuildStarted;
-    releasePostbuild();
-    await expect(runs).resolves.toEqual([0, 0]);
+      await postbuildStarted;
+      await waitingForLock;
+      releasePostbuild();
+      await expect(runs).resolves.toEqual([0, 0]);
 
-    expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
-    expect(maxActivePostbuilds).toBe(1);
-    expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
-  });
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
+    },
+  );
 
   it("returns the canonical build failure without starting the CLI", async ({ tmp }) => {
     const spawn = vi.fn((cmd: string, args: string[] = []) => {
@@ -1955,7 +1967,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("reports missing runtime overlay outputs from restored dist without plugin sources", async ({
+  it("restages missing runtime overlays from restored dist without plugin sources", async ({
     tmp,
   }) => {
     await setupStampedProject(tmp, {
@@ -1972,12 +1984,21 @@ describe("run-node script", () => {
     await fs.rm(resolvePath(tmp, "extensions"), { recursive: true, force: true });
     await fs.rm(resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX));
 
-    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldSync: true,
-      reason: "missing_runtime_postbuild_output",
+    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+    const runRuntimePostBuild = vi.fn(async () => {
+      await fs.copyFile(
+        resolvePath(tmp, DIST_EXTENSION_INDEX),
+        resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX),
+      );
     });
+    const exitCode = await runStatusCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
+
+    expect(exitCode).toBe(0);
+    expect(spawnCalls).toEqual([statusCommandSpawn()]);
+    expect(runRuntimePostBuild).toHaveBeenCalledOnce();
+    await expect(fs.readFile(resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX), "utf8")).resolves.toBe(
+      "export default {};\n",
+    );
   });
 
   it("does not require OpenClaw SDK alias outputs when dist extensions are absent", async ({
