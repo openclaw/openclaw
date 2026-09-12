@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { TLSSocket } from "node:tls";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -19,12 +20,15 @@ import {
   listControlUiPluginTabAuthGrants,
   listControlUiPluginWidgetKinds,
 } from "./control-ui-plugin-tabs.js";
+import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
+  createRequest,
   createResponse,
   createTestGatewayServer,
+  dispatchRequest,
   sendRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
@@ -222,6 +226,9 @@ describe("native Control UI browser assets", () => {
           expect(cookieHeaders).toHaveLength(requiresAuth ? 1 : 0);
           for (const header of cookieHeaders) {
             expect(header).toContain(`Path=${assetPath};`);
+            expect(header).toContain("HttpOnly;");
+            expect(header).toContain("SameSite=Strict;");
+            expect(header).not.toContain("; Secure;");
           }
           const cookie = cookieHeaders.map((value) => String(value).split(";")[0]).join("; ");
           for (const { assetUrl, source } of [
@@ -247,6 +254,148 @@ describe("native Control UI browser assets", () => {
           }
         },
       });
+    },
+  );
+
+  it("limits native asset HTTP cookies to direct loopback origins", async () => {
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          controlUi: { basePath: "/openclaw" },
+          trustedProxies: ["127.0.0.1", "::1"],
+        },
+      },
+      run: async () => {
+        activateFixture();
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { controlUiEnabled: true, controlUiBasePath: "/openclaw" },
+        });
+        const cases = [
+          { host: "127.0.0.1:18789", remoteAddress: "127.0.0.1", secure: false },
+          { host: "[::1]:18789", remoteAddress: "::1", secure: false },
+          { host: "localhost:18789", remoteAddress: "127.0.0.1", tls: true, secure: true },
+          { host: "localhost:18789", remoteAddress: "192.0.2.1", secure: true },
+          { host: "gateway.example:18789", remoteAddress: "127.0.0.1", secure: true },
+          {
+            host: "localhost:18789",
+            remoteAddress: "127.0.0.1",
+            headers: {
+              "x-forwarded-for": "192.0.2.2",
+              "x-forwarded-proto": "https",
+              "x-forwarded-host": "gateway.example",
+            },
+            secure: true,
+          },
+        ];
+        for (const scenario of cases) {
+          const request = createRequest({
+            path: "/openclaw/control-ui-config.json",
+            authorization: "Bearer test-token",
+            ...scenario,
+          });
+          const tlsSocket =
+            "tls" in scenario && scenario.tls ? new TLSSocket(request.socket) : undefined;
+          if (tlsSocket) {
+            Object.defineProperty(tlsSocket, "remoteAddress", { value: scenario.remoteAddress });
+            request.socket = tlsSocket;
+          }
+          try {
+            const response = createResponse();
+            await dispatchRequest(server, request, response.res);
+            expect(response.res.statusCode, JSON.stringify(scenario)).toBe(200);
+            const cookies = response.setHeader.mock.calls
+              .filter(([name]) => name === "Set-Cookie")
+              .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
+            expect(cookies).toHaveLength(1);
+            expect(cookies[0]).toContain(
+              "Path=/openclaw/__openclaw__/plugins/control-ui/native-ui/;",
+            );
+            expect(cookies[0]).toContain("SameSite=Strict;");
+            expect(String(cookies[0]).includes("; Secure;"), JSON.stringify(scenario)).toBe(
+              scenario.secure,
+            );
+          } finally {
+            tlsSocket?.destroy();
+            request.destroy();
+          }
+        }
+      },
+    });
+  });
+
+  it("keeps native asset cookies Secure for each independently present forwarded header", async () => {
+    await withTempConfig({
+      cfg: { gateway: { controlUi: { basePath: "/openclaw" } } },
+      run: async () => {
+        activateFixture();
+        // Exercise the post-authentication issuer, not an earlier proxy-attribution
+        // denial. Each header must prevent the HTTP exception on its own.
+        for (const header of [
+          "forwarded",
+          "x-real-ip",
+          "x-forwarded-for",
+          "x-forwarded-proto",
+          "x-forwarded-host",
+          "x-forwarded-prefix",
+        ]) {
+          for (const headerValue of ["present", ""]) {
+            const request = createRequest({
+              path: "/openclaw/control-ui-config.json",
+              host: "localhost:18789",
+              remoteAddress: "127.0.0.1",
+              headers: { [header]: headerValue },
+            });
+            try {
+              const response = createResponse();
+              setControlUiPluginAuthCookieForRequest(
+                request,
+                response.res,
+                "token",
+                false,
+                resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+                ["operator.read"],
+              );
+              const cookies = response.setHeader.mock.calls
+                .filter(([name]) => name === "Set-Cookie")
+                .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
+              expect(cookies, `${header}=${headerValue}`).toEqual([
+                expect.stringContaining("; Secure; SameSite=Strict;"),
+              ]);
+            } finally {
+              request.destroy();
+            }
+          }
+        }
+      },
+    });
+  });
+
+  it.each(["", "/openclaw"])(
+    "keeps opaque iframe grants Secure when native HTTP grants are allowed at %j",
+    (basePath) => {
+      const response = createResponse();
+      const nativePath = `${basePath}/__openclaw__/plugins/control-ui/native-ui/`;
+      const framePath = `${basePath}/plugin-frame/`;
+      setControlUiPluginAuthCookie(
+        response.res,
+        [
+          { pluginId: "native-ui", path: nativePath, match: "prefix", scopes: ["operator.read"] },
+          { pluginId: "native-ui", path: framePath, match: "prefix", scopes: ["operator.read"] },
+        ],
+        {
+          generation: resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+          basePath,
+          allowInsecureNativeAssets: true,
+        },
+      );
+      const cookies = response.setHeader.mock.calls
+        .filter(([name]) => name === "Set-Cookie")
+        .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
+      expect(cookies).toEqual([
+        expect.stringContaining(`Path=${nativePath}; HttpOnly; SameSite=Strict;`),
+        expect.stringContaining(`Path=${framePath}; HttpOnly; Secure; SameSite=None;`),
+      ]);
     },
   );
 
