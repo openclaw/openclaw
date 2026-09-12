@@ -691,7 +691,7 @@ describe("readRemoteMediaBuffer", () => {
       });
 
       // The 429 must not be retried until the origin's Retry-After delay elapses.
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1);
@@ -722,7 +722,7 @@ describe("readRemoteMediaBuffer", () => {
         retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0, retryAfterMs },
       });
 
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(9_999);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(retryAfterMs).toHaveBeenCalledTimes(1);
 
