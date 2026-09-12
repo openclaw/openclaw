@@ -106,7 +106,8 @@ Native dependency policy:
       Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
       behavior.
     - `scripts/run-vitest.mjs` terminates explicit non-watch Vitest runs
-      after 5 minutes with no stdout or stderr output. Set
+      when their configured no-output deadline expires. Expiry fails the run
+      even when the child shuts down with exit code zero. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
     - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
