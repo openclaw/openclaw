@@ -10,7 +10,6 @@ import {
 } from "../agent-runtime-id.js";
 import {
   resolveModelRuntimePolicy,
-  resolveModelRouteIntent,
   type AgentRuntimePolicyScope,
 } from "../model-runtime-policy.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
@@ -53,7 +52,7 @@ export function resolveAgentHarnessPolicy(
   }
   const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
     ...params,
-    routeIntent: resolveModelRouteIntent({ ...params, runtimePolicy: configured }),
+    runtimePolicy: configured,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
   });

@@ -495,6 +495,13 @@ async function resolveSessionAuthProfileOverride(params: {
             provider,
             modelId: params.modelId,
             agentId: params.agentId,
+            primaryModel: resolveDefaultModelForAgent({
+              cfg,
+              agentId: params.agentId,
+              allowManifestNormalization: false,
+              allowPluginNormalization: false,
+            }),
+            resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
           }),
         })
       : null;

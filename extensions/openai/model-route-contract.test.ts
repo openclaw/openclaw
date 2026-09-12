@@ -151,7 +151,7 @@ describe("OpenAI billing route intent", () => {
       }),
     ).toEqual({
       kind: "routes",
-      defaultRuntimeId: "codex",
+      defaultRuntimeId: "openclaw",
       preferredAuthRequirement: "subscription",
       routes: [
         {

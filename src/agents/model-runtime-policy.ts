@@ -4,7 +4,10 @@
  * Agent execution uses this to choose a model/provider-specific runtime policy
  * from agent entries, model catalog config, provider config, or QA overrides.
  */
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  parseModelCatalogRef,
+  type ProviderModelRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -281,6 +284,8 @@ export function resolveModelRuntimePolicy(
 export function resolveModelRouteIntent(
   params: Parameters<typeof resolveModelRuntimePolicy>[0] & {
     runtimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>;
+    primaryModel?: ProviderModelRef;
+    resolveProfileAuthMode?: (profileId: string) => string | undefined;
   },
 ): ProviderResolveModelRoutesContext["routeIntent"] {
   const selected = splitTrailingAuthProfile(params.modelId ?? "");
@@ -288,7 +293,10 @@ export function resolveModelRouteIntent(
     params.runtimePolicy ?? resolveModelRuntimePolicy({ ...params, modelId: selected.model });
   const runtimeId = normalizeOptionalAgentRuntimeId(configured.policy?.id);
   const selectedRequirement = resolveProviderModelRouteAuthRequirement(
-    selected.profile ? params.config?.auth?.profiles?.[selected.profile]?.mode : undefined,
+    selected.profile
+      ? (params.config?.auth?.profiles?.[selected.profile]?.mode ??
+          params.resolveProfileAuthMode?.(selected.profile))
+      : undefined,
   );
   if (selectedRequirement) {
     return {
@@ -305,11 +313,18 @@ export function resolveModelRouteIntent(
   }
   const agentId = resolveAgentRuntimePolicyAgentId(params);
   const agentEntry = agentId ? resolveAgentEntry(params.config, agentId) : undefined;
-  const primary = resolveAgentModelPrimaryValue(
-    agentEntry?.model ?? params.config.agents?.defaults?.model,
-  );
+  const primary =
+    resolveAgentModelPrimaryValue(agentEntry?.model) ??
+    resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
   const primarySelection = primary ? splitTrailingAuthProfile(primary) : undefined;
-  const primaryRef = primarySelection ? parseModelCatalogRef(primarySelection.model) : null;
+  const primaryRef = params.primaryModel
+    ? {
+        provider: params.primaryModel.provider,
+        modelId: splitTrailingAuthProfile(params.primaryModel.model).model,
+      }
+    : primarySelection
+      ? parseModelCatalogRef(primarySelection.model)
+      : null;
   if (
     !primaryRef ||
     primaryRef.provider !== resolveEffectiveProvider(params.provider, params.modelId)
@@ -324,7 +339,8 @@ export function resolveModelRouteIntent(
   const inheritedRuntimeId = normalizeOptionalAgentRuntimeId(inheritedPolicy.policy?.id);
   const primaryRequirement = resolveProviderModelRouteAuthRequirement(
     primarySelection?.profile
-      ? params.config.auth?.profiles?.[primarySelection.profile]?.mode
+      ? (params.config.auth?.profiles?.[primarySelection.profile]?.mode ??
+          params.resolveProfileAuthMode?.(primarySelection.profile))
       : undefined,
   );
   if (primaryRequirement) {

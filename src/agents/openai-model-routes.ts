@@ -1,4 +1,5 @@
 /** Cold adapter for provider-owned OpenAI model route facts. */
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { ModelApi } from "../config/types.models.js";
@@ -26,6 +27,8 @@ const OPENAI_PROVIDER_ID = "openai";
 export function createOpenAIModelRoutesResolver(params: {
   config?: OpenClawConfig;
   agentId?: string;
+  primaryModel?: ProviderModelRef;
+  resolveProfileAuthMode?: (profileId: string) => string | undefined;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
 }) {
@@ -50,6 +53,8 @@ export function createOpenAIModelRoutesResolver(params: {
         provider: OPENAI_PROVIDER_ID,
         modelId: observed.modelId,
         agentId: params.agentId,
+        primaryModel: params.primaryModel,
+        resolveProfileAuthMode: params.resolveProfileAuthMode,
       });
     return resolveRoutes({
       modelId: observed.modelId ? splitTrailingAuthProfile(observed.modelId).model : undefined,
@@ -113,6 +118,8 @@ export function resolveOpenAIModelRoutes(params: {
   baseUrl?: unknown;
   config?: OpenClawConfig;
   agentId?: string;
+  primaryModel?: ProviderModelRef;
+  resolveProfileAuthMode?: (profileId: string) => string | undefined;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
@@ -124,6 +131,8 @@ export function resolveOpenAIModelRoutes(params: {
   return createOpenAIModelRoutesResolver({
     config: params.config,
     agentId: params.agentId,
+    primaryModel: params.primaryModel,
+    resolveProfileAuthMode: params.resolveProfileAuthMode,
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
   })({

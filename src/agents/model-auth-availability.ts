@@ -74,6 +74,7 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveCliRuntimeExecutionProvider } from "./model-runtime-aliases.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
   createOpenAIModelRoutesResolver,
   resolveConfiguredOpenAIAuthMode,
@@ -421,6 +422,13 @@ export function createModelAuthAvailabilityResolver(
   const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)({
     config: params.cfg,
     agentId: params.agentId,
+    primaryModel: resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    }),
+    resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
     env,
   });
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
@@ -1187,9 +1195,7 @@ export function createModelAuthAvailabilityResolver(
         ? undefined
         : (configuredAuthMode ?? (basePolicy.hasDirectMaterial ? "api-key" : undefined));
     const automaticRouteAuthMode =
-      basePolicy.hasDirectFallback && configuredAuthMode && !basePolicy.required
-        ? undefined
-        : selectedConfiguredMode;
+      basePolicy.hasDirectFallback && !basePolicy.required ? undefined : selectedConfiguredMode;
     const targetForMode = (mode: string | undefined): AuthTarget => {
       const requirement = resolveProviderModelRouteAuthRequirement(mode);
       const route = requirement

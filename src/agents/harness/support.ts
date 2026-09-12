@@ -20,6 +20,7 @@ import {
   resolveModelRouteIntent,
   type AgentRuntimePolicyScope,
 } from "../model-runtime-policy.js";
+import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
 import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
@@ -183,6 +184,14 @@ export function buildAgentHarnessSupportContext(
             provider: params.provider,
             modelId: params.modelId,
             agentId,
+            primaryModel: params.config
+              ? resolveDefaultModelForAgent({
+                  cfg: params.config,
+                  agentId,
+                  allowManifestNormalization: false,
+                  allowPluginNormalization: false,
+                })
+              : undefined,
           }),
         });
   const modelProvider =

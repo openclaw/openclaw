@@ -382,3 +382,79 @@ describe("OpenAI materialized route readiness", () => {
     },
   );
 });
+
+describe("declared OpenAI fallback routing", () => {
+  it.each(["profile-only", "plain-literal-fallback", "explicit-api-auth"] as const)(
+    "keeps planner and availability aligned for %s",
+    (shape) => {
+      const explicitApi = shape === "explicit-api-auth";
+      const config: OpenClawConfig =
+        shape === "profile-only"
+          ? {}
+          : {
+              models: {
+                providers: {
+                  openai: {
+                    baseUrl: "",
+                    models: [],
+                    apiKey: "synthetic-direct-key",
+                    auth: explicitApi ? "api-key" : undefined,
+                  },
+                },
+              },
+            };
+      const store = authStore(
+        {
+          "openai:subscription": {
+            type: "oauth",
+            provider: "openai",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 600_000,
+          },
+        },
+        { openai: ["openai:subscription"] },
+      );
+      const availability = createModelAuthAvailabilityResolver({
+        cfg: config,
+        authStore: store,
+        env: {},
+      }).evaluateModelAuth("openai", { modelId: "gpt-5.5" });
+      expect
+        .soft({
+          available: availability.availability,
+          profileId: availability.selectedProfileId,
+          requirement: availability.selectedRoute?.authRequirement,
+        })
+        .toEqual({
+          available: true,
+          profileId: explicitApi ? undefined : "openai:subscription",
+          requirement: explicitApi ? "api-key" : "subscription",
+        });
+      const preparation = prepareAgentRuntimeAuth({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        env: {},
+        authProfileStore: store,
+        harnessId: "openclaw",
+        harnessRuntime: "openclaw",
+      });
+      const profileAttempt = ["profile", "openai:subscription", "subscription", undefined];
+      expect(
+        preparation.attempts.map((attempt) => [
+          attempt.kind,
+          attempt.profileId,
+          attempt.plan.modelRoute?.authRequirement,
+          attempt.requiresPriorProfileAttempt,
+        ]),
+      ).toEqual(
+        explicitApi
+          ? [["direct", undefined, "api-key", false]]
+          : shape === "plain-literal-fallback"
+            ? [profileAttempt, ["direct", undefined, "api-key", true]]
+            : [profileAttempt],
+      );
+    },
+  );
+});

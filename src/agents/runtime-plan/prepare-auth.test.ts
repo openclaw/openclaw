@@ -762,6 +762,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       prepareAgentRuntimeAuth({
         provider: "openai",
         modelId: "gpt-5.5",
+        routeIntent: { authRequirement: "api-key", source: "explicit" },
         config: {
           models: {
             providers: {

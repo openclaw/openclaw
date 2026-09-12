@@ -43,6 +43,7 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { resolveModelRouteIntent } from "./model-runtime-policy.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
@@ -252,6 +253,25 @@ async function prepareSimpleCompletionModelCore(
           })
         : undefined;
 
+    const primaryModel = params.cfg
+      ? resolveDefaultModelForAgent({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          allowManifestNormalization: false,
+          allowPluginNormalization: false,
+        })
+      : undefined;
+    const resolveProfileAuthMode = (profileId: string) => authStore?.profiles[profileId]?.type;
+    const routeIntent = params.agentRuntimeId
+      ? { runtimeId: params.agentRuntimeId, source: "explicit" as const }
+      : resolveModelRouteIntent({
+          config: params.cfg,
+          provider: initialModel.provider,
+          modelId: initialModel.id,
+          agentId: params.agentId,
+          primaryModel,
+          resolveProfileAuthMode,
+        });
     const routeResolution = resolveOpenAIModelRoutes({
       provider: initialModel.provider,
       modelId: initialModel.id,
@@ -259,13 +279,12 @@ async function prepareSimpleCompletionModelCore(
       baseUrl: initialModel.baseUrl,
       config: params.cfg,
       agentId: params.agentId,
+      routeIntent,
+      resolveProfileAuthMode,
       pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
         params.profileId ? authStore?.profiles[params.profileId]?.type : undefined,
       ),
       env: process.env,
-      ...(params.agentRuntimeId
-        ? { routeIntent: { runtimeId: params.agentRuntimeId, source: "explicit" as const } }
-        : {}),
     });
     const preparedAuth =
       routeResolution?.kind === "routes"
@@ -276,6 +295,7 @@ async function prepareSimpleCompletionModelCore(
             modelBaseUrl: initialModel.baseUrl,
             config: params.cfg,
             agentId: params.agentId,
+            routeIntent,
             agentDir: params.agentDir,
             workspaceDir,
             authProfileStore: authStore,
@@ -284,9 +304,6 @@ async function prepareSimpleCompletionModelCore(
             sessionAuthProfileSource: params.profileId ? "user" : "auto",
             ...(params.bindAuthOwner && params.profileId
               ? { allowAuthProfileFallback: false }
-              : {}),
-            ...(params.agentRuntimeId
-              ? { routeIntent: { runtimeId: params.agentRuntimeId, source: "explicit" as const } }
               : {}),
           })
         : undefined;

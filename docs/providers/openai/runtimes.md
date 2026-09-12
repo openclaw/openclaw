@@ -24,14 +24,13 @@ When provider/model `agentRuntime` policy is unset or `auto`, OpenAI's
 provider-owned route policy chooses the implicit runtime from the effective
 endpoint and adapter:
 
-| Effective route facts                                                                                                                                                           | Implicit runtime                              |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Exact official Platform HTTPS endpoint with `openai-responses`, or exact official ChatGPT HTTPS endpoint with `openai-chatgpt-responses`; no authored provider request override | Codex may be selected                         |
-| Official `openai-completions` adapter with a supported ChatGPT model and eligible subscription and API-key profiles; no explicit API route intent                               | Subscription preferred; Codex may be selected |
-| `openai-completions` selected with API-key authentication                                                                                                                       | OpenClaw                                      |
-| Custom endpoint                                                                                                                                                                 | OpenClaw                                      |
-| Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected                                      |
-| Route with an authored provider/model request override                                                                                                                          | OpenClaw                                      |
+| Effective route facts                                                                                                                                                           | Implicit runtime      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Exact official Platform HTTPS endpoint with `openai-responses`, or exact official ChatGPT HTTPS endpoint with `openai-chatgpt-responses`; no authored provider request override | Codex may be selected |
+| Authored `openai-completions` adapter                                                                                                                                           | OpenClaw              |
+| Custom endpoint                                                                                                                                                                 | OpenClaw              |
+| Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected              |
+| Route with an authored provider/model request override                                                                                                                          | OpenClaw              |
 
 Valid model-scoped `params.fastMode` / `params.fast_mode`, cutoff, and `thinking`
 values are typed agent-runtime controls, not authored provider request params.
@@ -50,8 +49,11 @@ auth and ChatGPT/Codex subscription auth remain distinct.
 An official Completions adapter alone does not pin a supported model to metered
 billing: older configurations used that adapter with Codex subscription auth.
 When both credential kinds are eligible, automatic selection prefers the
-subscription route. Required profile bindings, provider auth settings, and
-explicit auth order still take precedence. An authored OpenClaw runtime choice
+subscription route. That preference does not change the implicit runtime or
+require installing Codex for an API-only configuration. A literal provider
+`apiKey` without an `auth` override remains a fallback after eligible profiles.
+Required profile bindings, provider auth settings, configured secret references,
+and explicit auth order still take precedence. An authored OpenClaw runtime choice
 prefers the API route when both kinds are eligible; runtime compatibility is
 checked independently. Unpinned heartbeat and subagent models inherit their
 default model's route intent. Doctor reports a resolved billing-route change

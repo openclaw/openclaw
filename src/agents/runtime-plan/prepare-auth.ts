@@ -28,6 +28,7 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
+import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-model-routes.js";
 import {
   buildProviderModelAuthDirectSource,
@@ -419,7 +420,7 @@ export function prepareAgentRuntimeAuth(
       ? directSource(selectedConfiguredAuthMode)
       : undefined;
   const automaticRouteAuthMode =
-    fallbackDirectSource && configuredAuthMode && !providerBindingSuppressesProfiles
+    fallbackDirectSource && !providerBindingSuppressesProfiles
       ? undefined
       : selectedConfiguredAuthMode;
   const ownership = selectedProfileId
@@ -459,6 +460,16 @@ export function prepareAgentRuntimeAuth(
     baseUrl: params.modelBaseUrl,
     config: params.config,
     agentId: params.agentId,
+    primaryModel:
+      !params.routeIntent && params.config
+        ? resolveDefaultModelForAgent({
+            cfg: params.config,
+            agentId: params.agentId,
+            allowManifestNormalization: false,
+            allowPluginNormalization: false,
+          })
+        : undefined,
+    resolveProfileAuthMode: (profileId) => params.authProfileStore?.profiles[profileId]?.type,
     routeIntent: params.routeIntent,
     pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
       sourcePlan.kind === "required"

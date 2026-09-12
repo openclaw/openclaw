@@ -675,15 +675,9 @@ export function resolveModelRoutes(
   }
   const preferredAuthRequirement =
     intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription";
-  const preferredRoute = resolution.routes.find(
-    (candidate) => candidate.authRequirement === preferredAuthRequirement,
-  );
   return {
     ...resolution,
     preferredAuthRequirement,
-    defaultRuntimeId: preferredRoute
-      ? defaultRuntimeIdForRoute(preferredRoute)
-      : resolution.defaultRuntimeId,
   };
 }
 

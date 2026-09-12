@@ -58,7 +58,7 @@ describe("resolveAgentHarnessPolicy", () => {
     {
       name: "authored Completions route",
       params: { config: openAIProviderConfig({ api: "openai-completions" }) },
-      runtime: "codex",
+      runtime: "openclaw",
     },
     {
       name: "explicit API runtime on Completions",
@@ -219,7 +219,7 @@ describe("resolveAgentHarnessPolicy", () => {
     {
       name: "later route facts fill an omitted adapter",
       models: [{ id: "gpt-5.5" }, { id: "gpt-5.5", api: "openai-completions" }],
-      runtime: "codex",
+      runtime: "openclaw",
       api: "openai-completions",
     },
     {
@@ -228,7 +228,7 @@ describe("resolveAgentHarnessPolicy", () => {
         { id: "openai/gpt-5.5", api: "openai-responses" },
         { id: "gpt-5.5", api: "openai-completions" },
       ],
-      runtime: "codex",
+      runtime: "openclaw",
       api: "openai-completions",
     },
     {
