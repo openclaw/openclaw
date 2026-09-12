@@ -25,6 +25,35 @@ const artifactPreservingReads = resolveGlobalSingleton(
   () => new AsyncLocalStorage<boolean>(),
 );
 
+const disposableStateReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.disposableStateReads"),
+  () => new AsyncLocalStorage<{ path: string; active: boolean }[]>(),
+);
+
+/** The caller owns this private database and removes its files after the scope closes. */
+export async function withDisposableOpenClawStateReads<T>(
+  pathname: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const scope = { path: path.resolve(pathname), active: true };
+  try {
+    return await disposableStateReads.run(
+      [...(disposableStateReads.getStore() ?? []), scope],
+      operation,
+    );
+  } finally {
+    // Async descendants can retain the context after its owner starts cleanup.
+    scope.active = false;
+  }
+}
+
+function requiresArtifactPreservingSnapshot(pathname: string): boolean {
+  return (
+    isArtifactPreservingStateRead() &&
+    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname)
+  );
+}
+
 /** Admission scopes every nested reader without changing normal live-read semantics. */
 export function withArtifactPreservingStateReads<T>(operation: () => T): T {
   return artifactPreservingReads.run(true, operation);
@@ -103,7 +132,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   // Even read-only SQLite opens can create a missing WAL. The existing worker
   // snapshots committed WAL pages without touching source sidecars or caller-held locks.
-  const prepared = isArtifactPreservingStateRead()
+  const prepared = requiresArtifactPreservingSnapshot(pathname)
     ? prepareSqliteReadOnlyLocationSync(pathname)
     : undefined;
   return withOpenClawStateReadOnlyLocation(operation, pathname, prepared ?? pathname);
@@ -253,6 +282,9 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     }
     const env = options.env ?? process.env;
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+    if (!requiresArtifactPreservingSnapshot(pathname)) {
+      return withOpenClawStateReadOnlyLocation(operation, pathname, pathname);
+    }
     const prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
     });
