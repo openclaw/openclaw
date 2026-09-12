@@ -1,10 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
+import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
 import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { runStep } from "./update-runner-command.js";
 import {
   buildUpdateDoctorEnv,
@@ -15,12 +16,19 @@ import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import {
+  resolveGitDoctorEntry,
+  runGitDoctorStep,
+  runGitUpstreamStep,
+} from "./update-runner-git-steps.js";
+import {
   prepareGitMutation,
   readBranchName,
   resolveChannelTag,
+  resolveReleaseTagRemote,
   selectGitInspectionTarget,
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
+import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
 import type {
   CommandRunner,
   RunStepOptions,
@@ -101,7 +109,9 @@ export async function updateGitCheckout(params: {
   let allowGatewayActivation = opts.allowGatewayActivation === true;
   let createdDevBranchDuringUpdate = false;
   let mutationPrepared = false;
+  let sourceMutationStarted = false;
   let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
+  let candidateTransfer: Awaited<ReturnType<typeof prepareGitCandidateTransfer>>;
   let stateMigrationStarted = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
   const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
@@ -197,6 +207,10 @@ export async function updateGitCheckout(params: {
         "-fd",
         "-e",
         "dist/control-ui/",
+        ...(runtimePromotion?.sourceTreeStagingPaths.flatMap((relative) => [
+          "-e",
+          `/${relative}/`,
+        ]) ?? []),
       ])) && restored;
     if (branch && branch !== "HEAD") {
       const checkedOut = await appendRecoveryStep("git rollback checkout", [
@@ -254,6 +268,14 @@ export async function updateGitCheckout(params: {
     return restored && verified;
   };
   const rollbackError = async (reason: string) => {
+    // Admission can stop the service before import changes any source or runtime.
+    // Reverify retained artifacts without resetting an untouched checkout.
+    if (!sourceMutationStarted) {
+      if (!(await checkSourceUnchanged())) {
+        recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
+      }
+      return buildError(reason);
+    }
     // Doctor can migrate state before failing. Restoring code cannot undo that boundary.
     if (stateMigrationStarted) {
       return buildError(reason);
@@ -287,6 +309,66 @@ export async function updateGitCheckout(params: {
     }
     return mutationPrepared ? rollbackError(reason) : buildError(reason);
   };
+  const fetchTarget = async (root: string, targetStep: typeof step, name: string) => {
+    const fetch = await runStep(
+      targetStep(
+        name,
+        ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
+        root,
+      ),
+    );
+    if (fetch.exitCode !== 0 || channel === "dev") {
+      return fetch.exitCode === 0;
+    }
+    const remote = await runStep(targetStep("git remote", ["git", "-C", root, "remote"], root));
+    if (remote.exitCode !== 0) {
+      return false;
+    }
+    const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
+    const tracked = await runStep(
+      targetStep(
+        "git config update upstream",
+        ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
+        root,
+      ),
+    );
+    if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
+      return false;
+    }
+    const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
+    if (!tagRemote) {
+      steps.push({
+        name: "git release remote",
+        command: "git remote",
+        cwd: root,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail:
+          "Cannot determine the release remote. Set branch.main.remote to the remote that publishes releases.",
+      });
+      return false;
+    }
+    // Only the release authority may replace shared tag refs. Disable pruning
+    // even when Git config enables it, so operator-only tags survive.
+    const tags = await runStep(
+      targetStep(
+        `git fetch tags ${tagRemote}`,
+        [
+          "git",
+          "-C",
+          root,
+          "fetch",
+          "--no-tags",
+          "--no-prune",
+          "--no-prune-tags",
+          tagRemote,
+          "+refs/tags/*:refs/tags/*",
+        ],
+        root,
+      ),
+    );
+    return tags.exitCode === 0;
+  };
 
   const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
   if (statusCheck.exitCode !== 0) {
@@ -300,7 +382,10 @@ export async function updateGitCheckout(params: {
       cwd: gitRoot,
       timeoutMs,
     });
-    const currentStatus = await runCommand(gitCleanCheckArgs(gitRoot), { cwd: gitRoot, timeoutMs });
+    const currentStatus = await runCommand(
+      gitCleanCheckArgs(gitRoot, runtimePromotion?.sourceTreeStagingPaths),
+      { cwd: gitRoot, timeoutMs },
+    );
     if (currentHead.code !== 0 || currentStatus.code !== 0) {
       return { status: "error" as const, reason: "clean-check-failed" as const };
     }
@@ -325,22 +410,30 @@ export async function updateGitCheckout(params: {
         ...step(...args),
         runCommand: runInspectionCommand,
       });
-      const fetched = await runStep(
-        inspectionStep(
-          "git target inspection fetch",
-          [
-            "git",
-            "-C",
-            inspectionRoot,
-            "fetch",
-            "--all",
-            "--prune",
-            channel === "dev" ? "--no-tags" : "--tags",
-          ],
-          inspectionRoot,
-        ),
-      );
-      if (fetched.exitCode !== 0) {
+      const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
+        const transfer = await prepareGitCandidateTransfer({
+          candidateSha,
+          beforeSha,
+          installedRoot: gitRoot,
+          upstreamRef,
+          step: inspectionStep("git pack candidate", [], inspectionRoot),
+        });
+        if (!transfer) {
+          return { status: "error" as const, reason: "fetch-failed" };
+        }
+        const sourceChanged = await checkSourceUnchanged();
+        if (sourceChanged) {
+          return sourceChanged;
+        }
+        await prepareMutation(candidateSha, inspectionRoot, runInspectionCommand);
+        candidateTransfer = transfer;
+        const imported = await transfer.importInto(step("git import admitted target", [], gitRoot));
+        if (!imported) {
+          return { status: "error" as const, reason: "fetch-failed" };
+        }
+        return { status: "ok" as const };
+      };
+      if (!(await fetchTarget(inspectionRoot, inspectionStep, "git target inspection fetch"))) {
         return { status: "error" as const, reason: "fetch-failed" };
       }
       const inspectTarget = async (revision: string, root = inspectionRoot) => {
@@ -367,6 +460,7 @@ export async function updateGitCheckout(params: {
         steps,
         beforeCandidate: inspectTarget,
         validateCandidate: opts.validateCandidate,
+        inspectGitCandidate: opts.inspectGitCandidate,
         prepareGitExposure: opts.prepareGitExposure,
         prepareCandidate: async (root, cleanupRoot) => {
           const candidate = await runInspectionCommand(["git", "-C", root, "rev-parse", "HEAD"], {
@@ -376,33 +470,11 @@ export async function updateGitCheckout(params: {
           if (candidate.code !== 0 || !candidate.stdout.trim()) {
             throw new Error("Cannot inspect the validated Git candidate");
           }
-          if (opts.inspectGitTarget) {
-            await inspectTarget(candidate.stdout.trim(), root);
-          }
+          await inspectTarget(candidate.stdout.trim(), root);
           if (opts.publishGitCheckout) {
             // A new checkout must settle its destination before runtime relocation
             // records absolute paths. Candidate build/validation has already finished.
-            const sourceChanged = await checkSourceUnchanged();
-            if (sourceChanged) {
-              throw new Error(`Cannot publish Git candidate: ${sourceChanged.reason}`);
-            }
-            await prepareMutation(candidate.stdout.trim(), root, runInspectionCommand);
-            const imported = await runStep(
-              step(
-                "git import admitted target",
-                [
-                  "git",
-                  "-C",
-                  gitRoot,
-                  "fetch",
-                  "--no-tags",
-                  inspectionRoot,
-                  candidate.stdout.trim(),
-                ],
-                gitRoot,
-              ),
-            );
-            if (imported.exitCode !== 0) {
+            if ((await importCandidate(candidate.stdout.trim())).status !== "ok") {
               throw new Error("Cannot import the admitted Git candidate");
             }
             gitRoot = await opts.publishGitCheckout();
@@ -421,65 +493,41 @@ export async function updateGitCheckout(params: {
         return selected;
       }
       if (!publishedCandidate) {
-        const sourceChanged = await checkSourceUnchanged();
-        if (sourceChanged) {
-          return sourceChanged;
-        }
-        await prepareMutation(selected.candidateSha, inspectionRoot, runInspectionCommand);
         const upstreamRef = selected.selectedDevUpstream
           ? `refs/remotes/${selected.selectedDevUpstream}`
           : undefined;
-        const imported = await runStep(
-          step(
-            "git import admitted target",
-            [
-              "git",
-              "-C",
-              gitRoot,
-              "fetch",
-              "--no-tags",
-              inspectionRoot,
-              selected.candidateSha,
-              // Import the admitted upstream for both existing and newly created branches.
-              ...(upstreamRef ? [`+${upstreamRef}:${upstreamRef}`] : []),
-            ],
-            gitRoot,
-          ),
-        );
-        if (imported.exitCode !== 0) {
-          return { status: "error" as const, reason: "fetch-failed" };
+        const imported = await importCandidate(selected.candidateSha, upstreamRef);
+        if (imported.status !== "ok") {
+          return imported;
         }
       }
       return selected;
     };
     const inspectedTarget = opts.inspectGitTarget
       ? await withGitTargetInspectionRoot(
-          { root: gitRoot, runCommand, timeoutMs },
+          {
+            root: gitRoot,
+            runCommand,
+            timeoutMs,
+            onWarning: (warning) => {
+              steps.push(warning);
+              opts.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+            },
+          },
           inspectAndPrepare,
         )
       : undefined;
     if (inspectedTarget && inspectedTarget.status !== "ok") {
-      return buildError(inspectedTarget.reason, inspectedTarget.status);
+      return mutationPrepared
+        ? await rollbackError(inspectedTarget.reason)
+        : buildError(inspectedTarget.reason, inspectedTarget.status);
     }
     if (!inspectedTarget && opts.publishGitCheckout) {
       return buildError("target-metadata-preflight");
     }
     if (!inspectedTarget) {
-      const fetchFailure = await runRequiredStep(
-        "git fetch",
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "fetch",
-          "--all",
-          "--prune",
-          channel === "dev" ? "--no-tags" : "--tags",
-        ],
-        "fetch-failed",
-      );
-      if (fetchFailure) {
-        return fetchFailure;
+      if (!(await fetchTarget(gitRoot, step, "git fetch"))) {
+        return buildError("fetch-failed");
       }
     }
     const tag =
@@ -503,6 +551,7 @@ export async function updateGitCheckout(params: {
         steps,
         step,
         validateCandidate: opts.validateCandidate,
+        inspectGitCandidate: opts.inspectGitCandidate,
         prepareGitExposure: opts.prepareGitExposure,
         prepareCandidate: async (root, cleanupRoot) => {
           runtimePromotion = await prepareGitRuntimePromotion(
@@ -517,7 +566,7 @@ export async function updateGitCheckout(params: {
     if (preflight.status !== "ok") {
       return buildError(preflight.reason, preflight.status);
     }
-    // Candidate validation and worktree cleanup finish while the old gateway serves.
+    // Candidate validation and cleanup attempts finish while the old gateway serves.
     // Its exact build is retained on this filesystem; activation never installs or builds.
     const sourceChanged = await checkSourceUnchanged();
     if (sourceChanged) {
@@ -525,6 +574,7 @@ export async function updateGitCheckout(params: {
     }
     await prepareMutation(preflight.candidateSha);
     const activateBranch = channel === "dev" && !hasDevTarget;
+    sourceMutationStarted = true;
     const failure = await runRequiredStep(
       `git checkout ${activateBranch ? DEV_BRANCH : preflight.candidateSha}`,
       activateBranch
@@ -537,21 +587,23 @@ export async function updateGitCheckout(params: {
     }
     createdDevBranchDuringUpdate = activateBranch && preflight.localDevBranchExists === false;
     if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {
-      const upstreamFailure = await runRequiredStep(
+      const upstreamArgs = [
+        "git",
+        "-C",
+        gitRoot,
+        "branch",
+        "--set-upstream-to",
+        preflight.selectedDevUpstream,
+        DEV_BRANCH,
+      ];
+      const upstreamOptions = step(
         `git branch --set-upstream-to ${preflight.selectedDevUpstream} ${DEV_BRANCH}`,
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "branch",
-          "--set-upstream-to",
-          preflight.selectedDevUpstream,
-          DEV_BRANCH,
-        ],
-        "checkout-failed",
+        upstreamArgs,
+        gitRoot,
       );
-      if (upstreamFailure) {
-        return upstreamFailure;
+      const upstreamStep = await runGitUpstreamStep(upstreamOptions);
+      if (upstreamStep.exitCode !== 0 && !upstreamStep.advisory) {
+        return await rollbackError("checkout-failed");
       }
     }
     if (!runtimePromotion) {
@@ -573,20 +625,8 @@ export async function updateGitCheckout(params: {
 
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
-      const doctorEntry = path.join(gitRoot, "openclaw.mjs");
-      const doctorEntryExists = await fs.stat(doctorEntry).then(
-        () => true,
-        () => false,
-      );
-      if (!doctorEntryExists) {
-        steps.push({
-          name: "openclaw doctor entry",
-          command: `verify ${doctorEntry}`,
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: `missing ${doctorEntry}`,
-        });
+      const doctorEntry = await resolveGitDoctorEntry(gitRoot, steps);
+      if (!doctorEntry) {
         return await rollbackError("doctor-entry-missing");
       }
       const doctorNodePath = await resolveStableNodePath(process.execPath);
@@ -597,27 +637,27 @@ export async function updateGitCheckout(params: {
       });
       stateMigrationStarted = true;
       recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-      const doctorStep = await runStep(
-        step(
-          "openclaw doctor",
-          [
-            doctorNodePath,
-            doctorEntry,
-            "doctor",
-            "--non-interactive",
-            ...(doctorPolicy.fix ? ["--fix"] : []),
-          ],
-          gitRoot,
-          buildUpdateDoctorEnv({
-            allowGatewayServiceRepair,
-            allowGatewayActivation,
-            serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-            deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-          }),
-        ),
-      );
-      if (doctorStep.exitCode !== 0) {
-        return await rollbackError("doctor-failed");
+      const doctorStep = await runGitDoctorStep({
+        root: gitRoot,
+        runDoctor: opts.runGitDoctor,
+        entryPath: doctorEntry,
+        nodePath: doctorNodePath,
+        fix: doctorPolicy.fix,
+        step,
+        env: buildUpdateDoctorEnv({
+          allowGatewayServiceRepair,
+          allowGatewayActivation,
+          serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+          deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
+        }),
+      });
+      if (!doctorStep) {
+        return await rollbackError("doctor-entry-missing");
+      }
+      if (doctorStep.exitCode !== 0 && !doctorStep.advisory) {
+        return await rollbackError(
+          getUpdateDoctorConfigFailureReason(doctorStep.configWriteRefusal) ?? "doctor-failed",
+        );
       }
     }
 
@@ -668,8 +708,11 @@ export async function updateGitCheckout(params: {
       exitCode: 1,
       stderrTail: String(error),
     });
-    return await rollbackError("unexpected-error");
+    return await rollbackError(
+      error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
+    );
   } finally {
+    await candidateTransfer?.cleanup(step("git candidate pack cleanup", [], gitRoot));
     await runtimePromotion?.cleanup();
   }
 }

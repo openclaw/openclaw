@@ -25,11 +25,13 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
+  isPinnableUiSessionRow,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
   readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
+  resolveUiSessionRowAgentId,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
@@ -158,6 +160,10 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
+  const defaultAgentId = resolveUiDefaultAgentId({
+    agentsList: context?.agents.state.agentsList,
+    hello: context?.gateway.snapshot.hello,
+  });
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
     activeSession: input.activeSession,
@@ -183,6 +189,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
       sessionId: row.sessionId,
       displayName: row.displayName,
       incognito: row.incognito === true,
@@ -208,6 +215,7 @@ export function buildSidebarSessionNavigationState(input: {
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
       pinned: row.pinned === true,
+      pinnable: isPinnableUiSessionRow(row),
       archived: row.archived === true,
       visibility: row.visibility,
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
@@ -229,6 +237,8 @@ export function buildSidebarSessionNavigationState(input: {
         row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
       placementProfileId:
         row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
+      placementMachine:
+        row.placement && "machine" in row.placement ? row.placement.machine : undefined,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:

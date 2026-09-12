@@ -7,8 +7,10 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
@@ -41,6 +43,11 @@ export {
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type PluginRouteRuntimeScope = Parameters<typeof withPluginRuntimeGatewayRequestScope>[0];
+
+function runPluginRouteValue<T>(value: object, run: () => T): T {
+  const instance = getPluginValueInstance(value);
+  return instance ? instance.runConsumer(run) : run();
+}
 
 function resolvePluginRoutePathContextForRequest(
   req: IncomingMessage,
@@ -78,11 +85,6 @@ function createPluginRouteRuntimeClient(
       scopes: [...scopes],
     },
   };
-}
-
-function writeUpgradeUnauthorized(socket: Duplex) {
-  socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-  socket.destroy();
 }
 
 type PluginRouteRuntimeDispatchContext = {
@@ -273,7 +275,7 @@ export function createGatewayPluginRequestHandler(params: {
               gatewayRequestOperatorScopes,
               gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
             }),
-            async () => route.handler(req, res),
+            async () => runPluginRouteValue(route.handler, () => route.handler(req, res)),
           )) !== false;
         // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
@@ -318,7 +320,7 @@ export function createGatewayPluginUpgradeHandler(params: {
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
     if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
       log.warn(`plugin http upgrade blocked without gateway auth (${pathContext.canonicalPath})`);
-      writeUpgradeUnauthorized(socket);
+      rejectWebSocketUpgrade(socket, { status: 401 });
       return true;
     }
     const gatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
@@ -333,7 +335,7 @@ export function createGatewayPluginUpgradeHandler(params: {
         log.warn(
           `plugin http upgrade blocked without ${missingRuntimeContext} (${pathContext.canonicalPath})`,
         );
-        writeUpgradeUnauthorized(socket);
+        rejectWebSocketUpgrade(socket, { status: 401 });
         return true;
       }
     }
@@ -353,7 +355,10 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
               }),
-              async () => route.handleUpgrade?.(req, socket, head),
+              async () => {
+                const handleUpgrade = route.handleUpgrade!;
+                return runPluginRouteValue(handleUpgrade, () => handleUpgrade(req, socket, head));
+              },
             )) !== false,
         );
         if (handled) {

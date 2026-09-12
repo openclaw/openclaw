@@ -3,10 +3,9 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
@@ -40,6 +39,7 @@ import {
 } from "./node-commands.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
+const databasePaths = new Set<string>();
 const hostStats: NodeHostStats = {
   cpuCount: 4,
   loadAverage: [1.5, 1, 0.5],
@@ -49,7 +49,11 @@ const hostStats: NodeHostStats = {
 };
 
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
-  return await run(await tempDirs.make("case"));
+  const baseDir = await tempDirs.make("case");
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
+  );
+  return await run(baseDir);
 }
 
 async function findPairedNode(nodeId: string, baseDir: string) {
@@ -77,6 +81,9 @@ describe("node surface approvals", () => {
   });
 
   afterAll(async () => {
+    for (const databasePath of databasePaths) {
+      closeOpenClawStateDatabaseByPath(databasePath);
+    }
     await tempDirs.cleanup();
   });
 

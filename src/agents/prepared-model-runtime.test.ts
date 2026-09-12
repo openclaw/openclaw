@@ -37,7 +37,7 @@ let state: OpenClawTestState;
 describe("prepared model runtime snapshots", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {
@@ -127,30 +127,31 @@ describe("prepared model runtime snapshots", () => {
     );
 
     expect(lease.snapshot.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
-    lease.release();
+    await lease[Symbol.asyncDispose]();
   });
 
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
     mocks.configuredAgentIds = ["default"];
     const stagedConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
-    const selectedPluginRegistry = createEmptyPluginRegistry();
-    selectedPluginRegistry.agentHarnesses.push({
-      pluginId: "codex",
-      source: "test",
-      harness: {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("unused");
-        },
-      },
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
+      // Fresh acquisitions cannot reuse the registry retired by an earlier generation.
+      const registry = createEmptyPluginRegistry();
+      if ((params as { selections?: unknown }).selections) {
+        registry.agentHarnesses.push({
+          pluginId: "codex",
+          source: "test",
+          harness: {
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => {
+              throw new Error("unused");
+            },
+          },
+        });
+      }
+      return registry;
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
-      (params as { selections?: unknown }).selections
-        ? selectedPluginRegistry
-        : createEmptyPluginRegistry(),
-    );
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
       waitForReplacement: true,
@@ -180,32 +181,36 @@ describe("prepared model runtime snapshots", () => {
     expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
       "codex",
     ]);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual(
       expect.objectContaining({
         selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
       }),
     );
-    lease.release();
+    await lease[Symbol.asyncDispose]();
   });
 
-  it("loads provider runtime for an isolated native-harness probe", () => {
+  it("loads provider runtime for an isolated native-harness probe", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries(
-        {
-          config: {},
-          agentDir: "/tmp/native-provider-probe",
-          readOnly: true,
-          loadRuntimePlugins: true,
-        },
-        mocks.pluginMetadataSnapshot as never,
+      (
+        await prepareWorkspacePluginRegistries(
+          {
+            config: {},
+            agentDir: "/tmp/native-provider-probe",
+            readOnly: true,
+            loadRuntimePlugins: true,
+          },
+          mocks.pluginMetadataSnapshot as never,
+        )
       ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ selections: undefined }),
-    );
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual(expect.objectContaining({ selections: undefined }));
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {
@@ -268,7 +273,9 @@ describe("prepared model runtime snapshots", () => {
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
     });
 
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual({
       config: {},
       configuredHarnessRuntimes: [],
       env: process.env,
@@ -862,7 +869,7 @@ describe("prepared model runtime snapshots", () => {
     });
     expect(secondLease.snapshot).not.toBe(first);
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
-    secondLease.release();
+    await secondLease[Symbol.asyncDispose]();
   });
 
   it("keeps synchronous read-only snapshots isolated by config", async () => {

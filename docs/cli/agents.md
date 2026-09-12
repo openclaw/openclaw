@@ -1,19 +1,14 @@
 ---
-summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
+summary: "CLI reference for `openclaw agents` (roles, teams, workspaces, routing, and identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
+  - You want to create an agent from a role or set up a coordinated team
 title: "Agents"
 ---
 
 # `openclaw agents`
 
 Manage isolated agents (workspaces + auth + routing). Running `openclaw agents` with no subcommand is equivalent to `openclaw agents list`.
-
-Related:
-
-- [Multi-agent routing](/concepts/multi-agent)
-- [Agent workspace](/concepts/agent-workspace)
-- [Skills config](/tools/skills-config): skill visibility configuration.
 
 ## Examples
 
@@ -23,6 +18,8 @@ openclaw agents list --bindings
 openclaw agents add work --workspace ~/.openclaw/workspace-work
 openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:*
 openclaw agents add ops --workspace ~/.openclaw/workspace-ops --bind telegram:ops --non-interactive
+openclaw agents add research --role researcher --non-interactive
+openclaw agents team create --non-interactive
 openclaw agents bindings
 openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
@@ -37,18 +34,97 @@ openclaw agents delete work
 
 Options: `--json`, `--bindings` (include full routing rules, not only per-agent counts/summaries).
 
+Provider-status labels include optional account display names beside account IDs.
+Routing rules continue to identify accounts by channel and account ID.
+
+An agent whose database belongs to another agent appears as **degraded**, with the refusal reason and repair guidance. The Gateway can continue serving healthy agents when a secondary agent is refused. Follow [Doctor's database recovery guidance](/gateway/doctor/state-and-sessions), then restart the Gateway after repairing the files.
+
+Provider rows summarize local account status for the displayed binding scopes.
+A wildcard includes each locally known account once; message routing still applies
+peer and account precedence. Stored bindings with an omitted or blank account id
+refer to the literal `default` account key, independently of a channel's preferred
+account for commands. Use `--json --bindings` to include provider rows in JSON.
+
 Identity fields saved in config take precedence. Fields that are not configured
 fall back to `IDENTITY.md` in the agent's workspace. Unsupported avatar values
 and unreadable local images also fall back to the workspace avatar.
 
 ### `agents add [name]`
 
-Options: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
+Options: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
 
-- The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires both an agent name and `--workspace`.
+- The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires an agent name and, unless `--role` is supplied, `--workspace`.
 - `--json` alone keeps the guided wizard interactive. Prompts and status are written to stderr, and stdout contains one JSON summary after setup completes.
+- Non-interactive `--json` reports normalized agent IDs in the summary without extra stdout status messages.
 - `main` is an ordinary agent id. Recreating it after another agent owns the installation can require `openclaw doctor --fix` to repair legacy session or shared-auth ownership first.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
+
+#### Role templates
+
+`--role` works in interactive and non-interactive creation, including `--json`.
+Bundled roles are [Claw sources](/cli/claws): each role directory contains a
+`CLAW.md` manifest with identity and `SOUL.md` content, plus its operating
+program in `workspace/AGENTS.md`. Available roles:
+
+| Role          | Title          | Purpose                                                              |
+| ------------- | -------------- | -------------------------------------------------------------------- |
+| `coordinator` | Chief of staff | Coordinate specialists as your single point of contact.              |
+| `researcher`  | Researcher     | Gather evidence and return a cited research brief.                   |
+| `writer`      | Writer         | Turn a brief and source material into a usable draft.                |
+| `reviewer`    | Reviewer       | Check artifacts against requirements and return actionable findings. |
+
+A role seeds `AGENTS.md`, `SOUL.md`, and a complete `IDENTITY.md`; `USER.md`
+still uses the standard template. Existing workspace files are preserved. The
+role's name, emoji, and theme are saved in agent config, and new role workspaces
+skip the identity ceremony: no `BOOTSTRAP.md` is created. The bundled roles
+leave skills unchanged.
+Role delegation settings are also applied. A standalone chief of staff targets the
+standard specialist ids; use the team command to create and wire all four agents.
+Unknown roles are rejected with the available role names. A workspace with an
+unfinished bootstrap cannot adopt a role. OpenClaw checks completion before
+adding role files; rejected adoption leaves workspace files and agent config
+unchanged. Complete its bootstrap or choose a new workspace.
+
+With the experimental Claws surface enabled, the equivalent source path is
+`openclaw claws add docs/reference/templates/roles/<role>` from a source
+checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-preview)
+to add it. Use `agents team create` to wire the agents into a team.
+
+### `agents team create`
+
+Options: `--preset <name>` (default and only bundled preset: `team`),
+`--coordinator <id>` (default: `coordinator`), `--prefix <p>`,
+`--workspace-root <dir>`, `--non-interactive`, `--json`.
+
+Creates a chief of staff (`coordinator`) plus `researcher`, `writer`, and `reviewer` from the role
+templates. Each workspace lives at `<workspace-root>/<agentId>`; the default
+root is the installation's default workspace directory. `--prefix editorial`
+namespaces every id, producing `editorial-coordinator`, `editorial-researcher`,
+`editorial-writer`, and `editorial-reviewer`. It also prefixes a custom
+`--coordinator` id. If any resulting id exists, the command reports the conflicts
+and adds no agents.
+
+Existing agents remain in place, including an implicit `main` on an already
+configured installation.
+
+```bash
+openclaw agents team create --prefix editorial --workspace-root ~/agents --non-interactive --json
+openclaw agent --agent editorial-coordinator --message "Research this topic and draft a brief."
+```
+
+The coordinator's `subagents.allowAgents` names the three specialist ids and
+`delegationMode` is `"prefer"`. Specialists receive `subagents.allowAgents: []`
+and instructions to return results without further delegation. This does not
+change global delegation defaults or tool policy. See [Team preset](/concepts/multi-agent#team-preset).
+Delegation remains team wiring in config; the role Claws will carry these
+settings once the separate Claw profile support lands.
+
+The coordinator is an explicit chat target, not a universal default agent. If
+`agents.defaults.systemAgent.agentId` is unset, team creation sets it to the
+coordinator for ambient system work. An existing ambient owner is preserved and
+reported. Channel routing still needs bindings to the intended agent.
+With `--json`, the summary includes `coordinatorId`, the created `agents` and
+their paths, `ambientOwnerId`, and a `note` when another ambient owner is retained.
 
 ### `agents bindings`
 
@@ -73,15 +149,18 @@ Options: `--force`, `--json`.
 - The only configured agent cannot be deleted.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
 - Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, agent config deletion still succeeds and reports paths requiring manual cleanup; `--json` exposes path outcomes in `removed` and `failed` arrays.
+- If session-store cleanup fails, the agent is removed from config but its files and pending cleanup are retained. Resolve the reported storage error, then retry the same deletion command; `--json` reports `purgeFailed: true` until the purge succeeds.
 - On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
+- An agent that owns a session database still used by another configured agent cannot be deleted, even when retaining files. Keep that owner configured; moving shared history to another owner requires a supported migration, which is not currently available.
 - When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace, the workspace is retained, and `--json` reports `workspaceRetained`, `workspaceRetainedReason`, and `workspaceSharedWith`.
+- Cleanup also retains directories containing another agent's registered database, so deleting a parent directory cannot discard the survivor's history.
 
 ## Routing bindings
 
 Use routing bindings to pin inbound channel traffic to a specific agent.
 
-If you also want different visible skills per agent, configure `agents.defaults.skills` and `agents.entries.*.skills` in `openclaw.json`. See [Skills config](/tools/skills-config) and [Configuration reference](/gateway/config-agents#agents-defaults-skills).
+If you also want different visible skills per agent, configure `agents.defaults.skills` and `agents.entries.*.skills` in `openclaw.json`. See [Skills config](/tools/skills-config) and [Configuration reference](/gateway/config-agents/workspace-and-bootstrap#agents-defaults-skills).
 
 List bindings:
 
@@ -117,7 +196,7 @@ If you omit `--agent` for `bind` or `unbind`, OpenClaw targets the current defau
 
 ### Binding scope behavior
 
-- A stored binding without `accountId` matches the channel default account only.
+- A stored binding without `accountId` matches the literal `default` account key only.
 - `accountId: "*"` is the channel-wide fallback (all accounts) and is less specific than an explicit account binding.
 - If the same agent already has a matching channel binding without `accountId`, and you later bind with an explicit or resolved `accountId`, OpenClaw upgrades that existing binding in place instead of adding a duplicate.
 
@@ -210,3 +289,4 @@ Config sample:
 - [CLI reference](/cli)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Agent workspace](/concepts/agent-workspace)
+- [Skills config](/tools/skills-config): skill visibility configuration.

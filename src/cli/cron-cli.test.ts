@@ -640,11 +640,21 @@ describe("cron cli", () => {
       args: ["cron", "runs", "job-1", "--id", "job-2"],
       message: 'Conflicting job ids: positional "job-1" and --id "job-2".',
     },
+    ...(["rm", "enable", "disable", "get", "show", "run", "scratch"] as const).map((command) => ({
+      name: `blank ${command} id`,
+      args: ["cron", command, "   "],
+      message: "Missing job id",
+    })),
+    {
+      name: "blank edit id",
+      args: ["cron", "edit", "   ", "--enable"],
+      message: "Missing job id",
+    },
   ])("rejects $name before calling the Gateway", async ({ args, message }) => {
     await expectCronCommandExit(args);
 
     expectRuntimeErrorContaining(message);
-    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.runs")).toBe(false);
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   it.each([

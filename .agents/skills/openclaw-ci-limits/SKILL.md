@@ -56,10 +56,10 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 Before changing CI, collect current pressure:
 
 ```bash
-ghx api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
-ghx run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-ghx run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-ghx api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
+gh api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
+gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
 blacksmith testbox list --all
 curl -fsS https://clawsweeper.openclaw.ai/api/status | jq '{generated_at,fleet,diagnostics:{errors:.diagnostics.errors}}'
 curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '{generated_at,review:.lanes.review,publication:.lanes.publication,state_writer,state_append}'
@@ -207,22 +207,30 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   and Android at 2. Every compact profile has an enforced 80-row budget, plugin
   fallback has a 50-row budget, and the final Node matrix enforces 64 push or
   120 PR rows, including precise plans. Excess inventory fails preflight.
-- Windows keeps two disjoint file inventories. Jobs requesting the existing
-  Blacksmith class admit at most two project processes with one Vitest worker
-  each; hosted fallbacks remain serial. Runtime preparation completes before
-  project readers start. Native proof must cover available CPUs/RAM, concurrent
-  fixture memory and cleanup. This adds no runner registrations.
-- macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
-  release compilation and the complete shared/app test workload. Both phases
-  always use the existing GitHub-hosted `macos-26` image and 30-minute budget;
-  unassigned Blacksmith Mac jobs must not hold both main parity slots.
-  This removes two Blacksmith registrations per previously eligible native run.
-  Build caches are phase-owned; only the release phase writes the shared
-  SwiftPM dependency cache.
-- iOS Release, Debug/simulator tests, and both screenshot shards always use
-  `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
-  hosted image; do not require a failed first attempt to select that capacity.
-  The conservative non-Node inventory, including Control UI performance, is
+- Windows keeps two disjoint file inventories and at most two concurrent jobs.
+  Each job runs project processes serially with one Vitest worker on every
+  backend, after runtime preparation completes. Native allocation can be smaller
+  than the runner label. Native proof must cover available CPUs/RAM, fixture
+  memory and cleanup. This adds no runner registrations.
+- macOS Swift regular PR/main and PR `release_gate` CI retains the complete
+  shared/app test workload plus lint/schema guards in one `tests` phase.
+  Ordinary full-scope manual validation adds independent release compilation,
+  moves the guards to `release`, and retains health renders in `tests`.
+  Both phases use GitHub-hosted `macos-26`, `max-parallel: 2`, and the existing
+  30-minute budget. Build caches stay phase-owned; the sole eligible shared
+  SwiftPM cache writer is regular `tests` or full-validation `release`.
+- Android regular CI uses four test/lint rows, including benchmark compilation
+  in the Kotlin-lint row when benchmark/build/dependency inputs change or the
+  changed-path manifest is unusable. Full manual validation retains all six
+  rows and memory-bounded phone/Wear/benchmark builds without duplicate lint.
+  The cap stays at two; frozen task contracts and npm native deferral are unchanged.
+- iOS regular PR/main and PR `release_gate` CI runs one required Debug build
+  and Swift lint smoke. Ordinary full-scope manual validation retains Release
+  and Debug/native-test phases, both screenshot shards, and the evidence reducer.
+  Frozen full-manual targets keep their Debug-only contract without screenshots;
+  npm qualification still defers native jobs. All iOS build phases and screenshot
+  shards use `macos-26` from the first attempt.
+  The conservative full-tier non-Node inventory, including Control UI performance, is
   86 rows, or 87 for historical UI targets. Excluding those four hosted rows
   plus both macOS Swift phases and the always-hosted aggregate gate leaves at
   most 80 potentially eligible jobs. The enforced Node caps therefore give
@@ -292,10 +300,23 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   that contract retain four total rows on Blacksmith or fourteen on GitHub/hybrid,
   including the browser-extension row. Failed-job-only PR and hybrid push retries
   retain the six-shard width on hosted Ubuntu with the existing 25-minute timeout.
-  The browser-extension row stays on 8 and real-Gateway
-  on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
-  native timing proof and does not refresh stale timing weights.
-- `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+  The browser-extension row stays on 8. Twelve rows finished by 4:38 in run
+  33695337496; the reduced width needs native timing proof and does not refresh
+  stale timing weights.
+- Eligible real-Gateway jobs request the existing 32-class for the private artifact
+  build's two canonical SDK cache misses. Overlap requires at least two available
+  CPUs and 25.5 GiB of observed remaining memory for unchanged 12-GiB heaps plus
+  768 MiB native headroom each. Unknown finite-cgroup usage or insufficient capacity
+  keeps compilation serial. Keep browser workers, inventory, build/read ordering,
+  routing, deadlines and all caps unchanged. This adds zero jobs or registrations.
+  Compiler-only AWS evidence does not prove CI timing; validate the complete job
+  through exact-head native CI before claiming an improvement.
+- Current-target `build-artifacts` uses the existing 16-class after a complete
+  four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
+  The SDK memory owner keeps declarations serial when two heaps do not fit.
+  Frozen or unclassified targets retain 32-class; hosted fallbacks, job counts,
+  concurrency and deadlines stay unchanged. Measured compute fit does not prove
+  queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
@@ -372,11 +393,12 @@ git diff --check
 If `pnpm docs:list` tries to reconcile dependencies in a linked Codex worktree,
 stop and use `node scripts/docs-list.js`.
 
-For a PR before requesting maintainer approval:
+For a PR before requesting maintainer approval, bind the watcher to the PR's
+full 40-character head SHA:
 
 ```bash
 .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main
-ghx pr checks <pr> -R openclaw/openclaw --watch --interval 15
+node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
 Use hosted exact-head gates for CI workflow tuning. Do not burn local
@@ -401,9 +423,9 @@ land the PR. Both commands mutate GitHub state.
 After merge, watch at least one fresh main cycle and the adjacent repos:
 
 ```bash
-ghx run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
 for repo in openclaw/clawsweeper openclaw/clawhub openclaw/clownfish openclaw/openclaw-rtt openclaw/clawbench; do
-  ghx run list -R "$repo" --limit 12 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+  gh run list -R "$repo" --limit 12 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
 done
 curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '.'
 ```

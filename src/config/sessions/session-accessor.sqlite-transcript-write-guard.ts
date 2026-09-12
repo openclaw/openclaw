@@ -1,4 +1,4 @@
-import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptWriteScope,
@@ -6,6 +6,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -47,6 +48,7 @@ export function assertLockedTranscriptWriteAllowed(
   resolved: ResolvedTranscriptScope,
   scope: SessionTranscriptWriteScope,
 ): void {
+  assertSessionTranscriptHot(database.db, resolved.sessionId);
   const fencedScope = {
     ...scope,
     sessionId: resolved.sessionId,

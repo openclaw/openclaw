@@ -64,11 +64,6 @@ enum ShellExecutor {
         case timedOut
     }
 
-    private enum DeadlineOutcome: Sendable, Equatable {
-        case exited
-        case timedOut
-    }
-
     private enum StreamingTaskResult: Sendable {
         case drained
         case deadline(timedOut: Bool)
@@ -100,55 +95,6 @@ enum ShellExecutor {
         private static func output(from lines: [String]) -> String {
             guard !lines.isEmpty else { return "" }
             return lines.joined(separator: "\n") + "\n"
-        }
-    }
-
-    private final class ProcessExitSignal: @unchecked Sendable {
-        private let lock = NSLock()
-        private let source: DispatchSourceProcess
-        private var continuation: CheckedContinuation<Void, Never>?
-        private var finished = false
-
-        init(processIdentifier: pid_t) {
-            self.source = DispatchSource.makeProcessSource(
-                identifier: processIdentifier,
-                eventMask: .exit,
-                queue: .global(qos: .userInitiated))
-            self.source.setEventHandler { [weak self] in
-                self?.finish()
-            }
-            self.source.resume()
-        }
-
-        func wait() async {
-            await withTaskCancellationHandler {
-                await withCheckedContinuation { continuation in
-                    self.lock.lock()
-                    guard !self.finished else {
-                        self.lock.unlock()
-                        continuation.resume()
-                        return
-                    }
-                    self.continuation = continuation
-                    self.lock.unlock()
-                }
-            } onCancel: {
-                self.finish()
-            }
-        }
-
-        private func finish() {
-            self.lock.lock()
-            guard !self.finished else {
-                self.lock.unlock()
-                return
-            }
-            self.finished = true
-            let continuation = self.continuation
-            self.continuation = nil
-            self.lock.unlock()
-            self.source.cancel()
-            continuation?.resume()
         }
     }
 
@@ -259,25 +205,12 @@ enum ShellExecutor {
     {
         let processIdentifier = pid_t(execution.processIdentifier.value)
         return await withTaskCancellationHandler {
-            let deadline = await withTaskGroup(of: DeadlineOutcome.self) { group in
-                let exitSignal = ProcessExitSignal(processIdentifier: processIdentifier)
-                group.addTask {
-                    await exitSignal.wait()
-                    return .exited
-                }
-                group.addTask {
-                    do {
-                        try await Task.sleep(for: .seconds(timeout))
-                        return .timedOut
-                    } catch {
-                        return .exited
-                    }
-                }
-                defer { group.cancelAll() }
-                return await group.next() ?? .exited
-            }
+            let exitSignal = ChildProcessExit(
+                processIdentifier: processIdentifier,
+                queue: .global(qos: .userInitiated))
+            let deadline = await exitSignal.wait(timeout: timeout)
 
-            guard deadline == .timedOut else { return false }
+            guard deadline == .timedOut, !exitSignal.hasExited() else { return false }
             try? execution.send(signal: .terminate, toProcessGroup: true)
             try? await Task.sleep(for: .milliseconds(100))
             // The group leader may have exited on TERM. Keep the body alive until

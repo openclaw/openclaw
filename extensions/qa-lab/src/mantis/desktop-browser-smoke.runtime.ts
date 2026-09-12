@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements desktop browser smoke behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,12 +9,10 @@ import {
   copyCrabboxArtifacts,
   type CommandRunner,
   defaultCommandRunner,
-  inspectCrabbox,
+  createMantisCrabboxSession,
   resolveCrabboxBin,
   runCommand,
   shellQuote,
-  stopCrabbox,
-  warmupCrabbox,
 } from "./crabbox-runtime.js";
 import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
@@ -299,34 +296,22 @@ export async function runMantisDesktopBrowserSmoke(
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
   const keepLease = opts.keepLease ?? isTruthyOptIn(env[CRABBOX_KEEP_ENV]);
-  const createdLease = explicitLeaseId === undefined;
   const remoteOutputDir = `/tmp/openclaw-mantis-desktop-${startedAt
     .toISOString()
     .replace(/[^0-9A-Za-z]/gu, "-")}`;
-  let leaseId = explicitLeaseId;
+  const session = createMantisCrabboxSession({
+    crabboxBin,
+    cwd: repoRoot,
+    env,
+    leaseId: explicitLeaseId,
+    provider,
+    runner,
+  });
   let summary: MantisDesktopBrowserSmokeSummary | undefined;
 
   try {
-    leaseId =
-      leaseId ??
-      (await warmupCrabbox({
-        crabboxBin,
-        cwd: repoRoot,
-        env,
-        idleTimeout,
-        machineClass,
-        provider,
-        runner,
-        ttl,
-      }));
-    const inspected = await inspectCrabbox({
-      crabboxBin,
-      cwd: repoRoot,
-      env,
-      leaseId,
-      provider,
-      runner,
-    });
+    const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
+    const inspected = await session.inspect();
     await runCommand({
       command: crabboxBin,
       args: [
@@ -378,15 +363,7 @@ export async function runMantisDesktopBrowserSmoke(
       },
       browserUrl,
       htmlFile,
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId,
-        provider,
-        slug: inspected.slug,
-        state: inspected.state,
-        vncCommand: `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`,
-      },
+      crabbox: session.describe(inspected),
       finishedAt: new Date().toISOString(),
       outputDir,
       remoteOutputDir,
@@ -409,15 +386,7 @@ export async function runMantisDesktopBrowserSmoke(
       },
       browserUrl,
       htmlFile,
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId ?? "unallocated",
-        provider,
-        vncCommand: leaseId
-          ? `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`
-          : "unallocated",
-      },
+      crabbox: session.describe(),
       error: formatErrorMessage(error),
       finishedAt: new Date().toISOString(),
       outputDir,
@@ -438,8 +407,8 @@ export async function runMantisDesktopBrowserSmoke(
       await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
       await fs.writeFile(reportPath, renderReport(summary), "utf8");
     }
-    if (summary?.status === "pass" && createdLease && leaseId && !keepLease) {
-      await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
+    if (summary?.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
+      await session.stop();
     }
   }
 }

@@ -3,6 +3,8 @@
  */
 import type { FailoverReason } from "./failover/signal.js";
 
+export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
+
 // Shared model fallback record types used by selection, observation, and retry
 // reporting.
 export type ModelCandidate = {

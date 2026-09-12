@@ -105,6 +105,7 @@ function createCall(onTranscript?: (entry: RealtimeTalkTranscript) => void) {
     onStatus,
     onTalkEvent,
     entries: () => conversation.entries.map(({ role, text }) => ({ role, text })),
+    entryStates: () => conversation.entries,
     writes: () => requests.filter(({ method }) => method === "talk.client.transcript"),
   };
 }
@@ -132,6 +133,63 @@ describe("browser Talk provider item ordering", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each([
+    {
+      name: "split words",
+      user: ["hel", "lo"],
+      assistant: ["ye", "s"],
+      expected: ["hello", "yes"],
+    },
+    {
+      name: "repeated fragments",
+      user: ["ha", "ha"],
+      assistant: ["no", "no"],
+      expected: ["haha", "nono"],
+    },
+    {
+      name: "leading whitespace",
+      user: [" ", "hel", "lo "],
+      assistant: ["\n", "a", "a "],
+      expected: [" hello ", "\naa "],
+    },
+  ])(
+    "preserves public Live $name through the browser transcript pipeline",
+    async ({ user, assistant, expected }) => {
+      const transcripts: RealtimeTalkTranscript[] = [];
+      const call = createCall((entry) => transcripts.push(entry));
+      await call.session.start();
+      const peer = Peer.instances.at(-1)!;
+      for (let index = 0; index < user.length; index += 1) {
+        emit(peer, {
+          type: "session.input_transcript.delta",
+          delta: user[index],
+          start_ms: index * 100,
+          end_ms: index * 100 + 100,
+        });
+        emit(peer, {
+          type: "session.output_transcript.delta",
+          delta: assistant[index],
+          start_ms: index * 100,
+          end_ms: index * 100 + 100,
+        });
+      }
+      expect(call.entries()).toEqual([
+        { role: "user", text: expected[0] },
+        { role: "assistant", text: expected[1] },
+      ]);
+      expect(call.entryStates().every((entry) => entry.isStreaming)).toBe(true);
+      expect(transcripts.every((entry) => !entry.final && entry.itemId === undefined)).toBe(true);
+      expect(call.onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain("turn.ended");
+      expect(call.onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain(
+        "transcript.done",
+      );
+      expect(call.writes()).toEqual([]);
+      call.session.stop();
+      await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
+      expect(call.writes()).toEqual([]);
+    },
+  );
 
   it.each(["ready", "stop", "replacement", "failure"])(
     "owns early provider items during SDP setup through %s",

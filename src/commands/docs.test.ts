@@ -96,6 +96,28 @@ describe("docsSearchCommand", () => {
     });
   });
 
+  it("limits normalized search results before rendering", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [
+            { title: "Invalid result without a link" },
+            { title: "CLI reference", link: "https://docs.openclaw.ai/cli" },
+            { title: "Plugin guide", link: "https://docs.openclaw.ai/plugins" },
+          ],
+        }),
+      ),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["openclaw"], runtime, { json: true, limit: 1 });
+
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: "openclaw",
+      results: [{ title: "CLI reference", link: "https://docs.openclaw.ai/cli" }],
+    });
+  });
+
   it("emits one JSON object for the docs homepage", async () => {
     const runtime = makeRuntime();
 
@@ -143,6 +165,35 @@ describe("docsSearchCommand", () => {
     await expect(docsSearchCommand(["bad-json"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
     );
+  });
+
+  it.each([
+    { name: "missing results", payload: {} },
+    { name: "null results", payload: { results: null } },
+    { name: "object results", payload: { results: {} } },
+    { name: "string results", payload: { results: "unavailable" } },
+  ])("rejects $name instead of reporting a successful empty search", async ({ payload }) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload)));
+    const runtime = makeRuntime();
+
+    await expect(docsSearchCommand(["gateway"], runtime, { json: true })).rejects.toThrow(
+      "Docs search failed: Docs search response is malformed: expected results array",
+    );
+
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("keeps a successful empty search distinct from a malformed response", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results: [] })));
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["no-matches"], runtime, { json: true });
+
+    expect(runtime.log).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: "no-matches",
+      results: [],
+    });
   });
 
   it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {

@@ -45,6 +45,7 @@ import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveStableMessageToolAvailability } from "./session-stable-reply-mode.js";
 import {
@@ -93,7 +94,9 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   // Hook contexts use transport-native ids (for example Slack `U123`), while
   // binding records use the channel's canonical target (`user:U123`). Resolve
   // through the binding contract instead of reusing the hook projection.
-  const pluginBindingConversation = resolveConversationBindingContextFromMessage({ cfg, ctx });
+  const pluginBindingConversation = state.allowInboundHandlers
+    ? resolveConversationBindingContextFromMessage({ cfg, ctx })
+    : undefined;
   const pluginOwnedBindingRecord = pluginBindingConversation
     ? getSessionBindingService().resolveByConversation({
         channel: pluginBindingConversation.channel,
@@ -489,6 +492,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
     const operation = state.getDispatchReplyOperation();
+    recordReplyOperationAgentTurn([state.replyOperationRunState], operation);
     // Feedback only for pre-run drops: the user never saw output. Finalization or
     // terminal-settle stalls already produced/settled output, so a notice is noise.
     const droppedBeforeOutput =
@@ -517,7 +521,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts: dispatcher.getQueuedCounts(),
-      ...(state.turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
+      ...(state.turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),
     });
   };
 
@@ -527,6 +531,9 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       | "plugin-bound-fallback-no-handler";
   } = {};
   const emitMessageReceivedHooks = () => {
+    if (!state.allowInboundHandlers) {
+      return;
+    }
     emitSharedMessageReceivedHooks({
       ctx,
       hookRunner,
@@ -536,7 +543,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     });
   };
   state.markProcessing();
-  if (await capturePendingConversationTurnReply({ cfg, ctx })) {
+  if (state.allowInboundHandlers && (await capturePendingConversationTurnReply({ cfg, ctx }))) {
     emitMessageReceivedHooks();
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "conversation-turn-reply" });

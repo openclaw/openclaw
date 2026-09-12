@@ -58,9 +58,14 @@ function previewPayload(overrides: Record<string, unknown> = {}): Record<string,
 function managedIdentity(cacheScope: string, assertSelected: () => void = vi.fn()) {
   return {
     token: `token-${cacheScope}`,
+    selection: { source: "system-detected" as const, accountId: 101 },
     cacheScope,
     assertSelected,
     revalidate: vi.fn(async () => assertSelected()),
+    start: async <T>(start: () => T): Promise<Awaited<T>> => {
+      assertSelected();
+      return await start();
+    },
   };
 }
 

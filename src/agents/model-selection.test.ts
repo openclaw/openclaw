@@ -1,10 +1,12 @@
 // Exercises core model selection, aliases, thinking defaults, and visibility policy.
 import { afterEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import {
   getModelRefStatus as getNarrowModelRefStatus,
   resolveAllowedModelRefCore as resolveNarrowAllowedModelRef,
@@ -14,6 +16,7 @@ import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
+  resolveBareModelDefaultProvider,
   getModelRefStatus,
   parseModelRef,
   buildModelAliasIndex,
@@ -688,6 +691,12 @@ describe("model-selection", () => {
         expected: "anthropic",
       },
       {
+        name: "retains a unique case-insensitive configured match",
+        cfg: createProviderInferenceAllowlistConfig("custom/Model"),
+        model: "MODEL",
+        expected: "custom",
+      },
+      {
         name: "infers provider for slash-containing model id when allowlist match is unique",
         cfg: createProviderInferenceAllowlistConfig(
           "vercel-ai-gateway/anthropic/claude-sonnet-4-6",
@@ -751,23 +760,30 @@ describe("model-selection", () => {
       expect(inferUniqueProviderFromConfiguredModels({ cfg, model })).toBeUndefined();
     });
 
-    it("prefers a unique agent match over global and provider-config collisions", () => {
-      const cfg = {
-        agents: {
-          defaults: { models: { "openai/shared-model": {} } },
-          entries: {
-            worker: { models: { "anthropic/shared-model": {} } },
+    it.each(["shared-model", "SHARED-MODEL"])(
+      "prefers a unique agent match over global and provider-config collisions (%s)",
+      (agentModel) => {
+        const cfg = {
+          agents: {
+            defaults: { models: { "openai/shared-model": {} } },
+            entries: {
+              worker: { models: { [`anthropic/${agentModel}`]: {} } },
+            },
           },
-        },
-        models: {
-          providers: { minimax: { models: [{ id: "shared-model" }] } },
-        },
-      } as unknown as OpenClawConfig;
+          models: {
+            providers: { minimax: { models: [{ id: "shared-model" }] } },
+          },
+        } as unknown as OpenClawConfig;
 
-      expect(
-        inferUniqueProviderFromConfiguredModels({ cfg, agentId: "worker", model: "shared-model" }),
-      ).toBe("anthropic");
-    });
+        expect(
+          inferUniqueProviderFromConfiguredModels({
+            cfg,
+            agentId: "worker",
+            model: "shared-model",
+          }),
+        ).toBe("anthropic");
+      },
+    );
 
     it("keeps ambiguous agent matches unresolved without falling back globally", () => {
       const cfg = {
@@ -789,6 +805,48 @@ describe("model-selection", () => {
       ).toBeUndefined();
     });
   });
+
+  describe.each(["defaults", "agent", "configured catalog", "catalog"] as const)(
+    "bare provider inference from %s",
+    (scope) => {
+      it.each([false, true])(
+        "prefers exact case regardless of row order (reverse=%s)",
+        (reverse) => {
+          const rows = [
+            { provider: "first", id: "model", name: "model" },
+            { provider: "second", id: "MODEL", name: "MODEL" },
+            { provider: "third", id: "Model", name: "Model" },
+          ];
+          if (reverse) {
+            rows.reverse();
+          }
+          const models = Object.fromEntries(rows.map((row) => [`${row.provider}/${row.id}`, {}]));
+          const cfg: OpenClawConfig =
+            scope === "defaults"
+              ? { agents: { defaults: { models } } }
+              : scope === "agent"
+                ? { agents: { entries: { worker: { models } } } }
+                : scope === "configured catalog"
+                  ? createProviderInferenceCatalogConfig(
+                      Object.fromEntries(rows.map((row) => [row.provider, [row.id]])),
+                    )
+                  : {};
+          const resolve = (model: string) =>
+            resolveBareModelDefaultProvider({
+              cfg,
+              catalog: scope === "catalog" ? rows : [],
+              agentId: "worker",
+              model,
+              defaultProvider: "fallback",
+            });
+
+          expect(resolve(" Model ")).toBe("third");
+          expect(resolve("MODEL")).toBe("second");
+          expect(resolve("mOdEl")).toBe("fallback");
+        },
+      );
+    },
+  );
 
   describe("buildConfiguredModelCatalog", () => {
     it.each([
@@ -819,6 +877,37 @@ describe("model-selection", () => {
       expect(model?.provider).toBe(provider);
       expect(model?.id).toBe(expectedId);
       expect(model?.name).toBe("Gemini 3 Pro");
+    });
+
+    it("keeps the first captured route for a configured model with duplicate identities", () => {
+      const cfg = createConfiguredModelRefConfig({
+        providers: { custom: { models: [{ id: "model", name: "Configured" }] } },
+      });
+      const catalog: ModelCatalogEntry[] = [
+        {
+          provider: "custom",
+          id: "model",
+          name: "First",
+          api: "openai-responses",
+          baseUrl: "https://first.example/v1",
+        },
+        {
+          provider: "CUSTOM",
+          id: "model",
+          name: "Later",
+          api: "anthropic-messages",
+          baseUrl: "https://later.example/v1",
+        },
+      ];
+
+      expect(buildConfiguredModelCatalog({ cfg, catalog })).toMatchObject([
+        {
+          provider: "custom",
+          id: "model",
+          api: "openai-responses",
+          baseUrl: "https://first.example/v1",
+        },
+      ]);
     });
 
     it("carries configured model compat into catalog entries for provider policy", () => {
@@ -1056,6 +1145,195 @@ describe("model-selection", () => {
   });
 
   describe("buildAllowedModelSet", () => {
+    it.each([
+      ["absent", false],
+      ["absent", true],
+      ["forward", false],
+      ["forward", true],
+      ["reversed", false],
+      ["reversed", true],
+      ["first-only", false],
+      ["first-only", true],
+      ["nested-only", false],
+      ["nested-only", true],
+    ] as const)(
+      "keeps literal provider-prefixed models visible (%s catalog; reversed policy=%s)",
+      (catalogOrder, reversePolicy) => {
+        const rows = [
+          { provider: "custom", id: "model", name: "model" },
+          { provider: "custom", id: "custom/model", name: "custom/model" },
+        ];
+        const allow = rows.map((entry) => `custom/${entry.id}`);
+        if (reversePolicy) {
+          allow.reverse();
+        }
+        const catalogRows =
+          catalogOrder === "reversed" || catalogOrder === "nested-only" ? rows.toReversed() : rows;
+        const availableRows = catalogOrder.endsWith("-only")
+          ? catalogRows.slice(0, 1)
+          : catalogRows;
+        const policy = createModelVisibilityPolicy({
+          cfg: {
+            agents: {
+              defaults: { modelPolicy: { allow } },
+            },
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-completions",
+                  baseUrl: "https://custom.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          catalog: [
+            ...(catalogOrder === "absent" ? [] : availableRows),
+            { provider: "other", id: "model", name: "Excluded" },
+          ],
+          defaultProvider: "custom",
+        });
+
+        expect(policy.allowAny).toBe(false);
+        expect([...policy.allowedKeys]).toEqual(["custom/model"]);
+        expect(policy.visibleCatalog({ catalog: [], defaultVisibleCatalog: [] })).toEqual(
+          catalogOrder === "absent" && reversePolicy ? rows.toReversed() : catalogRows,
+        );
+      },
+    );
+
+    it.each([
+      ["case-insensitive", "Model", "model", false],
+      ["case-insensitive", "model", "Model", false],
+      ["literal slash", "team/Reader", "Reader", true],
+      ["literal slash", "Reader", "team/Reader", true],
+    ] as const)(
+      "preserves %s matching when only %s is catalogued",
+      (_kind, id, missing, expectSynthetic) => {
+        const catalog = [{ provider: "custom", id, name: id }];
+        const policy = createModelVisibilityPolicy({
+          cfg: {
+            agents: {
+              defaults: { modelPolicy: { allow: [`custom/${id}`, `custom/${missing}`] } },
+            },
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-completions",
+                  baseUrl: "https://custom.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          catalog,
+          defaultProvider: "custom",
+        });
+
+        expect(policy.visibleCatalog({ catalog: [], defaultVisibleCatalog: [] })).toEqual([
+          ...catalog,
+          ...(expectSynthetic ? [{ provider: "custom", id: missing, name: missing }] : []),
+        ]);
+      },
+    );
+
+    it.each([false, true])(
+      "preserves literal Arcee refs while matching equivalent catalog rows (catalog supplied=%s)",
+      (supplied) => {
+        const direct = {
+          provider: "arcee",
+          id: "trinity-large-thinking",
+          name: "trinity-large-thinking",
+        };
+        const wire = {
+          provider: "arcee",
+          id: "arcee-ai/trinity-large-thinking",
+          name: "arcee-ai/trinity-large-thinking",
+        };
+        const catalog = supplied ? [wire] : [];
+        const policy = createModelVisibilityPolicy({
+          cfg: {
+            agents: {
+              defaults: {
+                modelPolicy: {
+                  allow: [
+                    "arcee/*",
+                    "arcee/trinity-large-thinking",
+                    "arcee/arcee-ai/trinity-large-thinking",
+                  ],
+                },
+              },
+            },
+            models: {
+              providers: {
+                arcee: {
+                  api: "openai-completions",
+                  baseUrl: "https://arcee.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          catalog,
+          defaultProvider: "arcee",
+        });
+
+        expect(policy.visibleCatalog({ catalog, defaultVisibleCatalog: catalog })).toEqual(
+          supplied ? [wire] : [direct, wire],
+        );
+      },
+    );
+
+    it("retains every configured row in a large allowlist without admitting other rows", () => {
+      const catalog = Array.from({ length: 400 }, (_, index) => ({
+        provider: "custom",
+        id: `synthetic-${index}`,
+        name: `Synthetic ${index}`,
+      }));
+      const result = buildAllowedModelSet({
+        cfg: {
+          agents: {
+            defaults: {
+              modelPolicy: { allow: catalog.map((entry) => `custom/${entry.id}`) },
+            },
+          },
+        },
+        catalog: [...catalog, { provider: "other", id: "synthetic-0", name: "Other provider" }],
+        defaultProvider: "custom",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual(catalog);
+      expect(result.allowedKeys.size).toBe(400);
+    });
+
+    it("keeps case-insensitive visibility inside the exact provider namespace", () => {
+      const result = buildAllowedModelSet({
+        cfg: {
+          agents: {
+            defaults: {
+              modelPolicy: { allow: ["custom/team/Reader", "custom/READER"] },
+            },
+          },
+        },
+        catalog: [
+          { provider: "custom", id: "team/Reader", name: "Nested model" },
+          { provider: "custom/team", id: "Reader", name: "Namespaced provider" },
+          { provider: "custom", id: "Reader", name: "Uppercase" },
+          { provider: "custom", id: "reader", name: "Lowercase" },
+          { provider: "other", id: "READER", name: "Other provider" },
+        ],
+        defaultProvider: "custom",
+      });
+
+      expect(result.allowedCatalog.map(({ provider, id }) => [provider, id])).toEqual([
+        ["custom", "team/Reader"],
+        ["custom", "Reader"],
+        ["custom", "reader"],
+        ["custom", "READER"],
+      ]);
+    });
+
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
       const result = buildAllowedModelSet({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,
@@ -1121,6 +1399,117 @@ describe("model-selection", () => {
         },
       ]);
     });
+
+    it.each([
+      { provider: "custom", id: "model", otherProvider: "custom", otherId: "custom/model" },
+      { provider: "custom", id: "team/Reader", otherProvider: "custom/team", otherId: "Reader" },
+      { provider: "custom", id: "Reader", otherProvider: "custom", otherId: "reader" },
+    ])("keeps metadata on $provider/$id and $otherProvider/$otherId", (entry) => {
+      const { provider, id, otherProvider, otherId } = entry;
+      const rows = [
+        { provider, id, name: "Configured primary", contextWindow: 32_000, reasoning: false },
+        {
+          provider: otherProvider,
+          id: otherId,
+          name: "Configured sibling",
+          contextWindow: 128_000,
+          reasoning: true,
+        },
+      ];
+      for (const configuredRows of [rows, rows.toReversed()]) {
+        const providers: Record<string, ModelProviderConfig> = {};
+        for (const row of configuredRows) {
+          const configured = (providers[row.provider] ??= {
+            baseUrl: "https://configured.example/v1",
+            models: [],
+          });
+          configured.models.push({
+            id: row.id,
+            name: row.name,
+            contextWindow: row.contextWindow,
+            reasoning: row.reasoning,
+            input: row.reasoning ? ["text", "image"] : ["text"],
+            maxTokens: 4_096,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          });
+        }
+        const result = buildAllowedModelSet({
+          cfg: { models: { providers } },
+          catalog: [
+            {
+              provider,
+              id,
+              name: "Runtime primary",
+              api: "openai-responses",
+              baseUrl: "https://captured.example/v1",
+            },
+          ],
+          defaultProvider: "custom",
+        });
+
+        expect(result.allowedCatalog).toMatchObject([
+          {
+            provider,
+            id,
+            name: "Configured primary",
+            contextWindow: 32_000,
+            reasoning: false,
+            input: ["text"],
+            api: "openai-responses",
+            baseUrl: "https://captured.example/v1",
+          },
+          {
+            provider: otherProvider,
+            id: otherId,
+            name: "Configured sibling",
+            contextWindow: 128_000,
+            reasoning: true,
+            input: ["text", "image"],
+          },
+        ]);
+      }
+    });
+
+    it.each(["custom/model", "unrelated"])(
+      "keeps synthetic entries sparse when configured metadata belongs to %s",
+      (configuredId) => {
+        const result = buildAllowedModelSet({
+          cfg: {
+            agents: {
+              defaults: {
+                models: { "custom/model": { alias: "Selected alias" } },
+                modelPolicy: { allow: ["custom/model"] },
+              },
+            },
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://configured.example/v1",
+                  models: [
+                    {
+                      id: configuredId,
+                      name: "Unrelated configured name",
+                      contextWindow: 128_000,
+                      reasoning: true,
+                      input: ["text", "image"],
+                      params: { temperature: 0.5 },
+                      maxTokens: 4_096,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          catalog: [],
+          defaultProvider: "custom",
+        });
+
+        expect(result.allowedCatalog).toEqual([
+          { provider: "custom", id: "model", name: "model", alias: "Selected alias" },
+        ]);
+      },
+    );
 
     it("keeps compat catalog-owned while overlaying metadata after manifest normalization", () => {
       const cfg: OpenClawConfig = {
@@ -1315,7 +1704,7 @@ describe("model-selection", () => {
       ]);
     });
 
-    it("keeps exact same-provider entries visible beside wildcard catalog rows", () => {
+    it("keeps literal wildcard rows and exact entries with the first duplicate's metadata", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -1327,10 +1716,12 @@ describe("model-selection", () => {
           },
         },
       } as unknown as OpenClawConfig;
+      const nested = { provider: "vllm", id: "vllm/qwen-local", name: "Namespaced Qwen" };
+      const catalog = [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }, nested];
 
       const policy = createModelVisibilityPolicy({
         cfg,
-        catalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        catalog,
         defaultProvider: "anthropic",
         defaultModel: "claude-sonnet-4-6",
       });
@@ -1338,12 +1729,9 @@ describe("model-selection", () => {
       expect(
         policy.visibleCatalog({
           catalog: [],
-          defaultVisibleCatalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+          defaultVisibleCatalog: [...catalog, { ...nested, name: "Duplicate row" }],
         }),
-      ).toEqual([
-        { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
-        { provider: "vllm", id: "manual", name: "manual" },
-      ]);
+      ).toEqual([...catalog, { provider: "vllm", id: "manual", name: "manual" }]);
     });
 
     it("does not re-add a default outside mixed wildcard and exact filters", () => {
@@ -1686,6 +2074,56 @@ describe("model-selection", () => {
   });
 
   describe("resolveModelRefFromString", () => {
+    it.each<{
+      raw: string;
+      alias?: string;
+      expected: { provider: string; model: string } | null;
+    }>([
+      { raw: "/", expected: null },
+      { raw: "provider/", expected: null },
+      { raw: "//model", expected: null },
+      { raw: "literal", expected: { provider: "provider", model: "literal" } },
+      { raw: "provider/literal", expected: { provider: "provider", model: "literal" } },
+      { raw: "provider//literal", expected: { provider: "provider", model: "/literal" } },
+      {
+        raw: "provider/provider/literal",
+        expected: { provider: "provider", model: "provider/literal" },
+      },
+      { raw: "team/quick", expected: { provider: "provider", model: "literal" } },
+      { raw: "/", alias: "/", expected: { provider: "provider", model: "literal" } },
+      { raw: "openrouter:auto", expected: { provider: "openrouter", model: "openrouter/auto" } },
+    ])(
+      "keeps configured reference syntax and alias priority for $raw",
+      ({ raw, alias, expected }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { models: { "provider/literal": { alias: alias ?? "team/quick" } } },
+          },
+          models: {
+            providers: {
+              provider: {
+                api: "openai-completions",
+                baseUrl: "https://provider.example/v1",
+                models: [],
+              },
+            },
+          },
+        };
+        const resolved = resolveModelRefFromString({
+          cfg,
+          raw,
+          defaultProvider: "provider",
+          aliasIndex: buildModelAliasIndex({
+            cfg,
+            defaultProvider: "provider",
+            manifestPlugins: [],
+          }),
+          manifestPlugins: [],
+        });
+        expect(resolved?.ref ?? null).toEqual(expected);
+      },
+    );
+
     it("should resolve from string with alias", () => {
       const index = {
         byAlias: new Map([

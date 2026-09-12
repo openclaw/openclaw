@@ -4,6 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
+  AgentHarnessScopedCreateRunningTaskRunParams,
+  AgentHarnessScopedFinalizeTaskRunParams,
+  AgentHarnessScopedSetDeliveryStatusParams,
   AgentHarnessTaskRecord,
   AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
@@ -32,12 +35,44 @@ type RecordedDelivery = {
 function createDeliveryRecorder(taskRecords: AgentHarnessTaskRecord[] = []) {
   const deliveries: RecordedDelivery[] = [];
   const taskRuntime = {
-    tryCreateRunningTaskRun: (params: { runId?: string }) =>
-      ({ runId: params.runId }) as AgentHarnessTaskRecord,
+    tryCreateRunningTaskRun: (params: AgentHarnessScopedCreateRunningTaskRunParams) => {
+      const existing = taskRecords.find((task) => task.runId === params.runId);
+      if (existing) {
+        return existing;
+      }
+      const task: AgentHarnessTaskRecord = {
+        taskId: params.runId,
+        runtime: "subagent",
+        taskKind: "codex-native",
+        scopeKind: "session",
+        ownerKey: "live:streamed",
+        requesterSessionKey: "live:streamed",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+        runId: params.runId,
+        task: params.task,
+      };
+      taskRecords.push(task);
+      return task;
+    },
     recordTaskRunProgressByRunId: () => [],
-    finalizeTaskRunByRunId: () => [],
+    finalizeTaskRunByRunId: (params: AgentHarnessScopedFinalizeTaskRunParams) => {
+      const task = taskRecords.find((record) => record.runId === params.runId);
+      if (!task) {
+        return [];
+      }
+      task.status = params.status;
+      task.endedAt = params.endedAt;
+      task.terminalSummary = params.terminalSummary ?? undefined;
+      return [task];
+    },
     listTaskRecords: () => taskRecords,
-    setDetachedTaskDeliveryStatusByRunId: () => [],
+    setDetachedTaskDeliveryStatusByRunId: (params: AgentHarnessScopedSetDeliveryStatusParams) => {
+      const task = taskRecords.find((record) => record.runId === params.runId);
+      return task ? [Object.assign(task, params)] : [];
+    },
   };
   return {
     deliveries,
@@ -205,7 +240,7 @@ describeLive("codex native subagent monitor live", () => {
             scopeKind: "session",
             agentId: "live",
             runId: recoveryRunId,
-            label: "Codex subagent",
+            label: "Subagent",
             task: "live recovery probe",
             status: "running",
             deliveryStatus: "not_applicable",

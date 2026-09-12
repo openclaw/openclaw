@@ -16,6 +16,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   agents: () => import("./agents.js").then((module) => module.agentsHandlers),
   "claws-monitors": () =>
     import("./claws-monitors.js").then((module) => module.clawsMonitorHandlers),
+  "claws-packages": () =>
+    import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),
@@ -61,6 +63,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "ui-command": () => import("./ui-command.js").then((module) => module.uiCommandHandlers),
   "models-auth-status": () =>
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
+  "models-auth-login": () =>
+    import("./models-auth-login.js").then((module) => module.modelsAuthLoginHandlers),
   "models-auth-order": () =>
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),

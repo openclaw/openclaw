@@ -4,15 +4,16 @@ import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  isDeliveryRecoveryOwnedRetry,
   isRetryableDeliveryNotSentError,
   resolveDeliveryNotSentRetryability,
 } from "../../infra/delivery-recovery.shared.js";
-import { collectErrorGraphCandidates, toErrorObject } from "../../infra/errors.js";
-import { isOutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
+import { getGroupThreadParticipant } from "../group-thread-context.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -38,6 +39,7 @@ import {
   isReplyDispatchDeliveryPending,
   REPLY_DISPATCH_OUTCOME_COUNTS,
   resolveReplyDispatchDeliveryOutcome,
+  resolveReplyDispatchErrorOutcome,
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
@@ -77,6 +79,7 @@ type ReplyDispatchDeliveryOutcomeTracker = {
   resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
   tracked: boolean;
   pending: boolean;
+  deliveredPayload?: ReplyPayload;
 };
 
 type ReplyDispatchDeliverer = (
@@ -105,6 +108,7 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   isTracked: () => boolean;
   hasPendingDelivery: () => boolean;
+  getDeliveredPayload: () => ReplyPayload | undefined;
 } {
   // Nested dispatch observers share the next enqueue's receipt. Enqueue consumes
   // it so a later send of the same payload owns a separate settlement.
@@ -125,6 +129,7 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
     promise: tracker.promise,
     isTracked: () => tracker.tracked,
     hasPendingDelivery: () => tracker.pending,
+    getDeliveredPayload: () => tracker.deliveredPayload,
   };
 }
 
@@ -141,7 +146,12 @@ function buildReplyDispatchRuntimeInfo(
   kind: ReplyDispatchKind,
 ): ReplyDispatchRuntimeInfo {
   const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-  return { kind, ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}) };
+  const participant = getGroupThreadParticipant();
+  return {
+    kind,
+    ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
+    ...(participant ? { participant } : {}),
+  };
 }
 
 export type ReplyDispatcherOptions = {
@@ -311,10 +321,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
   });
 
-  const { unregister } = registerDispatcher({
-    pending: () => pending,
-    waitForIdle,
-  });
+  const unregister = registerDispatcher(() => pending);
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
     void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
@@ -366,31 +373,37 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     }
   };
 
-  const deliverOnce = async (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => {
+  const deliverOnce = async (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
+  ): Promise<{
+    settlement: Promise<ReplyDispatchDeliveryOutcome>;
+    pendingDelivery?: boolean;
+    payload?: ReplyPayload;
+  }> => {
     let deliverPayload: ReplyPayload | null = payload;
     let deliveryStarted = false;
     let pendingDelivery = false;
     const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
-    const settleCustody = (state: "delivered" | "unknown") =>
+    const settleCustody = (state: "delivered" | "suppressed" | "unknown") =>
       custody
         ? settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, ["queued"])
         : undefined;
     const settleFailure = async (error: unknown): Promise<ReplyDispatchDeliveryOutcome> => {
       const retryableNoSend = isRetryableDeliveryNotSentError(error);
-      const queueHeld = collectErrorGraphCandidates(error, (current) => [current.cause]).some(
-        (candidate) => isOutboundDeliveryError(candidate) && candidate.queueCustody === "held",
-      );
+      const queueHeld = isDeliveryRecoveryOwnedRetry(error);
       pendingDelivery ||=
         queueHeld ||
         (deliveryStarted &&
           !retryableNoSend &&
           resolveDeliveryNotSentRetryability(error) !== false);
       hasPendingDelivery ||= pendingDelivery;
+      const outcome = deliveryStarted
+        ? resolveReplyDispatchErrorOutcome(error)
+        : "failed-before-deliver";
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
-      const outcome: ReplyDispatchDeliveryOutcome =
-        deliveryStarted && !retryableNoSend ? "failed-deliver" : "failed-before-deliver";
       if (custody && deliveryStarted && !queueHeld) {
         // Proven no-send restores replayable custody, including after direct
         // admission marked it unknown. An external queue keeps its own marker.
@@ -445,20 +458,28 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           : undefined;
       pendingFinalizations += finalization ? 1 : 0;
       return {
+        payload: deliverPayload,
         get pendingDelivery() {
           return pendingDelivery;
         },
         settlement: (async (): Promise<ReplyDispatchDeliveryOutcome> => {
           try {
             const finalized = finalization ? await finalization : undefined;
-            const outcome =
+            const settledResult =
               finalization && isRecord(result) && isRecord(finalized)
                 ? { ...result, ...finalized, finalization: undefined }
                 : result;
-            pendingDelivery = isReplyDispatchDeliveryPending(outcome);
+            const outcome = resolveReplyDispatchDeliveryOutcome(settledResult);
+            pendingDelivery = isReplyDispatchDeliveryPending(settledResult);
             hasPendingDelivery ||= pendingDelivery;
-            await settleCustody(pendingDelivery ? "unknown" : "delivered");
-            return resolveReplyDispatchDeliveryOutcome(outcome);
+            await settleCustody(
+              pendingDelivery || outcome === "failed-deliver"
+                ? "unknown"
+                : outcome === "channel-transform"
+                  ? "suppressed"
+                  : "delivered",
+            );
+            return outcome;
           } catch (error) {
             // The channel lifecycle owns deferred error observers; custody uses the same rules.
             return await settleFailure(error);
@@ -564,6 +585,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         if (deliveryOutcomeTracker) {
           // Publish pending state before block/final observers consume this exact enqueue's outcome.
           deliveryOutcomeTracker.pending = attempt?.pendingDelivery === true;
+          deliveryOutcomeTracker.deliveredPayload =
+            deliveryOutcome === "delivered" ? attempt?.payload : undefined;
           deliveryOutcomeTracker.resolve(deliveryOutcome);
         }
         try {

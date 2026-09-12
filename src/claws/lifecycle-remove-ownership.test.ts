@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readSourceConfigBestEffort, resetConfigRuntimeState } from "../config/config.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { applyClawAddPlan } from "./add.js";
 import type { ClawRemoveApplyOptions, ClawRemoveResult } from "./lifecycle-remove-contract.js";
@@ -17,7 +20,7 @@ import {
   quiescentClawMonitorGateway,
 } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
-import { readClawInstallRecord } from "./provenance.js";
+import { readClawInstallRecord, persistClawPackageRef, readClawPackageRefs } from "./provenance.js";
 import { readClawWorkspaceFiles } from "./workspace.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -30,10 +33,7 @@ afterEach(async () => {
 async function fixture(withFile = false) {
   const state = await createOpenClawTestState({ prefix: "claw-removal-owner-" });
   cleanups.push(() => state.cleanup());
-  let config: OpenClawConfig = {};
-  const commitConfig = async (transform: (current: OpenClawConfig) => OpenClawConfig) => {
-    config = transform(config);
-  };
+  await state.writeConfig({});
   const install = async (name: string) => {
     const root = state.path(name);
     await fs.mkdir(root);
@@ -41,32 +41,118 @@ async function fixture(withFile = false) {
     expect(
       await applyClawAddPlan(added.plan, {
         consentPlanIntegrity: added.plan.planIntegrity,
-        commitConfig,
+        commitConfig: async (transform) => {
+          await state.writeConfig(transform(await readSourceConfigBestEffort()));
+          resetConfigRuntimeState();
+        },
       }),
     ).toMatchObject({ status: "complete" });
-    return added.plan.agent.workspace;
+    return { workspace: added.plan.agent.workspace, plan: added.plan };
   };
-  const workspace = await install("initial");
+  const { workspace, plan: initialPlan } = await install("initial");
   const trashPath: NonNullable<ClawRemoveApplyOptions["trashPath"]> = async (pathname) => {
     await fs.rm(pathname, { recursive: true, force: true });
     return true;
   };
   const remove = async (overrides: Partial<ClawRemoveApplyOptions> = {}) => {
-    const plan = await buildClawRemovePlan("worker", { config });
+    const config = await readSourceConfigBestEffort();
+    const plan = await buildClawRemovePlan("worker", { config, ...overrides });
     expect(plan.blockers).toEqual([]);
     return await applyClawRemovePlan(plan, {
       config,
-      commitConfig,
       monitorGateway: quiescentClawMonitorGateway,
       consentPlanIntegrity: plan.planIntegrity,
       trashPath,
       ...overrides,
     });
   };
-  return { state, workspace, install, remove, trashPath };
+  return { state, workspace, plan: initialPlan, install, remove, trashPath };
+}
+
+function expireDeletionLease(): void {
+  // A live deletion serializes successors; expiry models the recovery boundary.
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
+        .updateTable("state_leases")
+        .set({ expires_at: 0 })
+        .where("scope", "=", "core:agent-deletion")
+        .where("lease_key", "=", "worker"),
+    );
+  });
 }
 
 describe("Claw removal operation ownership", () => {
+  it.each(["transport", "runtime"])(
+    "keeps partial state after package %s failure without local fallback",
+    async (failure) => {
+      const current = await fixture(true);
+      persistClawPackageRef(current.plan, {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "1.0.0",
+        integrity: "sha256:audit",
+      });
+      const application = { operationId: "runtime-final", generation: 3, pluginIds: ["audit"] };
+      const message =
+        failure === "transport"
+          ? "package connection lost"
+          : "Plugin activation failed. Gateway generation 3: replacement applied.";
+      const warnings = ["Package dependency pruning failed."];
+      const packages = [
+        {
+          kind: "plugin" as const,
+          ref: "audit",
+          version: "1.0.0",
+          action: "error" as const,
+          reason: message,
+        },
+      ];
+      const packageGateway = vi.fn(async () => {
+        if (failure === "transport") {
+          throw new Error(message);
+        }
+        return { packages, warnings, application };
+      });
+      const uninstallPlugin = vi.fn();
+      const result = await current.remove({
+        referencedCleanup: { mode: "remove-selected", selected: ["plugin:audit@1.0.0"] },
+        packageGateway,
+        packageDeps: {
+          uninstallPlugin,
+          resolvePlugin: async () => ({
+            status: "found",
+            pluginId: "audit",
+            installedVersion: "1.0.0",
+            record: {
+              source: "clawhub",
+              integrity: "sha256:audit",
+              installedAt: "1970-01-01T00:00:00.001Z",
+            },
+          }),
+        },
+      });
+      expect(result).toMatchObject({
+        status: "partial",
+        agentRemoved: true,
+        error: { code: "package_cleanup_failed", message },
+      });
+      expect(result.packages).toEqual(failure === "runtime" ? packages : []);
+      expect(result.pluginRuntime).toEqual(failure === "runtime" ? application : undefined);
+      expect(result.warnings).toEqual(failure === "runtime" ? warnings : undefined);
+      expect(packageGateway).toHaveBeenCalledOnce();
+      expect(uninstallPlugin).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(false);
+      expect(readClawInstallRecord("worker")?.status).toBe("partial");
+      expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
+      await expect(fs.readFile(path.join(current.workspace, "SOUL.md"), "utf8")).resolves.toBe(
+        "managed\n",
+      );
+    },
+  );
+
   it.each([
     { successor: "removing", reject: false },
     { successor: "removing", reject: true },
@@ -95,6 +181,7 @@ describe("Claw removal operation ownership", () => {
     });
     try {
       const originalOperation = await entered.promise;
+      expireDeletionLease();
       next = current.remove({
         monitorGateway: {
           ...quiescentClawMonitorGateway,
@@ -120,8 +207,11 @@ describe("Claw removal operation ownership", () => {
       expect(await stale).toMatchObject({
         status: "partial",
         error: {
-          message: expect.stringContaining(
-            test.reject ? "original quiescence failure" : "no longer owns",
+          code: "monitor_cleanup_failed",
+          message: expect.stringMatching(
+            test.reject
+              ? /original quiescence failure|agent deletion core:agent-deletion\/worker was lost/
+              : /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
           ),
         },
       });
@@ -152,6 +242,7 @@ describe("Claw removal operation ownership", () => {
     });
     try {
       await entered.promise;
+      expireDeletionLease();
       next = current.remove({
         monitorGateway: {
           ...quiescentClawMonitorGateway,
@@ -167,9 +258,12 @@ describe("Claw removal operation ownership", () => {
       release.resolve();
       expect(await stale).toMatchObject({
         status: "partial",
+        agentRemoved: true,
         error: {
-          code: "session_cleanup_failed",
-          message: expect.stringContaining("Session cleanup failed"),
+          code: "monitor_cleanup_failed",
+          message: expect.stringMatching(
+            /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+          ),
         },
       });
       expect(readClawInstallRecord("worker")).toEqual(before);
@@ -211,6 +305,7 @@ describe("Claw removal operation ownership", () => {
       });
       try {
         await entered.promise;
+        expireDeletionLease();
         next = current.remove({
           monitorGateway: {
             ...quiescentClawMonitorGateway,
@@ -228,14 +323,16 @@ describe("Claw removal operation ownership", () => {
         expect(registry.some((entry) => entry.agentId === "worker")).toBe(true);
         expect(files).toHaveLength(1);
         release.resolve();
-        const outcome = await stale;
-        expect(outcome.status).toBe("partial");
-        if (!complete) {
-          expect(outcome.error).toMatchObject({
-            code: "workspace_cleanup_failed",
-            message: expect.stringContaining("Could not trash session transcripts"),
-          });
-        }
+        expect(await stale).toMatchObject({
+          status: "partial",
+          agentRemoved: true,
+          error: {
+            code: "monitor_cleanup_failed",
+            message: expect.stringMatching(
+              /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+            ),
+          },
+        });
         expect(listOpenClawRegisteredAgentDatabases()).toEqual(registry);
         expect(readClawWorkspaceFiles("worker")).toEqual(files);
         expect(readClawInstallRecord("worker")).toEqual(install);

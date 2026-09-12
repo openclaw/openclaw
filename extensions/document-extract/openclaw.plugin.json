@@ -1,5 +1,6 @@
 {
   "id": "document-extract",
+  "categories": ["documents-files"],
   "activation": {
     "onStartup": false
   },

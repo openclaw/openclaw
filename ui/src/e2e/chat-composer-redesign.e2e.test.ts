@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -55,14 +56,21 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("chat.startup");
           const textarea = page.locator(".agent-chat__composer-combobox textarea");
-          await expect.poll(() => textarea.isDisabled()).toBe(blocked);
+          const sendButton = page.getByRole("button", { name: "Send message", exact: true });
+          await expect.poll(() => textarea.isDisabled()).toBe(false);
+          await textarea.fill("Send while availability recovers");
+          await expect.poll(() => sendButton.isDisabled()).toBe(blocked);
+          expect(await textarea.inputValue()).toBe("Send while availability recovers");
           const statusBand = page.locator(".agent-chat__composer-status-band");
+          const setupBanner = page.locator(".agent-chat__disabled-banner");
+          await expect.poll(() => statusBand.count()).toBe(0);
           if (message) {
-            await expect.poll(() => statusBand.textContent()).toContain(message);
+            await expect.poll(() => setupBanner.textContent()).toContain(message);
+            const setupAction = setupBanner.getByRole("button", { name: "Connect an AI provider" });
+            await expect.poll(() => setupAction.isVisible()).toBe(true);
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {
-            await expect.poll(() => statusBand.count()).toBe(0);
-            await textarea.fill("Send while availability recovers");
-            await page.getByRole("button", { name: "Send message" }).click();
+            await sendButton.click();
             const send = await gateway.waitForRequest("chat.send");
             expect(send.params).toMatchObject({ message: "Send while availability recovers" });
             const runId =
@@ -134,7 +142,14 @@ suite.define(() => {
       });
       await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
       await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
-      await expect.poll(() => page.locator(".agent-chat__input textarea").isDisabled()).toBe(true);
+      const textarea = page.locator(".agent-chat__input textarea");
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      await textarea.fill("Try the message again.");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Send message", exact: true }).isDisabled())
+        .toBe(true);
+      expect(await textarea.inputValue()).toBe("Try the message again.");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 
@@ -145,7 +160,7 @@ suite.define(() => {
       : undefined;
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["chat.startup"],
+        deferredMethods: ["chat.startup", "models.list"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
@@ -214,17 +229,22 @@ suite.define(() => {
       for (const picker of [
         {
           menu: ".chat-controls__model-menu",
+          popup: '.chat-controls__model-picker wa-popup [part="popup"]',
           trigger: '[data-chat-model-select="true"]',
         },
         {
           menu: ".chat-controls__effort-menu",
+          popup: '.chat-controls__effort-picker wa-popup [part="popup"]',
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
         const visibleTrigger = composer.locator(picker.trigger);
         await expect.poll(() => visibleTrigger.isVisible()).toBe(true);
         await visibleTrigger.click();
-        await page.waitForTimeout(100);
+        // The popup scales while opening; measure its settled viewport bounds.
+        await waitForControlUiProofSurface(composer.locator(picker.popup), [
+          page.locator(picker.menu),
+        ]);
         const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
           composer.boundingBox(),
           composer.locator(".agent-chat__composer-footer").boundingBox(),
@@ -414,7 +434,7 @@ suite.define(() => {
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("models.list");
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);

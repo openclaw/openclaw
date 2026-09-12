@@ -2,12 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { safeTranscriptPathSegment, TranscriptsStore } from "./store.js";
+import { safeTranscriptPathSegment, transcriptSessionSelector, TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -36,6 +38,138 @@ function session(
 }
 
 describe("TranscriptsStore", () => {
+  it("keeps a streamed page stable across writes and shared writer closure", async () => {
+    const { store, stateDir } = createStore();
+    for (const id of ["a", "b", "c"]) {
+      await store.writeSession({ ...session(id), title: id });
+    }
+    const writer = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const rows = store.iterateReadEntries({ limit: 3 });
+    try {
+      const first = await rows.next();
+      expect(first.done).toBe(false);
+      if (first.done) {
+        throw new Error("Expected first transcript row");
+      }
+      expect(first.value.session.title).toBe("a");
+      await store.writeSession({ ...session("c"), title: "changed" });
+      closeOpenClawStateDatabaseForTest();
+      expect(writer.db.isOpen).toBe(false);
+      expect(() => acquireOpenClawStateDatabaseFileExclusion(writer.path)).toThrow(
+        StateDatabaseCoordinatorContentionError,
+      );
+      const remaining: string[] = [];
+      for await (const entry of rows) {
+        remaining.push(entry.session.title ?? "");
+      }
+      expect(remaining).toEqual(["b", "c"]);
+    } finally {
+      await rows.return(false);
+    }
+    const exclusion = acquireOpenClawStateDatabaseFileExclusion(writer.path);
+    exclusion.release();
+    expect((await store.readSession("c"))?.title).toBe("changed");
+  });
+
+  it.each(["return", "consumer-error"] as const)(
+    "releases its streamed utterance reader after %s",
+    async (finish) => {
+      const { store, stateDir } = createStore();
+      const target = session();
+      await store.writeSession(target);
+      await store.appendUtteranceForSession(target, { text: "first" });
+      await store.appendUtteranceForSession(target, { text: "second" });
+      const writer = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const rows = store.iterateExport(transcriptSessionSelector(target), false);
+      try {
+        const first = await rows.next();
+        expect(first.done).toBe(false);
+        expect(() => acquireOpenClawStateDatabaseFileExclusion(writer.path)).toThrow(
+          StateDatabaseCoordinatorContentionError,
+        );
+        if (finish === "return") {
+          expect((await rows.return(undefined)).done).toBe(true);
+        } else {
+          const failure = new Error("consumer stopped reading");
+          await expect(
+            (async () => {
+              for await (const row of rows) {
+                expect(row.text).toBe("second");
+                throw failure;
+              }
+            })(),
+          ).rejects.toBe(failure);
+        }
+      } finally {
+        await rows.return(undefined);
+      }
+      const exclusion = acquireOpenClawStateDatabaseFileExclusion(writer.path);
+      exclusion.release();
+      expect((await store.readUtterancesForSession(target)).map((row) => row.text)).toEqual([
+        "first",
+        "second",
+      ]);
+    },
+  );
+
+  it.each([undefined, null, "invalid", "generated", "supplied"])(
+    "retains the admitted ID origin %s across updates, reopen, and Doctor restoration",
+    async (origin) => {
+      const { store } = createStore();
+      const target = {
+        ...session(),
+        metadata: {
+          agentId: "original",
+          ...(origin === undefined ? {} : { sessionIdOrigin: origin }),
+        },
+      };
+      await store.writeSession(target);
+      await store.appendUtteranceForSession(target, { text: "Saved history" });
+      closeOpenClawStateDatabaseForTest();
+      for (const metadata of [undefined, { sessionIdOrigin: "generated", agentId: "updated" }]) {
+        await store.writeSession({ ...target, metadata, stoppedAt: "2026-07-01T10:01:00.000Z" });
+        const stored = await store.readSession(target.sessionId);
+        expect(stored?.metadata?.sessionIdOrigin).toEqual(origin);
+        expect(Object.hasOwn(stored?.metadata ?? {}, "sessionIdOrigin")).toBe(origin !== undefined);
+        expect(stored?.metadata?.agentId).toBe(metadata?.agentId);
+        expect(await store.readUtterancesForSession(target)).toMatchObject([
+          { text: "Saved history" },
+        ]);
+      }
+      const canonical = await store.readSession(target.sessionId);
+      const exported = await store.materializeSessionArtifacts(target, "all");
+      const restoredState = tempDirs.make("transcript-origin-restore-");
+      fs.mkdirSync(path.join(restoredState, "transcripts", "2026-07-01"), { recursive: true });
+      fs.cpSync(
+        exported.sessionDir,
+        path.join(restoredState, "transcripts", "2026-07-01", target.sessionId),
+        { recursive: true },
+      );
+      closeOpenClawStateDatabaseForTest();
+      const { detectLegacyMeetingTranscripts, migrateLegacyMeetingTranscripts } =
+        await import("../infra/state-migrations.meeting-transcripts.js");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: restoredState };
+      const migrated = await migrateLegacyMeetingTranscripts({
+        detected: detectLegacyMeetingTranscripts({
+          stateDir: restoredState,
+          doctorOnlyStateMigrations: true,
+        }),
+        stateDir: restoredState,
+        env,
+      });
+      expect(migrated.warnings).toEqual([]);
+      const restored = new TranscriptsStore(path.join(restoredState, "transcripts"), { env });
+      expect(await restored.readSession(target.sessionId)).toEqual(canonical);
+      expect(await restored.readUtterancesForSession(target)).toMatchObject([
+        { text: "Saved history" },
+      ]);
+    },
+  );
+
   it("encodes portable slugs for Windows-reserved and trailing-dot IDs", () => {
     expect(safeTranscriptPathSegment("CON")).toBe("%43%4F%4E");
     expect(safeTranscriptPathSegment("foo.")).toBe("%66%6F%6F%2E");
@@ -177,14 +311,32 @@ describe("TranscriptsStore", () => {
     ]);
   });
 
-  it("rejects two session identities that map to one shipped selector", async () => {
-    const { store } = createStore();
-    await store.writeSession(session("standup", "2026-07-01T10:00:00.000Z"));
-
-    await expect(
-      store.writeSession(session("standup", "2026-07-01T11:00:00.000Z")),
-    ).rejects.toThrow();
-  });
+  it.each(["stored", "exported", "concurrent"] as const)(
+    "reports a typed conflict for a selector with a %s owner",
+    async (mode) => {
+      const { store } = createStore();
+      const original = session("standup", "2026-07-01T10:00:00.000Z");
+      const firstWrite = store.writeSession(original);
+      if (mode !== "concurrent") {
+        await firstWrite;
+        if (mode === "exported") {
+          await store.materializeSessionArtifacts(original, "metadata");
+        }
+      }
+      const competing = session("standup", "2026-07-01T11:00:00.000Z");
+      const outcomes = await Promise.allSettled([firstWrite, store.writeSession(competing)]);
+      expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(outcomes.filter((result) => result.status === "rejected")).toEqual([
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ name: "TranscriptSessionConflictError" }),
+        },
+      ]);
+      await expect(store.readSession(original.sessionId)).resolves.toEqual(
+        outcomes[0].status === "fulfilled" ? original : competing,
+      );
+    },
+  );
 
   it("stores case-distinct sessions and rejects only unsafe export collisions", async () => {
     const { store } = createStore();

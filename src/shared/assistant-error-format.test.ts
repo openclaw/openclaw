@@ -94,6 +94,36 @@ describe("extractErrorHttpStatus", () => {
 });
 
 describe("HTTP status consumers", () => {
+  it.each(["500 ", "500: ", "HTTP 502: "])(
+    "preserves distinct validation type and code after %s",
+    (prefix) => {
+      const error = {
+        type: "invalid_request_error",
+        code: "unknown_parameter",
+        message: "Unsupported parameter: timeout",
+      };
+      expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
+    },
+  );
+
+  it("extracts the final upstream rejection from a proxy failure envelope", () => {
+    const message = "A maximum of 4 blocks with cache_control may be provided. Found 5.";
+    const raw = `400: ${JSON.stringify({
+      error: {
+        message: "All target providers failed.",
+        attempts: [
+          { status: 503, details: { error: { type: "api_error", message: "Unavailable" } } },
+          { status: 400, details: { error: { type: "invalid_request_error", message } } },
+        ],
+      },
+    })}`;
+    expect(parseApiErrorInfo(raw)).toMatchObject({
+      httpCode: "400",
+      type: "invalid_request_error",
+      message,
+    });
+  });
+
   it("does not return raw HTML after an HTTP reason phrase", () => {
     const raw = [
       "HTTP 502 Bad Gateway",

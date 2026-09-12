@@ -4,12 +4,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as eventStore from "../memory-host-sdk/event-store.js";
 import {
   listStoredMemoryHostEvents,
   normalizeMemoryHostEventRecordForStorage,
   setMaxMemoryHostEventsForTests,
 } from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import * as pluginStateStore from "../plugin-state/plugin-state-store.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   appendMemoryHostEvent,
   readMemoryHostEventRecords,
@@ -43,6 +47,248 @@ afterEach(() => {
 });
 
 describe("memory host event journal helpers", () => {
+  it("uses the retained tail when a cursor retires during a delayed append", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-retired-cursor-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const append = (query: string) =>
+      appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-09-10T12:00:00.000Z",
+          query,
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    for (let index = 1; index <= 9; index++) {
+      await append(`event-${index}`);
+    }
+    const entered = createDeferred();
+    const release = createDeferred();
+    const register = pluginStateStore.registerPluginStateSequencedJournalEntry;
+    vi.spyOn(pluginStateStore, "registerPluginStateSequencedJournalEntry").mockImplementationOnce(
+      async (params) => {
+        entered.resolve();
+        await release.promise;
+        return await register(params);
+      },
+    );
+    const pending = append("delayed").catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      await append("intervening");
+      const cursors = pluginStateStore.createPluginStateKeyedStore("memory-core", {
+        namespace: "memory-host.event-cursors",
+        maxEntries: 1_000,
+        env,
+      });
+      expect(await cursors.entries()).toMatchObject([{ value: { lastSequence: 10 } }]);
+      await cursors.clear();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect(await pending).toBeUndefined();
+    expect(
+      (await listStoredMemoryHostEvents({ workspaceDir, env })).map(
+        (entry) => entry.value.sequence,
+      ),
+    ).toEqual(Array.from({ length: 11 }, (_, index) => index + 1));
+  });
+
+  it("waits for the journal commit before completing an append", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-delayed-commit-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const register = pluginStateStore.registerPluginStateSequencedJournalEntry;
+    vi.spyOn(pluginStateStore, "registerPluginStateSequencedJournalEntry").mockImplementationOnce(
+      async (params) => {
+        entered.resolve();
+        await release.promise;
+        return await register(params);
+      },
+    );
+    const completed = vi.fn();
+    const pending = appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-09-10T12:00:00.000Z",
+        query: "delayed commit",
+        resultCount: 0,
+        results: [],
+      },
+      { env },
+    ).then(completed);
+    try {
+      await entered.promise;
+      expect(completed).not.toHaveBeenCalled();
+      expect(await readMemoryHostEventRecords({ workspaceDir, env })).toEqual([]);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect(await readMemoryHostEventRecords({ workspaceDir, env })).toMatchObject([
+      { query: "delayed commit" },
+    ]);
+  });
+
+  it.each([
+    { name: "fractional sequence", value: { kind: "event", sequence: 1.5 }, next: undefined },
+    {
+      name: "unsafe sequence",
+      value: { kind: "event", sequence: Number.MAX_SAFE_INTEGER + 1 },
+      next: undefined,
+    },
+    { name: "null record", value: null, next: undefined },
+    { name: "other record kind", value: { kind: "other", sequence: "invalid" }, next: 2 },
+    { name: "numeric string", value: { kind: "event", sequence: "2" }, next: 3 },
+  ])("preserves retained-tail decoding for $name", async ({ value, next }) => {
+    const workspaceDir = await createTempDir("memory-host-events-tail-decoding-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const append = () =>
+      appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-09-10T12:00:00.000Z",
+          query: "valid event",
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    await append();
+    const entry = (await listStoredMemoryHostEvents({ workspaceDir, env }))[0];
+    if (!entry) {
+      throw new Error("expected initial journal entry");
+    }
+    const journal = pluginStateStore.createPluginStateKeyedStore("memory-core", {
+      namespace: "memory-host.events",
+      maxEntries: 10_000,
+      env,
+    });
+    const cursors = pluginStateStore.createPluginStateKeyedStore("memory-core", {
+      namespace: "memory-host.event-cursors",
+      maxEntries: 1_000,
+      env,
+    });
+    await journal.register(entry.key, value);
+    const cursorBefore = await cursors.entries();
+    if (next === undefined) {
+      await expect(append()).rejects.toThrow();
+      expect(await cursors.entries()).toEqual(cursorBefore);
+      expect(await journal.entries()).toHaveLength(1);
+    } else {
+      await append();
+      expect(await cursors.entries()).toMatchObject([{ value: { lastSequence: next } }]);
+    }
+  });
+
+  it("awaits event reads and propagates read rejection through the public helpers", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-delayed-read-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-09-10T12:00:00.000Z",
+        query: "delayed read",
+        resultCount: 0,
+        results: [],
+      },
+      { env },
+    );
+    const entered = createDeferred();
+    const release = createDeferred();
+    const list = eventStore.listStoredMemoryHostEvents;
+    const reader = vi
+      .spyOn(eventStore, "listStoredMemoryHostEvents")
+      .mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await release.promise;
+        return await list(params);
+      });
+    const completed = vi.fn();
+    const pending = readMemoryHostEventRecords({ workspaceDir, env }).then(completed);
+    try {
+      await entered.promise;
+      expect(completed).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect(completed).toHaveBeenCalledWith([expect.objectContaining({ query: "delayed read" })]);
+    const failure = new Error("journal read failed");
+    reader.mockRejectedValueOnce(failure);
+    await expect(readMemoryHostEvents({ workspaceDir, env })).rejects.toBe(failure);
+  });
+
+  it("allocates unique sequences for concurrent appends and continues after reopen", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-concurrent-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const append = (index: number) =>
+      appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-09-10T12:00:00.000Z",
+          query: `event-${index}`,
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    await Promise.all(Array.from({ length: 24 }, (_, index) => append(index + 1)));
+    resetPluginStateStoreForTests();
+    const stored = await listStoredMemoryHostEvents({ workspaceDir, env });
+    expect(stored.map((entry) => entry.value.sequence)).toEqual(
+      Array.from({ length: 24 }, (_, index) => index + 1),
+    );
+    expect(new Set(stored.map((entry) => entry.key)).size).toBe(24);
+    await append(25);
+    expect(
+      (await listStoredMemoryHostEvents({ workspaceDir, env, limit: 1 }))[0]?.value.sequence,
+    ).toBe(25);
+  });
+
+  it("rolls back cursor allocation and retention when journal insertion fails", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-rollback-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    setMaxMemoryHostEventsForTests(1);
+    const append = (query: string) =>
+      appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-09-10T12:00:00.000Z",
+          query,
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    await append("retained");
+    const before = await listStoredMemoryHostEvents({ workspaceDir, env });
+    const { db } = openOpenClawStateDatabase({ env });
+    db.exec(`CREATE TEMP TRIGGER fail_memory_journal BEFORE INSERT ON plugin_state_entries
+      WHEN NEW.namespace = 'memory-host.events'
+      BEGIN SELECT RAISE(ABORT, 'injected journal write failure'); END`);
+    try {
+      await expect(append("refused")).rejects.toMatchObject({ code: "PLUGIN_STATE_WRITE_FAILED" });
+      expect(await listStoredMemoryHostEvents({ workspaceDir, env })).toEqual(before);
+    } finally {
+      db.exec("DROP TRIGGER fail_memory_journal");
+    }
+    await append("accepted");
+    expect(await listStoredMemoryHostEvents({ workspaceDir, env })).toMatchObject([
+      { value: { sequence: 2, event: { query: "accepted" } } },
+    ]);
+  });
+
   it("appends and reads typed workspace events", async () => {
     const workspaceDir = await createTempDir("memory-host-events-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
@@ -116,7 +362,7 @@ describe("memory host event journal helpers", () => {
     }
 
     expect(
-      listStoredMemoryHostEvents({ workspaceDir, env }).map((entry) => entry.createdAt),
+      (await listStoredMemoryHostEvents({ workspaceDir, env })).map((entry) => entry.createdAt),
     ).toEqual([now, now + 1]);
   });
 

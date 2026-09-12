@@ -136,40 +136,48 @@ describe("cron edit command", () => {
     });
   });
 
-  it("preserves existing trigger.once when only the script body is replaced (#119916)", async () => {
-    const fixtureDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cron-edit-cli-"));
-    const scriptPath = path.join(fixtureDir, "next.js");
-    await fs.promises.writeFile(scriptPath, "return { fire: true };", "utf8");
-    const configRevision = "trigger-script-revision";
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return {
-          id: "job-1",
-          configRevision,
-          trigger: { script: "return { fire: false };", once: true },
-        };
-      }
-      return { ok: true };
-    });
-
-    try {
-      await createCronProgram().parseAsync(["edit", "job-1", "--trigger-script", scriptPath], {
-        from: "user",
+  it.each(["next.js", "next.js "])(
+    "preserves trigger.once when reading %j (#119916)",
+    async (fileName) => {
+      const fixtureDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cron-edit-cli-"));
+      const scriptPath = path.join(fixtureDir, fileName);
+      await fs.promises.writeFile(
+        path.join(fixtureDir, "next.js"),
+        "return { fire: false };",
+        "utf8",
+      );
+      await fs.promises.writeFile(scriptPath, "return { fire: true };", "utf8");
+      const configRevision = "trigger-script-revision";
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return {
+            id: "job-1",
+            configRevision,
+            trigger: { script: "return { fire: false };", once: true },
+          };
+        }
+        return { ok: true };
       });
-    } finally {
-      await fs.promises.rm(fixtureDir, { recursive: true, force: true });
-    }
 
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
-      expect.anything(),
-      expect.objectContaining({
-        id: "job-1",
-        patch: { trigger: { script: "return { fire: true };", once: true } },
-        expectedConfigRevision: configRevision,
-      }),
-    );
-  });
+      try {
+        await createCronProgram().parseAsync(["edit", "job-1", "--trigger-script", scriptPath], {
+          from: "user",
+        });
+      } finally {
+        await fs.promises.rm(fixtureDir, { recursive: true, force: true });
+      }
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.objectContaining({
+          id: "job-1",
+          patch: { trigger: { script: "return { fire: true };", once: true } },
+          expectedConfigRevision: configRevision,
+        }),
+      );
+    },
+  );
 
   it.each([
     ["empty", "", undefined],

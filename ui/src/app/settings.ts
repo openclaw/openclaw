@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
+import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
@@ -69,21 +70,6 @@ const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
 const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
 const CSS_WIDTH_MAX_LENGTH = 96;
 
-function hasBalancedParentheses(value: string): boolean {
-  let depth = 0;
-  for (const char of value) {
-    if (char === "(") {
-      depth++;
-    } else if (char === ")") {
-      depth--;
-      if (depth < 0) {
-        return false;
-      }
-    }
-  }
-  return depth === 0;
-}
-
 function hasAllowedWidthIdentifiers(value: string): boolean {
   for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
     const identifier = match[0].toLowerCase();
@@ -114,7 +100,7 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
   }
   if (
     !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !hasBalancedParentheses(normalized) ||
+    !CSS.supports("max-width", normalized) ||
     !hasAllowedWidthIdentifiers(normalized)
   ) {
     return undefined;
@@ -194,6 +180,7 @@ export const UI_APPEARANCE_DEFAULTS = {
 
 export type UiSettings = {
   gatewayUrl: string;
+  // In-memory Gateway secret; only token-mode hello may persist it.
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
@@ -224,6 +211,9 @@ export type UiSettings = {
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
+  sidebarAgentsMode?: "chip" | "roster";
+  sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
+  sidebarCollapsedAgentIds?: string[];
   sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
@@ -244,6 +234,11 @@ export type UiSettings = {
 
 export type UiPreferences = Omit<UiSettings, "token">;
 
+function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined {
+  const agentId = normalizeOptionalString(value);
+  return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
+}
+
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;
@@ -263,6 +258,10 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
   const pageUrl = `${proto}://${location.host}${basePath}`;
+  const devGateway = configuredUiDevGateway();
+  if (devGateway) {
+    return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
+  }
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
@@ -343,8 +342,7 @@ function resolveScopedSessionSelection(
   parsed: PersistedUiSettings,
   fallback: ScopedSessionSelection,
 ): ScopedSessionSelection {
-  const scope = gatewayOriginScope(gatewayUrl);
-  const scoped = parsed.sessionsByGateway?.[scope];
+  const scoped = parsed.sessionsByGateway?.[gatewayOriginScope(gatewayUrl)];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
   const scopedSelectedAgentId = normalizeOptionalString(scoped?.selectedAgentId);
@@ -359,14 +357,9 @@ function resolveScopedSessionSelection(
   }
 
   const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? fallback.sessionKey;
-  const legacyLastActiveSessionKey =
-    normalizeOptionalString(parsed.lastActiveSessionKey) ??
-    legacySessionKey ??
-    fallback.lastActiveSessionKey;
-
   return {
     sessionKey: legacySessionKey,
-    lastActiveSessionKey: legacyLastActiveSessionKey,
+    lastActiveSessionKey: normalizeOptionalString(parsed.lastActiveSessionKey) ?? legacySessionKey,
   };
 }
 
@@ -455,7 +448,9 @@ export function loadSettings(gatewayUrl = livePreferenceOwner?.gatewayUrl()): Ui
   return { ...preferences, token: loadSessionToken(preferences.gatewayUrl) };
 }
 
-export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
+export function loadUiPreferences(
+  targetGatewayUrl = configuredUiDevGateway()?.gatewayUrl,
+): UiPreferences {
   const cached = unpersistedSettings;
   if (
     cached &&
@@ -481,6 +476,7 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
+    sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
@@ -571,6 +567,9 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
         parsed.navWidth <= NAV_WIDTH_MAX
           ? parsed.navWidth
           : defaults.navWidth,
+      sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
+      sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
+      sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
       sidebarEntries:
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
@@ -652,7 +651,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
-  persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
@@ -732,6 +730,13 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
         }
       : {}),
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
+    sidebarAgentsMode: next.sidebarAgentsMode === "roster" ? "roster" : "chip",
+    sidebarPreTeamScope: normalizeSidebarPreTeamScope(next.sidebarPreTeamScope),
+    ...(next.sidebarCollapsedAgentIds?.length
+      ? {
+          sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds),
+        }
+      : {}),
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)

@@ -14,6 +14,20 @@ const hasHistoricalExpected = (raw: string, dimensions = TERMINAL) =>
   oracle.hasHistoricalSynchronizedFrameRow(raw, MARKERS, EXPECTED, dimensions);
 
 describe("hasSynchronizedFrameRow", () => {
+  it.each(["\x07", "\x1b\\"])("accepts a renderer mailto link terminated by %j", (end) => {
+    const address = "reader@example.test";
+    const link = `\x1b]8;;mailto:${address}${end}${address}\x1b]8;;${end}`;
+    expect(parse(frame(link))).toEqual([[address]]);
+
+    for (const target of [
+      "mailto:",
+      "mailto:reader @example.test",
+      "mailto:reader\t@example.test",
+    ]) {
+      expect(() => parse(frame(`\x1b]8;;${target}${end}label\x1b]8;;${end}`))).toThrow();
+    }
+  });
+
   it("authenticates a bidi-isolated disconnect row before reconnect erases it", () => {
     const markers = ["T08Ia", "T08Ib", "T08Ic", "T08Id"];
     const status = "local runtime stopped: T08IaT08Ib café 東京 👩🏽‍💻 T08Ic مرحبا שלום T08Id";

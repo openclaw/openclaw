@@ -34,7 +34,7 @@ message, and target ids. Run/tool session keys remain available for correlation
 and can themselves contain platform account or peer ids. Records
 expire after 30 days and the ledger is capped at 100,000 rows. Query them with
 [`openclaw audit`](/cli/audit) or the
-[`audit.activity.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC. See
+[`audit.activity.list`](/gateway/protocol/ledgers#audit-ledger-rpc) Gateway RPC. See
 [Audit history](/gateway/audit) for the full data model, privacy semantics,
 and coverage limits.
 
@@ -61,11 +61,11 @@ Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
 The running Gateway captures `logging.audit.enabled`,
 `logging.audit.executionIdentity`, and `logging.audit.messages` at startup;
-restart it after changing any of these settings. Message coverage currently includes
+restart it after changing any of these settings. Message coverage includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
-yet covered. The bounded background
+covered. The bounded background
 writer is best-effort, not a lossless compliance archive.
 
 ---
@@ -84,7 +84,7 @@ writer is best-effort, not a lossless compliance archive.
 }
 ```
 
-- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`.
+- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`. When `/tmp/openclaw` is unsafe or unavailable (and always on Windows), OpenClaw uses a directory under the OS temp dir instead: `openclaw-<uid>` where a numeric user id is available, and plain `openclaw` where it is not, which includes Windows. Dated log files are pruned after 24 hours.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 - `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.
@@ -160,9 +160,9 @@ writer is best-effort, not a lossless compliance archive.
 }
 ```
 
-- `enabled`: include anonymous channel names, provider families, plugin count, and recent session count in the existing daily update-check request (default: `false`). Interactive setup offers an explicit opt-in with **No thanks** selected by default; non-interactive setup never enables it. `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` always disables feature statistics without disabling the update check.
+- `enabled`: include public configured channel and provider names, plugin inventory names and count, and a retained session-creation count in the existing daily update-check request (default: `false`). These fields do not measure per-plugin usage or active sessions. Interactive setup can offer an explicit opt-in with **No thanks** selected by default; non-interactive setup does not enable it automatically but can retain an explicitly enabled preference. `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` always disables feature statistics without disabling the update check.
 - `consentedAt`: ISO timestamp recording when the operator accepted or declined feature statistics. Prevents interactive setup from asking again.
-- `openclaw telemetry show` displays the exact current request; `openclaw telemetry on` and `openclaw telemetry off` update the preference and consent timestamp.
+- `openclaw telemetry show` previews the request using the CLI process's current context, which can differ from the running Gateway; `openclaw telemetry on` and `openclaw telemetry off` update the preference and consent timestamp.
 - `OPENCLAW_TELEMETRY_ENDPOINT`: optional full endpoint URL for testing or a self-hosted service. Defaults to `https://telemetry.openclaw.ai/api/latest-version`.
 
 See [Usage telemetry and update checks](/gateway/telemetry) for the complete payload, privacy guarantees, and all opt-out controls.

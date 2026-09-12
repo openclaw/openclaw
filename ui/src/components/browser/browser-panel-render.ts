@@ -1,21 +1,20 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
+import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const BACK_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5" /></svg>`;
-const FORWARD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5" /></svg>`;
-const RELOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5" /></svg>`;
-const PENCIL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.7l2 2L5 13H3v-2z" /></svg>`;
-const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l5.5 10 1.2-4.3L14 7.5z" /></svg>`;
+registerBrowserEnglish();
 
 export type BrowserPanelDock = "bottom" | "right";
+
+// Browser-only artwork stays with this lazy surface, outside the startup icon set.
+const mousePointer = strokeIcon(svg`<path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />`);
 
 function renderTabStrip(controller: BrowserPanelController, embedded: boolean) {
   return renderBrowserPanelTabs({
@@ -34,7 +33,11 @@ function renderHeaderActions(
   onDockChange: (dock: BrowserPanelDock) => void,
   onClose: () => void,
 ) {
-  const activeUrl = controller.view?.metrics?.url || controller.view?.url || controller.urlDraft;
+  const activeUrl =
+    controller.native.activeTab?.url ||
+    controller.view?.metrics?.url ||
+    controller.view?.url ||
+    controller.urlDraft;
   return html`
     <div class="rail-header__actions bp-actions">
       ${renderDockDestinations({
@@ -64,11 +67,7 @@ function renderHeaderActions(
         title=${t("browser.openExternal")}
         aria-label=${t("browser.openExternal")}
         ?disabled=${!activeUrl}
-        @click=${() => {
-          if (activeUrl) {
-            openExternalUrlSafe(activeUrl);
-          }
-        }}
+        @click=${() => controller.openExternal()}
       >
         ${icons.externalLink}
       </button>
@@ -86,11 +85,12 @@ function renderHeaderActions(
 }
 
 function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
-  const hasView = Boolean(controller.view);
+  const nativeTab = controller.native.activeTab;
+  const hasView = Boolean(nativeTab || controller.view);
   return html`
     <div class="bp-toolbar">
       ${
-        controller.operations.route
+        !nativeTab && controller.operations.route
           ? html`<span
               class="bp-profile"
               title=${t("browser.profile", { profile: controller.operations.route.profile })}
@@ -117,30 +117,30 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         type="button"
         title=${t("browser.back")}
         aria-label=${t("browser.back")}
-        ?disabled=${!hasView || controller.evaluateUnavailable}
+        ?disabled=${nativeTab ? !nativeTab.canGoBack : !hasView || controller.evaluateUnavailable}
         @click=${() => controller.goHistory(-1)}
       >
-        ${BACK_GLYPH}
+        ${icons.chevronLeft}
       </button>
       <button
         class="bp-icon"
         type="button"
         title=${t("browser.forward")}
         aria-label=${t("browser.forward")}
-        ?disabled=${!hasView || controller.evaluateUnavailable}
+        ?disabled=${nativeTab ? !nativeTab.canGoForward : !hasView || controller.evaluateUnavailable}
         @click=${() => controller.goHistory(1)}
       >
-        ${FORWARD_GLYPH}
+        ${icons.chevronRight}
       </button>
       <button
         class="bp-icon"
         type="button"
-        title=${t("browser.reload")}
-        aria-label=${t("browser.reload")}
+        title=${t(nativeTab?.loading ? "browser.stop" : "browser.reload")}
+        aria-label=${t(nativeTab?.loading ? "browser.stop" : "browser.reload")}
         ?disabled=${!controller.activeTargetId}
         @click=${() => controller.reloadPage()}
       >
-        ${RELOAD_GLYPH}
+        ${nativeTab?.loading ? icons.x : icons.refresh}
       </button>
       <input
         class="bp-url"
@@ -155,7 +155,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         }}
         @blur=${() => controller.setUrlDraftEditing(false)}
         @input=${(event: InputEvent) =>
-          controller.setUrlDraft((event.target as HTMLInputElement).value)}
+          controller.setState("urlDraft", (event.target as HTMLInputElement).value)}
         @keydown=${(event: KeyboardEvent) => {
           if (event.key === "Enter") {
             event.preventDefault();
@@ -167,6 +167,32 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
           }
         }}
       />
+      ${
+        embedded
+          ? html`<button
+              class="bp-icon"
+              type="button"
+              data-new-tab-action
+              title=${t("browser.openExternal")}
+              aria-label=${t("browser.openExternal")}
+              ?disabled=${!hasView}
+              @click=${() => controller.openExternal()}
+            >
+              ${icons.externalLink}
+            </button>`
+          : nothing
+      }
+      <button
+        class="bp-icon"
+        type="button"
+        title=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
+        aria-label=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
+        aria-busy=${controller.download.pending}
+        ?disabled=${!controller.download.available}
+        @click=${() => void controller.download.save()}
+      >
+        ${controller.download.pending ? icons.loader : icons.download}
+      </button>
       <button
         class="bp-icon ${controller.mode === "annotate" ? "is-active" : ""}"
         type="button"
@@ -175,19 +201,21 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         ?disabled=${!hasView}
         @click=${() => controller.setMode("annotate")}
       >
-        ${PENCIL_GLYPH}
+        ${icons.penLine}
       </button>
       <button
         class="bp-icon ${controller.mode === "inspect" ? "is-active" : ""}"
         type="button"
         title=${
-          controller.evaluateUnavailable ? t("browser.inspectUnavailable") : t("browser.inspect")
+          !nativeTab && controller.evaluateUnavailable
+            ? t("browser.inspectUnavailable")
+            : t("browser.inspect")
         }
         aria-label=${t("browser.inspect")}
-        ?disabled=${!hasView || controller.evaluateUnavailable}
+        ?disabled=${!hasView || (!nativeTab && controller.evaluateUnavailable)}
         @click=${() => controller.setMode("inspect")}
       >
-        ${INSPECT_GLYPH}
+        ${mousePointer}
       </button>
     </div>
   `;
@@ -222,7 +250,7 @@ function renderAnnotateBar(controller: BrowserPanelController) {
         title=${t("browser.annotateDone")}
         @click=${() => controller.exitCaptureModes()}
       >
-        ${CLOSE_GLYPH}
+        ${icons.x}
       </button>
       <button
         class="bp-btn bp-btn--primary"
@@ -277,7 +305,15 @@ function renderInspectTooltip(controller: BrowserPanelController) {
 }
 
 function renderViewportContent(controller: BrowserPanelController) {
-  if (controller.running === false) {
+  if (controller.native.activeTab && controller.mode === "interact") {
+    return html`<div
+      class="bp-stage bp-stage--native"
+      aria-busy=${controller.native.activeTab.loading}
+    >
+      ${controller.native.activeTab.loading ? html`<span class="bp-native-loading" role="status">${t("browser.loading")}</span>` : nothing}
+    </div>`;
+  }
+  if (!controller.native.activeTab && controller.running === false) {
     return renderPanelEmptyState({
       icon: icons.globe,
       heading: t("chat.sidePanel.browser"),
@@ -328,7 +364,7 @@ function renderViewportContent(controller: BrowserPanelController) {
   `;
 }
 
-function renderViewport(controller: BrowserPanelController) {
+function renderViewport(controller: BrowserPanelController, rendersTabStrip: boolean) {
   return html`
     <wa-tab-panel
       id="browser-tab-panel"
@@ -336,7 +372,9 @@ function renderViewport(controller: BrowserPanelController) {
       name=${controller.activeTargetId ?? "browser"}
       active
       aria-labelledby=${
-        controller.activeTargetId ? `browser-tab-${controller.activeTargetId}` : nothing
+        rendersTabStrip && controller.activeTargetId
+          ? `browser-tab-${controller.activeTargetId}`
+          : nothing
       }
       tabindex="0"
       @wheel=${(event: WheelEvent) => controller.handleWheel(event)}
@@ -345,7 +383,7 @@ function renderViewport(controller: BrowserPanelController) {
     >
       ${renderViewportContent(controller)}
       ${
-        controller.loading && controller.view
+        !controller.native.activeTab && controller.loading && controller.view
           ? renderPanelLoadingSkeleton("browser", t("browser.loading"), false, true)
           : nothing
       }
@@ -362,8 +400,10 @@ export function renderBrowserPanelChrome(
   onClose: () => void,
   resizer: TemplateResult | typeof nothing,
   embedded = false,
+  tabsInHeader = false,
 ) {
   const style = embedded ? nothing : dock === "bottom" ? `height:${height}px` : `width:${width}px`;
+  const rendersTabStrip = !embedded || (!tabsInHeader && controller.tabs.length > 0);
   return html`
     <section
       class="bp bp--${embedded ? "embedded" : dock}"
@@ -372,12 +412,12 @@ export function renderBrowserPanelChrome(
     >
       ${embedded ? nothing : resizer}
       ${
-        embedded && controller.tabs.length === 0
-          ? nothing
-          : html`<header class="rail-header bp-header">
+        rendersTabStrip
+          ? html`<header class="rail-header bp-header">
               ${renderTabStrip(controller, embedded)}
               ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
             </header>`
+          : nothing
       }
       ${renderToolbar(controller, embedded)} ${renderAnnotateBar(controller)}
       ${
@@ -387,7 +427,7 @@ export function renderBrowserPanelChrome(
             ? html`<div class="bp-note" role="status">${controller.noticeText}</div>`
             : nothing
       }
-      ${renderViewport(controller)}
+      ${renderViewport(controller, rendersTabStrip)}
     </section>
   `;
 }

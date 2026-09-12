@@ -1,4 +1,5 @@
-import { html, noChange, nothing } from "lit";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { html, noChange, nothing, type TemplateResult } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { Directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -6,6 +7,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import {
   reserveExternalWindowForDeferredNavigation,
   resolveSafeExternalUrl,
@@ -353,7 +355,11 @@ class MessageImagesDirective extends Directive {
   private canonicalMessageKey: string | undefined;
   private localSubmission = false;
 
-  override render(images: ImageBlock[], opts?: ImageRenderOptions) {
+  override render(
+    images: ImageBlock[],
+    opts?: ImageRenderOptions,
+    previews: TemplateResult[] = [],
+  ) {
     const scope = JSON.stringify([
       opts?.connectionEpoch,
       opts?.authToken?.trim(),
@@ -408,14 +414,15 @@ class MessageImagesDirective extends Directive {
     this.localSubmission =
       localSubmission &&
       !(opts?.canonicalMessageKey && images.every((image) => image.factIndex !== undefined));
-    if (!images.length) {
+    const mediaCount = images.length + previews.length;
+    if (!mediaCount) {
       return nothing;
     }
     const layoutClasses = [
       "chat-message-images",
-      images.length === 1 ? "chat-message-images--single" : "chat-message-images--gallery",
-      images.length === 2 || images.length === 4 ? "chat-message-images--two-column" : "",
-      images.length === 5 ? "chat-message-images--five" : "",
+      mediaCount === 1 ? "chat-message-images--single" : "chat-message-images--gallery",
+      mediaCount === 2 || mediaCount === 4 ? "chat-message-images--two-column" : "",
+      mediaCount === 5 ? "chat-message-images--five" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -425,6 +432,7 @@ class MessageImagesDirective extends Directive {
         ({ key }) => key,
         ({ image }) => html`${renderMessageImageResource(image, opts)}`,
       )}
+      ${previews}
     </div>`;
   }
 }
@@ -585,28 +593,22 @@ async function readManagedOutgoingImageBlob(
   opts?: ImageRenderOptions,
   artifactId?: string,
 ): Promise<Blob> {
-  const resource = resolveManagedOutgoingImageResource(source, opts, artifactId, "full");
-  const blobUrl = resource.value ?? (await resource.pending);
-  if (!blobUrl) {
+  const blob = await fetchManagedOutgoingImageBlob(source, opts, artifactId, "full");
+  if (!blob) {
     throw new Error("managed image is unavailable");
-  }
-  const response = await fetch(blobUrl);
-  const blob = await response.blob();
-  if (!blob.type.startsWith("image/")) {
-    throw new Error("managed image response is invalid");
   }
   return blob;
 }
 
 function imageDownloadFileName(title: string, mimeType: string): string {
   const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/", 2)[1] || "img";
-  const stem = Array.from(title, (character) =>
+  const rawStem = Array.from(title, (character) =>
     character.codePointAt(0)! <= 0x1f || '<>:"/\\|?*'.includes(character) ? "-" : character,
   )
     .join("")
     .replace(/\.[a-z0-9]{1,10}$/iu, "")
-    .replace(/[. -]+$/u, "")
-    .slice(0, 120);
+    .replace(/[. -]+$/u, "");
+  const stem = truncateUtf16Safe(rawStem, 120);
   return `${stem || "generated-image"}.${/^[a-z0-9.+-]{1,12}$/u.test(extension) ? extension : "img"}`;
 }
 
@@ -656,6 +658,7 @@ function renderManagedImageActions(image: ImageBlock, opts: ImageRenderOptions |
     }
   };
   const copy = async () => {
+    beginClipboardCopy();
     try {
       if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
         throw new Error("image clipboard is unavailable");

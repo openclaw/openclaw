@@ -8,4 +8,18 @@
 // can detect silent degradation instead of assuming reloads still fire.
 export type GatewayHotReloadStatus = "active" | "disabled";
 
-export type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
+type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
+
+export type GatewayHotReloadApplication =
+  | GatewayHotReloadApplicationStatus
+  | {
+      status: GatewayHotReloadApplicationStatus;
+      runtime: import("../plugins/lifecycle.js").PluginRuntimeApplication;
+    };
+
+/** Channel reload work currently waiting for active Gateway work to drain. */
+export type GatewayDeferredChannelReload = {
+  channel: string;
+  /** False when plugin publication committed before newly activated channels wait to start. */
+  publicationPending: boolean;
+};

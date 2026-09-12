@@ -327,6 +327,7 @@ it.each([false, true])(
             onConfigApplied: applied,
             log: logger,
           });
+          await reloader.ready;
           try {
             service.start();
             await vi.waitFor(async () =>

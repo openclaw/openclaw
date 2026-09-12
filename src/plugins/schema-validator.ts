@@ -1,4 +1,8 @@
-import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
+import {
+  normalizeJsonSchemaForTypeBox,
+  normalizeTypeBoxValidationErrors,
+  type TypeBoxValidationError,
+} from "@openclaw/normalization-core/json-schema";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
@@ -12,16 +16,8 @@ import {
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { PluginLruCache } from "./plugin-lru-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-
-type TypeBoxValidationError = {
-  keyword?: string;
-  instancePath?: string;
-  schemaPath?: string;
-  params?: Record<string, unknown>;
-  message?: string;
-};
 
 type CachedValidator = {
   hasDefaults: boolean;
@@ -160,7 +156,7 @@ function checkSchemaWithCurrentFormats(
     return null;
   }
   // The schema-only compiler returns [valid, errors], without loading value codecs.
-  return validate.Errors(value)[1];
+  return normalizeTypeBoxValidationErrors(validate.Errors(value)[1]);
 }
 
 function isDefaultActivatedConditionalFailure(params: {

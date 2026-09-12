@@ -1,3 +1,4 @@
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -9,11 +10,7 @@ const modelContextReads = new WorkerTaskPool<
   SessionModelContextWorkerInput,
   ReturnType<typeof readSessionTranscriptModelContext>
 >({
-  workerUrl: resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "session-model-context.worker",
-    distWorkerPath: "config/sessions/session-model-context.worker.js",
-  }),
+  workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionModelContext),
   // Preserve context-read admission order and avoid multiplying large SQLite scans.
   maxWorkers: 1,
 });

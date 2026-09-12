@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { HealthSnapshot, StatusSummary } from "../api/types.ts";
+import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/types.ts";
 
 type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
 
@@ -50,8 +50,13 @@ export async function loadGatewayDiagnostics(
   agentId: string | null,
   signal?: AbortSignal,
 ): Promise<GatewayDiagnosticsSnapshot> {
+  // Diagnostics sample the Gateway itself, independently of cached picker choices.
   const modelsRequest = agentId
-    ? client.request("models.list", { agentId, preparedOnly: true }, { signal })
+    ? client.request<ModelCatalogResult>(
+        "models.list",
+        { agentId: agentId.trim(), view: "default" },
+        { signal },
+      )
     : Promise.resolve({ models: [] });
   const lanesRequest = loadCommandLaneDiagnostics(client, signal);
   const [status, health, models, heartbeat, laneDiagnostics] = await Promise.all([
@@ -61,11 +66,10 @@ export async function loadGatewayDiagnostics(
     client.request("last-heartbeat", {}, { signal }),
     lanesRequest,
   ]);
-  const modelPayload = models as { models?: unknown[] } | undefined;
   return {
     status: status as StatusSummary,
     health: health as HealthSnapshot,
-    models: Array.isArray(modelPayload?.models) ? modelPayload.models : [],
+    models: models.models,
     heartbeat,
     ...laneDiagnostics,
   };

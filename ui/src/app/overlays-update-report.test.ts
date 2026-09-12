@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
@@ -48,12 +49,7 @@ function harnessFor(request: RequestFn) {
 }
 
 beforeEach(() => {
-  const values = new Map<string, string>();
-  vi.stubGlobal("sessionStorage", {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-    removeItem: (key: string) => values.delete(key),
-  });
+  vi.stubGlobal("sessionStorage", createStorageMock());
   reportUpdateFailure.mockReset();
 });
 

@@ -1,6 +1,7 @@
 // Covers managed task-flow creation, lookup, ownership, and state transitions.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -221,10 +222,10 @@ describe("task-flow-registry", () => {
     const onEvent = vi.fn();
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
       },
       observers: {
         onEvent,
@@ -275,8 +276,8 @@ describe("task-flow-registry", () => {
     const deleteFlow = vi.fn();
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot,
-        saveSnapshot: () => {},
         upsertFlow,
         deleteFlow,
       },
@@ -328,10 +329,10 @@ describe("task-flow-registry", () => {
     });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
         upsertFlow,
       },
     });
@@ -349,19 +350,16 @@ describe("task-flow-registry", () => {
   });
 
   it("does not throw or mutate memory when flow update persistence fails", () => {
-    let failUpsert = false;
-    const upsertFlow = vi.fn(() => {
-      if (failUpsert) {
-        throw new Error("SQLITE_IOERR: disk I/O error");
-      }
+    const updateFlow = vi.fn(() => {
+      throw new Error("SQLITE_IOERR: disk I/O error");
     });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
-        upsertFlow,
+        updateFlow,
       },
     });
     const created = createManagedTaskFlow({
@@ -370,7 +368,6 @@ describe("task-flow-registry", () => {
       goal: "Update while persistence fails",
     });
 
-    failUpsert = true;
     const result = setFlowWaiting({
       flowId: created.flowId,
       expectedRevision: created.revision,
@@ -398,10 +395,10 @@ describe("task-flow-registry", () => {
     });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
         upsertFlow: () => {},
         deleteFlow,
       },
@@ -421,6 +418,7 @@ describe("task-flow-registry", () => {
   it("normalizes restored managed flows without a controller id", () => {
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map([
             [
@@ -439,7 +437,6 @@ describe("task-flow-registry", () => {
             ],
           ]),
         }),
-        saveSnapshot: () => {},
       },
     });
 

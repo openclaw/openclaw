@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -31,7 +32,11 @@ import {
   hasVisibleAgentPayload,
 } from "../../embedded-agent-runner/message-visibility.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
+import {
+  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  hasFailedSubagentNoOutputCompletion,
+  hasVisibleCompletionResult,
+} from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   formatActiveWakeFailure,
@@ -41,7 +46,6 @@ import {
 } from "./subagent-announce-active-wake.js";
 import {
   deliverCompletionDirect,
-  hasFailedSubagentNoOutputCompletion,
   hasMessagingToolDeliveryToSource,
   isDirectMessageDeliveryTarget,
   isGatewayAgentRunPending,
@@ -71,6 +75,8 @@ import {
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+
+const REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS = 12_000;
 
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
@@ -203,7 +209,8 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&
-      (trustedCompletionEvent?.result.trim() === "(no output)" ||
+      ((trustedCompletionEvent !== undefined &&
+        !hasVisibleCompletionResult(trustedCompletionEvent)) ||
         hasFailedSubagentNoOutputCompletion(params.internalEvents));
     const hasSuccessfulTrustedSubagentNoOutputCompletion =
       hasRequiredSubagentNoOutputCompletion && trustedCompletionEvent?.status === "ok";
@@ -555,6 +562,21 @@ export async function sendSubagentAnnounceDirectly(params: {
         terminal: automaticEvidence.mayHaveSent ? undefined : true,
       };
     }
+    if (
+      asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
+      directAnnounceResult?.meta?.yielded === true &&
+      !directAnnounceResult.meta.error &&
+      !directAnnounceResult.meta.aborted &&
+      directAnnounceResult.requesterContinuationSettled === true &&
+      !hasFinalMessagingToolDelivery &&
+      !automaticFinalDelivered &&
+      !hasVisibleNonSilentGatewayPayload
+    ) {
+      // Core persisted responsibility for the next wave (or observed it already
+      // completed). Acknowledge an empty wake without inventing a visible final;
+      // existing real final evidence still follows its normal path below.
+      return { delivered: true, path: "direct" };
+    }
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
@@ -628,10 +650,10 @@ export async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
-    const requesterVisibleFinalDelivered =
+    const hasRequesterVisibleFinalDelivery =
       hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
     const hasVisibleCompletionReply =
-      requesterVisibleFinalDelivered ||
+      hasRequesterVisibleFinalDelivery ||
       (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
       // Nested requesters and internal sessions observe the final in their transcript.
       // Unresolved external origins still require delivery evidence.
@@ -662,20 +684,29 @@ export async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not produce a visible reply",
       };
     }
+    const requesterVisibleFinalCommitted =
+      !params.requesterIsSubagent &&
+      (hasRequesterVisibleFinalDelivery ||
+        (!params.expectsCompletionMessage &&
+          asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
+          hasVisibleNonSilentGatewayPayload &&
+          hasVisibleCompletionReply));
+    const finalAssistantVisibleText =
+      requesterVisibleFinalCommitted &&
+      typeof directAnnounceResult?.meta?.finalAssistantVisibleText === "string"
+        ? truncateUtf16Safe(
+            directAnnounceResult.meta.finalAssistantVisibleText.trim(),
+            REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS,
+          )
+        : "";
 
     return {
       delivered: true,
       path: "direct",
       // Synthetic wakes can commit their final to the requester transcript.
       // A canceled partial payload or accepted handoff is not that receipt.
-      ...(!params.requesterIsSubagent &&
-      (requesterVisibleFinalDelivered ||
-        (!params.expectsCompletionMessage &&
-          asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
-          hasVisibleNonSilentGatewayPayload &&
-          hasVisibleCompletionReply))
-        ? { requesterVisibleFinalDelivered: true }
-        : {}),
+      ...(requesterVisibleFinalCommitted ? { requesterVisibleFinalDelivered: true } : {}),
+      ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
     };
   } catch (err) {
     const disposition = hasAnnounceSendEvidence(err)

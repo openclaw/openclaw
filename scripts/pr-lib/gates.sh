@@ -327,99 +327,19 @@ derive_prepare_gate_change_plan() {
     PREPARE_GATE_DOCS_ONLY=true
   fi
   PREPARE_GATE_CHANGELOG_ONLY=false
-  if [ "$PREPARE_GATE_CHANGED_FILES" = "CHANGELOG.md" ]; then
+  local changelog_mode
+  changelog_mode=$(release_changelog_file_list_mode "$PREPARE_GATE_CHANGED_FILES") || return 1
+  PREPARE_GATE_CHANGELOG_UPDATE=false
+  if [ "$changelog_mode" != "none" ]; then
+    PREPARE_GATE_CHANGELOG_UPDATE=true
+  fi
+  if [ "$changelog_mode" = "only" ]; then
     PREPARE_GATE_CHANGELOG_ONLY=true
   fi
   PREPARE_GATE_CHANGELOG_REQUIRED=false
   if changelog_required_for_changed_files "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_CHANGELOG_REQUIRED=true
   fi
-}
-
-run_prepare_push_retry_gates() {
-  local docs_only="${1:-false}"
-
-  if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    echo "A lease retry changed the prepared head after gate selection."
-    echo "Stop here, wait for hosted evidence on the pushed branch, then re-run prepare-run."
-    return 1
-  fi
-
-  local gates_remote_mode
-  gates_remote_mode=$(resolve_pr_gates_remote_mode)
-
-  if [ "$gates_remote_mode" = "crabbox-aws" ]; then
-    local retry_head
-    retry_head=$(git rev-parse HEAD)
-    write_gates_env_stamp \
-      "${PR_NUMBER:-}" \
-      "$docs_only" \
-      "${CHANGELOG_REQUIRED:-false}" \
-      "remote_crabbox_aws_pending" \
-      "$retry_head" \
-      "" \
-      "" \
-      "aws" \
-      "" \
-      "" \
-      ""
-    echo "Crabbox AWS proof is deferred until the exact retried prep head is pushed."
-    return 0
-  fi
-
-  prepare_local_gate_workspace
-  run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
-  run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
-
-  # The retry rebased the prep head, so the pre-push gates.env stamp no longer
-  # describes what these gates just verified; rewrite it for the new head so
-  # prep.md and prep.env do not attribute stale evidence to the pushed commit.
-  local retry_head
-  retry_head=$(git rev-parse HEAD)
-  local gates_mode="full"
-  local full_gates_head="$retry_head"
-  local remote_gates_provider=""
-  local remote_gates_run_id=""
-  local remote_gates_lease_id=""
-  local remote_gates_run_url=""
-
-  if [ "$docs_only" = "true" ]; then
-    gates_mode="docs_only"
-    # No test ran: carry the prior full-gates proof and how it was produced.
-    full_gates_head="${FULL_GATES_HEAD_SHA:-}"
-    remote_gates_provider="${REMOTE_GATES_PROVIDER:-}"
-    remote_gates_run_id="${REMOTE_GATES_RUN_ID:-}"
-    remote_gates_lease_id="${REMOTE_GATES_LEASE_ID:-}"
-    remote_gates_run_url="${REMOTE_GATES_RUN_URL:-}"
-  elif [ "$gates_remote_mode" = "testbox" ]; then
-    gates_mode="remote_testbox"
-    run_remote_testbox_full_test_gate \
-      "pnpm test (lease-retry, blacksmith-testbox)" \
-      ".local/lease-retry-test.log" \
-      "pr-${PR_NUMBER:-unknown}-gates-lease-retry"
-    local retry_stamp
-    retry_stamp=$(require_remote_testbox_gate_stamp ".local/lease-retry-test.log")
-    remote_gates_provider="blacksmith-testbox"
-    remote_gates_run_id=""
-    remote_gates_lease_id=$(printf '%s\n' "$retry_stamp" | jq -r '.leaseId')
-    remote_gates_run_url=$(printf '%s\n' "$retry_stamp" | jq -r '.actionsRunUrl // ""')
-    echo "Remote testbox lease-retry gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
-  else
-    run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
-  fi
-
-  write_gates_env_stamp \
-    "${PR_NUMBER:-}" \
-    "$docs_only" \
-    "${CHANGELOG_REQUIRED:-false}" \
-    "$gates_mode" \
-    "$retry_head" \
-    "$full_gates_head" \
-    "" \
-    "$remote_gates_provider" \
-    "$remote_gates_run_id" \
-    "$remote_gates_lease_id" \
-    "$remote_gates_run_url"
 }
 
 prepare_gates() {
@@ -447,7 +367,7 @@ prepare_gates() {
   local changelog_only="$PREPARE_GATE_CHANGELOG_ONLY"
   local changelog_required="$PREPARE_GATE_CHANGELOG_REQUIRED"
 
-  local has_changelog_update=false
+  local has_changelog_update="$PREPARE_GATE_CHANGELOG_UPDATE"
   local unsupported_changelog_fragments=""
   local changed_path
   while [ -n "$changed_files" ]; do
@@ -459,9 +379,6 @@ prepare_gates() {
     fi
     [ -n "$changed_path" ] || continue
     case "$changed_path" in
-      CHANGELOG.md)
-        has_changelog_update=true
-        ;;
       changelog/fragments/*)
         unsupported_changelog_fragments="${unsupported_changelog_fragments}${changed_path}"$'\n'
         ;;
@@ -470,7 +387,7 @@ prepare_gates() {
   if [ -n "$unsupported_changelog_fragments" ]; then
     echo "Unsupported changelog fragment files detected:"
     printf '%s\n' "$unsupported_changelog_fragments"
-    echo "Move changelog fragment content into CHANGELOG.md and remove changelog/fragments files."
+    echo "Move release-note context into the PR body or commit message and remove changelog/fragments files."
     exit 1
   fi
 
@@ -478,13 +395,11 @@ prepare_gates() {
   if [ "$has_changelog_update" = "true" ]; then
     remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
     if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
-      echo "CHANGELOG.md is release-owned; normal PRs should put release-note context in the PR body or commit message."
-      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged version section, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
+      echo "CHANGELOG.md is release-owned, along with CHANGELOG/<version>.md and matching records; normal PRs should put release-note context in the PR body or commit message."
+      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged release's artifacts and necessary index update, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
       exit 1
     fi
-    # Published closeout text is immutable; normalizing PR references can move it
-    # into an Unreleased section and invalidate the tagged release copy.
-    if [ "$changelog_mode" = "override" ]; then normalize_pr_changelog_entries "$pr"; fi
+    # Release artifacts retain their approved text, including historical PR references.
     validate_changelog_attribution_policy
   fi
 

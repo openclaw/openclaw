@@ -10,11 +10,13 @@ import { generateUUID } from "../../lib/uuid.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
+  type ModelSetupWizardResult,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
 
 export type ModelSetupWizardStartMethod =
+  | "models.authLogin"
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start"
   | "openclaw.setup.activate.start";
@@ -27,10 +29,7 @@ export type ModelSetupWizardCompletion = {
   isCurrent?: () => boolean;
 };
 
-type WizardTerminalObserver = (
-  result: WizardNextResult,
-  admissionRejected?: true,
-) => (() => boolean) | void;
+type WizardTerminalObserver = (result: ModelSetupWizardResult) => (() => boolean) | void;
 
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
@@ -53,12 +52,12 @@ type WizardSession = {
   suspended?: boolean;
   retired?: boolean;
   retirementGeneration: number;
-  terminalResult?: WizardNextResult;
+  terminalResult?: ModelSetupWizardResult;
   cancellationPromise?: Promise<WizardStatusResult>;
+  inputClosurePromise?: Promise<WizardStatusResult>;
   abortController: AbortController;
   startMethod: ModelSetupWizardStartMethod;
   activationTargetId?: string;
-  admissionRejected?: true;
   onTerminalResult?: WizardTerminalObserver;
 };
 
@@ -102,6 +101,7 @@ export class ModelSetupWizardRunner {
       client,
       abortController: new AbortController(),
       cancellationPromise: undefined,
+      inputClosurePromise: undefined,
       suspended: false,
       retired: false,
     };
@@ -177,17 +177,15 @@ export class ModelSetupWizardRunner {
           },
           { timeoutMs: null },
         )
-        .catch((error: unknown): WizardStartResult => {
+        .catch((error: unknown): ModelSetupWizardResult => {
           if (!isSetupAdmissionBusyError(error)) {
             throw error;
           }
-          session.admissionRejected = true;
           // Normalize only the retained start's proven non-admission, including
           // late replies after deadline/disposal, through exact terminal cleanup.
           return {
-            sessionId: session.sessionId,
             done: true,
-            status: "error",
+            status: "not-admitted",
             error: formatUiError(error, this.options.requestFailedMessage()),
           };
         });
@@ -261,6 +259,27 @@ export class ModelSetupWizardRunner {
       return undefined;
     }
     if (result?.status === "cancelled" || result?.status === "error") {
+      if (session.startMethod === "models.authLogin") {
+        // Cancellation acknowledges the abort before provider teardown releases
+        // admission. Status waits for that release; a purged session is settled.
+        try {
+          await session.client.request<WizardStatusResult>(
+            "wizard.status",
+            { sessionId: session.sessionId },
+            {
+              timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
+              signal: session.abortController.signal,
+            },
+          );
+        } catch (error) {
+          if (!isWizardNotFoundError(error)) {
+            throw error;
+          }
+        }
+        if (session !== this.session || this.isRetired(session) || session.suspended) {
+          return undefined;
+        }
+      }
       this.close();
       return "cancelled";
     }
@@ -290,8 +309,8 @@ export class ModelSetupWizardRunner {
 
   private async awaitWizardStart(
     session: WizardSession,
-    request: Promise<WizardStartResult>,
-  ): Promise<WizardStartResult> {
+    request: Promise<ModelSetupWizardResult>,
+  ): Promise<ModelSetupWizardResult> {
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Gateway request abort/deadline retirement discards the late session needed for cleanup.
@@ -358,7 +377,7 @@ export class ModelSetupWizardRunner {
   private applyResult(
     session: WizardSession,
     authChoice: string,
-    result: WizardNextResult,
+    result: ModelSetupWizardResult,
   ): ModelSetupWizardCompletion | null {
     if (session === this.session && session.suspended && result.done) {
       session.terminalResult = result;
@@ -383,14 +402,14 @@ export class ModelSetupWizardRunner {
       this.session = null;
     }
     this.setState(next);
-    if (next.phase !== "done") {
+    if (!result.done || result.status !== "done") {
       return null;
     }
     return {
       startMethod: session.startMethod,
       ...(session.activationTargetId ? { activationTargetId: session.activationTargetId } : {}),
       ...(isCurrent ? { isCurrent } : {}),
-      ...(next.preparedModelRef ? { preparedModelRef: next.preparedModelRef } : {}),
+      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
       ...(result.modelActivation ? { modelActivation: result.modelActivation } : {}),
     };
   }
@@ -413,23 +432,28 @@ export class ModelSetupWizardRunner {
 
   private async cancelSession(session: WizardSession): Promise<WizardStatusResult | undefined> {
     try {
-      return await this.sendCancellation(session);
+      return await this.sendCancellation(session, session.startMethod === "models.authLogin");
     } catch {
       // Detached cleanup is best effort; explicit cancellation surfaces failures.
       return undefined;
     }
   }
 
-  private async sendCancellation(session: WizardSession): Promise<WizardStatusResult | undefined> {
+  private async sendCancellation(
+    session: WizardSession,
+    closeInput = false,
+  ): Promise<WizardStatusResult | undefined> {
     if (this.isRetired(session)) {
       return undefined;
     }
-    if (!session.cancellationPromise) {
-      // Explicit cancellation and detached cleanup share only the pending request.
-      session.cancellationPromise = session.client
+    const promiseKey = closeInput ? "inputClosurePromise" : "cancellationPromise";
+    if (!session[promiseKey]) {
+      // Disposal must close input even when a pending user cancellation can
+      // still return running for a protected credential write.
+      session[promiseKey] = session.client
         .request<WizardStatusResult>(
           "wizard.cancel",
-          { sessionId: session.sessionId },
+          { sessionId: session.sessionId, ...(closeInput ? { closeInput: true } : {}) },
           { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
         )
         .then((result) => {
@@ -439,26 +463,27 @@ export class ModelSetupWizardRunner {
           return result;
         })
         .finally(() => {
-          session.cancellationPromise = undefined;
+          session[promiseKey] = undefined;
         });
     }
-    return session.cancellationPromise;
+    return session[promiseKey];
   }
 
   private reportTerminalResult(
     session: WizardSession,
-    result: WizardNextResult,
+    result: ModelSetupWizardResult,
   ): (() => boolean) | void {
     // Confirmed failure/cancellation owns exact receipt cleanup after presentation retires.
     // Success and visible state still require this runner's live session.
     if (this.isRetired(session) || session.suspended) {
       return;
     }
-    const failed = result.status === "cancelled" || result.status === "error";
+    const failed =
+      result.status === "cancelled" ||
+      result.status === "error" ||
+      result.status === "not-admitted";
     if (result.done && (session === this.session || failed)) {
-      return session.admissionRejected
-        ? session.onTerminalResult?.(result, true)
-        : session.onTerminalResult?.(result);
+      return session.onTerminalResult?.(result);
     }
   }
 

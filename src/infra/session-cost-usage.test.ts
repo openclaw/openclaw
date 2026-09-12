@@ -2,6 +2,7 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -1157,10 +1158,10 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      currentRollup.version = 2;
+      currentRollup.version = 3;
       currentRollup.rollup.untimestamped.totals.totalTokens = 9_999;
       expect(
-        writeSessionCostUsageRollup({
+        await writeSessionCostUsageRollup({
           agentId: "main",
           rollupId: sessionFile,
           previousValueJson: currentRow.valueJson,
@@ -1206,7 +1207,7 @@ describe("session cost usage", () => {
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
-      expect(appendedRollup.version).toBe(3);
+      expect(appendedRollup.version).toBe(4);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],
@@ -1225,7 +1226,7 @@ describe("session cost usage", () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-incremental.jsonl");
-    const assistantEntry = (timestamp: string, totalTokens: number) =>
+    const assistantEntry = (timestamp: string, totalTokens: number, content = "") =>
       JSON.stringify({
         type: "message",
         timestamp,
@@ -1233,6 +1234,7 @@ describe("session cost usage", () => {
           role: "assistant",
           provider: "openai",
           model: "gpt-5.5",
+          content,
           usage: {
             input: totalTokens,
             output: 0,
@@ -1244,7 +1246,7 @@ describe("session cost usage", () => {
     await fs.writeFile(
       sessionFile,
       [
-        assistantEntry("2026-02-05T12:00:00.000Z", 10),
+        assistantEntry("2026-02-05T12:00:00.000Z", 10, "🦞".repeat(32 * 1024)),
         assistantEntry("2026-02-05T12:01:00.000Z", 20),
       ].join("\n"),
       "utf-8",
@@ -1947,15 +1949,18 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const lock = acquireSessionCostUsageRefreshLock("main");
+      const lock = await acquireSessionCostUsageRefreshLock("main");
       expect(lock.acquired).toBe(true);
-      const releaseTimer = setTimeout(lock.release, 40);
+      const released = delay(40).then(lock.release);
       try {
-        const summary = await loadSessionCostSummary({ agentId: "main", sessionFile });
+        const [summary] = await Promise.all([
+          loadSessionCostSummary({ agentId: "main", sessionFile }),
+          released,
+        ]);
         expect(summary?.totalTokens).toBe(12);
       } finally {
-        clearTimeout(releaseTimer);
-        lock.release();
+        await released;
+        await lock.release();
       }
     });
   });
@@ -2741,6 +2746,42 @@ describe("session cost usage", () => {
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+  });
+
+  it.each([
+    {
+      name: "indented message-ID code",
+      content: "    [message_id: literal]",
+      expected: "[message_id: literal]",
+    },
+    {
+      name: "fenced code after a generated hint",
+      content: "[message_id: generated]\n```text\n[message_id: literal]\n```",
+      expected: "```text\n[message_id: literal]\n```",
+    },
+    {
+      name: "visible text after internal context",
+      content:
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nvisible user text",
+      expected: "visible user text",
+    },
+  ])("preserves $name in user usage logs", async ({ content, expected }) => {
+    const root = await makeSessionCostRoot("logs-user-display");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "user", content },
+      }),
+      "utf-8",
+    );
+    await withStateDir(root, async () => {
+      const logs = await loadSessionLogs({ sessionFile });
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toBe(expected);
+    });
   });
 
   it("does not split surrogate pairs when truncating session log content", async () => {

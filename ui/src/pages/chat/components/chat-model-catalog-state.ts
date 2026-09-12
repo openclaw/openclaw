@@ -1,11 +1,9 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
-export type ChatModelCatalogState = {
-  hasSnapshot: boolean;
-  status: "idle" | "loading" | "ready" | "error" | "offline";
-};
+export type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
 export function renderChatModelCatalogState(
   state: ChatModelCatalogState | undefined,
@@ -15,34 +13,41 @@ export function renderChatModelCatalogState(
   errorLabel = t("chat.modelControls.modelsUnavailable"),
   retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
 ) {
-  if (!state || (state.status === "ready" && hasSelectableOptions)) {
+  if (!state) {
     return nothing;
   }
-  if (state.status === "error" && hasOptions) {
+  const { status } = state;
+  const checking = state.pendingProviders?.join(", ");
+  if (status === "ready" && hasSelectableOptions && !checking) {
     return nothing;
   }
   const label =
-    state.status === "offline"
+    status === "offline"
       ? t("common.offline")
-      : state.status === "error"
-        ? errorLabel
-        : state.status === "ready"
-          ? t("chat.modelControls.noModelsAvailable")
-          : t("chat.modelControls.loadingModels");
+      : status === "error"
+        ? hasOptions
+          ? t("chat.modelControls.modelsRefreshFailed")
+          : errorLabel
+        : checking
+          ? t("chat.modelControls.checkingProviderModels", { providers: checking })
+          : status === "ready"
+            ? t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${
         hasOptions ? "" : "chat-controls__model-catalog-state--empty"
       }"
-      data-chat-model-catalog-state=${state.status}
+      data-chat-model-catalog-state=${status}
+      role="status"
       aria-live="polite"
     >
       <span class="chat-controls__model-catalog-state-label">
-        ${state.status === "error" ? icons.alertTriangle : nothing}
+        ${status === "error" ? icons.alertTriangle : nothing}
         <span>${label}</span>
       </span>
       ${
-        state.status === "error" && retryTarget
+        status === "error" && retryTarget
           ? html`
               <button
                 class="chat-controls__model-catalog-action"
@@ -60,7 +65,7 @@ export function renderChatModelCatalogState(
           : nothing
       }
       ${
-        state.status === "ready" && !hasSelectableOptions && onModelSetup
+        status === "ready" && !hasSelectableOptions && onModelSetup
           ? html`
               <button
                 class="chat-controls__model-catalog-action"

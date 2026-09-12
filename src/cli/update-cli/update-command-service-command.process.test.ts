@@ -2,20 +2,28 @@ import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
-it.each(["restart", "install", "missing candidate"] as const)(
-  "handles %s after replacing the updater's module files",
-  async (scenario) => {
-    await withOpenClawTestState(
-      { prefix: "openclaw-update-command-replacement-", scenario: "minimal", applyEnv: false },
-      async (state) => {
-        const script = String.raw`
+it.each([
+  "restart",
+  "install",
+  "missing candidate",
+  "unregistered executor",
+  "missing executor",
+  "restart revoked",
+  "install revoked",
+] as const)("handles %s after replacing the updater's module files", async (scenario) => {
+  await withOpenClawTestState(
+    { prefix: "openclaw-update-command-replacement-", scenario: "minimal", applyEnv: false },
+    async (state) => {
+      const script = String.raw`
           import assert from "node:assert/strict";
+          import { existsSync } from "node:fs";
           import fs from "node:fs/promises";
           import { registerHooks } from "node:module";
           import path from "node:path";
           import { pathToFileURL } from "node:url";
 
           const scenario = ${JSON.stringify(scenario)};
+          const action = scenario.startsWith("install") ? "install" : "restart";
           const root = ${JSON.stringify(state.path("installation"))};
           const dist = path.join(root, "dist");
           const receipt = path.join(root, "candidate.json");
@@ -50,9 +58,18 @@ it.each(["restart", "install", "missing candidate"] as const)(
           await fs.mkdir(dist);
           const params = {
             result: { root, mode: "npm" },
-            opts: { json: true },
+            opts: { json: true, ...(scenario === "missing executor" ? { run: { runId: "original", env: process.env } } : scenario === "unregistered executor" ? {
+              run: { runId: "original", env: process.env, executorFence: {
+                assertCurrent() { if (existsSync(receipt)) { throw new Error("Update authority revoked during native command"); } },
+              } },
+            } : {}) },
             invocationEnv: process.env,
             timeoutMs: 10_000,
+            assertCurrent() {
+              if (scenario !== "unregistered executor" && scenario.endsWith("revoked") && existsSync(receipt)) {
+                throw new Error("Update authority revoked during native command");
+              }
+            },
           };
           if (scenario === "missing candidate") {
             await assert.rejects(runUpdatedInstallGatewayCommand(params, "install"), {
@@ -68,35 +85,52 @@ it.each(["restart", "install", "missing candidate"] as const)(
               '  compileCacheDisabled: process.env.NODE_DISABLE_COMPILE_CACHE,',
               '}));',
             ].join("\n"));
-            assert.equal(await runUpdatedInstallGatewayCommand(params, scenario, true), "unverified");
-            const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
-            assert.deepEqual(observed, {
-              args: ["gateway", scenario, scenario === "install" ? "--force" : "--preserve-definition", "--json"],
-              node: process.execPath,
-              config: process.env.OPENCLAW_CONFIG_PATH,
-              compileCacheDisabled: "1",
-            });
+            if (scenario === "missing executor") {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+                message: "Native command requires its original update executor.",
+              });
+              assert.equal(existsSync(receipt), false);
+            } else if (scenario === "unregistered executor") {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+                message: "Child continuation requires its live executor.",
+              });
+              assert.equal(existsSync(receipt), false);
+            } else if (scenario.endsWith("revoked")) {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+                message: "Update authority revoked during native command",
+              });
+            } else {
+              assert.equal(await runUpdatedInstallGatewayCommand(params, action, true), "unverified");
+            }
+            if (scenario !== "unregistered executor" && scenario !== "missing executor") {
+              const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
+              assert.deepEqual(observed, {
+                args: ["gateway", action, action === "restart" ? "--preserve-definition" : "--force", "--json"],
+                node: process.execPath,
+                config: process.env.OPENCLAW_CONFIG_PATH,
+                compileCacheDisabled: "1",
+              });
+            }
           }
           console.log("UPDATE_COMMAND_AFTER_REPLACEMENT_OK");
         `;
-        const result = await runCliProcessChild({
-          nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
-          env: {
-            PATH: process.env.PATH,
-            ...state.envVars,
-            TMPDIR: state.root,
-            TMP: state.root,
-            TEMP: state.root,
-          },
-        });
-        const failure = formatCliProcessFailure({
-          reason: "Update command child failed",
-          ...result,
-        });
-        expect(result.signal, failure).toBeNull();
-        expect(result.code, failure).toBe(0);
-        expect(result.stdout, failure).toContain("UPDATE_COMMAND_AFTER_REPLACEMENT_OK");
-      },
-    );
-  },
-);
+      const result = await runCliProcessChild({
+        nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+        env: {
+          PATH: process.env.PATH,
+          ...state.envVars,
+          TMPDIR: state.root,
+          TMP: state.root,
+          TEMP: state.root,
+        },
+      });
+      const failure = formatCliProcessFailure({
+        reason: "Update command child failed",
+        ...result,
+      });
+      expect(result.signal, failure).toBeNull();
+      expect(result.code, failure).toBe(0);
+      expect(result.stdout, failure).toContain("UPDATE_COMMAND_AFTER_REPLACEMENT_OK");
+    },
+  );
+});

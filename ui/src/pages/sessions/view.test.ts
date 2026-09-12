@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
@@ -31,6 +32,7 @@ function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsLis
 function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    refreshing: false,
     agentId: "main",
     mainKey: "main",
     result,
@@ -105,6 +107,37 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("identifies agents on plain chat sessions in a mixed-agent list", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            { key: "agent:main:chat-one", kind: "direct" },
+            { key: "agent:research:chat-two", kind: "direct" },
+            { key: "legacy-chat", agentId: "research", kind: "direct" },
+          ]),
+        ),
+      ),
+      container,
+    );
+    document.body.append(container);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
+          (chip) => chip.updateComplete,
+        ),
+      );
+      expect(
+        [...container.querySelectorAll(".session-data-row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        ),
+      ).toEqual(["main", "research", "research"]);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("renders local calendar date headings with their session rows", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 2, 9, 12).getTime());
     const container = document.createElement("div");
@@ -375,6 +408,7 @@ describe("sessions view", () => {
           ],
           indexing: true,
           truncated: true,
+          archivedTranscriptsExcluded: 0,
         },
         onNavigateToChat,
       }),
@@ -532,7 +566,10 @@ describe("sessions view", () => {
     expect(container.querySelectorAll(".session-data-row")).toHaveLength(1);
   });
 
-  it("offers person grouping and labels owner sections from their durable profile", async () => {
+  it.each([
+    ["profile-ada", "Ada Lovelace", "Ada Lovelace"],
+    ["gateway-owner", "Saved owner name", "Shared owner"],
+  ])("offers person grouping and labels the durable profile %s", async (id, name, expected) => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -545,9 +582,9 @@ describe("sessions view", () => {
               owner: {
                 actor: {
                   type: "human",
-                  id: "profile-ada",
-                  label: "Ada Lovelace",
-                  identity: { type: "profile", id: "profile-ada" },
+                  id,
+                  label: name,
+                  identity: { type: "profile", id },
                 },
               },
             },
@@ -569,7 +606,7 @@ describe("sessions view", () => {
       [...container.querySelectorAll(".session-group-row__label")].map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Ada Lovelace", "Ungrouped"]);
+    ).toEqual([expected, "Ungrouped"]);
   });
 
   it("hides the person grouping option without the identity capability", async () => {
@@ -892,6 +929,32 @@ describe("sessions view", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
     popover?.dispatchEvent(new Event("wa-hide"));
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("does not invent thinking choices for an empty session profile", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            modelProvider: "thinking-fixture",
+            model: "no-effort",
+            thinkingLevels: [],
+          }),
+        ),
+        expandedSessionKey: "agent:main:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector<HTMLSelectElement>("tbody select");
+    expect(thinking).not.toBeNull();
+    expect(Array.from(thinking?.options ?? []).map((option) => option.value)).toEqual([""]);
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Unknown");
   });
 
   it("renders and patches provider-owned thinking ids", async () => {
@@ -1449,7 +1512,7 @@ describe("sessions view", () => {
     expect(stats.get("Status")).toBe("running");
     expect(stats.get("Model")).toBe("gpt-5.5");
     expect(stats.get("Provider")).toBe("openai");
-    expect(stats.get("Runtime")).toBe("pi");
+    expect(stats.get("Runtime")).toBe("-");
     expect(stats.get("Run duration")).toBe("2m 5s");
     expect(stats.get("Tokens")).toBe("123456 / 200000");
     expect(stats.get("Compaction")).toBe("1 Checkpoint");
@@ -1869,3 +1932,31 @@ describe("sessions view", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("renders the sessions meter against its last-run prompt budget", async () => {
+  const container = document.createElement("div");
+  render(
+    renderSessions(
+      buildProps(
+        buildResult({
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          totalTokens: 160_000,
+          contextTokens: 200_000,
+          contextBudgetStatus: contextBudgetStatusFixture(),
+        }),
+      ),
+    ),
+    container,
+  );
+  await Promise.resolve();
+  expect(container.querySelector(".session-context-meter")?.getAttribute("aria-label")).toBe(
+    "89% of last-run prompt budget used (160,000 / 180,000 tokens)",
+  );
+  expect(
+    container
+      .querySelector(".session-context-meter")
+      ?.classList.contains("session-context-meter--danger"),
+  ).toBe(true);
+});

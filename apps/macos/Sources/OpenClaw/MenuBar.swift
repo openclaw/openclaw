@@ -34,7 +34,7 @@ enum OpenClawProcessEntrypoint {
 struct OpenClawApp: App {
     // periphery:ignore - SwiftUI installs the application delegate through this property wrapper.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
     private var tailscaleService: TailscaleService {
@@ -71,19 +71,16 @@ struct OpenClawApp: App {
 
     var body: some Scene {
         // Register before any window is opened, including connection recovery from the dashboard.
-        let openWindow = self.openWindow
+        let openSettings = self.openSettings
         ConnectionWindowOpener.shared.register {
-            openWindow(id: ConnectionWindowOpener.windowID)
+            openSettings()
         }
-        return Window("OpenClaw Connection", id: ConnectionWindowOpener.windowID) {
+        // The native Connection window is a standard macOS Settings window: toolbar tabs, fixed width,
+        // content-sized height per tab. Cmd-, still opens Dashboard settings via the replaced command.
+        return Settings {
             ConnectionWindow(state: self.state)
                 .environment(self.tailscaleService)
         }
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-        // Keep this a preferred size so the content can fit smaller displays.
-        .defaultSize(width: ConnectionWindow.width, height: ConnectionWindow.height)
-        .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Gateway Window…") {
@@ -155,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     private static func cleanUpProcesses() async {
         let execHostCleanup = ExecApprovalsPromptServer.shared.stop()
+        let macControlCleanup = MacControlServer.shared.stop()
         // Start tunnel retirement before helper drains can consume the quit deadline.
         async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
         async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
@@ -167,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await MacNodeModeCoordinator.shared.stopAndWait()
         _ = await (tunnelCleanup, gatewayCleanup, profileCleanup)
         await execHostCleanup?.value
+        await macControlCleanup?.value
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
@@ -333,7 +332,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 // Validate PATH selection before local startup. Existing installs may not
                 // have the validation cache yet, and a stale external CLI must not win.
-                if state.connectionMode == .local {
+                if state.connectionMode == .local ||
+                    (state.connectionMode == .remote && state.hostsLocalGatewayWithRemotePrimary)
+                {
                     _ = await CLIInstaller.status()
                 }
                 await ConnectionModeCoordinator.shared.apply(
@@ -357,6 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NodePairingApprovalPrompter.shared.start()
             DevicePairingApprovalPrompter.shared.start()
             ExecApprovalsPromptServer.shared.start()
+            MacControlServer.shared.start()
             ExecApprovalsGatewayPrompter.shared.start()
             if let state {
                 CookieSyncManager.shared.start(state: state)
@@ -392,7 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
-            self.openDashboardAction()
+            DashboardManager.shared.presentDashboard(userGesture: false)
         }
     }
 
@@ -404,6 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
         ExecApprovalsPromptServer.shared.stop()
+        MacControlServer.shared.stop()
         ExecApprovalsGatewayPrompter.shared.stop()
         MacNodeModeCoordinator.shared.stop()
         CookieSyncManager.shared.stop()

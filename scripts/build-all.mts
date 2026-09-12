@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import type { SpawnSyncOptions } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import prettyMilliseconds from "pretty-ms";
 import {
@@ -10,7 +10,7 @@ import {
   restoreBuildStepCacheOutputs,
   type BuildCacheStep,
 } from "./lib/build-artifact-cache.mts";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
@@ -369,14 +369,6 @@ export function resolveBuildAllSteps(
     });
 }
 
-function readCurrentGitCommit() {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return result.status === 0 ? result.stdout.trim() : null;
-}
-
 /** Pin one source identity for every child process that contributes to this build. */
 export function resolveBuildAllEnvironment(
   env: NodeJS.ProcessEnv = process.env,
@@ -393,6 +385,9 @@ export function resolveBuildAllEnvironment(
   // Updates need runtime artifacts; explicit declaration/package builds still win.
   if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
     buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
+    // Published updaters can still pass the serving checkout's source root.
+    // Rebind before plugin asset hooks resolve SDK aliases in this candidate.
+    buildEnv.OPENCLAW_DEV_SOURCE_ROOT = process.cwd();
   }
   return buildEnv;
 }

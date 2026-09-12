@@ -3,7 +3,10 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  createRuntimeConfigReader,
+  getRuntimeConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   logVerbose,
   warn,
@@ -20,6 +23,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
+import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -31,6 +35,7 @@ import type { MutableDiscordGateway } from "./gateway-handle.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import { registerDiscordListener } from "./listeners.js";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { discordProviderRuntime } from "./provider-runtime.js";
 import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
@@ -53,6 +58,7 @@ export type MonitorDiscordOpts = {
   token?: string;
   accountId?: string;
   config?: OpenClawConfig;
+  readConfig?: () => OpenClawConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
@@ -89,6 +95,7 @@ function isDiscordDisallowedIntentsError(err: unknown): boolean {
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const startupStartedAt = Date.now();
   const cfg = opts.config ?? getRuntimeConfig();
+  const readConfig = opts.readConfig ?? createRuntimeConfigReader(cfg);
   const account = discordProviderRuntime.resolveDiscordAccount({
     cfg,
     accountId: opts.accountId,
@@ -176,6 +183,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
   const voiceEnabled = resolveDiscordVoiceEnabled(discordCfg.voice);
+  if (voiceEnabled && getDiscordEndpointRuntime()) {
+    throw new Error("Discord voice transport is unavailable while DISCORD_API_URL is configured");
+  }
 
   const allowlistResolved = await resolveDiscordAllowlistConfig({
     token,
@@ -187,6 +197,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   });
   guildEntries = allowlistResolved.guildEntries;
   allowFrom = allowlistResolved.allowFrom ?? [];
+  const readPolicy = createDiscordLivePolicyReader({
+    cfg,
+    readConfig,
+    accountId: account.accountId,
+    discordConfig: discordCfg,
+    token,
+    runtime,
+    discordRestFetch,
+    abortSignal: opts.abortSignal,
+    resolvedAllowlist: allowlistResolved,
+  });
 
   if (discordProviderRuntime.shouldLogVerbose()) {
     logDiscordResolvedConfig({
@@ -314,6 +335,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
     const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
+      readPolicy,
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
@@ -421,6 +443,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         DiscordVoiceStateUpdateListener,
       } = await discordProviderRuntime.loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
+        readPolicy,
         client,
         cfg,
         discordConfig: discordCfg,
@@ -439,6 +462,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
+      readPolicy,
       client,
       cfg,
       discordConfig: discordCfg,
@@ -472,6 +496,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
       : undefined;
     registerDiscordMonitorListeners({
+      readPolicy,
       cfg,
       client,
       accountId: account.accountId,

@@ -4,6 +4,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
+import type { AgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import type {
   RetainedLostTaskAuditSummary,
   TaskAuditSummary,
@@ -74,6 +75,7 @@ export type StatusSummary = {
   channelSummary: string[];
   queuedSystemEvents: string[];
   startupMigrationWarning?: string;
+  secretEgressProxy?: import("../secrets/egress-proxy/certificates.js").SecretEgressCertificateStatus;
   degradedSecretOwners?: Array<{
     ownerKind: "account" | "capability" | "gateway" | "provider" | "route";
     ownerId: string;
@@ -101,6 +103,8 @@ export type StatusSummary = {
     recent: SessionStatus[];
     byAgent: Array<{
       agentId: string;
+      status?: "degraded";
+      admissionRefusal?: AgentDatabaseAdmissionRefusal;
       path: string;
       count: number;
       recent: SessionStatus[];

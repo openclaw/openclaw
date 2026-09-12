@@ -20,7 +20,12 @@ import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
 } from "../loading/symlink-targets.js";
-import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
+import {
+  normalizeWorkspaceSkillRoots,
+  resolveWorkspaceSkillDirectories,
+} from "../loading/workspace-skill-roots.js";
+import { resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
+import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
@@ -111,21 +116,13 @@ function resolveWatchTargets(
   workspaceDir: string,
   config: OpenClawConfig | undefined,
   agentId: string | undefined,
-  executionSkillsDir: string | undefined,
+  executionWorkspaceDir: string | undefined,
   watcherKey: string,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
 ): WatchTarget[] {
-  const baseRoots: Array<{ path: string; source: string }> = [];
-  if (workspaceDir.trim()) {
-    baseRoots.push({ path: path.join(workspaceDir, "skills"), source: "openclaw-workspace" });
-    baseRoots.push({
-      path: path.join(workspaceDir, ".agents", "skills"),
-      source: "agents-skills-project",
-    });
-  }
-  if (executionSkillsDir) {
-    baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
-  }
+  const baseRoots = [workspaceDir, ...(executionWorkspaceDir ? [executionWorkspaceDir] : [])]
+    .flatMap((workspace) => resolveWorkspaceSkillDirectories(workspace))
+    .map(({ dir, source }) => ({ path: dir, source }));
   baseRoots.push(...resolveWorkshopWatchRoots(config, agentId));
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
@@ -477,20 +474,6 @@ function resolveSkillsWatcherUsePolling(): boolean {
   return Boolean(normalized) && normalized !== "false" && normalized !== "0";
 }
 
-// Requires resolveWatchTargets to produce a stable-order result (it returns a
-// sorted array); positional comparison is intentional for hot-path efficiency.
-function sameWatchTargets(a: WatchTarget[], b: WatchTarget[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every(
-      (target, index) =>
-        target.path === b[index]?.path &&
-        target.watchRoot === b[index]?.watchRoot &&
-        target.depth === b[index]?.depth,
-    )
-  );
-}
-
 function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
   const usePolling = resolveSkillsWatcherUsePolling();
   // Chokidar's missing-root fallback retains only the final basename, so it
@@ -554,6 +537,9 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
       .then(() => schedule(changedPath));
   };
 
+  // ignoreInitial suppresses writes discovered before native watches are ready.
+  // Reconcile snapshots read during that gap once the initial scan completes.
+  watcher.on("ready", () => schedule());
   watcher.on("all", (_event, changedPath) => {
     if (isPathInside(target.path, changedPath) || isPathInside(changedPath, target.path)) {
       schedule(changedPath);
@@ -692,7 +678,7 @@ function evictIdleWorkspaceWatchStates(now: number): void {
 
 export function ensureSkillsWatcher(params: {
   workspaceDir: string;
-  executionSkillsDir?: string;
+  executionWorkspaceDir?: string;
   config?: OpenClawConfig;
   agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -701,7 +687,11 @@ export function ensureSkillsWatcher(params: {
   if (!workspaceDir) {
     return;
   }
-  const watcherKey = createWorkshopWatcherKey(workspaceDir, params);
+  const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
+    agentWorkspaceDir: workspaceDir,
+    executionWorkspaceDir: params.executionWorkspaceDir,
+  });
+  const watcherKey = JSON.stringify([workspaceDir, executionWorkspaceDir, params.agentId]);
   workspaceWatchOwnerDirs.set(watcherKey, workspaceDir);
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
@@ -726,11 +716,19 @@ export function ensureSkillsWatcher(params: {
     workspaceDir,
     params.config,
     params.agentId,
-    params.executionSkillsDir,
+    executionWorkspaceDir,
     watcherKey,
     params.pluginMetadataSnapshot,
   );
-  const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
+  // resolveWatchTargets returns stable sorted order, so positional equality is intentional.
+  const targetsUnchanged = areOrderedArraysEqual(
+    previousTargets,
+    watchTargets,
+    (previous, next) =>
+      previous.path === next.path &&
+      previous.watchRoot === next.watchRoot &&
+      previous.depth === next.depth,
+  );
   const watcherDepthsCoverTargets = watchTargets.every(
     (watchTarget) => (pathWatchers.get(watchTarget.path)?.depth ?? -1) >= watchTarget.depth,
   );
@@ -738,8 +736,6 @@ export function ensureSkillsWatcher(params: {
     evictIdleWorkspaceWatchStates(now);
     return;
   }
-  const watchTargetsChanged = previousTargets.length > 0 && !targetsUnchanged;
-
   const nextTargetKeys = new Set(watchTargets.map((target) => target.path));
   for (const watchTarget of previousTargets) {
     if (!nextTargetKeys.has(watchTarget.path)) {
@@ -751,7 +747,9 @@ export function ensureSkillsWatcher(params: {
   }
   workspaceWatchTargets.set(watcherKey, watchTargets);
 
-  if (watchTargetsChanged) {
+  // Acquisition must invalidate reads cached during an unwatched interval,
+  // before the first consumer runs or the asynchronous initial scan completes.
+  if (!targetsUnchanged) {
     bumpSkillsSnapshotVersion({
       workspaceDir,
       reason: "watch-targets",

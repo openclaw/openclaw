@@ -10,6 +10,7 @@ import {
   validateUpdateRunsListResult,
   validateUpdateStatusResult,
 } from "./index.js";
+import { UPDATE_RUN_DRIVER_LIMIT } from "./update-run-vocabulary.js";
 
 const run = LedgerRecordSchema.parse({
   runId: "27d967ef-0485-4f98-a93a-229d50c75111",
@@ -20,6 +21,8 @@ const run = LedgerRecordSchema.parse({
   status: "succeeded",
   reason: null,
   origin: {
+    driver: { host: "gateway.test", pid: 1234, startIdentity: "98765" },
+    previousDrivers: [{ host: "gateway.test", pid: 1200, startIdentity: "98700" }],
     requester: { channel: "telegram", accountId: "primary", senderId: "operator" },
     sessionKey: "agent:main:main",
     deliveryContext: { channel: "telegram", to: "chat", accountId: "default", threadId: "1" },
@@ -41,7 +44,6 @@ const run = LedgerRecordSchema.parse({
     versionMatch: true,
     pluginErrors: [],
     channelsReady: true,
-    inferenceProbe: "passed",
     noticeDelivered: true,
     doctorHint: "openclaw doctor",
   },
@@ -61,6 +63,29 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
+  it.each([
+    { configChange: { kind: "key", key: "meta" } },
+    { configChange: { kind: "migration", message: "Enabled the configured provider." } },
+    {
+      configWriteRefusal: {
+        reason: "config-input-changed",
+        message: "Config changed before promotion.",
+        keys: ["meta", "plugins", "wizard"],
+      },
+    },
+  ])("carries typed Doctor evidence through the wire projection: %j", (evidence) => {
+    const record = LedgerRecordSchema.parse({
+      ...run,
+      steps: [{ ...run.steps[0], ...evidence }],
+    });
+    expect(validateUpdateRunRecord(record)).toBe(true);
+    expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+    expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+    expect(
+      validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+    ).toBe(true);
+  });
+
   it("carries a canonical ledger record through lookup, history, and additive status responses", () => {
     expect(validateUpdateRunRecord(run)).toBe(true);
     expect(validateUpdateRunsGetResult({ run })).toBe(true);
@@ -91,7 +116,46 @@ describe("update run wire contract", () => {
     ["oversized text", { reason: "x".repeat(1025) }],
     ["oversized steps", { steps: Array.from({ length: 129 }, () => run.steps[0]) }],
     ["oversized repairs", { repair: Array.from({ length: 17 }, () => run.repair[0]) }],
+    [
+      "unknown Doctor evidence kind",
+      { steps: [{ ...run.steps[0], configChange: { kind: "other", key: "meta" } }] },
+    ],
+    [
+      "oversized Doctor key",
+      { steps: [{ ...run.steps[0], configChange: { kind: "key", key: "x".repeat(1025) } }] },
+    ],
+    [
+      "oversized Doctor refusal keys",
+      {
+        steps: [
+          {
+            ...run.steps[0],
+            configWriteRefusal: {
+              reason: "config-input-changed",
+              message: "Config changed before promotion.",
+              keys: Array.from({ length: 33 }, () => "meta"),
+            },
+          },
+        ],
+      },
+    ],
     ["invalid service port", { verification: { port: 65536 } }],
+    [
+      "oversized driver host",
+      { origin: { driver: { ...run.origin.driver, host: "x".repeat(256) } } },
+    ],
+    [
+      "oversized driver start identity",
+      { origin: { driver: { ...run.origin.driver, startIdentity: "1".repeat(129) } } },
+    ],
+    [
+      "too many previous drivers",
+      {
+        origin: {
+          previousDrivers: Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, () => run.origin.driver),
+        },
+      },
+    ],
     [
       "oversized plugin errors",
       { verification: { pluginErrors: Array.from({ length: 33 }, () => "failed") } },

@@ -1,402 +1,414 @@
-// Control UI tests cover models behavior.
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ModelCatalogResult } from "../api/types.ts";
 import {
-  peekChatMetadata,
-  loadChatMetadata,
-  beginChatMetadataPublication,
-  subscribeChatMetadata,
-} from "./chat/chat-metadata-store.ts";
-import { invalidateModelCatalogCache, loadModelCatalog } from "./model-catalog-store.ts";
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../test-helpers/gateway-client.ts";
+import { invalidateModelCatalogCache } from "./model-catalog-cache.ts";
+import { loadModelCatalog, peekModelCatalog } from "./model-catalog-store.ts";
 
-const loadModels = async (...args: Parameters<typeof loadModelCatalog>) =>
-  (await loadModelCatalog(...args)).models;
+const prepared = { id: "prepared", name: "Prepared", provider: "example" };
+const published = { id: "published", name: "Published", provider: "example" };
 
-describe("loadModels", () => {
-  it("requests the configured model list view", async () => {
-    const request = vi.fn(async () => ({
-      models: [
-        { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
-      ],
-    }));
-
-    const models = await loadModels({ request } as unknown as GatewayBrowserClient, {
-      agentId: "main",
-    });
-
-    expect(request).toHaveBeenCalledWith("models.list", {
-      view: "configured",
-      agentId: "main",
-    });
-    expect(models).toEqual([
-      { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
-    ]);
-  });
-
-  it("requests only the prepared catalog for automatic reads", async () => {
-    const request = vi.fn(async () => ({ models: [] }));
-
-    await loadModels({ request } as unknown as GatewayBrowserClient, {
-      agentId: "main",
-      preparedOnly: true,
-    });
-
-    expect(request).toHaveBeenCalledWith("models.list", {
-      view: "configured",
-      agentId: "main",
-      preparedOnly: true,
-    });
-  });
-
-  it("revalidates existing metadata after explicit account-model discovery", async () => {
-    const prepared = [{ id: "prepared", name: "Prepared", provider: "openai" }];
-    const discovered = [
+describe("model catalog display cache", () => {
+  it("rereads readiness when the earliest Gateway cooldown expires without a publication", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const cooling = {
       ...prepared,
-      { id: "discovered", name: "Discovered", provider: "openai", contextWindow: 262_144 },
-    ];
-    const request = vi.fn(async (method: string) => ({
-      models: discovered,
-      ...(method === "chat.metadata" ? { commands: [] } : {}),
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    beginChatMetadataPublication(client, { agentId: "main" }).publish({
-      commands: [],
-      models: prepared,
-    });
-    const listener = vi.fn((update: { type: string }) => {
-      if (update.type === "invalidated") {
-        void loadChatMetadata(client, { agentId: "main" });
-      }
-    });
-    const unsubscribe = subscribeChatMetadata(client, { agentId: "main" }, listener);
-
-    await loadModels(client, { agentId: "main" });
-
-    await vi.waitFor(() =>
-      expect(peekChatMetadata(client, { agentId: "main" })?.models).toEqual(discovered),
-    );
-    expect(request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
-    expect(listener.mock.calls.filter(([update]) => update.type === "result")).toHaveLength(1);
-    unsubscribe();
-  });
-
-  it("does not revalidate metadata for automatic prepared-only catalog reads", async () => {
-    const models = [{ id: "prepared", name: "Prepared", provider: "openai" }];
-    const request = vi.fn(async () => ({ models }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models });
-
-    await loadModels(client, { agentId: "main", preparedOnly: true });
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
-  });
-
-  it("reuses the configured model list while the cache is fresh", async () => {
-    const request = vi.fn(async () => ({
-      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const first = await loadModels(client, { agentId: "main" });
-    const second = await loadModels(client, { agentId: "main" });
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(first).toBe(second);
-  });
-
-  it("keeps model catalogs scoped by agent", async () => {
-    const request = vi.fn(async (_method: string, params: { agentId?: string }) => ({
-      models: [
-        {
-          id: params.agentId ?? "default-model",
-          name: params.agentId ?? "Default Model",
-          provider: "openai",
-        },
-      ],
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const writer = await loadModels(client, { agentId: "writer" });
-    const reviewer = await loadModels(client, { agentId: "reviewer" });
-    await loadModels(client, { agentId: "writer" });
-
-    expect(writer[0]?.id).toBe("writer");
-    expect(reviewer[0]?.id).toBe("reviewer");
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith("models.list", {
-      view: "configured",
-      agentId: "writer",
-    });
-  });
-
-  it("keeps a Models refresh visible when route re-entry uses a prepared read", async () => {
-    const prepared = [{ id: "prepared", name: "Prepared", provider: "openai" }];
-    const exact = [{ id: "exact", name: "Exact", provider: "openai" }];
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: prepared })
-      .mockResolvedValueOnce({ models: exact });
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    expect(await loadModels(client, { agentId: "main", preparedOnly: true })).toEqual(prepared);
-    expect(await loadModels(client, { agentId: "main", refresh: true })).toEqual(exact);
-    expect(await loadModels(client, { agentId: "main", preparedOnly: true })).toEqual(exact);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a late stale response from clobbering a fresher refresh result", async () => {
-    const stale = [{ id: "stale", name: "Stale", provider: "openai" }];
-    const fresh = [{ id: "fresh", name: "Fresh", provider: "openai" }];
-    let releaseStale: (() => void) | undefined;
-    const staleGate = new Promise<void>((resolve) => {
-      releaseStale = resolve;
-    });
-    const request = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        await staleGate;
-        return { models: stale };
+      available: false,
+      unavailableReason: "cooldown" as const,
+      unavailableUntil: 12_000,
+    };
+    const recovered = { ...prepared, available: true };
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce({
+        models: [{ ...cooling, id: "later", unavailableUntil: 20_000 }, cooling],
       })
-      .mockImplementationOnce(async () => ({ models: fresh }));
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const stalePromise = loadModels(client, { agentId: "main" });
-    const freshModels = await loadModels(client, { agentId: "main", refresh: true });
-    releaseStale?.();
-    await stalePromise;
-
-    expect(freshModels).toEqual(fresh);
-    expect(await loadModels(client, { agentId: "main" })).toEqual(fresh);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("coalesces concurrent refreshes without reusing a completed refresh", async () => {
-    let releaseRefresh: (() => void) | undefined;
-    const refreshGate = new Promise<void>((resolve) => {
-      releaseRefresh = resolve;
-    });
-    const request = vi.fn(async () => {
-      await refreshGate;
-      return { models: [{ id: "fresh", name: "Fresh", provider: "openai" }] };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const first = loadModels(client, { agentId: "writer", refresh: true });
-    const concurrent = loadModels(client, { agentId: "writer", refresh: true });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    releaseRefresh?.();
-    expect(await concurrent).toBe(await first);
-
-    await loadModels(client, { agentId: "writer", refresh: true });
-
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a shared refresh alive until its final subscriber aborts", async () => {
-    let requestSignal: AbortSignal | undefined;
-    const request = vi.fn(
-      async (_method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
-        const signal = options?.signal;
-        if (!signal) {
-          throw new Error("expected a cancellable model-catalog request");
-        }
-        requestSignal = signal;
-        return await new Promise<never>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new DOMException("model catalog request aborted", "AbortError"),
-              ),
-            { once: true },
-          );
-        });
-      },
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const firstAbort = new AbortController();
-    const secondAbort = new AbortController();
-    const firstReason = new DOMException("first page retired", "AbortError");
-    const secondReason = new DOMException("last page retired", "AbortError");
-
-    const first = loadModels(client, {
-      agentId: "writer",
-      refresh: true,
-      signal: firstAbort.signal,
-    });
-    const second = loadModels(client, {
-      agentId: "writer",
-      refresh: true,
-      signal: secondAbort.signal,
-    });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-
-    firstAbort.abort(firstReason);
-    await expect(first).rejects.toBe(firstReason);
-    expect(requestSignal?.aborted).toBe(false);
-
-    secondAbort.abort(secondReason);
-    await expect(second).rejects.toBe(secondReason);
-    expect(requestSignal?.aborted).toBe(true);
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { label: "explicit refresh", refresh: { refresh: true } },
-    { label: "picker refresh", refresh: { refreshIfDue: true } },
-  ])(
-    "starts a replacement $label when the retired request is already aborted",
-    async (testCase) => {
-      const fresh = [{ id: "fresh", name: "Fresh", provider: "openai" }];
-      let requestCount = 0;
-      const request = vi.fn(
-        (_method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
-          const signal = options?.signal;
-          if (!signal) {
-            throw new Error("expected a cancellable model-catalog request");
-          }
-          requestCount += 1;
-          if (requestCount > 1) {
-            return Promise.resolve({ models: fresh });
-          }
-          return new Promise<never>((_resolve, reject) => {
-            signal.addEventListener(
-              "abort",
-              () =>
-                reject(
-                  signal.reason instanceof Error
-                    ? signal.reason
-                    : new DOMException("model catalog request aborted", "AbortError"),
-                ),
-              { once: true },
-            );
-          });
-        },
-      );
-      const client = { request } as unknown as GatewayBrowserClient;
-      const retired = new AbortController();
-      const replacementTask = new AbortController();
-      const reason = new DOMException("page retired", "AbortError");
-      const first = loadModels(client, {
-        agentId: "writer",
-        ...testCase.refresh,
-        signal: retired.signal,
-      });
-      const firstResult = first.catch((error: unknown) => error);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-
-      retired.abort(reason);
-      const replacement = loadModels(client, {
-        agentId: "writer",
-        ...testCase.refresh,
-        signal: replacementTask.signal,
-      });
-
-      expect(await firstResult).toBe(reason);
-      await expect(replacement).resolves.toEqual(fresh);
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it("joins an active picker refresh instead of returning the cooldown cache", async () => {
-    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
-    const refreshed = [{ id: "refreshed", name: "Refreshed", provider: "openai" }];
-    let releaseRefresh: (() => void) | undefined;
-    const refreshGate = new Promise<void>((resolve) => {
-      releaseRefresh = resolve;
-    });
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: initial })
-      .mockImplementationOnce(async () => {
-        await refreshGate;
-        return { models: refreshed };
-      });
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
-    const first = loadModels(client, { agentId: "main", refreshIfDue: true });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    const concurrent = loadModels(client, { agentId: "main", refreshIfDue: true });
-    releaseRefresh?.();
-
-    expect(await concurrent).toBe(await first);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("refreshes an account catalog once per picker cooldown", async () => {
-    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
-    const refreshed = [{ id: "refreshed", name: "Refreshed", provider: "openai" }];
-    const later = [{ id: "later", name: "Later", provider: "openai" }];
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: initial })
-      .mockResolvedValueOnce({ models: refreshed })
-      .mockResolvedValueOnce({ models: later });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-
+      .mockResolvedValueOnce({ models: [recovered] });
+    const client = createTestGatewayClient(request);
     try {
-      expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
-      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
-      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
+      await loadModelCatalog(client, { agentId: "writer" });
+      clock.mockReturnValue(11_999);
+      expect(peekModelCatalog(client, { agentId: "writer" })?.models).toContainEqual(cooling);
+      await loadModelCatalog(client, { agentId: "writer" });
+      expect(request).toHaveBeenCalledTimes(1);
+      clock.mockReturnValue(12_000);
+      expect(peekModelCatalog(client, { agentId: "writer" })).toBeUndefined();
+      expect((await loadModelCatalog(client, { agentId: "writer" })).models).toEqual([recovered]);
       expect(request).toHaveBeenCalledTimes(2);
-
-      now.mockReturnValue(1_000 + 60_000 + 1);
-      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
-      expect(request).toHaveBeenCalledTimes(2);
-
-      now.mockReturnValue(1_000 + 5 * 60_000 + 1);
-      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(later);
-      expect(request).toHaveBeenCalledTimes(3);
-      expect(request.mock.calls.slice(1).map((call) => call[1])).toEqual([
-        { view: "configured", agentId: "main", refresh: true },
-        { view: "configured", agentId: "main", refresh: true },
-      ]);
+      clock.mockReturnValue(100_000);
+      expect(peekModelCatalog(client, { agentId: "writer" })?.models).toEqual([recovered]);
     } finally {
-      now.mockRestore();
+      clock.mockRestore();
     }
   });
 
-  it("retires a picker catalog when its logical Gateway connection changes", async () => {
-    const beforeReconnect = [{ id: "before", name: "Before", provider: "openai" }];
-    const afterReconnect = [{ id: "after", name: "After", provider: "openai" }];
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: beforeReconnect })
-      .mockResolvedValueOnce({ models: afterReconnect });
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
-      beforeReconnect,
-    );
-
+  it("reuses a published snapshot synchronously until its Gateway generation changes", async () => {
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce({ models: [prepared] })
+      .mockResolvedValueOnce({ models: [published] });
+    const client = createTestGatewayClient(request);
+    const scope = { agentId: "writer" };
+    expect(peekModelCatalog(client, scope)).toBeUndefined();
+    expect((await loadModelCatalog(client, scope)).models).toEqual([prepared]);
+    expect(peekModelCatalog(client, scope)?.models).toEqual([prepared]);
+    expect((await loadModelCatalog(client, scope)).models).toEqual([prepared]);
+    expect(request).toHaveBeenCalledTimes(1);
     invalidateModelCatalogCache(client);
-
-    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
-      afterReconnect,
-    );
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(peekModelCatalog(client, scope)).toBeUndefined();
+    expect((await loadModelCatalog(client, scope)).models).toEqual([published]);
   });
 
-  it("keeps a failed account catalog refresh retryable", async () => {
-    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
-    const recovered = [{ id: "recovered", name: "Recovered", provider: "openai" }];
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: initial })
-      .mockRejectedValueOnce(new Error("probe timed out"))
-      .mockResolvedValueOnce({ models: recovered });
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
-    await expect(loadModels(client, { agentId: "main", refreshIfDue: true })).rejects.toThrow(
-      "probe timed out",
+  it("keeps every projection and connection separate while normalizing equivalent requests", async () => {
+    let generation = 0;
+    const request = createGatewayRequestMock(async () => ({
+      models: [{ ...prepared, id: String(++generation) }],
+    }));
+    const client = createTestGatewayClient(request);
+    const scopes: ModelsListParams[] = [
+      { agentId: "writer" },
+      { agentId: "reader" },
+      { agentId: "writer", sessionKey: "agent:writer:saved" },
+      { agentId: "writer", authProfileId: "personal:reader:example:one" },
+      { agentId: "writer", provider: "example" },
+      { agentId: "writer", includeDetails: true },
+      { agentId: "writer", includeProviderCapabilities: true },
+      { agentId: "writer", preparedOnly: true },
+      { agentId: "writer", view: "provider-config" },
+    ];
+    for (const [index, scope] of scopes.entries()) {
+      expect((await loadModelCatalog(client, scope)).models[0]?.id).toBe(String(index + 1));
+    }
+    for (const [index, scope] of scopes.entries()) {
+      expect((await loadModelCatalog(client, scope)).models[0]?.id).toBe(String(index + 1));
+    }
+    expect(
+      (await loadModelCatalog(client, { view: "configured", agentId: " writer " })).models[0]?.id,
+    ).toBe("1");
+    expect(request).toHaveBeenCalledTimes(scopes.length);
+    const otherClient = createTestGatewayClient(request);
+    expect((await loadModelCatalog(otherClient, scopes[0]!)).models[0]?.id).toBe(
+      String(scopes.length + 1),
     );
-    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(recovered);
+  });
+
+  it("separates transport budgets while sharing the first successful projection", async () => {
+    const inherited = createDeferred<ModelCatalogResult>();
+    const unbounded = createDeferred<ModelCatalogResult>();
+    const bounded = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockImplementationOnce(() => inherited.promise)
+      .mockImplementationOnce(() => unbounded.promise)
+      .mockImplementationOnce(() => bounded.promise);
+    const client = createTestGatewayClient(request);
+    const scope = { agentId: "writer" };
+    const first = loadModelCatalog(client, scope);
+    const unlimited = loadModelCatalog(client, { ...scope, timeoutMs: null });
+    const limited = loadModelCatalog(client, { ...scope, timeoutMs: 30_000 });
+    const follower = loadModelCatalog(client, { ...scope, timeoutMs: 30_000 });
     expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls.map(([, params, options]) => ({ params, options }))).toEqual([
+      { params: { view: "configured", agentId: "writer" }, options: undefined },
+      { params: { view: "configured", agentId: "writer" }, options: { timeoutMs: null } },
+      { params: { view: "configured", agentId: "writer" }, options: { timeoutMs: 30_000 } },
+    ]);
+    bounded.resolve({ models: [published] });
+    expect(await Promise.all([limited, follower])).toEqual([
+      { models: [published] },
+      { models: [published] },
+    ]);
+    expect(await loadModelCatalog(client, { ...scope, timeoutMs: 5 })).toEqual({
+      models: [published],
+    });
+    inherited.resolve({ models: [prepared] });
+    unbounded.resolve({ models: [prepared] });
+    await Promise.all([first, unlimited]);
+    expect(await loadModelCatalog(client, scope)).toEqual({ models: [published] });
+    expect(await loadModelCatalog(client, { ...scope, timeoutMs: null })).toEqual({
+      models: [published],
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not revive an older ordinary flight after its winning cooldown snapshot expires", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const stale = createDeferred<ModelCatalogResult>();
+    const first = createDeferred<ModelCatalogResult>();
+    const fresh = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => fresh.promise);
+    const client = createTestGatewayClient(request);
+    try {
+      const old = loadModelCatalog(client, { timeoutMs: null });
+      const winner = loadModelCatalog(client, { timeoutMs: 30_000 });
+      first.resolve({
+        models: [
+          {
+            ...prepared,
+            available: false,
+            unavailableReason: "cooldown",
+            unavailableUntil: 12_000,
+          },
+        ],
+      });
+      await winner;
+      clock.mockReturnValue(12_000);
+      expect(peekModelCatalog(client, {})).toBeUndefined();
+      const replacement = loadModelCatalog(client, { timeoutMs: null });
+      expect(request).toHaveBeenCalledTimes(3);
+      stale.resolve({ models: [prepared] });
+      await old;
+      expect(peekModelCatalog(client, {})).toBeUndefined();
+      fresh.resolve({ models: [published] });
+      expect(await replacement).toEqual({ models: [published] });
+      expect(peekModelCatalog(client, {})?.models).toEqual([published]);
+    } finally {
+      stale.resolve({ models: [prepared] });
+      fresh.resolve({ models: [published] });
+      clock.mockRestore();
+    }
+  });
+
+  it("retries a Gateway-timed-out budget without discarding another pending budget", async () => {
+    const unbounded = createDeferred<ModelCatalogResult>();
+    const timeout = createDeferred<ModelCatalogResult>();
+    const recovery = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockImplementationOnce(() => unbounded.promise)
+      .mockImplementationOnce(() => timeout.promise)
+      .mockImplementationOnce(() => recovery.promise);
+    const client = createTestGatewayClient(request);
+    const original = loadModelCatalog(client, { timeoutMs: null });
+    const expired = loadModelCatalog(client, { timeoutMs: 30_000 });
+    const reason = new GatewayProtocolRequestTimeoutError({
+      method: "models.list",
+      timeoutMs: 30_000,
+      requestSent: true,
+    });
+    const rejected = expect(expired).rejects.toBe(reason);
+    timeout.reject(reason);
+    await rejected;
+    expect(peekModelCatalog(client, {})).toBeUndefined();
+    const replacement = loadModelCatalog(client, { timeoutMs: 30_000 });
+    const existing = loadModelCatalog(client, { timeoutMs: null });
+    expect(request).toHaveBeenCalledTimes(3);
+    recovery.resolve({ models: [published] });
+    expect(await replacement).toEqual({ models: [published] });
+    unbounded.resolve({ models: [prepared] });
+    await Promise.all([original, existing]);
+    expect(await loadModelCatalog(client, {})).toEqual({ models: [published] });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("retires old projections and flights when an explicit refresh publishes", async () => {
+    const stale = createDeferred<ModelCatalogResult>();
+    const refresh = createDeferred<ModelCatalogResult>();
+    const duringRefresh = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => refresh.promise)
+      .mockImplementationOnce(() => duringRefresh.promise)
+      .mockResolvedValue({ models: [published] });
+    const client = createTestGatewayClient(request);
+    const old = loadModelCatalog(client, { agentId: "writer" });
+    const replacement = loadModelCatalog(client, { view: "provider-config", refresh: true });
+    const interim = loadModelCatalog(client, { agentId: "writer" });
+    stale.resolve({ models: [prepared] });
+    expect(await old).toEqual({ models: [prepared] });
+    refresh.resolve({ models: [published] });
+    expect(await replacement).toEqual({ models: [published] });
+    duringRefresh.resolve({ models: [prepared] });
+    await interim;
+    expect((await loadModelCatalog(client, { agentId: "writer" })).models).toEqual([published]);
+    expect((await loadModelCatalog(client, { view: "provider-config" })).models).toEqual([
+      published,
+    ]);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request.mock.calls[1]?.[1]).toEqual({ view: "provider-config", refresh: true });
+  });
+
+  it.each([false, true])(
+    "preserves an explicit refresh after a different-budget result (expired: %s)",
+    async (expired) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+      const refresh = createDeferred<ModelCatalogResult>();
+      const ordinary = createDeferred<ModelCatalogResult>();
+      const cooling = {
+        ...prepared,
+        available: false,
+        unavailableReason: "cooldown" as const,
+        unavailableUntil: 12_000,
+      };
+      const request = createGatewayRequestMock()
+        .mockImplementationOnce(() => refresh.promise)
+        .mockImplementationOnce(() => ordinary.promise)
+        .mockResolvedValue({ models: [published] });
+      const client = createTestGatewayClient(request);
+      try {
+        const refreshed = loadModelCatalog(client, {
+          agentId: "writer",
+          refresh: true,
+          timeoutMs: 30_000,
+        });
+        const concurrent = loadModelCatalog(client, { agentId: "writer", timeoutMs: null });
+        ordinary.resolve({ models: [cooling] });
+        expect(await concurrent).toEqual({ models: [cooling] });
+        expect(peekModelCatalog(client, { agentId: "writer" })?.models).toEqual([cooling]);
+        if (expired) {
+          clock.mockReturnValue(12_000);
+          expect(peekModelCatalog(client, { agentId: "writer" })).toBeUndefined();
+        }
+        await loadModelCatalog(client, { agentId: "writer", preparedOnly: true });
+        refresh.resolve({ models: [published] });
+        expect(await refreshed).toEqual({ models: [published] });
+        expect(await loadModelCatalog(client, { agentId: "writer", timeoutMs: 5 })).toEqual({
+          models: [published],
+        });
+        expect(peekModelCatalog(client, { agentId: "writer", preparedOnly: true })).toBeUndefined();
+        expect(request).toHaveBeenCalledTimes(3);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("keeps an explicit refresh authoritative while other projections fill the cache", async () => {
+    const refreshing = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockImplementationOnce(() => refreshing.promise)
+      .mockResolvedValue({ models: [prepared] });
+    const client = createTestGatewayClient(request);
+    const refresh = loadModelCatalog(client, {
+      agentId: "writer",
+      refresh: true,
+      timeoutMs: 30_000,
+    });
+    for (let index = 0; index < 64; index += 1) {
+      await loadModelCatalog(client, { agentId: "writer", sessionKey: `session:${index}` });
+    }
+    await loadModelCatalog(client, { agentId: "writer", timeoutMs: null });
+    expect(peekModelCatalog(client, { agentId: "writer" })?.models).toEqual([prepared]);
+    refreshing.resolve({ models: [published] });
+    expect(await refresh).toEqual({ models: [published] });
+    expect(peekModelCatalog(client, { agentId: "writer" })?.models).toEqual([published]);
+  });
+
+  it("retries partial refreshes and transport failures, but retains successful empty catalogs", async () => {
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce({ models: [prepared], refreshFailed: true })
+      .mockRejectedValueOnce(new Error("transport closed"))
+      .mockResolvedValueOnce({ models: [] });
+    const client = createTestGatewayClient(request);
+    expect(await loadModelCatalog(client, {})).toEqual({ models: [prepared], refreshFailed: true });
+    expect(peekModelCatalog(client, {})).toBeUndefined();
+    await expect(loadModelCatalog(client, {})).rejects.toThrow("transport closed");
+    expect(await loadModelCatalog(client, {})).toEqual({ models: [] });
+    expect(await loadModelCatalog(client, {})).toEqual({ models: [] });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([undefined, null, 30_000])(
+    "shares timeout %s without letting one consumer cancel another",
+    async (timeoutMs) => {
+      const pending = createDeferred<ModelCatalogResult>();
+      const first = new AbortController();
+      const second = new AbortController();
+      const request = createGatewayRequestMock(() => pending.promise);
+      const client = createTestGatewayClient(request);
+      const retired = loadModelCatalog(client, {
+        agentId: "writer",
+        signal: first.signal,
+        timeoutMs,
+      });
+      const active = loadModelCatalog(client, {
+        agentId: "writer",
+        signal: second.signal,
+        timeoutMs,
+      });
+      const reason = new DOMException("Page retired", "AbortError");
+      first.abort(reason);
+      await expect(retired).rejects.toBe(reason);
+      expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(false);
+      pending.resolve({ models: [published] });
+      expect(await active).toEqual({ models: [published] });
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("replaces a flight immediately when its last consumer retires", async () => {
+    const stale = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockImplementationOnce(() => stale.promise)
+      .mockResolvedValueOnce({ models: [published] });
+    const client = createTestGatewayClient(request);
+    const controller = new AbortController();
+    const retired = loadModelCatalog(client, { signal: controller.signal });
+    const rejected = expect(retired).rejects.toHaveProperty("name", "AbortError");
+    controller.abort();
+    expect(await loadModelCatalog(client, {})).toEqual({ models: [published] });
+    await rejected;
+    expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
+    stale.resolve({ models: [prepared] });
+    await stale.promise;
+    expect(await loadModelCatalog(client, {})).toEqual({ models: [published] });
+  });
+
+  it("invalidates saved-session projections without discarding other sessions or draft accounts", async () => {
+    const request = createGatewayRequestMock(async () => ({ models: [published] }));
+    const client = createTestGatewayClient(request);
+    const scopes = [
+      { agentId: "writer", sessionKey: "global" },
+      { agentId: "reader", sessionKey: "global" },
+      { agentId: "writer", sessionKey: "other" },
+      { agentId: "writer", authProfileId: "personal:writer:example:one" },
+    ];
+    const implicitAgentScope = { sessionKey: "global" };
+    await Promise.all(
+      [...scopes, implicitAgentScope].map((scope) => loadModelCatalog(client, scope)),
+    );
+    invalidateModelCatalogCache(client, scopes[0]);
+    expect(peekModelCatalog(client, implicitAgentScope)).toBeUndefined();
+    expect(peekModelCatalog(client, scopes[0]!)).toBeUndefined();
+    for (const scope of scopes.slice(1)) {
+      expect(peekModelCatalog(client, scope)?.models).toEqual([published]);
+    }
+    await loadModelCatalog(client, scopes[0]!);
+    expect(request).toHaveBeenCalledTimes(6);
+  });
+
+  it("bounds retained session snapshots while keeping recently used entries warm", async () => {
+    const request = createGatewayRequestMock(async () => ({ models: [published] }));
+    const client = createTestGatewayClient(request);
+    for (let index = 0; index < 64; index += 1) {
+      await loadModelCatalog(client, { sessionKey: `session:${index}` });
+    }
+    await loadModelCatalog(client, { sessionKey: "session:0" });
+    await loadModelCatalog(client, { sessionKey: "session:64" });
+    expect(peekModelCatalog(client, { sessionKey: "session:0" })?.models).toEqual([published]);
+    expect(peekModelCatalog(client, { sessionKey: "session:1" })).toBeUndefined();
+
+    const cold = createDeferred<ModelCatalogResult>();
+    request.mockImplementation(() => cold.promise);
+    const scopes = Array.from({ length: 65 }, (_, index) => ({ sessionKey: `cold:${index}` }));
+    const concurrent = Promise.all(scopes.map((scope) => loadModelCatalog(client, scope)));
+    cold.resolve({ models: [published] });
+    await concurrent;
+    expect(scopes.filter((scope) => peekModelCatalog(client, scope))).toHaveLength(64);
+  });
+
+  it("rejects an already retired request before transport or cached publication", async () => {
+    const request = createGatewayRequestMock();
+    const controller = new AbortController();
+    const reason = new DOMException("Page retired", "AbortError");
+    controller.abort(reason);
+    await expect(
+      loadModelCatalog(createTestGatewayClient(request), { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(request).not.toHaveBeenCalled();
   });
 });

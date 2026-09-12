@@ -272,8 +272,8 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 }
 
 // Minimal WebSocket mock for connection-log assertions.
-vi.mock("ws", () => ({
-  default: class MockWebSocket {
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     private bufferedMessageFlushed = false;
 
@@ -684,9 +684,9 @@ describe("containerRestRequest", () => {
         observedSignal = init.signal ?? undefined;
         return new Response(
           delayedBodyStream([
-            { delayMs: 10, text: "{" },
-            { delayMs: 20, text: '"ok"' },
-            { delayMs: 20, text: ":true" },
+            { delayMs: 5, text: "{" },
+            { delayMs: 5, text: '"ok"' },
+            { delayMs: 5, text: ":true" },
             { delayMs: 20, text: "}" },
           ]).body,
           {

@@ -975,6 +975,36 @@ describe("resolveBuildAllSteps", () => {
   });
 
   describe.each(["full", "package"])("%s runner build environment", (profile) => {
+    it.each([undefined, "1"])("isolates update build children with marker %s", async (marker) => {
+      const env = {
+        OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout",
+        OPENCLAW_UPDATE_IN_PROGRESS: marker,
+      };
+      const originalEnv = { ...env };
+      const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+      const result = await runBuildAllSteps(profile, {
+        cacheEnabled: false,
+        env,
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: buildMemoryLimit(5),
+        now: () => 0,
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep(invocation) {
+          invocations.push(invocation);
+          return { status: 0 };
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.timings.map((timing) => timing.label)).toContain("plugins:assets:build");
+      expect(invocations.length).toBeGreaterThan(0);
+      for (const invocation of invocations) {
+        expect(invocation.options.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(
+          marker === "1" ? process.cwd() : "/serving-checkout",
+        );
+      }
+      expect(env).toEqual(originalEnv);
+    });
+
     it.each([
       { name: "ordinary build", env: {}, runtimeOnly: false, skipDts: undefined },
       {
@@ -1793,18 +1823,28 @@ describe("resolveBuildStepCacheState", () => {
       const cacheState = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
       writeBuildStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
       fs.writeFileSync(outputPath, "overwritten by earlier build step");
+      const obsoletePath = path.join(rootDir, "dist/obsolete.js");
+      fs.writeFileSync(obsoletePath, "obsolete output");
 
-      const restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+      const readSpy = vi.spyOn(fs, "readFileSync");
+      let restorable: ReturnType<typeof resolveBuildStepCacheState>;
+      try {
+        restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+        expect(readSpy.mock.calls.map(([file]) => file)).not.toContain(outputPath);
+      } finally {
+        readSpy.mockRestore();
+      }
       expect(restorable.cacheable).toBe(true);
       expect(restorable.fresh).toBe(true);
       expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.outputFiles).toBe(1);
+      expect(restorable.outputFiles).toBe(2);
       expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(restorable.relativeOutputFiles).toEqual(["dist/obsolete.js", "dist/output.js"]);
       expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
 
       expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+      expect(fs.existsSync(obsoletePath)).toBe(false);
     });
   });
 

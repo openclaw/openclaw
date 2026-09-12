@@ -21,14 +21,15 @@ import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
 import type { MessageActionDeniedError } from "./message-action-denial.js";
+import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type MessageActionGateway = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
+export type MessageActionGateway = Omit<
+  OutboundMessageGatewayOptionsInput,
+  "resolveAgentRuntimeIdentityToken"
+> & {
   resolveAgentRuntimeIdentityToken?: (context?: {
     sourceReplyFinal?: boolean;
     sourceReplyToolCallId?: string;
@@ -105,6 +106,8 @@ export type MessageActionInput = {
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence the live owner after waits and before platform I/O. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Keep ephemeral-authority sends out of replayable recovery. */
   skipQueue?: boolean;
   /** @internal Runs when broadcast converts a typed target denial into result text. */

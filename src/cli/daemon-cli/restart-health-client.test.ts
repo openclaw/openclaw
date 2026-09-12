@@ -27,9 +27,14 @@ import { waitForGatewayHealthyRestart } from "./restart-health.js";
 // Exercise the real client over a socket and apply the Gateway's actual identity
 // predicates, so a diagnostic client cannot accidentally stand in for local control.
 describe("restart verifier local control identity", () => {
-  it.each(["token", "password", "none"] as const)(
-    "reads health and served identity with %s auth without creating device state",
-    async (mode) => {
+  it.each([
+    { mode: "token", requirePluginHealth: true },
+    { mode: "password", requirePluginHealth: true },
+    { mode: "none", requirePluginHealth: true },
+    { mode: "token", requirePluginHealth: false },
+  ] as const)(
+    "reads health with $mode auth without creating device state (requirePluginHealth=$requirePluginHealth)",
+    async ({ mode, requirePluginHealth }) => {
       await withOpenClawTestState(
         {
           env: {
@@ -124,8 +129,21 @@ describe("restart verifier local control identity", () => {
                       error: "fixture load failure",
                     },
                   ],
+                  unavailable: [
+                    {
+                      id: "unavailable-plugin",
+                      state: "configured-unavailable",
+                      diagnostic: {
+                        kind: "plugin-verification",
+                        reason: "missing-extension-entry",
+                        detail: "Fixture entry missing",
+                      },
+                    },
+                  ],
                 },
-                channels: { fixture: { probe: { ok: false, error: "fixture channel failure" } } },
+                channels: requirePluginHealth
+                  ? { fixture: { probe: { ok: false, error: "fixture channel failure" } } }
+                  : {},
               });
             });
           });
@@ -152,16 +170,26 @@ describe("restart verifier local control identity", () => {
               probeHosts: ["127.0.0.1"],
               expectedVersion: "2026.8.1",
               expectedBuildId: "fixture-build",
+              requirePluginHealth,
               attempts: 0,
               delayMs: 1,
             });
             expect(result).toMatchObject({
-              healthy: false,
-              waitOutcome: "plugin-errors",
+              healthy: !requirePluginHealth,
+              waitOutcome: requirePluginHealth ? "plugin-errors" : "healthy",
               gatewayVersion: "2026.8.1",
               gatewayBuildId: "fixture-build",
               activatedPluginErrors: [{ id: "fixture-plugin", error: "fixture load failure" }],
-              channelProbeErrors: [{ id: "fixture", error: "fixture channel failure" }],
+              unavailablePlugins: [
+                {
+                  id: "unavailable-plugin",
+                  reason: "missing-extension-entry",
+                  detail: "Fixture entry missing",
+                },
+              ],
+              ...(requirePluginHealth
+                ? { channelProbeErrors: [{ id: "fixture", error: "fixture channel failure" }] }
+                : {}),
             });
             expect(failures).toEqual([]);
             expect(requests).toEqual(["connect", "health"]);

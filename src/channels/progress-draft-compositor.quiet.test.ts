@@ -172,13 +172,94 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
         );
         await progress.pushApprovalEvent({ phase: "resolved", approvalId: "approval-1" });
         expect(update.mock.lastCall?.[0]).not.toContain("Run checks");
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it.each([undefined, false, true])(
+    "only starts a failed-command draft with tool progress enabled (%s)",
+    async (toolProgress) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress, maxLines: 3, label: false },
+          },
+        },
+        update,
+      });
+      try {
         await progress.pushCommandOutputEvent({
           phase: "end",
           toolCallId: "failed-command",
           exitCode: 1,
         });
-        expect(update.mock.lastCall?.[0]).toContain("exit 1");
-        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        expect(progress.hasStarted).toBe(toolProgress === true);
+        if (toolProgress) {
+          expect(update.mock.lastCall?.[0]).toContain("exit 1");
+          expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        } else {
+          expect(update).not.toHaveBeenCalled();
+          expect(progress.getSnapshot().lines).toEqual([]);
+        }
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it.each([
+    { presentation: undefined, toolProgress: false, maxLines: 1 },
+    { presentation: undefined, toolProgress: false, maxLines: 3 },
+    { presentation: "summary" as const, toolProgress: false, maxLines: 1 },
+    { presentation: "summary" as const, toolProgress: true, maxLines: 3 },
+  ])(
+    "keeps failed commands out of quiet plans through reasoning and commentary ($presentation, $toolProgress, $maxLines)",
+    async ({ presentation, toolProgress, maxLines }) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        presentation,
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress, maxLines, commentary: true, label: false },
+          },
+        },
+        update,
+      });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ]);
+        const planText = update.mock.lastCall?.[0];
+        await progress.pushCommandOutputEvent({
+          phase: "end",
+          toolCallId: "failed-command",
+          exitCode: 1,
+        });
+        expect(update.mock.lastCall?.[0]).toBe(planText);
+        expect(progress.getSnapshot().lines).toEqual([]);
+        for (let index = 0; index < 5; index++) {
+          await progress.pushToolEvent({
+            name: "read",
+            toolCallId: `read-${index}`,
+            phase: "start",
+          });
+          await progress.pushReasoningProgress(`Thinking ${index}`, { snapshot: true });
+          expect(update.mock.lastCall?.[0]).not.toContain("exit 1");
+          await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+            itemId: `comment-${index}`,
+          });
+          expect(update.mock.lastCall?.[0]).not.toContain("exit 1");
+        }
+        expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(
+          maxLines,
+        );
         await progress.pushCommandOutputEvent({
           phase: "end",
           toolCallId: "failed-command",
@@ -190,4 +271,150 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
       }
     },
   );
+
+  it.each([
+    {
+      order: "tool item, then command output",
+      failures: ["tool", "command"],
+      recovery: "command",
+    },
+    {
+      order: "command output, then tool item",
+      failures: ["command", "tool"],
+      recovery: "tool",
+    },
+  ] as const)(
+    "hides quiet failures across tool item and command output events ($order)",
+    async ({ failures, recovery }) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: false, maxLines: 3, commentary: true, label: false },
+          },
+        },
+        update,
+      });
+      // Providers can report the same failure through both event families.
+      const push = (family: "tool" | "command", outcome: "failed" | "completed") =>
+        family === "tool"
+          ? progress.pushItemEvent({
+              itemId: "tool:call-1",
+              toolCallId: "call-1",
+              kind: "tool",
+              name: "exec",
+              status: outcome,
+            })
+          : progress.pushCommandOutputEvent({
+              phase: "end",
+              itemId: "command:call-1",
+              toolCallId: "call-1",
+              exitCode: outcome === "failed" ? 1 : 0,
+            });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+        ]);
+        for (const family of failures) {
+          await push(family, "failed");
+          expect(update.mock.lastCall?.[0]).not.toMatch(/failed|exit 1/);
+        }
+        expect(progress.getSnapshot().lines).toHaveLength(0);
+        await push(recovery, "completed");
+        expect(update.mock.lastCall?.[0]).toContain("Repair");
+        expect(update.mock.lastCall?.[0]).not.toMatch(/failed|exit 1/);
+        expect(update.mock.lastCall?.[1]?.lines).toHaveLength(0);
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it.each(["failed", "error", "blocked"])(
+    "flushes and retains explicit %s status while tool progress is enabled",
+    async (status) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, maxLines: 3, commentary: true, label: false },
+          },
+        },
+        update,
+      });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ]);
+        await progress.pushItemEvent({
+          itemId: "attention-item",
+          kind: "tool",
+          name: "read",
+          status,
+          progressText: "Check access",
+        });
+        expect(update.mock.lastCall?.[0]).toContain("Check access");
+        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        for (let index = 0; index < 5; index++) {
+          await progress.pushToolEvent({
+            name: "read",
+            toolCallId: `read-${index}`,
+            phase: "start",
+          });
+          await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+            itemId: `comment-${index}`,
+          });
+        }
+        expect(update.mock.lastCall?.[0]).toContain("Check access");
+        expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(3);
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it("lets new activity replace old non-zero exits without collapsing the plan", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, maxLines: 8, commentary: true, label: false },
+        },
+      },
+      update,
+    });
+    try {
+      await progress.pushPlanProgress([
+        { step: "Inspect", status: "completed" },
+        { step: "Repair", status: "in_progress" },
+        { step: "Verify", status: "pending" },
+        { step: "Audit", status: "pending" },
+        { step: "Ship", status: "pending" },
+      ]);
+      for (let index = 1; index <= 8; index++) {
+        await progress.pushCommandOutputEvent({
+          phase: "end",
+          toolCallId: `failed-${index}`,
+          exitCode: index,
+        });
+      }
+      await progress.pushToolEvent({ name: "read", toolCallId: "new-work", phase: "start" });
+
+      const rendered = update.mock.lastCall?.[0] ?? "";
+      for (const step of ["Inspect", "Repair", "Verify", "Audit", "Ship"]) {
+        expect(rendered).toContain(step);
+      }
+      expect(rendered).toContain("Read");
+      expect(rendered).not.toContain("exit 1");
+      expect(progress.getSnapshot().lines).toHaveLength(8);
+    } finally {
+      progress.cancel();
+    }
+  });
 });

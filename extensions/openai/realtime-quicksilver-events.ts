@@ -1,5 +1,6 @@
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 const eventEnvelopeSchema = z.object({ type: z.string() }).passthrough();
 const sessionStartedSchema = z
@@ -51,14 +52,36 @@ const delegationSchema = z
       .passthrough(),
   })
   .passthrough();
+const liveTranscriptSchema = z.object({
+  delta: z.string(),
+  start_ms: z.number(),
+  end_ms: z.number(),
+});
+const liveDelegationSchema = z.object({
+  delegation: z.object({
+    id: z.string().min(1),
+    type: z.literal("delegation"),
+    target: z.literal("client"),
+  }),
+  offset_ms: z.number(),
+});
+const liveAudioSchema = z.object({ delta: z.string() });
+const liveClosedSchema = z.object({
+  reason: z.enum(["close_requested", "expired", "content", "remote_hangup", "connection_lost"]),
+});
 
 export type OpenAIQuicksilverInboundEvent =
   | { kind: "ignored"; eventType: string }
   | { kind: "session-started"; expiresAt?: number }
+  | {
+      kind: "session-closed";
+      reason: "close_requested" | "expired" | "content" | "remote_hangup" | "connection_lost";
+    }
+  | { kind: "audio-cleared" }
   | { kind: "audio"; data: string }
   | { kind: "transcript-delta"; role: "user" | "assistant"; text: string }
   | { kind: "transcript-done"; role: "user" | "assistant"; text: string }
-  | { kind: "delegation"; id: string; prompt: string }
+  | { kind: "delegation"; id: string; prompt?: string }
   | { kind: "error"; message: string; fatalAuth: boolean }
   | { kind: "unknown"; eventType: string };
 
@@ -112,7 +135,10 @@ function isFatalQuicksilverAuthError(value: unknown): boolean {
   );
 }
 
-export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverInboundEvent | null {
+export function parseOpenAIQuicksilverEvent(
+  payload: string,
+  model?: string,
+): OpenAIQuicksilverInboundEvent | null {
   let decoded: unknown;
   try {
     decoded = JSON.parse(payload);
@@ -124,6 +150,42 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
     return null;
   }
   const eventType = envelope.data.type;
+  if (model && isOpenAIGptLiveApiModel(model)) {
+    if (
+      eventType === "session.input_transcript.delta" ||
+      eventType === "session.output_transcript.delta"
+    ) {
+      const transcript = liveTranscriptSchema.safeParse(decoded);
+      return transcript.success
+        ? {
+            kind: "transcript-delta",
+            role: eventType === "session.input_transcript.delta" ? "user" : "assistant",
+            text: transcript.data.delta,
+          }
+        : { kind: "ignored", eventType };
+    }
+    if (eventType === "session.output_audio.delta") {
+      const audio = liveAudioSchema.safeParse(decoded);
+      return audio.success
+        ? { kind: "audio", data: audio.data.delta }
+        : { kind: "ignored", eventType };
+    }
+    if (eventType === "session.delegation.created") {
+      const delegation = liveDelegationSchema.safeParse(decoded);
+      return delegation.success
+        ? { kind: "delegation", id: delegation.data.delegation.id }
+        : { kind: "ignored", eventType };
+    }
+    if (eventType === "session.closed") {
+      const closed = liveClosedSchema.safeParse(decoded);
+      return closed.success
+        ? { kind: "session-closed", reason: closed.data.reason }
+        : { kind: "ignored", eventType };
+    }
+    if (!["session.started", "session.updated", "error"].includes(eventType)) {
+      return { kind: "unknown", eventType };
+    }
+  }
   if (eventType === "session.started") {
     const started = sessionStartedSchema.safeParse(decoded);
     if (!started.success) {
@@ -156,6 +218,9 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
     return audio.success
       ? { kind: "audio", data: audio.data.audio }
       : { kind: "ignored", eventType };
+  }
+  if (eventType === "output_audio_buffer.cleared") {
+    return { kind: "audio-cleared" };
   }
   if (eventType === "session.updated") {
     return { kind: "ignored", eventType };

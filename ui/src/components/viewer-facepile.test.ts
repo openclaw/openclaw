@@ -20,6 +20,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["session", "profile"] as const)(
+  "labels the shared owner avatar in %s context",
+  async (variant) => {
+    const avatar = document.createElement("openclaw-viewer-avatar");
+    avatar.user = { id: "gateway-owner", name: "Saved owner name", watchedSessions: [] };
+    avatar.variant = variant;
+    document.body.append(avatar);
+    await avatar.updateComplete;
+    expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
+      variant === "profile" ? "Saved owner name" : "Shared owner",
+    );
+  },
+);
+
 it("uses the same user initials and identity hue in the roster and attributed chat", async () => {
   const user: PresenceViewer = {
     id: "profile-riley",
@@ -264,11 +278,16 @@ it("renders ordered static participant actors without presence filtering", async
   await vi.waitFor(async () => {
     await facepile.updateComplete;
     expect(
-      [...facepile.querySelectorAll("openclaw-viewer-avatar .viewer-avatar")].map((node) =>
+      [...facepile.querySelectorAll(".viewer-avatar:not(.viewer-avatar--overflow)")].map((node) =>
         node.getAttribute("aria-label"),
       ),
     ).toEqual(["Ada", "Research"]);
   });
+  await vi.waitFor(() =>
+    expect(facepile.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+  );
+  expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(1);
+  expect(facepile.querySelector("[data-viewer-id]")).toBeNull();
   expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
 });
 

@@ -635,7 +635,8 @@ describe("node worker tunnel manager", () => {
       ok: false,
       error: {
         code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
-        message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        message:
+          "workspace-transfer-failed: operation=upload stage=reconcile: socket hang up | ECONNRESET",
       },
     }));
     const transfer = {
@@ -671,7 +672,8 @@ describe("node worker tunnel manager", () => {
     ).rejects.toMatchObject({
       name: NodeWorkerWorkspaceTransferError.name,
       code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
-      message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+      message:
+        "workspace-transfer-failed: operation=upload stage=reconcile: socket hang up | ECONNRESET",
     });
     expect(workspaceInfo).toHaveBeenCalledWith("worker workspace sync path selected", {
       environmentId: "environment-1",

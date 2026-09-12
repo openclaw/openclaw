@@ -42,8 +42,20 @@ export function resolveBuildEnv(
   };
 }
 
-export function gitCleanCheckArgs(gitRoot: string): string[] {
-  return ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"];
+export function gitCleanCheckArgs(
+  gitRoot: string,
+  sourceTreeStagingPaths: readonly string[] = [],
+): string[] {
+  return [
+    "git",
+    "-C",
+    gitRoot,
+    "status",
+    "--porcelain",
+    "--",
+    ":!dist/control-ui/",
+    ...sourceTreeStagingPaths.map((relative) => `:(top,exclude,literal)${relative}`),
+  ];
 }
 
 async function hasExplicitPnpmPreferOfflineConfig(params: {
@@ -76,11 +88,16 @@ export async function prepareCandidateCommandEnv(
   cwd: string,
   runCommand: CommandRunner,
   timeoutMs: number,
-): Promise<{ env: NodeJS.ProcessEnv | undefined; restoreWorkspace?: () => Promise<void> }> {
+): Promise<{ env: NodeJS.ProcessEnv; restoreWorkspace?: () => Promise<void> }> {
+  // Source launchers select the serving checkout; candidate builds must not
+  // resolve their plugin SDK or bundled sources through that inherited root.
+  const effectiveEnv: NodeJS.ProcessEnv = {
+    ...(env ?? process.env),
+    OPENCLAW_DEV_SOURCE_ROOT: cwd,
+  };
   if (manager !== "pnpm") {
-    return { env };
+    return { env: effectiveEnv };
   }
-  const effectiveEnv = env ?? process.env;
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
     effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
@@ -88,7 +105,7 @@ export async function prepareCandidateCommandEnv(
     ? false
     : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
   const candidateEnv: NodeJS.ProcessEnv = {
-    ...resolvePnpmCandidateEnv(env, "node_modules/.pnpm"),
+    ...resolvePnpmCandidateEnv(effectiveEnv, "node_modules/.pnpm"),
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",

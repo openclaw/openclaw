@@ -47,6 +47,10 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
 } from "./service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "./service-update-authority.js";
 
 const CALLER_OWNED_SERVICE_IDENTITY_KEYS = [
   "OPENCLAW_LAUNCHD_LABEL",
@@ -126,6 +130,7 @@ async function writeScheduledTaskScript({
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
   const taskLaunchPath = resolveTaskLauncherScriptPath(taskEnv, scriptPath);
+  assertGatewayServiceUpdateCurrent();
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({
     env: taskEnv,
@@ -137,9 +142,15 @@ async function writeScheduledTaskScript({
     workingDirectory,
     environment: resolveScheduledTaskScriptEnvironment(taskEnv, environment),
   });
+  assertGatewayServiceUpdateCurrent();
   await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
   if (taskLaunchPath !== scriptPath) {
-    const launcher = buildHiddenLauncherScript({ description: taskDescription, scriptPath });
+    const launcher = buildHiddenLauncherScript({
+      description: taskDescription,
+      scriptPath,
+      taskSupervisor: environment?.OPENCLAW_SERVICE_KIND === "gateway",
+    });
+    assertGatewayServiceUpdateCurrent();
     await fs.writeFile(
       taskLaunchPath,
       encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
@@ -248,15 +259,26 @@ async function activateScheduledTask(params: {
   if (create.code !== 0) {
     const detail = create.stderr || create.stdout;
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
+      if (isUpdateOwnedGatewayServiceCommand()) {
+        throw new Error(
+          "UPDATE_NATIVE_AUTHORITY: update-owned native commands require Task Scheduler; startup fallback is unsupported.",
+        );
+      }
       const startupEntryPath = resolveStartupEntryPath(params.env);
+      assertGatewayServiceUpdateCurrent();
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
       const useHiddenLauncher = shouldUseHiddenWindowsTaskLauncher(params.env);
       const launcher = useHiddenLauncher
-        ? buildHiddenLauncherScript({ description: taskDescription, scriptPath: params.scriptPath })
+        ? buildHiddenLauncherScript({
+            description: taskDescription,
+            scriptPath: params.scriptPath,
+            taskSupervisor: params.env.OPENCLAW_SERVICE_KIND === "gateway",
+          })
         : buildStartupLauncherScript({
             description: taskDescription,
             scriptPath: params.scriptPath,
           });
+      assertGatewayServiceUpdateCurrent();
       await fs.writeFile(
         startupEntryPath,
         encodeWindowsLauncherScript({
@@ -298,6 +320,9 @@ async function activateScheduledTask(params: {
 export async function installScheduledTask(
   args: GatewayServiceInstallArgs,
 ): Promise<{ scriptPath: string }> {
+  if (args.beforeLoad) {
+    throw new Error("Deferred native service load is not supported on this platform.");
+  }
   const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
   const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
   // Capture ownership before repair changes the port/profile that locates the old process.

@@ -24,14 +24,12 @@ beforeEach(() => {
   setup();
 });
 
-afterEach(() => {
-  cleanup();
-});
+afterEach(cleanup);
 
 describe("processEvent (functional inbound calls)", () => {
   it.each(["created", "rejected"] as const)(
     "does not publish %s inbound calls before SQLite persistence succeeds",
-    (kind) => {
+    async (kind) => {
       let failPersistence = true;
       installStateRuntime(() => failPersistence);
       const { ctx, hangupCalls } = createRejectingInboundContext();
@@ -42,7 +40,9 @@ describe("processEvent (functional inbound calls)", () => {
         from: "+15550000002",
       });
 
-      expect(() => processEvent(ctx, event)).toThrow("synthetic SQLite persistence failure");
+      await expect(processEvent(ctx, event)).rejects.toThrow(
+        "synthetic SQLite persistence failure",
+      );
       expect(ctx.activeCalls.size).toBe(0);
       expect(ctx.providerCallIdMap.size).toBe(0);
       expect(ctx.rejectedProviderCallIds.size).toBe(0);
@@ -50,13 +50,13 @@ describe("processEvent (functional inbound calls)", () => {
       expect(hangupCalls).toHaveLength(0);
 
       failPersistence = false;
-      expect(processEvent(ctx, event)).toEqual({ kind: "processed" });
+      expect(await processEvent(ctx, event)).toEqual({ kind: "processed" });
       expect(ctx.activeCalls.size).toBe(kind === "created" ? 1 : 0);
       expect(hangupCalls).toHaveLength(kind === "rejected" ? 1 : 0);
     },
   );
 
-  it("calls provider hangup when rejecting inbound call", () => {
+  it("calls provider hangup when rejecting inbound call", async () => {
     const { ctx, hangupCalls } = createRejectingInboundContext();
     const event = createInboundInitiatedEvent({
       id: "evt-1",
@@ -64,7 +64,7 @@ describe("processEvent (functional inbound calls)", () => {
       from: "+15559999999",
     });
 
-    processEvent(ctx, event);
+    await processEvent(ctx, event);
 
     expect(ctx.activeCalls.size).toBe(0);
     expect(hangupCalls).toHaveLength(1);
@@ -75,7 +75,7 @@ describe("processEvent (functional inbound calls)", () => {
     });
   });
 
-  it("does not call hangup when provider is null", () => {
+  it("does not call hangup when provider is null", async () => {
     const ctx = createContext({
       config: createInboundDisabledConfig(),
       provider: null,
@@ -86,12 +86,12 @@ describe("processEvent (functional inbound calls)", () => {
       from: "+15551111111",
     });
 
-    processEvent(ctx, event);
+    await processEvent(ctx, event);
 
     expect(ctx.activeCalls.size).toBe(0);
   });
 
-  it("calls hangup only once for duplicate events for same rejected call", () => {
+  it("calls hangup only once for duplicate events for same rejected call", async () => {
     const { ctx, hangupCalls } = createRejectingInboundContext();
     const event1 = createInboundInitiatedEvent({
       id: "evt-init",
@@ -109,8 +109,8 @@ describe("processEvent (functional inbound calls)", () => {
       to: "+15550000000",
     };
 
-    processEvent(ctx, event1);
-    processEvent(ctx, event2);
+    await processEvent(ctx, event1);
+    await processEvent(ctx, event2);
 
     expect(ctx.activeCalls.size).toBe(0);
     expect(hangupCalls).toEqual([
@@ -122,7 +122,7 @@ describe("processEvent (functional inbound calls)", () => {
     ]);
   });
 
-  it("answers accepted inbound calls when the provider requires an answer command", () => {
+  it("answers accepted inbound calls when the provider requires an answer command", async () => {
     const answerCalls: AnswerCallInput[] = [];
     const provider = createProvider({
       answerCall: async (input: AnswerCallInput): Promise<void> => {
@@ -149,7 +149,7 @@ describe("processEvent (functional inbound calls)", () => {
       from: "+15552222222",
     });
 
-    processEvent(ctx, event);
+    await processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
     expect(answerCalls).toEqual([
@@ -160,7 +160,7 @@ describe("processEvent (functional inbound calls)", () => {
     ]);
   });
 
-  it("removes active call even when hangup rejects", () => {
+  it("removes active call even when hangup rejects", async () => {
     const provider = createProvider({
       hangupCall: async (): Promise<void> => {
         throw new Error("provider down");
@@ -176,11 +176,11 @@ describe("processEvent (functional inbound calls)", () => {
       from: "+15553333333",
     });
 
-    processEvent(ctx, event);
+    await processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
   });
 
-  it("preserves inbound direction for auto-registered inbound calls", () => {
+  it("preserves inbound direction for auto-registered inbound calls", async () => {
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,
@@ -200,7 +200,7 @@ describe("processEvent (functional inbound calls)", () => {
       to: "+15550000000",
     };
 
-    processEvent(ctx, event);
+    await processEvent(ctx, event);
 
     expect(ctx.activeCalls.size).toBe(1);
     const call = requireFirstActiveCall(ctx);
@@ -220,7 +220,7 @@ describe("processEvent (functional inbound calls)", () => {
     },
   ])(
     "assigns $sessionScope session keys to inbound calls",
-    ({ sessionScope, coreSession, expectedSessionKey }) => {
+    async ({ sessionScope, coreSession, expectedSessionKey }) => {
       const ctx = createContext({
         config: VoiceCallConfigSchema.parse({
           enabled: true,
@@ -242,14 +242,14 @@ describe("processEvent (functional inbound calls)", () => {
         to: "+15550000000",
       };
 
-      processEvent(ctx, event);
+      await processEvent(ctx, event);
 
       const call = requireFirstActiveCall(ctx);
       expect(call.sessionKey).toBe(expectedSessionKey(call));
     },
   );
 
-  it("applies per-number inbound greeting and stores the matched route key", () => {
+  it("applies per-number inbound greeting and stores the matched route key", async () => {
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,
@@ -276,7 +276,7 @@ describe("processEvent (functional inbound calls)", () => {
       to: "+1 (555) 000-2222",
     };
 
-    processEvent(ctx, event);
+    await processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
     expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
@@ -284,7 +284,7 @@ describe("processEvent (functional inbound calls)", () => {
     expect(call.agentId).toBe("cards");
   });
 
-  it("bounds rejected provider calls while retaining hangup-once behavior", () => {
+  it("bounds rejected provider calls while retaining hangup-once behavior", async () => {
     const rejectedProviderCallIds = new Map<string, symbol>(
       Array.from(
         { length: EVENT_MANAGER_REPLAY_KEY_LIMIT },
@@ -294,7 +294,7 @@ describe("processEvent (functional inbound calls)", () => {
     const { ctx, hangupCalls } = createRejectingInboundContext();
     ctx.rejectedProviderCallIds = rejectedProviderCallIds;
 
-    processEvent(
+    await processEvent(
       ctx,
       createInboundInitiatedEvent({
         id: "evt-rejected-new",
@@ -302,7 +302,7 @@ describe("processEvent (functional inbound calls)", () => {
         from: "+15552222222",
       }),
     );
-    processEvent(
+    await processEvent(
       ctx,
       createInboundInitiatedEvent({
         id: "evt-rejected-new-replay",

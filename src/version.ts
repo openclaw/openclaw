@@ -91,9 +91,12 @@ export function readBuildIdFromBuildInfoForModuleUrl(moduleUrl: string): string 
 }
 
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
+  // build-info.json records the version this artifact was built from, so it wins:
+  // a git checkout whose source moved ahead of dist must not report the unbuilt
+  // source version. Source runs have no build-info and fall back to package.json.
   return (
-    readVersionFromPackageJsonForModuleUrl(moduleUrl) ||
-    readVersionFromBuildInfoForModuleUrl(moduleUrl)
+    readVersionFromBuildInfoForModuleUrl(moduleUrl) ||
+    readVersionFromPackageJsonForModuleUrl(moduleUrl)
   );
 }
 

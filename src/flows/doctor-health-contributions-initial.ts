@@ -63,6 +63,35 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:agent-database-admission",
+      label: "Agent database admission",
+      healthChecks: {
+        description: "Agent databases with mismatched ownership are isolated until repaired.",
+        async detect(ctx) {
+          const { evaluateAgentDatabaseAdmissions } =
+            await import("../state/agent-database-admission.js");
+          const refusals = await evaluateAgentDatabaseAdmissions(ctx.cfg, { env: ctx.env });
+          return refusals.map((refusal) => ({
+            checkId: "core/doctor/agent-database-admission",
+            severity: "warning" as const,
+            target: refusal.agentId,
+            requirement: refusal.code,
+            message: `Agent ${refusal.agentId} is degraded. ${refusal.reason}`,
+            fixHint: refusal.repairHint,
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-runtime",
+      label: "Node runtime",
+      healthCheckIds: ["core/doctor/node-runtime"],
+      async run(ctx) {
+        const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
+        await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],
@@ -268,6 +297,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:active-tool-schema-warnings",
       label: "Active tool schema warnings",
+      updatePolicy: "standalone",
       run: runActiveToolSchemaWarningsHealth,
     }),
     createDoctorHealthContribution({
@@ -282,17 +312,36 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
-        async detect(ctx) {
+        async detect() {
           const { collectDiskSpaceHealthFindings } =
             await import("../commands/doctor-disk-space.js");
-          return collectDiskSpaceHealthFindings(ctx.cfg);
+          return collectDiskSpaceHealthFindings();
         },
       },
       run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:project-clone-shape",
+      label: "Project clones",
+      updatePolicy: "standalone",
+      healthChecks: {
+        description: "Partial and shallow registry-owned project clones need manual repair.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectProjectCloneShapeHealthFindings } =
+            await import("../commands/doctor-project-clone-shape.js");
+          return await collectProjectCloneShapeHealthFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { noteProjectCloneShape } = await import("../commands/doctor-project-clone-shape.js");
+        await noteProjectCloneShape(ctx.cfg);
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:db-bloat",
       label: "SQLite database size",
+      updatePolicy: "standalone",
       run: runDatabaseBloatHealth,
     }),
     createDoctorHealthContribution({
@@ -311,7 +360,7 @@ export function resolveInitialDoctorHealthContributions(params: {
             await import("../commands/doctor-state-integrity.js");
           return detectStateIntegrityHealthIssues(ctx.cfg, {
             configPath: ctx.configPath,
-            env: process.env,
+            env: ctx.env ?? process.env,
           }).map(stateIntegrityIssueToHealthFinding);
         },
         repair: legacyOwnedRepair(async (ctx) => {
@@ -319,7 +368,7 @@ export function resolveInitialDoctorHealthContributions(params: {
             await import("../commands/doctor-state-integrity.js");
           return detectStateIntegrityHealthIssues(ctx.cfg, {
             configPath: ctx.configPath,
-            env: process.env,
+            env: ctx.env ?? process.env,
           }).map(stateIntegrityIssueToRepairEffect);
         }, "legacy doctor state integrity contribution owns state repairs"),
       },

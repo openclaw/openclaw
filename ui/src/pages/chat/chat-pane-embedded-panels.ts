@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
+import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
@@ -14,15 +15,14 @@ import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  isSessionWorkspaceItemLoading,
-  resolveSessionDiffSidebarContent,
-} from "./components/chat-session-workspace.ts";
+import { openTaskDetailId } from "./components/chat-detail-slot.ts";
+import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
@@ -31,6 +31,8 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  browserTabsInHeader: boolean;
+  terminalTabsInHeader: boolean;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
@@ -51,6 +53,7 @@ type SidebarPanelDefinitionParams = {
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  companionPresented: boolean;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionVisibilityChange: (visible: boolean) => void;
@@ -91,6 +94,10 @@ export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
 ): SidebarPanelDefinition[] {
   const state = params?.state;
+  // Review owns task history; rendering Files must not retire that selection.
+  if (state && openTaskDetailId(state.sidebarContent, state.sidebarLayout) === undefined) {
+    resetTaskDetail(state);
+  }
   // Metadata-only definitions have no pane context, so they describe types without offering tabs.
   const panelContext = params && {
     ...params,
@@ -112,7 +119,7 @@ export function sidebarPanelDefinitions(
       textKey === "conversation" || textKey === "companion"
         ? "chat"
         : textKey === "dashboard"
-          ? "review"
+          ? "board"
           : textKey,
       t("common.loading"),
     ),
@@ -125,6 +132,7 @@ export function sidebarPanelDefinitions(
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
         embedded
+        .tabsInHeader=${params?.terminalTabsInHeader ?? false}
         .client=${state.connected ? state.client : null}
         .available=${state.terminalAvailable}
         .agentId=${params?.agentId ?? null}
@@ -139,7 +147,12 @@ export function sidebarPanelDefinitions(
         data-chat-autotype-exempt
         .client=${state.connected ? state.client : null}
         .available=${state.browserPanelAvailable}
+        .remoteAvailable=${isBrowserPanelAvailable({
+          phase: state.connected ? "connected" : "offline",
+          hello: state.hello,
+        })}
         .presented=${params?.browserPresented ?? false}
+        .tabsInHeader=${params?.browserTabsInHeader ?? false}
         .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
         .sessionKey=${state.sessionKey}
         .preferredTab=${params?.preferredBrowserTab}
@@ -150,6 +163,7 @@ export function sidebarPanelDefinitions(
   const companion = params
     ? html`<openclaw-chat-session-rail
         embedded
+        .presented=${params.companionPresented}
         .sessionKey=${state?.sessionKey}
         .digest=${params.digest}
         .running=${Boolean(params.activeRunId)}
@@ -159,6 +173,7 @@ export function sidebarPanelDefinitions(
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
+        .sendShortcut=${state?.settings.chatSendShortcut ?? "enter"}
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onVisibilityChange=${params.onCompanionVisibilityChange}
@@ -189,12 +204,10 @@ export function sidebarPanelDefinitions(
       ></openclaw-session-discussion>`
     : null;
   const attachmentContent = state?.attachmentSidebarContent ?? null;
-  const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
   // The region owns mounting and visibility. Hidden Review tabs must keep the
   // same cached diff loader so their live content and selection survive.
   const detailContent =
-    state?.sidebarContent ??
-    (state && !detailLoading ? resolveSessionDiffSidebarContent(state) : null);
+    state?.sidebarContent ?? (state ? resolveSessionDiffSidebarContent(state) : null);
   const workspaceContent =
     attachmentContent && params
       ? params.renderDetail(attachmentContent)
@@ -216,11 +229,16 @@ export function sidebarPanelDefinitions(
       "detail",
       "review",
       icons.diff,
-      detailLoading
+      detailContent?.kind === "loading"
         ? renderPanelLoadingSkeleton("review", t("common.loading"))
-        : detailContent && params
-          ? params.renderDetail(detailContent)
-          : null,
+        : detailContent?.kind === "unavailable"
+          ? html`<div class="callout danger review-unavailable" role="alert">
+              <strong>${t("chat.detailPanel.unavailable")}</strong>
+              <span>${detailContent.message}</span>
+            </div>`
+          : detailContent && params
+            ? params.renderDetail(detailContent)
+            : null,
     ),
     definePanel("terminal", "terminal", icons.terminal, terminal),
     definePanel("browser", "browser", icons.globe, browser),
@@ -285,7 +303,7 @@ export function sidebarPanelDefinitions(
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
-      icon: icons.puzzle,
+      icon: icons.plug,
       available: entry !== undefined,
       content: entry
         ? renderPluginContribution(

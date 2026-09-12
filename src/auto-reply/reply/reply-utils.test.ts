@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
-import { parseAudioTag } from "../../media/audio-tags.js";
+import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -735,29 +735,29 @@ describe("resolveTypingMode", () => {
   });
 });
 
-describe("parseAudioTag", () => {
+describe("parseInlineDirectives audio-only projection", () => {
   it("extracts audio tag state and cleaned text", () => {
     const cases = [
       {
         name: "tag in sentence",
         input: "Hello [[audio_as_voice]] world",
-        expected: { audioAsVoice: true, hadTag: true, text: "Hello world" },
+        expected: { audioAsVoice: true, hasAudioTag: true, text: "Hello world" },
       },
       {
         name: "missing text",
         input: undefined,
-        expected: { audioAsVoice: false, hadTag: false, text: "" },
+        expected: { audioAsVoice: false, hasAudioTag: false, text: "" },
       },
       {
         name: "tag-only content",
         input: "[[audio_as_voice]]",
-        expected: { audioAsVoice: true, hadTag: true, text: "" },
+        expected: { audioAsVoice: true, hasAudioTag: true, text: "" },
       },
     ] as const;
     for (const testCase of cases) {
-      const result = parseAudioTag(testCase.input);
+      const result = parseInlineDirectives(testCase.input, { stripReplyTags: false });
       expect(result.audioAsVoice, testCase.name).toBe(testCase.expected.audioAsVoice);
-      expect(result.hadTag, testCase.name).toBe(testCase.expected.hadTag);
+      expect(result.hasAudioTag, testCase.name).toBe(testCase.expected.hasAudioTag);
       expect(result.text, testCase.name).toBe(testCase.expected.text);
     }
   });
@@ -932,7 +932,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("does not start typing for media-only deltas", async () => {
+  it("does not start typing for non-renderable deltas", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -940,10 +940,15 @@ describe("createTypingSignaler", () => {
       isHeartbeat: false,
     });
 
-    await signaler.signalTextDelta(undefined);
+    for (const text of [undefined, "", " \t\n", SILENT_REPLY_TOKEN]) {
+      await signaler.signalTextDelta(text);
+      await signaler.signalMessageStart();
+      await signaler.signalToolStart();
+    }
 
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
   });
 
   it("suppresses tool-start typing in message mode until renderable text arrives", async () => {

@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -119,6 +120,7 @@ import {
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
@@ -521,6 +523,266 @@ test("sessions.create commits the personal default before dispatching its initia
     }
   });
 });
+
+test.each([
+  {
+    endpoint: "direct model override",
+    modelId: "trinity-large-thinking",
+    baseUrl: "https://api.arcee.ai/api/v1",
+    expectedPin: "arcee:work",
+    expectedSource: "user-link",
+  },
+  {
+    endpoint: "inherited OpenRouter endpoint",
+    modelId: "trinity-large-preview",
+    baseUrl: "https://openrouter.ai/api/v1",
+    expectedPin: undefined,
+    expectedSource: undefined,
+  },
+] as const)(
+  "sessions.create applies an admin-linked Arcee default only for the $endpoint",
+  async ({ modelId, baseUrl, expectedPin, expectedSource }) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "session-arcee-linked-default-" },
+      async (state) => {
+        const { OpenClawSchema } = await import("../config/zod-schema.js");
+        const { ensureAuthProfileStoreWithoutExternalProfiles } =
+          await import("../agents/auth-profiles/store-runtime.js");
+        const { resolveModelWithRegistry } =
+          await import("../agents/embedded-agent-runner/model.registry-resolution.js");
+        const { AuthStorage } = await import("../agents/sessions/auth-storage.js");
+        const { ModelRegistry } = await import("../agents/sessions/model-registry.js");
+        const { createModelAccountConnectService } = await import("./model-account-connect.js");
+        const { storePath } = await createSessionStoreDir();
+        const inputConfig: import("../config/types.openclaw.js").OpenClawConfig = {
+          plugins: { allow: ["arcee"] },
+          agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+          session: { store: storePath },
+          auth: { profiles: { "arcee:work": { provider: "arcee", mode: "api_key" } } },
+          models: {
+            providers: {
+              arcee: {
+                baseUrl: "https://openrouter.ai/api/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "trinity-large-thinking",
+                    name: "Direct Arcee model",
+                    api: "openai-completions",
+                    baseUrl: "https://api.arcee.ai/api/v1",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 32768,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                  {
+                    id: "trinity-large-preview",
+                    name: "Arcee model through OpenRouter",
+                    api: "openai-completions",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 32768,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        };
+        const parsedConfig = OpenClawSchema.safeParse(inputConfig);
+        expect(parsedConfig.success, JSON.stringify(parsedConfig.error?.issues)).toBe(true);
+        await state.writeConfig(inputConfig);
+        const credential = {
+          type: "api_key",
+          provider: "arcee",
+          key: "synthetic-direct-arcee-key",
+        } as const;
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: { "arcee:work": credential },
+        });
+        const gatewayConfig = await getGatewayConfigModule();
+        // The Gateway fixture reads its own config root; bind this case through the real snapshot.
+        gatewayConfig.setRuntimeConfigSnapshot(inputConfig);
+        const cfg = gatewayConfig.getRuntimeConfig();
+        const { loadPluginMetadataSnapshot } =
+          await import("../plugins/plugin-metadata-snapshot.js");
+        const { getCurrentPluginMetadataSnapshot, withPluginMetadataSnapshotScope } =
+          await import("../plugins/current-plugin-metadata-snapshot.js");
+        const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+        const { resolveSessionModelRef } = await import("../agents/session-model-ref.js");
+        const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
+        const metadata = loadPluginMetadataSnapshot({
+          config: cfg,
+          workspaceDir: state.workspaceDir,
+          env: {
+            ...process.env,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+          },
+          allowCurrent: false,
+          preferPersisted: false,
+        });
+        await withPluginMetadataSnapshotScope(
+          metadata,
+          async () => {
+            const manifest = metadata.byPluginId.get("arcee");
+            const manifestPath = path.join(bundledRoot, "arcee", "openclaw.plugin.json");
+            const declaredManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+            expect(manifest?.manifestPath).toBe(manifestPath);
+            expect(manifest?.origin).toBe("bundled");
+            expect(manifest?.providerAuthAliases).toEqual(declaredManifest.providerAuthAliases);
+            expect(
+              getCurrentPluginMetadataSnapshot({
+                config: cfg,
+                allowWorkspaceScopedSnapshot: true,
+              }) === metadata,
+            ).toBe(true);
+            const providerDefaultAuth = resolveProviderIdForAuth("arcee", { config: cfg });
+            expect(providerDefaultAuth).toBe("openrouter");
+            expect(resolveProviderIdForAuth("arcee", { config: cfg, storedCredential: true })).toBe(
+              "arcee",
+            );
+            const model = resolveModelWithRegistry({
+              cfg,
+              provider: "arcee",
+              modelId,
+              agentDir: state.agentDir(),
+              modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+            });
+            expect(model?.baseUrl).toBe(baseUrl);
+
+            const owner = ensureProfileForEmail("arcee-session-owner@example.test");
+            const administrator = ensureProfileForEmail("arcee-link-admin@example.test");
+            const client = {
+              ...identifiedClient(owner.id, owner.displayName),
+              connId: "arcee-session-owner-connection",
+            };
+            const adminClient = {
+              ...identifiedClient(administrator.id, administrator.displayName),
+              connId: "arcee-link-admin-connection",
+            };
+            adminClient.connect.scopes = ["operator.admin"];
+            const clients = new Set([client, adminClient]);
+            const service = createModelAccountConnectService({ getConfig: () => cfg });
+            const context = {
+              getRuntimeConfig: () => cfg,
+              modelAccountConnectService: service,
+              loadGatewayModelCatalog: async () => [
+                { id: "trinity-large-thinking", name: "Direct Arcee model", provider: "arcee" },
+                {
+                  id: "trinity-large-preview",
+                  name: "Arcee model through OpenRouter",
+                  provider: "arcee",
+                },
+              ],
+              getClientConnIds: (filter?: (current: GatewayClient) => boolean) =>
+                new Set(
+                  [...clients]
+                    .filter((current) => !filter || filter(current))
+                    .map(({ connId }) => connId),
+                ),
+            };
+            try {
+              const linked = await directSessionReq(
+                "users.linkAuthProfile",
+                { profileId: owner.id, authProfileId: "arcee:work" },
+                { client: adminClient, context },
+              );
+              expect(linked.ok, JSON.stringify(linked.error)).toBe(true);
+              const linksBefore = await directSessionReq(
+                "users.listAuthLinks",
+                { profileId: owner.id },
+                { client, context },
+              );
+              expect(linksBefore.ok, JSON.stringify(linksBefore.error)).toBe(true);
+              expect(linksBefore.payload).toMatchObject({
+                links: [{ provider: "arcee", authProfileId: "arcee:work" }],
+              });
+
+              const key = `agent:main:dashboard:arcee-linked-${modelId}`;
+              expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+              const observedSelections: Array<{
+                provider: string | undefined;
+                model: string | undefined;
+                profile: string | undefined;
+                source: string | undefined;
+              }> = [];
+              const { chatHandlers } = await import("./server-methods/chat.js");
+              const chatSend = vi
+                .spyOn(chatHandlers, "chat.send")
+                .mockImplementation(({ respond }) => {
+                  const entry = loadSessionEntry({
+                    sessionKey: key,
+                    storePath,
+                    readConsistency: "latest",
+                  });
+                  observedSelections.push({
+                    ...resolveSessionModelRef(cfg, entry, "main"),
+                    profile: entry?.authProfileOverride,
+                    source: entry?.authProfileOverrideSource,
+                  });
+                  respond(true, { runId: "arcee-linked-default-first-turn", status: "started" });
+                });
+              try {
+                const created = await directSessionReq<{ runStarted: boolean }>(
+                  "sessions.create",
+                  { key, model: `arcee/${modelId}`, message: "Start the first turn" },
+                  { client, context },
+                );
+
+                expect(created.ok, JSON.stringify(created.error)).toBe(true);
+                expect(created.payload?.runStarted).toBe(true);
+                expect.soft(observedSelections).toEqual([
+                  {
+                    provider: "arcee",
+                    model: modelId,
+                    profile: expectedPin,
+                    source: expectedSource,
+                  },
+                ]);
+                const saved = loadSessionEntry({
+                  sessionKey: key,
+                  storePath,
+                  readConsistency: "latest",
+                });
+                expect
+                  .soft(resolveSessionModelRef(cfg, saved, "main"))
+                  .toEqual({ provider: "arcee", model: modelId });
+                expect.soft(saved?.authProfileOverride).toBe(expectedPin);
+                expect.soft(saved?.authProfileOverrideSource).toBe(expectedSource);
+                expect(
+                  ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir(), {
+                    readOnly: true,
+                  }).profiles["arcee:work"],
+                ).toEqual(credential);
+                const linksAfter = await directSessionReq(
+                  "users.listAuthLinks",
+                  { profileId: owner.id },
+                  { client, context },
+                );
+                expect(linksAfter.ok, JSON.stringify(linksAfter.error)).toBe(true);
+                expect(linksAfter.payload).toEqual(linksBefore.payload);
+                expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(
+                  inputConfig,
+                );
+              } finally {
+                chatSend.mockRestore();
+              }
+            } finally {
+              clients.clear();
+              await service.stop();
+              gatewayConfig.clearRuntimeConfigSnapshot();
+            }
+          },
+          { config: cfg, env: process.env, workspaceDir: state.workspaceDir },
+        );
+      },
+    );
+  },
+);
 
 test("sessions.create does not donate a personal default to an unpinned adoption or fork", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
@@ -929,10 +1191,14 @@ test("sessions.create revalidates parent participation before committing a fork 
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
-  const heldWriter = runExclusiveSqliteSessionWrite(resolvedStore, async () => {
-    writerEntered.resolve();
-    await releaseWriter.promise;
-  });
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolvedStore,
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
   await writerEntered.promise;
   const database = openOpenClawAgentDatabase({
     agentId: "main",
@@ -1493,15 +1759,9 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     });
     scheduleTitle(params);
   });
-  let finishDispatch: (() => void) | undefined;
-  const dispatchFinished = new Promise<void>((resolve) => {
-    finishDispatch = resolve;
-  });
+  const { promise: dispatchFinished, resolve: finishDispatch } = createDeferredCore();
   let finishTitle: (() => void) | undefined;
-  let markTitleStarted = () => {};
-  const titleStarted = new Promise<void>((resolve) => {
-    markTitleStarted = resolve;
-  });
+  const { promise: titleStarted, resolve: markTitleStarted } = createDeferredCore();
   dashboardTitleGenerationMocks.generate.mockImplementationOnce(async () => {
     markTitleStarted();
     await new Promise<void>((resolve) => {
@@ -1591,11 +1851,8 @@ test("chat.send fences dashboard title persistence from concurrent session delet
 test("chat.send persists a dashboard title while the first turn is still running", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  let finishDispatch: (() => void) | undefined;
   let dispatchFinished = false;
-  const dispatchPending = new Promise<void>((resolve) => {
-    finishDispatch = resolve;
-  });
+  const { promise: dispatchPending, resolve: finishDispatch } = createDeferredCore();
   dispatchInboundMessageMock.mockImplementationOnce(async () => {
     await dispatchPending;
     dispatchFinished = true;
@@ -2108,14 +2365,8 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
   let failedWorktreeId: string | undefined;
   let successorWorktreeId: string | undefined;
-  let releaseRollback = () => {};
-  const rollbackGate = new Promise<void>((resolve) => {
-    releaseRollback = resolve;
-  });
-  let markRollbackStarted = () => {};
-  const rollbackStarted = new Promise<void>((resolve) => {
-    markRollbackStarted = resolve;
-  });
+  const { promise: rollbackGate, resolve: releaseRollback } = createDeferredCore();
+  const { promise: rollbackStarted, resolve: markRollbackStarted } = createDeferredCore();
   const removeSpy = vi.spyOn(managedWorktrees, "remove").mockImplementation(async (params) => {
     if (params.reason === "session-create-failed") {
       failedWorktreeId = params.id;
@@ -2136,7 +2387,12 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       },
       { client: adminClient },
     );
-    await rollbackStarted;
+    await Promise.race([
+      rollbackStarted,
+      failedPromise.then((result) => {
+        throw new Error(`Creation returned before rollback started: ${JSON.stringify(result)}`);
+      }),
+    ]);
     let successorSettled = false;
     const successorPromise = directSessionReq<{
       entry: {
@@ -2226,6 +2482,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   });
   const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
+  await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
@@ -2246,7 +2503,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { agentId: "main", label: "Release planning", worktree: true },
+      {
+        agentId: "main",
+        label: "Release planning",
+        worktree: true,
+        worktreeBaseRef: "selected-base",
+      },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
@@ -2271,12 +2533,13 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
       .stdout;
 
+    await execFileAsync("git", ["-C", workspace, "branch", "-D", "selected-base"]);
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { key, agentId: "main", worktree: true },
+      { key, agentId: "main", worktree: true, worktreeBaseRef: "selected-base" },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
     expect(recreated.ok).toBe(true);
@@ -2953,6 +3216,7 @@ test("sessions.create maps worktree options and preserves a nested workspace cwd
   const workspace = path.join(repoRoot, "packages", "app");
   const worktreePath = path.join(openClawState.root, "managed-worktree");
   const key = "agent:main:dashboard:worktree-options";
+  await execFileAsync("git", ["-C", repoRoot, "branch", "base-branch"]);
   await Promise.all([
     fs.mkdir(workspace, { recursive: true }),
     fs.mkdir(worktreePath, { recursive: true }),
@@ -3305,6 +3569,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
       writerEntered.resolve();
       await releaseWriter.promise;
     },
+    "session.transcript.batch",
   );
   await writerEntered.promise;
   const persisted = persistReplySessionEntry({
@@ -3852,10 +4117,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     const removalGate = new Promise<void>((resolve) => {
       releaseWorktreeRemoval = resolve;
     });
-    let markRemovalStarted = () => {};
-    const removalStarted = new Promise<void>((resolve) => {
-      markRemovalStarted = resolve;
-    });
+    const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
     const removeIfLosslessSpy = vi
       .spyOn(managedWorktrees, "removeIfLossless")
       .mockImplementation(async (id) => {
@@ -3957,8 +4219,9 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
     expect(created.ok).toBe(false);
     expect(created.error).toMatchObject({
       code: "INVALID_REQUEST",
-      message: "agent workspace is not a git checkout",
+      message: expect.stringContaining("git checkout has no commits"),
     });
+    expect(created.error?.message).toContain("Create an initial commit, then retry.");
   } finally {
     testState.agentConfig = undefined;
   }
@@ -4034,12 +4297,24 @@ test("sessions.create stores dashboard model, thinking, fast mode, and parent li
 test.each([undefined, "main"])(
   "sessions.create parents dashboard sessions to agent main when dmScope is %s",
   async (dmScope) => {
-    await createSessionStoreDir();
+    const { storePath } = await createSessionStoreDir();
     testState.sessionConfig = dmScope ? { dmScope } : undefined;
+    testState.agentConfig = { model: { primary: "openai/current-model" } };
+    await writeSessionStore({
+      entries: {
+        "agent:main:main": {
+          ...sessionStoreEntry("sess-grouping-parent"),
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          modelOverrideSource: "user",
+        },
+      },
+    });
 
     const created = await directSessionReq<{
       key?: string;
       entry?: { parentSessionKey?: string; spawnDepth?: number };
+      resolved?: { modelProvider?: string; model?: string };
     }>("sessions.create", { agentId: "main" });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
@@ -4049,6 +4324,39 @@ test.each([undefined, "main"])(
     // their operator identity and makes explicit finite spawn-depth caps apply
     // from the correct origin.
     expect(created.payload?.entry?.spawnDepth).toBe(0);
+    const key = requireNonEmptyString(created.payload?.key, "created session key");
+    const child = expectDefined(
+      loadSessionEntry({ sessionKey: key, storePath }),
+      "created session",
+    );
+    const parent = expectDefined(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
+      "grouping parent session",
+    );
+    const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
+    const cfg = getRuntimeConfig();
+    const reply = await createModelSelectionState({
+      cfg,
+      agentId: "main",
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry: child,
+      sessionStore: { "agent:main:main": parent },
+      sessionKey: key,
+      parentSessionKey: child.parentSessionKey,
+      defaultProvider: "openai",
+      defaultModel: "current-model",
+      provider: "openai",
+      model: "current-model",
+      hasModelDirective: false,
+    });
+    expect(created.payload?.resolved).toMatchObject({
+      modelProvider: "openai",
+      model: "current-model",
+    });
+    expect({ provider: reply.provider, model: reply.model }).toEqual({
+      provider: "openai",
+      model: "current-model",
+    });
   },
 );
 
@@ -4370,10 +4678,14 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
-  const heldWriter = runExclusiveSqliteSessionWrite(resolvedStore, async () => {
-    writerEntered.resolve();
-    await releaseWriter.promise;
-  });
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolvedStore,
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
   await writerEntered.promise;
   const creating = directSessionReq(
     "sessions.create",
@@ -4406,13 +4718,17 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
 test("sessions.create commits no child after its worker turn closes", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:worker-turn-race";
-  const placements = createWorkerSessionPlacementStore({
-    database: openOpenClawStateDatabase(),
-  });
+  const database = openOpenClawStateDatabase();
+  const placements = createWorkerSessionPlacementStore({ database });
   let placement = placements.startDispatch({
     agentId: "main",
     sessionId: "worker-source-session",
     sessionKey: "agent:main:dashboard:worker-source",
+  });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: "worker-environment",
+    sessionId: placement.sessionId,
+    ownerEpoch: 7,
   });
   for (const [from, to, patch] of [
     ["requested", "provisioning", { environmentId: "worker-environment" }],
@@ -4450,6 +4766,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
       writerEntered.resolve();
       await releaseWriter.promise;
     },
+    "session.transcript.batch",
   );
   await writerEntered.promise;
   const creating = directSessionReq(

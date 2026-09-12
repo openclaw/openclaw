@@ -126,16 +126,23 @@ describe("exec auto-review failure handling", () => {
     });
   });
 
-  it("preserves a successful reviewer's original decision", async () => {
-    const decision = {
-      decision: "allow-once",
-      risk: "low",
-      rationale: "read-only inspection",
-    } as const;
-    const reviewer: ExecAutoReviewer = () => decision;
+  it.each([
+    { decision: "allow-once", risk: "low" },
+    { decision: "allow-once", risk: "medium" },
+    { decision: "deny", risk: "high" },
+    { decision: "ask", risk: "unknown" },
+  ] as const)(
+    "preserves a successful reviewer's $decision decision with $risk risk",
+    async (outcome) => {
+      const decision = {
+        ...outcome,
+        rationale: "reviewer explanation",
+      };
+      const reviewer: ExecAutoReviewer = () => decision;
 
-    await expect(resolveExecAutoReviewDecision(reviewer, reviewInput)).resolves.toBe(decision);
-  });
+      await expect(resolveExecAutoReviewDecision(reviewer, reviewInput)).resolves.toBe(decision);
+    },
+  );
 
   it("redacts provider credentials before displaying a reviewer failure", async () => {
     const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ";

@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
@@ -19,9 +20,10 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import { invalidateModelCatalogCache } from "../lib/model-catalog-store.ts";
+import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
+import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   isUiGlobalSessionKey,
@@ -95,6 +97,7 @@ i18n.setLocaleLoadRecovery({
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
   return (
     previous.routeId === next.routeId &&
+    previous.routeFailed === next.routeFailed &&
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
     previous.location?.hash === next.location?.hash &&
@@ -160,6 +163,13 @@ class OpenClawShell
   runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   lastLocalePrefSignature: string | null = null;
   previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
+  private metadataConnection:
+    | {
+        client: GatewayBrowserClient | null;
+        hello: ApplicationContext["gateway"]["snapshot"]["hello"];
+        profileId: string | undefined;
+      }
+    | undefined;
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
   private outboxStoreUnsubscribe: (() => void) | null = null;
@@ -493,10 +503,18 @@ class OpenClawShell
     this.shellNavigation.selectChatSession(sessionKey, agentId);
   }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
+    const client = this.context?.gateway?.snapshot.client;
+    if (client && event.event === "sessions.changed") {
+      const agentId = asNullableRecord(event.payload)?.agentId;
+      // Session aliases are resolved by the Gateway; retire all saved projections for this agent.
+      invalidateModelCatalogCache(client, {
+        ...(typeof agentId === "string" ? { agentId } : {}),
+        sessionsOnly: true,
+      });
+    }
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
-      const client = this.context?.gateway?.snapshot.client;
       if (client) {
-        invalidateModelCatalogCache(client);
+        invalidateModelAuthStatusRequests(client);
         invalidateChatMetadataStore(client);
       }
     }
@@ -535,8 +553,8 @@ class OpenClawShell
     this.shellNavigation.navigate(routeId, options);
   }
 
-  replaceChatWithCurrentSession() {
-    return this.shellNavigation.replaceChatWithCurrentSession();
+  recoverNotFoundRoute() {
+    return this.shellNavigation.recoverNotFoundRoute();
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
@@ -680,14 +698,20 @@ class OpenClawShell
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
-    if (this.previousGatewayPhase === "connected" && snapshot.phase !== "connected") {
-      // A disconnect can retain the browser client, so object identity alone
-      // cannot keep metadata alive across logical Gateway connections.
-      if (snapshot.client) {
-        invalidateModelCatalogCache(snapshot.client);
-        invalidateChatMetadataStore(snapshot.client);
-      }
+    const previous = this.metadataConnection;
+    const profileId = snapshot.selfUser?.id;
+    if (
+      previous?.client &&
+      (previous.client !== snapshot.client ||
+        previous.hello !== snapshot.hello ||
+        previous.profileId !== profileId ||
+        (this.previousGatewayPhase === "connected" && snapshot.phase !== "connected"))
+    ) {
+      // A reused browser client must not carry display facts across connections or identities.
+      invalidateModelAuthStatusRequests(previous.client);
+      invalidateChatMetadataStore(previous.client);
     }
+    this.metadataConnection = { client: snapshot.client, hello: snapshot.hello, profileId };
     this.shellGateway.synchronizeGateway(snapshot);
   }
 

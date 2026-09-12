@@ -398,18 +398,11 @@ function resolveLoaderPluginSdkPackageRoot(
     return devSourceRoot;
   }
   const cwd = params.cwd ?? path.dirname(params.modulePath);
-  const fromCwd = resolveOpenClawPackageRootSync({ cwd });
-  const fromExplicitHints =
-    resolveTrustedOpenClawRootFromArgvHint({ cwd, argv1: params.argv1 }) ??
-    (params.moduleUrl
-      ? resolveOpenClawPackageRootSync({
-          cwd,
-          moduleUrl: params.moduleUrl,
-        })
-      : null);
+  // The running loader owns the SDK, even when plugin source lives in another checkout.
   return (
-    fromCwd ??
-    fromExplicitHints ??
+    (params.moduleUrl ? resolveOpenClawPackageRootSync({ moduleUrl: params.moduleUrl }) : null) ??
+    resolveOpenClawPackageRootSync({ cwd }) ??
+    resolveTrustedOpenClawRootFromArgvHint({ cwd, argv1: params.argv1 }) ??
     findNearestPluginSdkPackageRoot(path.dirname(params.modulePath)) ??
     (params.cwd ? findNearestPluginSdkPackageRoot(params.cwd) : null) ??
     findNearestPluginSdkPackageRoot(process.cwd())
@@ -522,6 +515,8 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
       "client-info",
       "connect-error-details",
       "frame-guards",
+      "gateway-error-details",
+      "restart-unavailable",
       "schema",
       "startup-unavailable",
       "version",
@@ -1409,9 +1404,13 @@ export function preparePluginLoaderAliases(
         )),
     );
   const prepared = {
+    packageRoot,
     // These are all inputs to the three map builders; installed artifacts stay
     // stable for the loader lifecycle. Key the captured authority, not raw hints.
     cacheKey,
+    sdkRoots: packageRoot
+      ? context.orderedKinds.map((kind) => path.join(packageRoot, kind, "plugin-sdk"))
+      : [],
     getAliasMap,
     resolveAlias: (specifier: string): string | undefined => {
       if (!isPluginLoaderAliasSpecifier(specifier)) {

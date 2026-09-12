@@ -10,10 +10,14 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
+import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
-import { loadMatrixDeliveryPlan, resolveMatrixDurableDeliveryIdentity } from "./delivery-plan.js";
+import {
+  loadMatrixDeliveryPlan,
+  reconcileMatrixUnknownSend,
+  resolveMatrixDurableDeliveryIdentity,
+} from "./delivery-plan.js";
 import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
 import { createBundledReplacementEvent } from "./monitor/test-events.js";
 import { matrixEventToRaw } from "./sdk/event-helpers.js";
@@ -477,6 +481,7 @@ describe("sendMessageMatrix durable delivery", () => {
       cfg: {},
       channel: runtimeStub.channel,
     });
+    setMatrixRuntime({ ...getMatrixRuntime(), media: runtimeStub.media });
   });
 
   afterEach(() => {
@@ -590,6 +595,99 @@ describe("sendMessageMatrix durable delivery", () => {
     expect(result.messageId).toBe("$event-1");
     expect(dispatch).toHaveBeenCalledOnce();
     expect(sendMessage.mock.calls[0]?.[2]).toMatch(/^oc_/);
+  });
+
+  it("recovers actual media reply relations after losing the overflow response", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    resolveTextChunkLimitMock.mockReturnValue(6);
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    const acceptedTransactions = new Map<string, string>();
+    sendMessage.mockImplementation(
+      async (
+        roomId: string,
+        _content: unknown,
+        transactionId?: string,
+        beforeWireDispatch?: (dispatch: {
+          roomId: string;
+          eventType: "m.room.message";
+          transactionId: string;
+          requestPath: string;
+        }) => Promise<void>,
+      ) => {
+        if (!transactionId || !beforeWireDispatch) {
+          throw new Error("expected durable Matrix dispatch context");
+        }
+        await beforeWireDispatch({
+          roomId,
+          eventType: "m.room.message",
+          transactionId,
+          requestPath: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
+        });
+        const existingId = acceptedTransactions.get(transactionId);
+        if (existingId) {
+          return existingId;
+        }
+        const eventId = acceptedTransactions.size === 0 ? "$image" : "$overflow";
+        acceptedTransactions.set(transactionId, eventId);
+        if (eventId === "$overflow") {
+          throw new Error("provider response lost");
+        }
+        return eventId;
+      },
+    );
+    const payload = { text: "first|second", mediaUrl: "file:///tmp/photo.png" };
+    await expect(
+      sendMessageMatrix("room:!room:example", payload.text, {
+        client,
+        cfg: {},
+        accountId: "default",
+        mediaUrl: payload.mediaUrl,
+        replyToId: "$reply",
+        deliveryQueueId: "queue-media",
+        deliveryPartIndex: 0,
+        deliveryPartCount: 1,
+      }),
+    ).rejects.toThrow("provider response lost");
+    expect(sentContent(sendMessage, 0)["m.relates_to"]).toEqual({
+      "m.in_reply_to": { event_id: "$reply" },
+    });
+    expect(sentContent(sendMessage, 1)).not.toHaveProperty("m.relates_to");
+    withResolvedRuntimeMatrixClientMock.mockImplementationOnce(
+      async (_opts: unknown, run: (resolved: typeof client) => Promise<unknown>) =>
+        await run(client),
+    );
+
+    const recovered = await reconcileMatrixUnknownSend({
+      cfg: {},
+      queueId: "queue-media",
+      channel: "matrix",
+      to: "room:!room:example",
+      accountId: "default",
+      enqueuedAt: 1,
+      payloads: [payload],
+      retryCount: 0,
+      effectiveReplyToId: "$reply",
+    });
+
+    expect(recovered.status).toBe("sent");
+    if (recovered.status !== "sent") {
+      throw new Error("expected recovered Matrix delivery");
+    }
+    expect(uploadContent).toHaveBeenCalledOnce();
+    expect(acceptedTransactions.size).toBe(2);
+    expect(sendMessage.mock.calls.slice(2).map((call) => call.slice(0, 3))).toEqual(
+      sendMessage.mock.calls.slice(0, 2).map((call) => call.slice(0, 3)),
+    );
+    expect(recovered.messageId).toBe("$overflow");
+    expect(recovered.receipt).toMatchObject({
+      primaryPlatformMessageId: "$image",
+      platformMessageIds: ["$image", "$overflow"],
+      parts: [
+        { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
+        { platformMessageId: "$overflow", kind: "text", index: 1 },
+      ],
+    });
+    expect(recovered.receipt?.parts[1]).not.toHaveProperty("replyToId");
   });
 });
 
@@ -1135,30 +1233,38 @@ describe("sendMessageMatrix mentions", () => {
     );
   });
 
-  it("does not emit mentions for escaped qualified users", async () => {
-    const { client, sendMessage } = makeClient();
+  it.each(["\\@alice:example.org", "`literal then \\@alice:example.org"])(
+    "does not emit mentions for escaped qualified users in %j",
+    async (markdown) => {
+      const { client, sendMessage } = makeClient();
 
-    await sendMessageMatrix("room:!room:example", "\\@alice:example.org", {
-      client,
-      cfg: {} as never,
-    });
+      await sendMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+      });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    expect((sentContent(sendMessage) as { formatted_body?: string }).formatted_body).not.toContain(
-      "matrix.to/#/@alice:example.org",
-    );
-  });
+      expect(sentContent(sendMessage).body).toBe(markdown);
+      expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+      expect(
+        (sentContent(sendMessage) as { formatted_body?: string }).formatted_body,
+      ).not.toContain("matrix.to/");
+    },
+  );
 
-  it("does not emit mentions for escaped room mentions", async () => {
-    const { client, sendMessage } = makeClient();
+  it.each(["\\@room please review", "``literal then \\@room please review"])(
+    "does not emit mentions for escaped room mentions in %j",
+    async (markdown) => {
+      const { client, sendMessage } = makeClient();
 
-    await sendMessageMatrix("room:!room:example", "\\@room please review", {
-      client,
-      cfg: {} as never,
-    });
+      await sendMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+      });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-  });
+      expect(sentContent(sendMessage).body).toBe(markdown);
+      expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    },
+  );
 
   it("marks room mentions via m.mentions.room", async () => {
     const { client, sendMessage } = makeClient();

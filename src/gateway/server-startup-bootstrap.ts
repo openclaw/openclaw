@@ -12,6 +12,7 @@ import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-
 import {
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
@@ -39,10 +40,15 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import {
+  getGatewayPluginMetadataSnapshot,
+  selectCurrentPluginMetadataCache,
+} from "../plugins/current-plugin-metadata-state.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -81,14 +87,48 @@ export async function prepareGatewayServerBootstrap(input: {
   formatRuntimeGatewayAuthTokenWarning: () => string;
 }) {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
+  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
+  // Derive defaults and admit exactly the snapshot that bootstrap will consume.
+  process.env.OPENCLAW_GATEWAY_PORT = String(port);
+  const envBeforeStartupConfigLoad = { ...process.env };
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
   const startupElapsedMs =
     typeof traceOriginAt === "number" ? Math.max(0, Date.now() - traceOriginAt) : 0;
   const startupTrace = createGatewayStartupTrace(log, performance.now() - startupElapsedMs);
+  using startupTraceOwner = {
+    transferred: false,
+    [Symbol.dispose]() {
+      if (!this.transferred) {
+        startupTrace.close();
+      }
+    },
+  };
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
+  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
+    if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
+      const restartHandoff = readGatewayRestartHandoffSync();
+      resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
+        ["source", restartHandoff?.source],
+        ["restartKind", restartHandoff?.restartKind],
+        ["supervisorMode", restartHandoff?.supervisorMode],
+      ]);
+    }
+    const read =
+      opts.startupConfigSnapshotRead ??
+      (await startupTrace.measure("config.snapshot.read", () =>
+        readConfigFileSnapshotWithPluginMetadata({
+          observe: false,
+          measure: (name, run) => startupTrace.measure(name, run),
+        }),
+      ));
+    await assertConfiguredWorkspaceStateReady({
+      cfg: captureConfigOverrideApplier()(read.snapshot.config),
+    });
+    return read;
+  });
   const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
     await assertOpenClawStateWriteAllowedAtPath({
@@ -161,8 +201,6 @@ export async function prepareGatewayServerBootstrap(input: {
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
 
-  // Ensure all default port derivations (browser/canvas) see the actual runtime port.
-  process.env.OPENCLAW_GATEWAY_PORT = String(port);
   logAcceptedEnvOption({
     key: "OPENCLAW_RAW_STREAM",
     description: "raw stream logging enabled",
@@ -171,14 +209,6 @@ export async function prepareGatewayServerBootstrap(input: {
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
-  if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
-    const restartHandoff = readGatewayRestartHandoffSync();
-    resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
-      ["source", restartHandoff?.source],
-      ["restartKind", restartHandoff?.restartKind],
-      ["supervisorMode", restartHandoff?.supervisorMode],
-    ]);
-  }
   if (!minimalTestGateway) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
@@ -191,15 +221,12 @@ export async function prepareGatewayServerBootstrap(input: {
   });
   const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
 
-  const envBeforeStartupConfigLoad = { ...process.env };
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
-      ...(opts.startupConfigSnapshotRead
-        ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
-        : {}),
+      initialSnapshotRead: startupConfigSnapshotRead,
     }),
   );
   const configSnapshot = startupConfigLoad.snapshot;
@@ -414,8 +441,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
     return next;
   };
-  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
-  const prepareReloadCandidate = (params: {
+  const prepareReloadCandidate = async (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
     previousSourceConfig?: OpenClawConfig;
@@ -430,10 +456,10 @@ export async function prepareGatewayServerBootstrap(input: {
       nextConfig: params.sourceConfig,
     });
     const metadata = startupConfigLoad.pluginMetadataSnapshot;
-    const pluginCandidate = minimalTestGateway
-      ? { runtimeConfig: params.runtimeConfig, compareConfig: params.sourceConfig }
+    const activationConfig = minimalTestGateway
+      ? params.sourceConfig
       : resolveGatewayReloadPluginActivationCandidate({
-          ...params,
+          sourceConfig: params.sourceConfig,
           env: runtimeEnv.env,
           ...(metadata?.manifestRegistry ? { manifestRegistry: metadata.manifestRegistry } : {}),
           discovery: metadata?.discovery,
@@ -444,7 +470,7 @@ export async function prepareGatewayServerBootstrap(input: {
       const applied = applyCandidateOverrides(
         mergeActivationSectionsIntoRuntimeConfig({
           runtimeConfig: config,
-          activationConfig: pluginCandidate.compareConfig,
+          activationConfig,
         }),
       );
       copyConfigResolutionFacts(config, applied);
@@ -455,7 +481,7 @@ export async function prepareGatewayServerBootstrap(input: {
     const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
     // Both managed writes and watcher reloads must reject unmigrated workspaces
     // before persistence or publication, using the candidate's final config and env.
-    assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
+    await assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
     return {
       runtimeConfig,
       compareConfig: reapplyCompareOverlays(params.sourceConfig),
@@ -536,7 +562,11 @@ export async function prepareGatewayServerBootstrap(input: {
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
   const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
-  if (!existingPluginMetadataSnapshot) {
+  if (existingPluginMetadataSnapshot) {
+    selectCurrentPluginMetadataCache(
+      getPluginMetadataSnapshotCache(existingPluginMetadataSnapshot),
+    );
+  } else {
     setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
       config: startupActivationSourceConfig,
       compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
@@ -561,6 +591,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
 
+  startupTraceOwner.transferred = true;
   return {
     opts,
     minimalTestGateway,

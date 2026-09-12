@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
@@ -23,6 +24,9 @@ export type StoreWriterQueue = {
 /** Store writer queues keyed by the canonical store path. */
 type StoreWriterQueues = Map<string, StoreWriterQueue>;
 
+/** Request-owned monotonic timestamps; queued work may be rejected without entering. */
+export type StoreWriterTiming = { startedAt?: number; finishedAt?: number; reentrant?: boolean };
+
 type ActiveStoreWriter = {
   active: boolean;
   parent: ActiveStoreWriter | undefined;
@@ -38,6 +42,10 @@ const activeStoreWriters = resolveGlobalSingleton(
 );
 
 function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
+  // A new lane cannot be reentrant; bulk acquisition must not scan every held lock.
+  if (!queues.has(storePath)) {
+    return false;
+  }
   let active = activeStoreWriters.getStore();
   while (active) {
     if (active.active && active.queues === queues && active.storePath === storePath) {
@@ -52,11 +60,19 @@ async function runActiveStoreWriter<T>(
   queues: StoreWriterQueues,
   storePath: string,
   fn: () => Promise<T>,
+  timing?: StoreWriterTiming,
 ): Promise<T> {
   const writer = { active: true, parent: activeStoreWriters.getStore(), queues, storePath };
+  if (timing) {
+    timing.reentrant = false;
+    timing.startedAt = performance.now();
+  }
   try {
     return await activeStoreWriters.run(writer, fn);
   } finally {
+    if (timing) {
+      timing.finishedAt = performance.now();
+    }
     writer.active = false;
   }
 }
@@ -119,6 +135,7 @@ export async function runQueuedStoreWrite<T>(params: {
   label: string;
   fn: () => Promise<T>;
   reentrant?: boolean;
+  timing?: StoreWriterTiming;
 }): Promise<T> {
   if (!params.storePath || typeof params.storePath !== "string") {
     throw new Error(
@@ -130,7 +147,17 @@ export async function runQueuedStoreWrite<T>(params: {
   // Explicit reentrancy keeps one logical read/decide/write section on the
   // active lane; ordinary async children must queue behind the current writer.
   if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
-    return await params.fn();
+    if (params.timing) {
+      params.timing.reentrant = true;
+      params.timing.startedAt = performance.now();
+    }
+    try {
+      return await params.fn();
+    } finally {
+      if (params.timing) {
+        params.timing.finishedAt = performance.now();
+      }
+    }
   }
   // A queued writer retains its caller's authority, never the preceding writer's
   // async context. The active-writer scope still belongs to actual execution.
@@ -139,7 +166,13 @@ export async function runQueuedStoreWrite<T>(params: {
   return await new Promise<T>((resolve, reject) => {
     const task: StoreWriterTask = {
       fn: async () =>
-        await runInAsyncContext(runActiveStoreWriter, params.queues, params.storePath, params.fn),
+        await runInAsyncContext(
+          runActiveStoreWriter,
+          params.queues,
+          params.storePath,
+          params.fn,
+          params.timing,
+        ),
       resolve: (value) => resolve(value as T),
       reject,
     };

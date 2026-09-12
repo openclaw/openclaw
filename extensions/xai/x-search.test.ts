@@ -364,10 +364,10 @@ describe("xai x_search tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4.3");
+    expect(body.model).toBe("grok-4.6");
     expect(body.input).toEqual([{ role: "user", content: "dinner recipes" }]);
     expect(body.store).toBe(false);
-    expect(body.reasoning).toEqual({ effort: "none" });
+    expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.max_turns).toBe(2);
     expect(body.tools).toEqual([
       {

@@ -70,7 +70,6 @@
   background: var(--panel);
   color: var(--text);
   box-shadow: var(--shadow-md), var(--focus-ring);
-  text-decoration: none;
   transform: translate(-50%, -160%);
   transition: transform var(--duration-fast) var(--ease-out);
 }
@@ -597,7 +596,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -608,7 +606,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  text-decoration: none;
 }
 
 .settings-sidebar__item:focus-visible {
@@ -668,12 +665,10 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  text-decoration: none;
 }
 
 .settings-sidebar__subitem:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  text-decoration: none;
 }
 
 .settings-sidebar__subitem--active {
@@ -1231,15 +1226,102 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
+  flex: 0 0 auto;
+}
+
+.sidebar-session-filter-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  cursor: default;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-filter-summary:hover,
+.sidebar-session-filter-summary:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+/* The lead slot stacks the filter glyph (owner avatar or archive mark) under the
+   clear icon; hover swaps them so the summary spends no width on a second control. */
+.sidebar-session-filter-summary__lead {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.sidebar-session-filter-summary__lead > * {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-session-filter-summary__clear,
+.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__glyph {
+  opacity: 0;
+}
+
+.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__clear {
+  opacity: 1;
+}
+
+.sidebar-session-filter-summary__lead svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-session-filter-summary .viewer-avatar {
+  width: 14px;
+  height: 14px;
+  border-color: var(--bg-elevated);
+}
+
+.sidebar-session-filter-summary__label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-session-filter-summary__sep {
+  margin: 0 4px;
+}
+
 .sidebar-session-toolbar__button.sidebar-session-sort {
   margin-left: auto;
 }
 
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
+.sidebar-session-toolbar__button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+}
+
+/* The filter summary names the active filter; the funnel only keeps its dot. */
+.sidebar-session-toolbar__button:hover,
+.sidebar-session-toolbar__button:focus-visible,
 .sidebar-session-toolbar__button[aria-expanded="true"],
 .sidebar-session-toolbar__button.sidebar-session-sort--filtered {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
 }
@@ -1272,14 +1354,8 @@ openclaw-settings-save-indicator:empty {
   overflow-wrap: anywhere;
 }
 
-.sidebar-session-error.sidebar-session-catalog-error .callout__content {
-  max-height: none;
-  flex-basis: 100%;
-  overflow: visible;
-}
-
-.sidebar-session-catalog-error .btn {
-  margin-inline-start: auto;
+.sidebar-session-catalog-error {
+  overflow-wrap: anywhere;
 }
 
 .sidebar-session-error .callout__dismiss {
@@ -1369,6 +1445,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-sessions__head {
+  --sidebar-session-group-action-size: 22px;
+  --sidebar-session-group-count-slot: 24px;
+
   position: relative;
   display: flex;
   align-items: center;
@@ -1614,8 +1693,8 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
   flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-sm);
@@ -1627,6 +1706,10 @@ openclaw-settings-save-indicator:empty {
     opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+.sidebar-session-person-filter {
+  position: relative;
 }
 
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
@@ -1653,7 +1736,64 @@ openclaw-settings-save-indicator:empty {
   stroke-linejoin: round;
 }
 
+/* Reserve the new-session button's width so provider counts line up. */
+.sidebar-session-catalog-new-spacer {
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
+  flex: 0 0 var(--sidebar-session-group-action-size);
+}
+
+.sidebar-session-catalog-action-reserve {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  /* Keep hover actions immediately left of the fixed count. */
+  .sidebar-session-catalog-grouping,
+  .sidebar-session-catalog-new {
+    position: absolute;
+    top: 50%;
+    right: calc(10px + var(--sidebar-session-group-count-slot));
+    transform: translateY(-50%);
+  }
+
+  .sidebar-recent-sessions__group--catalog-can-create
+    > .sidebar-recent-sessions__head
+    > .sidebar-session-catalog-grouping {
+    right: calc(
+      10px + var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
+        8px
+    );
+  }
+
+  .sidebar-session-catalog-action-reserve {
+    display: block;
+    flex: 0 0
+      calc(var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size));
+  }
+
+  .sidebar-recent-sessions__group--catalog-can-create .sidebar-session-catalog-action-reserve {
+    flex-basis: calc(
+      var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
+        var(--sidebar-session-group-action-size) + 8px
+    );
+  }
+
+  .sidebar-session-catalog-new-spacer {
+    display: none;
+  }
+}
+
 @media (hover: none), (pointer: coarse) {
+  /* No hover on touch: the clear icon is the resting lead glyph. */
+  .sidebar-session-filter-summary__glyph {
+    opacity: 0;
+  }
+
+  .sidebar-session-filter-summary__clear {
+    opacity: 0.55;
+  }
+
   /* Touch has no hover, so the chevron must be the resting state or
      catalog collapsibility becomes undiscoverable. */
   .sidebar-session-group-toggle__lead--branded .sidebar-session-catalog-provider-icon {
@@ -1754,7 +1894,7 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   gap: 8px;
   min-height: 19px;
-  padding: 1px 12px 1px var(--sidebar-inset);
+  padding: 1px 10px 1px var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
@@ -1773,7 +1913,7 @@ openclaw-settings-save-indicator:empty {
   font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   opacity: 0.68;
-  text-align: center;
+  text-align: right;
 }
 
 .sidebar-session-catalog-host__count--error {
@@ -1797,7 +1937,7 @@ openclaw-settings-save-indicator:empty {
   gap: var(--sidebar-row-gap);
   width: 100%;
   min-height: 18px;
-  padding: 2px 12px 0 var(--sidebar-inset);
+  padding: 2px 10px 0 var(--sidebar-inset);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1852,7 +1992,7 @@ openclaw-settings-save-indicator:empty {
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
   font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
-  text-align: center;
+  text-align: right;
 }
 
 .sidebar-session-catalog-project > .sidebar-session-pagination--catalog {
@@ -1976,7 +2116,6 @@ openclaw-settings-save-indicator:empty {
   padding: var(--sidebar-session-link-padding-block) 2px var(--sidebar-session-link-padding-block)
     var(--sidebar-inset);
   color: inherit;
-  text-decoration: none;
 }
 
 .sidebar-child-session-toggle {
@@ -2049,10 +2188,6 @@ openclaw-settings-save-indicator:empty {
   font-size: calc(9px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   line-height: 1;
-}
-
-.sidebar-recent-session__link:hover {
-  text-decoration: none;
 }
 
 .viewer-facepile {
@@ -2256,13 +2391,10 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--session-row-actions-reserve);
 }
 
-/* Trade unread/PR tracks for action space, keeping active state and second-line
-   metadata visible. Collapse empty containers too so their gaps cannot squeeze the title. */
+/* Hover actions replace trailing PR badges; leading state and second-line metadata stay visible. */
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   :is(
-    .session-unread-dot,
     .session-row-badge--pull-request,
-    .session-row-aside:has(> .session-row-state > .session-unread-dot:only-child),
     .session-row-badges:has(> openclaw-tooltip:only-child > .session-row-badge--pull-request)
   ) {
   display: none;
@@ -2507,7 +2639,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
-  text-decoration: none;
 }
 
 /* Keep expanded state separate from :hover so hover media scoping preserves
@@ -2549,6 +2680,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
 }
 
 .sidebar-customize-menu__text {
+  display: block;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -2768,6 +2900,21 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-menu__description {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-menu__item--described:disabled {
+  opacity: 1;
+  color: var(--muted);
 }
 
 /* Keycap hint, not content: the app's quiet mono shortcut idiom, fixed-width so
@@ -3071,7 +3218,6 @@ a:is(
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -3118,7 +3264,6 @@ a:is(
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  text-decoration: none;
 }
 
 .nav-item:hover .nav-item__icon {
@@ -3200,9 +3345,9 @@ a:is(
   padding-right: 0;
 }
 
-/* Footer agent chip: identity-first entrance to the active agent. The body
-   resumes the latest conversation; trailing actions create/open the menu. */
-.sidebar-brand > openclaw-sidebar-agent-card {
+/* The header identifies the active agent or the whole workspace. */
+.sidebar-brand > openclaw-sidebar-agent-card,
+.sidebar-workspace-header {
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
@@ -3217,7 +3362,8 @@ a:is(
   flex: 0 1 auto;
 }
 
-.sidebar-agent-card__main {
+.sidebar-agent-card__main,
+.sidebar-workspace-header__main {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3235,17 +3381,27 @@ a:is(
 }
 
 .sidebar-agent-card__main:hover,
+.sidebar-workspace-header__main:hover,
+.sidebar-workspace-header__main[aria-expanded="true"],
 .sidebar-agent-card--open .sidebar-agent-card__main {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.sidebar-agent-card__main:active {
+.sidebar-agent-card__main:active,
+.sidebar-workspace-header__main:active {
   background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
 }
 
-.sidebar-agent-card__main:focus-visible {
+.sidebar-agent-card__main:focus-visible,
+.sidebar-workspace-header__main:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: 1px;
+}
+
+.sidebar-workspace-header__mark {
+  width: var(--sidebar-agent-avatar-size);
+  height: var(--sidebar-agent-avatar-size);
+  flex: none;
 }
 
 .sidebar-agent-card__avatar {
@@ -3566,6 +3722,7 @@ openclaw-sidebar-attention {
 
 .sidebar-identity-card__text {
   display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -3581,6 +3738,56 @@ openclaw-sidebar-attention {
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 18px;
+}
+
+.sidebar-identity-card__gateway,
+.sidebar-gateway-details {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-identity-card__gateway {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.sidebar-gateway-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-gateway-primary {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-gateway-health {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sidebar-gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.sidebar-gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.sidebar-gateway-check {
+  display: inline-flex;
+}
+
+.sidebar-gateway-check svg {
+  width: 12px;
+  height: 12px;
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {
@@ -3827,32 +4034,11 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
     filter 120ms ease;
 }
 
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar--text,
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar--icon {
-  width: var(--agent-avatar-glyph-size);
-  height: var(--agent-avatar-glyph-size);
-  background: transparent;
-  color: var(--secondary-foreground);
-  font-size: var(--agent-avatar-glyph-size);
-  line-height: 1;
-}
-
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar img.agent-select__avatar {
-  display: block;
+.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar {
   width: var(--agent-avatar-size);
   height: var(--agent-avatar-size);
-  border-radius: var(--radius-full);
-  object-fit: cover;
-  opacity: var(--agent-avatar-opacity);
-  filter: var(--agent-avatar-filter);
-  transition:
-    opacity 120ms ease,
-    filter 120ms ease;
-}
-
-.sidebar-agent-menu__agent-avatar:has(img.agent-select__avatar) {
-  opacity: 1;
-  filter: none;
+  font-size: var(--agent-avatar-glyph-size);
+  line-height: 1;
 }
 
 .sidebar-agent-menu__agent-switch--active .sidebar-agent-menu__agent-avatar {
@@ -3919,12 +4105,6 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-}
-
-/* Help destinations are real hyperlinks; keep them looking like menu rows. */
-.sidebar-identity-menu a.sidebar-customize-menu__item {
-  color: inherit;
-  text-decoration: none;
 }
 
 /* The help flyout must escape the menu box, so the root stays
@@ -4088,13 +4268,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-decoration: none;
 }
 
 .sidebar-footer-build:hover,
 .sidebar-footer-build:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .sidebar-footer-build__text {
@@ -4333,6 +4511,26 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 0;
 }
 
+/* Embedded pages own their spacing and scrolling inside the frame. */
+.content:has(.plugin-tab-embed) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
+.content:has(.plugin-tab-embed) > * + * {
+  margin-top: 0;
+}
+
+.content:has(.plugin-tab-embed) > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 :root[data-theme-mode="light"] .content {
   background: var(--bg-content);
 }
@@ -4467,7 +4665,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
    Responsive - Tablet
    =========================================== */
 
-@media (max-width: 1100px) {
+@media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--mobile-nav {
     --shell-pad: 12px;
     --shell-gap: 12px;
@@ -4598,10 +4796,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;
-}
-
-.sidebar-recent-session__details-endcap .session-row-state {
-  min-height: 18px;
 }
 
 .sidebar-session-attention__icon {

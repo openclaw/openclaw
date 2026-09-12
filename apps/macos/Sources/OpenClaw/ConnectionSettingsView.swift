@@ -5,16 +5,15 @@ import OpenClawKit
 import SwiftUI
 
 struct ConnectionSettingsView: View {
-    private static let remoteFieldWidth: CGFloat = 320
-    private static let remoteSecretFieldWidth: CGFloat = 300
-
     @Bindable var state: AppState
     let isActive: Bool
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
         localDisplayName: InstanceIdentity.displayName)
+    @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
+    @State private var showConnectionEditor = false
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -30,30 +29,16 @@ struct ConnectionSettingsView: View {
     }
 
     var body: some View {
-        ScrollView(.vertical) {
-            self.connectionPage
-                .settingsDetailContent()
-        }
-        .onAppear { self.updateActiveWork(active: self.isActive) }
-        .onChange(of: self.isActive) { _, active in
-            self.updateActiveWork(active: active)
-        }
-        .onDisappear { self.gatewayDiscovery.stop() }
-    }
+        Form {
+            self.statusSection
+            self.gatewayModeSection
 
-    private var connectionPage: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            SettingsPageHeader(
-                title: "Connection",
-                subtitle: "Choose where the Gateway runs and how this Mac app reaches it.")
-
-            self.connectionStatusPanel
-            self.gatewayModeGroup
-
+            // The Remote section owns this banner in remote mode; Local and Not configured
+            // still need to see conflicts and rejected saves.
             if self.state.connectionMode != .remote,
-               self.state.gatewayConfigConflict != nil
+               self.state.gatewayConfigConflict != nil || self.state.gatewayConfigSyncFailure != nil
             {
-                SettingsCardGroup("Remote Access") {
+                Section(self.state.gatewayConfigConflict != nil ? "Remote Access" : "Connection") {
                     GatewayConfigConflictRecoveryView(state: self.state)
                 }
             }
@@ -62,22 +47,28 @@ struct ConnectionSettingsView: View {
             case .unconfigured:
                 EmptyView()
             case .local:
-                self.localGatewayGroup
+                self.localGatewaySection
+                TailscaleIntegrationSection(
+                    connectionMode: self.state.connectionMode,
+                    isPaused: self.state.isPaused,
+                    isActive: self.isActive)
             case .remote:
-                self.remoteCard
+                self.remoteAccessSection
+                self.localHostingSection
+                self.nearbyGatewaysSection
             }
 
-            HStack(spacing: 12) {
-                Text("""
-                App-local settings (permissions, Quick Chat, voice, updates) live in \
-                Dashboard → Settings → This Mac and require a Gateway release that includes those pages.
-                """)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                Button("Open Dashboard Settings") { AppNavigationActions.openSettings() }
-                    .controlSize(.small)
-                    .fixedSize()
+            self.dashboardSettingsSection
+        }
+        .formStyle(.grouped)
+        .onAppear { self.updateActiveWork(active: self.isActive) }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
+        }
+        .onDisappear { self.gatewayDiscovery.stop() }
+        .sheet(isPresented: self.$showConnectionEditor) {
+            PrimaryGatewayConnectionEditor(state: self.state) {
+                self.remoteStatus = .idle
             }
         }
     }
@@ -92,47 +83,43 @@ struct ConnectionSettingsView: View {
         }
     }
 
-    private var connectionStatusPanel: some View {
-        HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(self.connectionStatusTint.opacity(0.18))
+    // MARK: - Status
+
+    private var statusSection: some View {
+        Section {
+            HStack(spacing: 12) {
                 Image(systemName: self.connectionStatusIcon)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 22, weight: .medium))
                     .foregroundStyle(self.connectionStatusTint)
-            }
-            .frame(width: 46, height: 46)
+                    .frame(width: 32, height: 32)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(self.connectionStatusTitle)
-                    .font(.headline)
-                Text(self.connectionStatusSubtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.connectionStatusTitle)
+                        .font(.headline)
+                    Text(self.connectionStatusSubtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-            Spacer(minLength: 18)
+                Spacer(minLength: 12)
 
-            if ControlChannel.shared.state == .connected,
-               self.localGatewayFailure == nil,
-               let ping = ControlChannel.shared.lastPingMs
-            {
-                Text(String(format: String(localized: "%lld ms"), Int(ping)))
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.green.opacity(0.16), in: Capsule())
-                    .foregroundStyle(.green)
+                if let latency = self.latencyText {
+                    Text(latency)
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(.vertical, 4)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.06))
-        }
+    }
+
+    private var latencyText: String? {
+        guard ControlChannel.shared.state == .connected,
+              self.localGatewayFailure == nil,
+              let ping = ControlChannel.shared.lastPingMs
+        else { return nil }
+        return String(format: String(localized: "%lld ms"), Int(ping))
     }
 
     private var connectionStatusIcon: String {
@@ -172,7 +159,14 @@ struct ConnectionSettingsView: View {
             if trimmed.isEmpty {
                 return "Enter a remote endpoint so this Mac app can attach cleanly."
             }
-            return "\(self.controlStatusLine) · \(trimmed)"
+            // Disconnected status lines already name the endpoint; avoid printing it twice.
+            let statusLine = self.controlStatusLine
+            let endpoint = trimmed.replacingOccurrences(of: #"^[a-z]+://"#, with: "", options: .regularExpression)
+            var parts = statusLine.contains(endpoint) ? [statusLine] : [statusLine, trimmed]
+            if let authLabel = ControlChannel.shared.authSourceLabel {
+                parts.append(authLabel)
+            }
+            return parts.joined(separator: " · ")
         case .unconfigured:
             return "Choose local or remote before the app can attach to a Gateway."
         }
@@ -182,283 +176,149 @@ struct ConnectionSettingsView: View {
         self.state.connectionMode == .local ? self.gatewayManager.lastFailureReason : nil
     }
 
-    private var gatewayModeGroup: some View {
-        SettingsCardGroup("Gateway") {
-            SettingsCardRow(
-                title: "OpenClaw runs",
-                subtitle: "Pick whether this app owns a local Gateway or attaches to another host.",
-                showsDivider: self.state.connectionMode == .unconfigured)
-            {
-                Picker("Gateway location", selection: self.$state.connectionMode) {
-                    Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
-                    Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
-                    Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .frame(width: 260, alignment: .trailing)
-            }
+    private var controlStatusLine: String {
+        GatewayConnectionPresentation(state: ControlChannel.shared.state).statusLine
+    }
 
+    // MARK: - Gateway
+
+    private var gatewayModeSection: some View {
+        Section {
+            LabeledContent {
+                Picker("Gateway location", selection: Binding(
+                    get: { self.state.connectionMode },
+                    set: { mode in
+                        if mode == .remote, self.state.connectionMode != .remote {
+                            self.showConnectionEditor = true
+                        } else {
+                            self.state.connectionMode = mode
+                        }
+                    })) {
+                        Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
+                        Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
+                        Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
+                    }
+                    .labelsHidden()
+                        .fixedSize()
+            } label: {
+                Text("OpenClaw runs")
+                Text("Own a Gateway on this Mac, or attach to one on another host.")
+            }
+        } header: {
+            Text("Gateway")
+        } footer: {
             if self.state.connectionMode == .unconfigured {
-                SettingsCardRow(
-                    title: "Setup needed",
-                    subtitle: """
-                    Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.
-                    """,
-                    showsDivider: false)
-                {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                Text("""
+                Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.
+                """)
+            }
+        }
+    }
+
+    // MARK: - Local
+
+    private var localGatewaySection: some View {
+        Section {
+            if !self.isNixMode {
+                switch self.gatewayManager.installation {
+                case .managed:
+                    self.gatewayInstallerRow
+                case .external:
+                    LabeledContent {
+                        Text(self.gatewayManager.status.label)
+                            .foregroundStyle(.secondary)
+                    } label: {
+                        Text("Independently managed Gateway")
+                        Text("This app connects without installing or updating its CLI runtime.")
+                    }
+                case .unreadable:
+                    Text(GatewayProcessManager.Installation.ownershipFailure)
                         .foregroundStyle(.orange)
                 }
             }
+            self.healthRow
+        } header: {
+            Text("Local Gateway")
+        } footer: {
+            if !self.isNixMode, self.gatewayManager.installation == .managed {
+                Text(String(
+                    format: String(localized: "Gateway auto-starts in local mode via launchd (%@)."),
+                    gatewayLaunchdLabel))
+            }
         }
     }
 
-    private var localGatewayGroup: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            SettingsCardGroup("Local Gateway") {
-                if !self.isNixMode {
-                    switch self.gatewayManager.installation {
-                    case .managed:
-                        self.gatewayInstallerCard
-                    case .external:
-                        SettingsCardRow(
-                            title: "Independently managed Gateway",
-                            subtitle: "This app connects without installing or updating its CLI runtime.")
-                        {
-                            Text(self.gatewayManager.status.label).font(.caption)
-                        }
-                    case .unreadable:
-                        Text(GatewayProcessManager.Installation.ownershipFailure)
-                            .foregroundStyle(.orange)
-                            .padding(14)
+    private var gatewayInstallerRow: some View {
+        GatewayInstallerView(
+            status: self.gatewayStatus,
+            failure: self.gatewayManager.lastFailureReason,
+            existingGatewayDetails: {
+                if case let .attachedExisting(details) = self.gatewayManager.status {
+                    return details ?? String(localized: "Using existing gateway instance")
+                }
+                return nil
+            }(),
+            isInstalling: CLIInstallPrompter.shared.isPrompting,
+            installStatus: CLIInstallPrompter.shared.installStatus,
+            onInstall: {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(
+                    reason: "connection-settings", userInitiated: true)
+            },
+            onRecheck: self.refreshGatewayStatus)
+    }
+
+    private func refreshGatewayStatus() {
+        guard self.state.connectionMode == .local, self.gatewayManager.installation == .managed else { return }
+        self.gatewayManager.refreshEnvironmentStatus(force: true)
+    }
+
+    // MARK: - Remote
+
+    private var localHostingSection: some View {
+        Section {
+            Toggle("Also run a Gateway on this Mac", isOn: Binding(
+                get: { self.state.hostsLocalGatewayWithRemotePrimary },
+                set: { enabled in
+                    do {
+                        try self.state.setHostsLocalGatewayWithRemotePrimary(enabled)
+                        self.localHostingError = nil
+                    } catch {
+                        self.localHostingError = error.localizedDescription
                     }
-                }
-                self.healthRow
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-            }
-
-            TailscaleIntegrationSection(
-                connectionMode: self.state.connectionMode,
-                isPaused: self.state.isPaused,
-                isActive: self.isActive)
-        }
-    }
-
-    private var remoteCard: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            SettingsCardGroup("Remote Access") {
-                self.remoteTransportRow
-
-                if self.state.remoteTransport == .ssh {
-                    self.remoteSshRow
-                } else {
-                    self.remoteDirectRow
-                }
-                self.remoteTokenRow
-                GatewayConfigConflictRecoveryView(state: self.state)
-            }
-
-            SettingsCardGroup("Discovery & Status") {
-                self.remoteDiscoveryRow
-                self.remoteStatusRow
-                self.controlChannelRow
-                self.remoteTipRow
-            }
-
-            if self.state.remoteTransport == .ssh {
-                self.remoteAdvancedGroup
-            }
-        }
-        .transition(.opacity)
-    }
-
-    private var remoteDiscoveryRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Nearby gateways")
-                .font(.callout.weight(.medium))
-            GatewayDiscoveryInlineList(
-                discovery: self.gatewayDiscovery,
-                currentTarget: self.state.remoteTarget,
-                currentUrl: self.state.remoteUrl,
-                transport: self.state.remoteTransport)
-            { gateway in
-                self.applyDiscoveredGateway(gateway)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .overlay(alignment: .bottom) {
-            Divider()
-                .padding(.leading, 14)
-        }
-    }
-
-    @ViewBuilder
-    private var remoteStatusRow: some View {
-        if self.remoteStatus != .idle {
-            SettingsCardRow(title: "Remote test") {
-                self.remoteStatusView
-            }
-        }
-    }
-
-    private var controlChannelRow: some View {
-        SettingsCardRow(
-            title: "Control channel",
-            subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim))
-        {
-            Text(self.controlStatusLine)
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(self.connectionStatusTint.opacity(0.16), in: Capsule())
-                .foregroundStyle(self.connectionStatusTint)
-        }
-    }
-
-    private var controlChannelSubtitle: String? {
-        var parts: [String] = []
-        if let ping = ControlChannel.shared.lastPingMs {
-            parts.append("Ping \(Int(ping)) ms")
-        }
-        if let hb = ControlChannel.shared.lastHeartbeatEvent {
-            let ageText = age(from: Date(timeIntervalSince1970: hb.ts / 1000))
-            parts.append("Last heartbeat \(hb.status) · \(ageText)")
-        }
-        if let authLabel = ControlChannel.shared.authSourceLabel {
-            parts.append(authLabel)
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: "\n")
-    }
-
-    private var remoteTipRow: some View {
-        SettingsCardRow(
-            title: "Recommended setup",
-            subtitle: self.state.remoteTransport == .ssh
-                ? "Use Tailscale plus an SSH tunnel for stable private access."
-                : "Use Tailscale Serve so the gateway has a valid HTTPS certificate.",
-            showsDivider: false)
-        {
-            Image(systemName: "lightbulb.fill")
-                .foregroundStyle(.yellow)
-        }
-    }
-
-    private var remoteAdvancedGroup: some View {
-        SettingsCardGroup("Advanced") {
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 12) {
-                    self.advancedTextField(
-                        "Identity file",
-                        placeholder: "/Users/you/.ssh/id_ed25519",
-                        text: self.$state.remoteIdentity)
-                    self.advancedTextField(
-                        "Project root",
-                        placeholder: "/home/you/Projects/openclaw",
-                        text: self.$state.remoteProjectRoot)
-                    self.advancedTextField(
-                        "CLI path",
-                        placeholder: "/Applications/OpenClaw.app/.../openclaw",
-                        text: self.$state.remoteCliPath)
-                }
-                .padding(.top, 10)
-            } label: {
-                Text("SSH command details")
-                    .font(.callout.weight(.medium))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-        }
-    }
-
-    private func advancedTextField(_ title: String, placeholder: String, text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
+                }))
+            Text(String(
+                format: String(
+                    localized: "Local port %lld. This Mac’s node capabilities and Talk Mode stay with the primary."),
+                GatewayEnvironment.gatewayPort()))
+                .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField(placeholder, text: text)
-                .textFieldStyle(.roundedBorder)
-        }
-    }
-
-    private var remoteTransportRow: some View {
-        SettingsCardRow(
-            title: "Transport",
-            subtitle: "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.")
-        {
-            Picker("Transport", selection: self.$state.remoteTransport) {
-                Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
-                Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
+            if let notice = self.state.localGatewayHostingNotice {
+                Text(notice).font(.caption)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 320)
-        }
-    }
-
-    private var remoteSshRow: some View {
-        let trimmedTarget = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-        let validationMessage = CommandResolver.sshTargetValidationMessage(trimmedTarget)
-        let canTest = !trimmedTarget.isEmpty && validationMessage == nil
-
-        return VStack(alignment: .leading, spacing: 0) {
-            SettingsCardRow(title: "SSH target", subtitle: "User and host for the remote Gateway machine.") {
-                TextField("user@host[:22]", text: self.$state.remoteTarget)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: Self.remoteFieldWidth)
-                self.remoteTestButton(disabled: !canTest)
-            }
-            if let validationMessage {
-                Text(validationMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
-            }
-        }
-    }
-
-    private var remoteDirectRow: some View {
-        SettingsCardRow(title: "Gateway URL", subtitle: "The WebSocket URL exposed by the remote Gateway.") {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: Self.remoteFieldWidth)
-                    self.remoteTestButton(
-                        disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                Text("Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var remoteTokenRow: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsCardRow(
-                title: "Gateway token",
-                subtitle: "Used when the remote gateway requires token auth.",
-                showsDivider: self.state.gatewayConfigConflict != nil)
+            if let error = self.localHostingError ?? (self.state.hostsLocalGatewayWithRemotePrimary
+                ? self.gatewayManager.lastFailureReason : nil)
             {
-                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: Self.remoteSecretFieldWidth)
+                Text(error).foregroundStyle(.red)
             }
-            if self.state.remoteTokenUnsupported {
-                Text(
-                    "The current gateway.remote.token value is not plain text. "
-                        + "OpenClaw for macOS cannot use it directly; "
-                        + "enter a plaintext token here to replace it.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
+        }
+    }
+
+    private var remoteAccessSection: some View {
+        Section {
+            LabeledContent(
+                self.state.remoteTransport == .ssh ? "SSH target" : "Gateway URL",
+                value: self.state.remoteTransport == .ssh ? self.state.remoteTarget : self.state.remoteUrl)
+            HStack {
+                Button("Change connection…") { self.showConnectionEditor = true }
+                Spacer()
+                self.remoteTestButton(disabled: self.state.remoteTransport == .ssh
+                    ? self.state.remoteTarget.isEmpty : self.state.remoteUrl.isEmpty)
             }
+            GatewayConfigConflictRecoveryView(state: self.state)
+        } header: {
+            Text("Remote Access")
+        } footer: {
+            self.remoteAccessFooter
         }
     }
 
@@ -469,116 +329,70 @@ struct ConnectionSettingsView: View {
             if self.remoteStatus == .checking {
                 ProgressView().controlSize(.small)
             } else {
-                Text("Test remote")
+                Text("Test")
             }
         }
-        .buttonStyle(.borderedProminent)
-        .frame(minWidth: 116)
+        .frame(minWidth: 48)
         .disabled(self.remoteStatus == .checking || disabled)
     }
 
-    private var controlStatusLine: String {
-        GatewayConnectionPresentation(state: ControlChannel.shared.state).statusLine
-    }
-
     @ViewBuilder
-    private var remoteStatusView: some View {
+    private var remoteAccessFooter: some View {
         switch self.remoteStatus {
         case .idle:
-            EmptyView()
+            Text(self.state.remoteTransport == .ssh
+                ? "SSH keeps the Gateway private. Tailscale plus an SSH tunnel gives stable private access."
+                : "Use wss:// for public hosts; ws:// is allowed for localhost, LAN, .local, and Tailnet hosts. "
+                + "Tailscale Serve provides a valid HTTPS certificate.")
         case .checking:
-            Text("Testing…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text("Testing the remote Gateway…")
         case let .ok(success):
-            VStack(alignment: .leading, spacing: 2) {
-                Label(success.title, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                if let detail = success.detail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(success.title)
+                    if let detail = success.detail {
+                        Text(detail)
+                    }
                 }
             }
         case let .failed(message):
             Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .foregroundStyle(.red)
         }
     }
 
-    private var gatewayInstallerCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(self.gatewayStatusColor)
-                    .frame(width: 10, height: 10)
-                Text(self.gatewayStatus.message)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+    private var nearbyGatewaysSection: some View {
+        Section {
+            GatewayDiscoveryInlineList(
+                discovery: self.gatewayDiscovery,
+                currentTarget: self.state.remoteTarget,
+                currentUrl: self.state.remoteUrl,
+                transport: self.state.remoteTransport)
+            { gateway in
+                self.applyDiscoveredGateway(gateway)
             }
-
-            if let gatewayVersion = self.gatewayStatus.gatewayVersion,
-               let required = self.gatewayStatus.requiredGateway,
-               gatewayVersion != required
-            {
-                Text(String(
-                    format: String(localized: "Installed: %@ · Required: %@"), gatewayVersion, required))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let gatewayVersion = self.gatewayStatus.gatewayVersion {
-                Text(String(format: String(localized: "Gateway %@ detected"), gatewayVersion))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let node = self.gatewayStatus.nodeVersion {
-                Text(verbatim: "Node \(node)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if case let .attachedExisting(details) = self.gatewayManager.status {
-                Text(details ?? "Using existing gateway instance")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let failure = self.gatewayManager.lastFailureReason {
-                Text(String(format: String(localized: "Last failure: %@"), failure))
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            Button("Recheck") { self.refreshGatewayStatus() }
-                .buttonStyle(.bordered)
-
-            Text(String(
-                format: String(localized: "Gateway auto-starts in local mode via launchd (%@)."),
-                gatewayLaunchdLabel))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+        } header: {
+            Text("Nearby Gateways")
+        } footer: {
+            Text(self.gatewayDiscovery.statusText)
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(10)
     }
 
-    private func refreshGatewayStatus() {
-        guard self.state.connectionMode == .local, self.gatewayManager.installation == .managed else { return }
-        self.gatewayManager.refreshEnvironmentStatus(force: true)
-    }
+    // MARK: - Dashboard handoff
 
-    private var gatewayStatusColor: Color {
-        if self.localGatewayFailure != nil { return .red }
-        switch self.gatewayStatus.kind {
-        case .ok: return .green
-        case .checking: return .secondary
-        case .missingNode, .missingGateway, .incompatible, .error: return .orange
+    private var dashboardSettingsSection: some View {
+        Section {
+            LabeledContent {
+                Button("Open Dashboard Settings…") { AppNavigationActions.openSettings() }
+            } label: {
+                Text("App settings")
+                Text("""
+                Permissions, Quick Chat, voice, and updates live in Dashboard → Settings → This Mac \
+                and need a Gateway release that includes those pages.
+                """)
+            }
         }
     }
 }
@@ -592,41 +406,33 @@ private enum RemoteStatus: Equatable {
 
 extension ConnectionSettingsView {
     private var healthRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(self.healthStore.state.tint)
-                    .frame(width: 10, height: 10)
-                Text(self.healthStore.summaryLine)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if let detail = self.healthStore.detailLine {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(spacing: 10) {
+        LabeledContent {
+            HStack(spacing: 8) {
                 Button("Retry now") {
                     Task { await HealthStore.shared.refresh(onDemand: true) }
                 }
                 .disabled(self.healthStore.isRefreshing)
-
                 Button("Open logs") { self.revealLogs() }
-                    .buttonStyle(.link)
-                    .foregroundStyle(.secondary)
             }
-            .font(.caption)
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(self.healthStore.state.tint)
+                    .frame(width: 8, height: 8)
+                Text(self.healthStore.summaryLine)
+            }
+            if let detail = self.healthStore.detailLine {
+                Text(detail)
+            }
         }
     }
 
     @MainActor
     func testRemote() async {
         self.remoteStatus = .checking
-        switch await RemoteGatewayProbe.run() {
+        let result = await RemoteGatewayProbe.run()
+        guard !Task.isCancelled else { return }
+        switch result {
         case let .ready(success):
             self.remoteStatus = .ok(success)
         case let .authIssue(issue):
@@ -657,9 +463,9 @@ extension ConnectionSettingsView {
         alert.runModal()
     }
 
-    private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
+    private func applyDiscoveredGateway(_: GatewayDiscoveryModel.DiscoveredGateway) {
+        // Discovery is only a setup hint. The editor requires independent trusted input.
+        self.showConnectionEditor = true
     }
 }
 
@@ -667,7 +473,7 @@ extension ConnectionSettingsView {
 struct ConnectionSettingsView_Previews: PreviewProvider {
     static var previews: some View {
         ConnectionSettingsView(state: .preview)
-            .frame(width: ConnectionWindow.width, height: ConnectionWindow.height)
+            .frame(width: ConnectionWindow.width, height: 700)
             .environment(TailscaleService.shared)
     }
 }

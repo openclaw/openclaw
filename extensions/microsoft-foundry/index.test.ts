@@ -1846,16 +1846,8 @@ assert.equal(afterOldest, 130, "the evicted account must refresh through az");
         params: { canonicalModelId: "claude-fable-5" },
       }),
     ).toMatchObject({
-      defaultLevel: "high",
-      levels: [
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "adaptive" },
-        { id: "max" },
-      ],
+      defaultLevel: "medium",
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
     });
     for (const modelName of ["claude-opus-4-6", "claude-sonnet-4-6"]) {
       expect(

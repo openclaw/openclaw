@@ -34,6 +34,14 @@ export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
+/** Store selectors and explicit databases share the owning agent's session artifact directory. */
+export function resolveSessionArtifactDirectory(storePath: string): string {
+  const storeDir = path.dirname(storePath);
+  return path.basename(storeDir) === "agent"
+    ? path.join(path.dirname(storeDir), "sessions")
+    : storeDir;
+}
+
 type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;
@@ -340,7 +348,6 @@ export function resolveSessionStorePathCore(
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {
       return path.resolve(

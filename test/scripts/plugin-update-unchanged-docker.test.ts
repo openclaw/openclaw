@@ -5,14 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "../../src/plugins/installed-plugin-package-ownership.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
@@ -351,43 +348,31 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(
       script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
-    ).toBe(2);
+    ).toBe(1);
     expect(script).toContain("--channel beta");
-    expect(script.match(/--timeout "\$update_step_timeout_seconds"/g)).toHaveLength(2);
-    expect(script).toContain("OPENCLAW_UPDATE_POST_CORE=1");
+    expect(script.match(/--timeout "\$update_step_timeout_seconds"/g)).toHaveLength(1);
+    expect(script).not.toContain("OPENCLAW_UPDATE_POST_CORE=1");
     expect(script).not.toContain(
       'node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ',
     );
     expect(script).toContain(
       "openclaw update failed or timed out after ${update_timeout_seconds}s",
     );
-    expect(script).toContain(
-      "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s",
-    );
-    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(7);
-    expect(script).toContain('openclaw_e2e_print_log "$post_core_result_path"');
+    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(5);
     expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
-    expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(3);
   });
 
-  it("inherits the shared upgrade-survivor baseline for corrupt plugin updates", () => {
-    const result = runCorruptUpdateDockerBaseline({
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
-    });
-
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.7.1-2");
-  });
-
-  it("keeps an explicit corrupt-plugin baseline ahead of the shared baseline", () => {
-    const result = runCorruptUpdateDockerBaseline({
-      OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: "openclaw@2026.6.34",
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
-    });
-
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.6.34");
-  });
+  it.each(["2026.9.2", "2026.8.2"])(
+    "keeps a historical %s override out of the same-schema repair lane",
+    (version) => {
+      const result = runCorruptUpdateDockerBaseline({
+        OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: `openclaw@${version}`,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: `openclaw@${version}`,
+      });
+      expect(result.result.status, result.result.stderr).toBe(0);
+      expect(result.baseline).toBeUndefined();
+    },
+  );
 
   it.each([
     ["explicit disable", { enabled: false }, [CORRUPT_PLUGIN_ID]],
@@ -419,75 +404,104 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(result.stderr).toContain(expectedError);
   });
 
-  it("accepts disabled or quarantined corrupt plugin warnings and rejects neither", () => {
-    const disabledAfterFailure = {
-      status: "ok",
-      npm: {
-        outcomes: [
-          {
-            pluginId: CORRUPT_PLUGIN_ID,
-            status: "skipped",
-            message: `Disabled "${CORRUPT_PLUGIN_ID}" after plugin update failure; OpenClaw will continue without it. Failed to update ${CORRUPT_PLUGIN_ID}: registry timeout`,
+  it.each([
+    "warning",
+    "core failure",
+    "core skipped",
+    "missing warning",
+    "wrong plugin",
+    "missing guidance",
+    "unsafe recovery",
+  ] as const)(
+    "requires a successful core update and named unavailable-plugin notice: %s",
+    (outcome) => {
+      const warnedPluginId = outcome === "wrong plugin" ? "another-plugin" : CORRUPT_PLUGIN_ID;
+      const result = runProbeStatus("assert-corrupt-unavailable", {
+        status:
+          outcome === "core failure" ? "error" : outcome === "core skipped" ? "skipped" : "ok",
+        ...(outcome === "unsafe recovery" ? { recovery: { serviceRestartSafe: false } } : {}),
+        postUpdate: {
+          plugins: {
+            status: "warning",
+            warnings:
+              outcome === "missing warning"
+                ? []
+                : [
+                    {
+                      pluginId: warnedPluginId,
+                      reason: "package.json is missing",
+                      message: `Plugin "${warnedPluginId}" could not be loaded. Run \`openclaw doctor --fix\` to check and repair the load problem.`,
+                      guidance: outcome === "missing guidance" ? [] : ["openclaw doctor --fix"],
+                    },
+                  ],
           },
-        ],
-      },
-    };
+        },
+      });
+      expect(result.status).toBe(outcome === "warning" ? 0 : 1);
+      if (outcome !== "warning") {
+        expect(result.stderr).toContain(
+          "expected successful core update with a named plugin repair notice",
+        );
+      }
+    },
+  );
 
-    const acceptedOkResult = runProbeStatus("assert-corrupt-plugin-result", disabledAfterFailure);
+  it.each(["clean", "updated", "unchanged", "repaired after error", "unrelated warning"])(
+    "accepts completed corrupt plugin repair: %s",
+    (outcome) => {
+      expect(() =>
+        runProbe("assert-corrupt-plugin-result", {
+          status: outcome === "unrelated warning" ? "warning" : "ok",
+          npm: {
+            outcomes:
+              outcome === "clean"
+                ? []
+                : [
+                    ...(outcome === "repaired after error"
+                      ? [{ pluginId: CORRUPT_PLUGIN_ID, status: "error" }]
+                      : []),
+                    {
+                      pluginId: CORRUPT_PLUGIN_ID,
+                      status: outcome === "unchanged" ? "unchanged" : "updated",
+                    },
+                  ],
+          },
+          warnings:
+            outcome === "unrelated warning"
+              ? [{ pluginId: "another-plugin", message: "Retry another plugin." }]
+              : [],
+        }),
+      ).not.toThrow();
+    },
+  );
 
-    expect(acceptedOkResult.status).not.toBe(0);
-    expect(acceptedOkResult.stderr).toContain("expected clean or repaired corrupt plugin state");
-    expect(() =>
-      runProbe("assert-corrupt-plugin-result", {
-        ...disabledAfterFailure,
+  it.each(["disabled", "quarantined", "still missing"])(
+    "rejects unresolved corrupt plugin repair: %s",
+    (outcome) => {
+      const result = runProbeStatus("assert-corrupt-plugin-result", {
         status: "warning",
-        warnings: [
-          {
-            pluginId: CORRUPT_PLUGIN_ID,
-            message:
-              `Plugin "${CORRUPT_PLUGIN_ID}" could not be processed after the core update: ` +
-              expectDefined(
-                disabledAfterFailure.npm.outcomes[0],
-                "corrupt plugin update failure outcome",
-              ).message +
-              " Run openclaw update repair to retry post-update plugin repair. " +
-              `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
-          },
-        ],
-      }),
-    ).not.toThrow();
-
-    const quarantinedAfterFailure = {
-      status: "warning",
-      npm: {
-        outcomes: [
-          {
-            pluginId: CORRUPT_PLUGIN_ID,
-            status: "error",
-            message: `Plugin "${CORRUPT_PLUGIN_ID}" failed post-core payload smoke check: package.json is missing`,
-          },
-        ],
-      },
-      warnings: [
-        {
-          pluginId: CORRUPT_PLUGIN_ID,
-          reason: "package.json is missing",
-          guidance: [
-            "Run openclaw update repair to retry post-update plugin repair.",
-            `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
+        npm: {
+          outcomes: [
+            {
+              pluginId: CORRUPT_PLUGIN_ID,
+              status:
+                outcome === "disabled"
+                  ? "skipped"
+                  : outcome === "quarantined"
+                    ? "error"
+                    : "updated",
+            },
           ],
         },
-      ],
-    };
-    expect(() => runProbe("assert-corrupt-plugin-result", quarantinedAfterFailure)).not.toThrow();
-
-    const neitherRecovery = runProbeStatus("assert-corrupt-plugin-result", {
-      ...quarantinedAfterFailure,
-      npm: { outcomes: [] },
-    });
-    expect(neitherRecovery.status).not.toBe(0);
-    expect(neitherRecovery.stderr).toContain(
-      "expected quarantined or disabled-after-failure outcome",
-    );
-  });
+        warnings:
+          outcome === "still missing"
+            ? [{ pluginId: CORRUPT_PLUGIN_ID, reason: "package.json is missing" }]
+            : [],
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `expected ${CORRUPT_PLUGIN_ID} restored without unresolved plugin errors or warnings`,
+      );
+    },
+  );
 });

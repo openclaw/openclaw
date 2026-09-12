@@ -8,10 +8,8 @@ import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-s
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
@@ -32,6 +30,7 @@ import {
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
 import { createRepositoryWorkspaceMutationService } from "../worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "../worker-environments/service.js";
 import {
@@ -256,8 +255,12 @@ afterEach(() => {
 });
 
 async function withCheckpointAcceptance(failCapture = false) {
-  const placements = createWorkerSessionPlacementStore({
-    database: openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") }),
+  const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
+  const placements = createWorkerSessionPlacementStore({ database });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: identity.environmentId,
+    sessionId: identity.sessionId,
+    ownerEpoch: identity.generation,
   });
   let placement = placements.startDispatch({
     sessionId: identity.sessionId,

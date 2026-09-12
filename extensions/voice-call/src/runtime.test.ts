@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Voice Call tests cover runtime plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   resolveTwilioAuthToken: vi.fn(),
   validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
+  managerStop: vi.fn(),
   managerGetCall: vi.fn(),
   webhookStart: vi.fn(),
   webhookStop: vi.fn(),
@@ -76,6 +78,7 @@ vi.mock("./config.js", () => ({
 vi.mock("./manager.js", () => ({
   CallManager: class {
     initialize = mocks.managerInitialize;
+    stop = mocks.managerStop;
     getCall = mocks.managerGetCall;
   },
 }));
@@ -234,6 +237,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     );
     mocks.validateProviderConfig.mockReturnValue({ valid: true, errors: [] });
     mocks.managerInitialize.mockResolvedValue(undefined);
+    mocks.managerStop.mockResolvedValue(undefined);
     mocks.managerGetCall.mockReset();
     mocks.webhookStart.mockResolvedValue("http://127.0.0.1:3334/voice/webhook");
     mocks.webhookStop.mockResolvedValue(undefined);
@@ -377,14 +381,37 @@ describe("createVoiceCallRuntime lifecycle", () => {
       expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
     });
     expect(stopped).toBe(false);
+    expect(mocks.managerStop).not.toHaveBeenCalled();
 
     releaseWebhookStop?.();
     await firstStop;
     expect(stopped).toBe(true);
+    expect(mocks.managerStop).toHaveBeenCalledOnce();
 
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains the manager after transport cleanup fails and preserves the first error", async () => {
+    const transportFailure = new Error("webhook shutdown failed");
+    const drain = createDeferred<void>();
+    mocks.webhookStop.mockRejectedValue(transportFailure);
+    mocks.managerStop.mockReturnValue(drain.promise);
+    const runtime = await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig: {},
+      agentRuntime: {} as never,
+    });
+    let settled = false;
+    const stopped = runtime.stop().catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+    await vi.waitFor(() => expect(mocks.managerStop).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    drain.reject(new Error("manager drain failed"));
+    expect(await stopped).toBe(transportFailure);
   });
 
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {

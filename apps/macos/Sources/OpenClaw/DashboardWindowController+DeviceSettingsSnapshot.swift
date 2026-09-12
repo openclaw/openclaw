@@ -57,7 +57,7 @@ extension DashboardWindowController {
                 launchAtLoginAvailable: self.deviceLaunchAtLoginAvailable ||
                     (!AppProfile.current.isActive && state.launchAtLogin),
                 quickChatEnabled: state.quickChatEnabled,
-                quickChatShortcut: KeyboardShortcuts.getShortcut(for: .toggleQuickChat)?.description,
+                quickChatShortcut: .some(KeyboardShortcuts.getShortcut(for: .toggleQuickChat)?.description),
                 debugPaneEnabled: state.debugPaneEnabled),
             capabilities: .init(
                 canvasEnabled: state.canvasEnabled,
@@ -66,7 +66,9 @@ extension DashboardWindowController {
                 computerControlProvider: ComputerControlProvider.current().rawValue,
                 cuaDriverBundled: CuaDriverArtifact.bundledExecutableURL != nil,
                 peekabooBridgeEnabled: state.peekabooBridgeEnabled,
-                activeComputerPresenceEnabled: state.activeComputerPresenceEnabled),
+                activeComputerPresenceEnabled: state.activeComputerPresenceEnabled,
+                unattendedDesktopEnabled: MacDesktopAvailabilityCoordinator.shared.unattendedEnabled),
+            desktopAvailability: .init(state: MacDesktopAvailabilityCoordinator.shared.refresh()),
             browser: .init(
                 importAvailable: state.connectionMode == .local && BrowserProfileImportModel.shared.importAvailable,
                 cookieSync: Self.deviceCookieSyncSnapshot(state: state)),
@@ -132,8 +134,8 @@ extension DashboardWindowController {
 
     private static func devicePermissionEntries() async -> [DeviceSettingsSnapshot.Permissions.Entry] {
         let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording, .appleScript])
-        var statuses = Dictionary(uniqueKeysWithValues: DeviceSettingsPermission.allCases.map {
-            ($0, DeviceSettingsPermissionStatus(monitored[$0.capability]))
+        var statuses = Dictionary(uniqueKeysWithValues: DeviceSettingsPermission.macOSPermissions.map {
+            ($0, DeviceSettingsPermissionStatus($0.capability.flatMap { monitored[$0] }))
         })
         if PermissionManager.notificationCenterAvailable {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
@@ -158,7 +160,7 @@ extension DashboardWindowController {
         } else {
             .denied
         }
-        return DeviceSettingsPermission.allCases.map { .init(id: $0, status: statuses[$0] ?? .unavailable) }
+        return DeviceSettingsPermission.macOSPermissions.map { .init(id: $0, status: statuses[$0] ?? .unavailable) }
     }
 
     private static func deviceMediaPermission(_ status: AVAuthorizationStatus) -> DeviceSettingsPermissionStatus {

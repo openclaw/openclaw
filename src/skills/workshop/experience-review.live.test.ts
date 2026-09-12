@@ -10,7 +10,7 @@ import {
 import { SessionManager } from "../../agents/sessions/index.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import type { Message } from "../../llm/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -28,7 +28,8 @@ import {
   createExperienceReviewCandidate,
   createExperienceReviewMessages,
 } from "./experience-review.test-support.js";
-import { getSkillProposalRunProgress, listSkillProposals } from "./service.js";
+import { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
+import { listSkillProposals } from "./service.js";
 
 const LIVE =
   isLiveTestEnabled(["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]) &&

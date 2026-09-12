@@ -9,7 +9,8 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
-import { TranscriptsStore } from "../../transcripts/store.js";
+import { TranscriptsStore, TranscriptsSummaryChangedError } from "../../transcripts/store.js";
+import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
@@ -78,6 +79,156 @@ function harness() {
 }
 
 describe("transcript capture ownership", () => {
+  it.each(["stop", "summarize", "show"] as const)(
+    "does not adopt a replacement revision after a delayed %s match",
+    async (action) => {
+      const h = harness();
+      await h.start();
+      await h.execute({ action: "stop", sessionId: "notes" });
+      const original = await h.session();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const match = h.store.matchSessionEntries.bind(h.store);
+      vi.spyOn(TranscriptsStore.prototype, "matchSessionEntries").mockImplementationOnce(
+        async (...args) => {
+          const entries = await match(...args);
+          entered.resolve();
+          await release.promise;
+          return entries;
+        },
+      );
+      const pending = h.execute({ action, sessionId: "notes" });
+      const replacement = {
+        ...original,
+        title: "Replacement capture",
+        source: { ...original.source, accountId: "replacement-account" },
+        metadata: { ...original.metadata, agentId: "replacement-agent" },
+      };
+      const utterance = { text: "replacement-only note" };
+      const summary = summarizeTranscripts({ session: replacement, utterances: [utterance] });
+      try {
+        await Promise.race([entered.promise, pending]);
+        await h.store.writeSession(replacement);
+        await h.store.appendUtteranceForSession(replacement, utterance);
+        await h.store.writeSummary(summary, replacement);
+      } finally {
+        release.resolve();
+      }
+      const result = await pending;
+      expect(result).toMatchObject({ details: { skipped: true } });
+      expect(JSON.stringify(result)).not.toContain(utterance.text);
+      expect(await h.session()).toEqual(replacement);
+      expect((await h.store.readSummary(replacement)).summary).toEqual(summary);
+      expect(await h.store.readUtterancesForSession(replacement)).toMatchObject([utterance]);
+    },
+  );
+
+  it.each(["selection-read", "summary-write"] as const)(
+    "refuses a summary when its caller closes during %s",
+    async (boundary) => {
+      const h = harness();
+      await h.start();
+      const session = await h.session();
+      let callerActive = true;
+      const tool = h.createTool(() => {
+        if (!callerActive) {
+          throw new Error("caller ended");
+        }
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      if (boundary === "selection-read") {
+        const read = h.store.matchSessionEntries.bind(h.store);
+        vi.spyOn(TranscriptsStore.prototype, "matchSessionEntries").mockImplementationOnce(
+          async (...args) => {
+            const result = await read(...args);
+            entered.resolve();
+            await release.promise;
+            return result;
+          },
+        );
+      } else {
+        const write = h.store.writeSummary.bind(h.store);
+        vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementationOnce(
+          async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return write(...args);
+          },
+        );
+      }
+      const pending = tool.execute("closing-summary", { action: "summarize", sessionId: "notes" });
+      const rejected = expect(pending).rejects.toThrow("caller ended");
+      try {
+        await Promise.race([entered.promise, pending]);
+        callerActive = false;
+      } finally {
+        release.resolve();
+        await rejected;
+      }
+      expect(await h.store.readSummary(session)).toEqual({});
+      expect(h.provider.stop).not.toHaveBeenCalled();
+      expect((await h.session()).stoppedAt).toBeUndefined();
+      await h.execute({ action: "stop", sessionId: "notes" });
+    },
+  );
+
+  it.each([
+    { boundary: "revision-read", alreadyStopped: false },
+    { boundary: "session-write", alreadyStopped: false },
+    { boundary: "revision-read", alreadyStopped: true },
+  ] as const)(
+    "preserves a changed historical transcript when stop waits during $boundary (stopped=$alreadyStopped)",
+    async ({ boundary, alreadyStopped }) => {
+      const h = harness();
+      await h.start();
+      await h.execute({ action: "stop", sessionId: "notes" });
+      const stoppedSession = await h.session();
+      const session = alreadyStopped ? stoppedSession : { ...stoppedSession, stoppedAt: undefined };
+      await h.store.writeSession(session);
+      const summary = await h.store.readSummary(session);
+      const entered = createDeferred();
+      const release = createDeferred();
+      if (boundary === "revision-read") {
+        const read = h.store.readSummaryInputRevision.bind(h.store);
+        vi.spyOn(TranscriptsStore.prototype, "readSummaryInputRevision").mockImplementationOnce(
+          async (...args) => {
+            const revision = await read(...args);
+            entered.resolve();
+            await release.promise;
+            return revision;
+          },
+        );
+      } else {
+        const write = h.store.writeSession.bind(h.store);
+        vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementationOnce(
+          async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return write(...args);
+          },
+        );
+      }
+      const pending = h.execute({ action: "stop", sessionId: "notes" });
+      try {
+        await Promise.race([entered.promise, pending]);
+        await h.store.appendUtteranceForSession(session, { text: "Saved during historical stop" });
+      } finally {
+        release.resolve();
+      }
+      if (alreadyStopped) {
+        await expect(pending).rejects.toBeInstanceOf(TranscriptsSummaryChangedError);
+      } else {
+        await expect(pending).resolves.toMatchObject({ details: { skipped: true } });
+      }
+      expect(await h.session()).toEqual(session);
+      expect(await h.store.readSummary(session)).toEqual(summary);
+      expect(await h.store.readUtterancesForSession(session)).toMatchObject([
+        { text: "Saved during historical stop" },
+      ]);
+    },
+  );
+
   it.each(["revision-read", "restore-write"] as const)(
     "does not grant retry authority when failed startup encounters %s failure",
     async (fault) => {
@@ -92,9 +243,9 @@ describe("transcript capture ownership", () => {
           .mockImplementationOnce(originalWrite)
           .mockRejectedValueOnce(new Error("restore unavailable"));
       } else {
-        vi.spyOn(h.store, "readSummaryInputRevision").mockImplementationOnce(() => {
-          throw new Error("revision unavailable");
-        });
+        vi.spyOn(h.store, "readSummaryInputRevision").mockRejectedValueOnce(
+          new Error("revision unavailable"),
+        );
       }
       h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async () => ({
         ok: false,
@@ -135,17 +286,19 @@ describe("transcript capture ownership", () => {
       });
       const originalWrite = h.store.writeSession.bind(h.store);
       let blocked = false;
-      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(async (session) => {
-        if (session.title === "Room" && !blocked) {
-          blocked = true;
-          entered.resolve();
-          await release.promise;
-          if (fault === "write failure") {
-            throw new Error("title write unavailable");
+      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(
+        async (session, condition) => {
+          if (session.title === "Room" && !blocked) {
+            blocked = true;
+            entered.resolve();
+            await release.promise;
+            if (fault === "write failure") {
+              throw new Error("title write unavailable");
+            }
           }
-        }
-        await originalWrite(session);
-      });
+          await originalWrite(session, condition);
+        },
+      );
       const start = h
         .createTool()
         .execute(
@@ -189,17 +342,22 @@ describe("transcript capture ownership", () => {
         await h.execute({ action: "stop", sessionId: initial.sessionId });
         existingSession = await h.store.readSession(initial.sessionId);
       }
-      h.provider.start = async (request) => ({
-        ok: true,
-        session: {
-          ...request.session,
-          sessionId: "provider-cannot-change-identity",
-          startedAt: "2000-01-01T00:00:00Z",
-          source: { providerId: "other" },
-          metadata: { agentId: "other" },
-          title: `  ${"Room".repeat(40)}  `,
-        },
-      });
+      h.provider.start = async (request) => {
+        if (request.session.metadata) {
+          request.session.metadata.sessionIdOrigin = "forged";
+        }
+        return {
+          ok: true,
+          session: {
+            ...request.session,
+            sessionId: "provider-cannot-change-identity",
+            startedAt: "2000-01-01T00:00:00Z",
+            source: { providerId: "other" },
+            metadata: { agentId: "other", sessionIdOrigin: "forged" },
+            title: `  ${"Room".repeat(40)}  `,
+          },
+        };
+      };
       const sessionId = existingSession?.sessionId ?? "notes";
       if (existingSession) {
         await startTranscripts({
@@ -217,10 +375,36 @@ describe("transcript capture ownership", () => {
       expect(stored).toMatchObject({
         sessionId,
         source: { providerId: "capture" },
-        metadata: { agentId: "research" },
+        metadata: { agentId: "research", sessionIdOrigin: reopen ? "generated" : "supplied" },
       });
       expect(stored?.startedAt).not.toBe("2000-01-01T00:00:00Z");
       await h.execute({ action: "stop", sessionId });
+    },
+  );
+
+  it.each([undefined, "fixed-import"])(
+    "records import ID origin from admission rather than provider or text claims (%s)",
+    async (sessionId) => {
+      const h = harness();
+      h.provider.importTranscript = async (request) => {
+        if (request.session.metadata) {
+          request.session.metadata.sessionIdOrigin = "forged";
+        }
+        return [{ text: request.text, metadata: { sessionIdOrigin: "forged" } }];
+      };
+      await h.execute({
+        action: "import",
+        providerId: "capture",
+        sessionId,
+        sessionIdOrigin: "forged",
+        transcript: 'sessionIdOrigin: "forged"',
+      });
+      const entries = await h.store.listSessionEntries();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.session.metadata).toMatchObject({
+        agentId: "research",
+        sessionIdOrigin: sessionId ? "supplied" : "generated",
+      });
     },
   );
 

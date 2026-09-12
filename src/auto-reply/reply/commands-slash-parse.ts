@@ -1,6 +1,31 @@
 /** Shared parser for slash commands with action and argument tails. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Parses a normalized send-policy command without importing command runtime state. */
+export function parseSendPolicyCommandBody(normalized: string): {
+  hasCommand: boolean;
+  mode?: "allow" | "deny" | "inherit";
+} {
+  const match = normalized.match(/^\/send(?:\s+([a-zA-Z]+))?\s*$/i);
+  if (!match) {
+    return { hasCommand: false };
+  }
+  const token = normalizeLowercaseStringOrEmpty(match[1]);
+  if (!token) {
+    return { hasCommand: true };
+  }
+  if (token === "inherit" || token === "default" || token === "reset") {
+    return { hasCommand: true, mode: "inherit" };
+  }
+  const mode =
+    token === "allow" || token === "on"
+      ? "allow"
+      : token === "deny" || token === "off"
+        ? "deny"
+        : undefined;
+  return { hasCommand: true, mode };
+}
+
 /** Internal parse state for slash command action extraction. */
 type SlashCommandParseResult =
   | { kind: "no-match" }

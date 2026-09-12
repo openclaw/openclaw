@@ -76,8 +76,11 @@ export async function resolveTranscriptToolSession(params: {
   params.ctx.assertCallerActive?.();
   const durableRead = params.action === "show";
   const exactActive = explicit || durableRead ? undefined : activeSessions.get(value);
-  const { qualified, unqualified } = params.store.matchSessionEntries(value);
-  let entry: { session: TranscriptSessionDescriptor; selector: string } | undefined;
+  const { qualified, unqualified } = await params.store.matchSessionEntries(value);
+  params.ctx.assertCallerActive?.();
+  let entry:
+    | { session: TranscriptSessionDescriptor; selector: string; inputRevision?: string }
+    | undefined;
   // Current raw handles can span historical dates, but never another raw ID
   // or a conflicting qualified meaning. Authorization cannot break a tie.
   const preferActive =
@@ -116,10 +119,8 @@ export async function resolveTranscriptToolSession(params: {
   // Reads authorize the durable descriptor that owns the notes. Mutations keep
   // the admitted capture's authority even after a same-tuple durable rewrite.
   const session = durableRead ? entry?.session : (selectedActive?.session ?? entry?.session);
-  // Historical authorization and inference can outlive an entire reopen/stop.
-  // Capture the durable input revision before either awaited operation.
-  const historicalRevision =
-    session && !selectedActive ? params.store.readSummaryInputRevision(session) : undefined;
+  // The revision belongs to the matched descriptor, even if its row changes while matching waits.
+  const historicalRevision = !selectedActive ? entry?.inputRevision : undefined;
   if (
     !entry ||
     !session ||
@@ -127,6 +128,7 @@ export async function resolveTranscriptToolSession(params: {
   ) {
     throw new Error(`transcripts session not found: ${value}`);
   }
+  params.ctx.assertCallerActive?.();
   return { session, selector: entry.selector, activeCandidate, selectedActive, historicalRevision };
 }
 

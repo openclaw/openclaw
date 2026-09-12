@@ -1,12 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import type {
+  WorkerDispatchPlacement,
+  WorkerProvisioningDispatchPlacement,
+} from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
+  type WorkerPlacementCancellationTarget,
 } from "./service-contract.js";
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
@@ -25,6 +29,7 @@ function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
     };
   };
   return {
+    superseded: new AbortController(),
     currentPlacement: () => current,
     completedPlacement: () => completed,
     operation: run((placement) => {
@@ -45,8 +50,14 @@ function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
 export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
   admitDispatch: WorkerPlacementDispatchAdmission,
+  recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
+  waitForInitialPlacement(
+    this: void,
+    placement: WorkerDispatchPlacement,
+    signal?: AbortSignal,
+  ): Promise<WorkerDispatchPlacement>;
 } {
   type PlacementFence = { promise: Promise<void>; dispatchCohort: readonly symbol[] };
   type ReconciliationSweep = PlacementFence & {
@@ -108,27 +119,37 @@ export function coordinateWorkerPlacementDispatch(
   };
   const runExclusivePlacementOperation = <T>(
     operation: () => Promise<T>,
-    signal?: AbortSignal,
-    joinsActiveDispatch = false,
+    options: {
+      signal?: AbortSignal;
+      joinsActiveDispatch?: boolean;
+      waitForActiveDispatches?: boolean;
+    } = {},
   ): Promise<T> => {
+    const { signal } = options;
     const predecessor = placementFence;
+    const predecessorSettled = predecessor?.promise.catch(() => undefined);
     const ready = (async () => {
-      if (predecessor) {
-        await predecessor.promise.catch(() => undefined);
+      if (predecessorSettled) {
+        await predecessorSettled;
       }
       await waitForDispatchIdle();
     })();
     const current = (async () => {
-      await racePromiseWithAbortSignal(ready, signal);
+      await racePromiseWithAbortSignal(
+        options.waitForActiveDispatches === false
+          ? (predecessorSettled ?? Promise.resolve())
+          : ready,
+        signal,
+      );
       signal?.throwIfAborted();
       return await operation();
     })();
-    // A canceled waiter releases its admission immediately, but its fence must still
-    // carry older work forward so later requests cannot overtake the predecessor.
+    // Reclaim or cancellation can finish before older dispatches. Keep their idle
+    // wait in the fence so later requests still cannot overtake unfinished work.
     const barrier = Promise.allSettled([ready, current]).then(() => undefined);
     const exclusive: PlacementFence = {
       promise: barrier,
-      dispatchCohort: joinsActiveDispatch
+      dispatchCohort: options.joinsActiveDispatch
         ? (predecessor?.dispatchCohort ?? [...activeDispatches])
         : [],
     };
@@ -179,14 +200,28 @@ export function coordinateWorkerPlacementDispatch(
     [Kind in keyof OperationServices]: {
       kind: Kind;
       request: Parameters<OperationServices[Kind]>[0];
-    } & ReturnType<typeof trackPlacementOperation<Awaited<ReturnType<OperationServices[Kind]>>>>;
+    } & ReturnType<typeof trackPlacementOperation<Awaited<ReturnType<OperationServices[Kind]>>>> &
+      (Kind extends "recovery"
+        ? { foreground: ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]> }
+        : unknown);
   }[keyof OperationServices];
   const operationsInFlight = new Map<string, Set<PlacementOperation>>();
+  const setupWaiters = new Map<string, Set<(operation: PlacementOperation) => void>>();
   const pendingOperations = (sessionId: string) => [...(operationsInFlight.get(sessionId) ?? [])];
   const registerOperation = (record: PlacementOperation) => {
     const pending = operationsInFlight.get(record.request.sessionId) ?? new Set();
+    // A new lifecycle operation permanently invalidates waiters on its predecessor,
+    // even if Stop/Move/replacement finishes before that predecessor resolves.
+    for (const predecessor of pending) {
+      predecessor.superseded.abort(
+        new Error("Worker setup was superseded by another placement operation"),
+      );
+    }
     pending.add(record);
     operationsInFlight.set(record.request.sessionId, pending);
+    for (const observe of setupWaiters.get(record.request.sessionId) ?? []) {
+      observe(record);
+    }
     const release = () => {
       pending.delete(record);
       if (pending.size === 0) {
@@ -204,6 +239,86 @@ export function coordinateWorkerPlacementDispatch(
   };
   return {
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
+    async waitForInitialPlacement(placement, signal) {
+      signal?.throwIfAborted();
+      const pending = pendingOperations(placement.sessionId);
+      const matchesOwner = (owner: PlacementOperation) =>
+        (owner.kind === "dispatch" || owner.kind === "recovery") &&
+        owner.request.sessionKey === placement.sessionKey &&
+        owner.request.agentId === placement.agentId &&
+        matchesWorkerPlacementTarget(
+          owner.currentPlacement() ?? (owner.kind === "recovery" ? owner.request : undefined),
+          placement,
+        );
+      const missingOwner = () =>
+        new Error(
+          "Worker setup has no matching live dispatch owner. Wait for recovery or explicitly retry setup.",
+        );
+      const initialOwner = pending.length === 1 ? pending[0] : undefined;
+      const recover =
+        recoverInitialPlacement && placement.state === "provisioning" && placement.environmentId
+          ? () => recoverInitialPlacement(placement)
+          : undefined;
+      if (pending.length ? !initialOwner || !matchesOwner(initialOwner) : !recover) {
+        throw missingOwner();
+      }
+      const superseded = new AbortController();
+      let recoveryFailure: { error: unknown } | undefined;
+      const waitSignal = signal ? AbortSignal.any([signal, superseded.signal]) : superseded.signal;
+      let nextOwner = createDeferredCore<PlacementOperation>();
+      const observe = (owner: PlacementOperation) => {
+        // A restart can leave a gap between provider recovery passes. Stop, Move, or
+        // replacement during that gap still permanently invalidates the held input.
+        if (pendingOperations(placement.sessionId).length !== 1 || !matchesOwner(owner)) {
+          superseded.abort(missingOwner());
+        } else {
+          nextOwner.resolve(owner);
+        }
+      };
+      const waiters = setupWaiters.get(placement.sessionId) ?? new Set();
+      waiters.add(observe);
+      setupWaiters.set(placement.sessionId, waiters);
+      try {
+        if (initialOwner) {
+          nextOwner.resolve(initialOwner);
+        } else if (recover) {
+          // Subscribe before waking the existing guarded recovery owner. Its environment
+          // coordinator deduplicates concurrent waiters and owns subsequent provider passes.
+          void recover().catch((error: unknown) => {
+            recoveryFailure = { error };
+            superseded.abort(error);
+          });
+        }
+        for (;;) {
+          const owner = await racePromiseWithAbortSignal(nextOwner.promise, waitSignal);
+          nextOwner = createDeferredCore<PlacementOperation>();
+          const ownerSignal = AbortSignal.any([waitSignal, owner.superseded.signal]);
+          const completed = await racePromiseWithAbortSignal(owner.operation, ownerSignal);
+          ownerSignal.throwIfAborted();
+          if (completed && matchesWorkerPlacementTarget(owner.completedPlacement(), completed)) {
+            return completed;
+          }
+          if (
+            !completed &&
+            recover &&
+            owner.kind === "recovery" &&
+            matchesWorkerPlacementTarget(owner.currentPlacement(), placement)
+          ) {
+            continue;
+          }
+          throw new Error(
+            "Worker setup did not publish a ready placement. Inspect the setup recovery error.",
+          );
+        }
+      } catch (error) {
+        throw recoveryFailure ? recoveryFailure.error : error;
+      } finally {
+        waiters.delete(observe);
+        if (waiters.size === 0) {
+          setupWaiters.delete(placement.sessionId);
+        }
+      }
+    },
     dispatch: async (request, onTransition, authorize) => {
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "dispatch",
@@ -257,10 +372,9 @@ export function coordinateWorkerPlacementDispatch(
         return await admitDispatch(
           request,
           (signal) =>
-            runExclusivePlacementOperation(
-              () => service.move(request, report, authorize, signal),
+            runExclusivePlacementOperation(() => service.move(request, report, authorize, signal), {
               signal,
-            ),
+            }),
           authorize,
         );
       }, onTransition);
@@ -297,7 +411,8 @@ export function coordinateWorkerPlacementDispatch(
           request,
           authorize,
           beforeDrain,
-          runExclusivePlacementOperation,
+          // Preparation has settled this session's work; unrelated dispatches need not delay Stop.
+          (run) => runExclusivePlacementOperation(run, { waitForActiveDispatches: false }),
           operations.length
             ? {
                 isCurrent: isPending,
@@ -320,6 +435,14 @@ export function coordinateWorkerPlacementDispatch(
         ? runReconciliation(() => service.reconcileActive())
         : runReconciliation(() => service.reconcileActive(environmentId), false),
     resumeProvisioning: (placement, reconcileEnvironmentCore) => {
+      const inFlight = pendingOperations(placement.sessionId).find(
+        (pending) => pending.kind === "recovery" && isDeepStrictEqual(pending.request, placement),
+      );
+      if (inFlight?.kind === "recovery") {
+        // A timed-out provider retains admission after foreground recovery has finished.
+        // Reuse that pass until it settles; a later sweep can then resume the same owner.
+        return inFlight.foreground;
+      }
       // Insertion order matters: a later queued sweep must not steal a provisioning join
       // from the earlier sweep already awaiting that environment pass.
       const sweep = [...reconciliationSweeps].find((candidate) => candidate.acceptingJoins);
@@ -329,6 +452,7 @@ export function coordinateWorkerPlacementDispatch(
           Awaited<ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]>>
         >();
       let providerSettlement = Promise.resolve();
+      let providerPending = false;
       // Reserve the queue in this stack, before admission can yield to a newer sweep.
       // Only foreground recovery holds that fence; a timed-out provider retains admission.
       const recover = async () => {
@@ -348,53 +472,64 @@ export function coordinateWorkerPlacementDispatch(
         })();
         sweep.joinedRecoveries.add(queued);
       } else {
-        queued = runExclusivePlacementOperation(recover, undefined, true);
+        queued = runExclusivePlacementOperation(recover, { joinsActiveDispatch: true });
       }
       void queued.catch(ready.reject);
       const tracked = trackPlacementOperation(async (report) => {
-        try {
-          // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
-          const result = await service.resumeProvisioning(
-            placement,
-            async (signal) => {
-              await reconcileEnvironmentCore(signal, (settled) => {
-                providerSettlement = settled;
-              });
-            },
-            report,
-            (runRecovery) =>
-              admitDispatch(placement, async (signal) => {
-                try {
-                  await racePromiseWithAbortSignal(ready.promise, signal);
-                  signal?.throwIfAborted();
-                  const recovered = await runRecovery(signal);
-                  foreground.resolve(recovered);
-                  return recovered;
-                } catch (error) {
-                  foreground.reject(error);
-                  throw error;
-                } finally {
-                  // Caller timeouts finish the sweep, not the real provider or its Stop owner.
-                  await providerSettlement;
+        // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
+        return await service.resumeProvisioning(
+          placement,
+          async (signal) => {
+            await reconcileEnvironmentCore(signal, (settled) => {
+              providerSettlement = settled;
+              providerPending = true;
+              const markSettled = () => {
+                if (providerSettlement === settled) {
+                  providerPending = false;
                 }
-              }).catch(async (error: unknown) => {
-                if (error instanceof WorkerPlacementAdmissionTargetError) {
-                  // The failed reservation is released. Cleanup still follows its captured
-                  // predecessor, never a later Stop or the sweep that this recovery joins.
-                  await ready.promise;
+              };
+              void settled.then(markSettled, markSettled);
+            });
+          },
+          report,
+          (runRecovery) =>
+            admitDispatch(placement, async (signal) => {
+              try {
+                await racePromiseWithAbortSignal(ready.promise, signal);
+                signal?.throwIfAborted();
+                const recovered = await runRecovery(signal);
+                if (providerPending) {
+                  foreground.resolve(recovered);
+                }
+                return recovered;
+              } catch (error) {
+                if (providerPending) {
+                  foreground.reject(error);
                 }
                 throw error;
-              }),
-          );
-          // Never-admitted invalid owners still settle their exact cleanup before returning.
-          foreground.resolve(result);
-          return result;
-        } catch (error) {
-          foreground.reject(error);
-          throw error;
-        }
+              } finally {
+                // Caller timeouts finish the sweep, not the real provider or its Stop owner.
+                await providerSettlement;
+              }
+            }).catch(async (error: unknown) => {
+              if (error instanceof WorkerPlacementAdmissionTargetError) {
+                // The failed reservation is released. Cleanup still follows its captured
+                // predecessor, never a later Stop or the sweep that this recovery joins.
+                await ready.promise;
+              }
+              throw error;
+            }),
+        );
       });
-      registerOperation({ kind: "recovery", request: placement, ...tracked });
+      registerOperation({
+        kind: "recovery",
+        request: placement,
+        ...tracked,
+        foreground: foreground.promise,
+      });
+      // Ordinary completion must release the old operation before a caller can retry it.
+      // Only a still-running provider may publish foreground completion ahead of that release.
+      void tracked.operation.then(foreground.resolve, foreground.reject);
       return foreground.promise;
     },
   };

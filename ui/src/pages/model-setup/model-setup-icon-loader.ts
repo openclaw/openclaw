@@ -6,6 +6,7 @@ import {
   renderProviderFallbackIcon,
 } from "../../components/provider-icon.ts";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
+import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
 import type { ModelSetupPageState } from "./state.ts";
 
 type SetupIconEntry = {
@@ -46,83 +47,52 @@ export function renderProviderIcon(
   />`;
 }
 
-type IconRequest = {
-  controller: AbortController;
-  timeout: ReturnType<typeof setTimeout>;
-};
-
 export class ModelSetupIconLoader {
-  private urls: Record<string, string> = {};
-  private readonly misses = new Set<string>();
-  private readonly requests = new Map<string, IconRequest>();
+  private readonly loader: PluginIconController;
 
   constructor(
     private readonly getContext: () => ApplicationContext,
     private readonly getPageState: () => ModelSetupPageState,
     private readonly onChange: (urls: Record<string, string>) => void,
-  ) {}
+  ) {
+    this.loader = new PluginIconController({
+      getFetchContext: () => {
+        const context = this.getContext();
+        return {
+          resourceBasePath: context.resourceBasePath,
+          gatewayUrl: context.gateway.connection.gatewayUrl,
+          auth: {
+            hello: context.gateway.snapshot.hello,
+            settings: { token: context.gateway.connection.token },
+            password: context.gateway.connection.password,
+          },
+        };
+      },
+      // Eligibility can change before Lit's next reconciliation callback.
+      isConnected: (iconUrl) =>
+        this.getContext().gateway.snapshot.phase === "connected" &&
+        this.currentIconUrls().has(iconUrl),
+      fetchIcon: (iconUrl, context, signal) =>
+        fetchCatalogIconBlobUrl({ iconUrl, ...context, signal }),
+      timeoutError: () => new DOMException("catalog icon fetch timed out", "TimeoutError"),
+      onUrlsChange: (urls) => this.onChange(urls),
+    });
+  }
 
   reconcile(): void {
     const eligible = this.currentIconUrls();
-    const nextUrls = { ...this.urls };
-    let changed = false;
-    for (const [iconUrl, blobUrl] of Object.entries(nextUrls)) {
-      if (!eligible.has(iconUrl)) {
-        URL.revokeObjectURL(blobUrl);
-        delete nextUrls[iconUrl];
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.publish(nextUrls);
-    }
-    for (const [iconUrl, request] of this.requests) {
-      if (!eligible.has(iconUrl)) {
-        clearTimeout(request.timeout);
-        request.controller.abort();
-        this.requests.delete(iconUrl);
-      }
-    }
-    for (const iconUrl of this.misses) {
-      if (!eligible.has(iconUrl)) {
-        this.misses.delete(iconUrl);
-      }
-    }
+    this.loader.reconcileKeys(eligible);
     for (const iconUrl of eligible) {
-      if (!this.urls[iconUrl] && !this.misses.has(iconUrl) && !this.requests.has(iconUrl)) {
-        this.fetch(iconUrl);
-      }
+      this.loader.load(iconUrl);
     }
   }
 
   invalidate(iconUrl: string): void {
-    const request = this.requests.get(iconUrl);
-    if (request) {
-      clearTimeout(request.timeout);
-      request.controller.abort();
-      this.requests.delete(iconUrl);
-    }
-    const blobUrl = this.urls[iconUrl];
-    if (blobUrl) {
-      URL.revokeObjectURL(blobUrl);
-    }
-    const nextUrls = { ...this.urls };
-    delete nextUrls[iconUrl];
-    this.publish(nextUrls);
-    this.misses.add(iconUrl);
+    this.loader.handleError(iconUrl);
   }
 
   reset(): void {
-    for (const request of this.requests.values()) {
-      clearTimeout(request.timeout);
-      request.controller.abort();
-    }
-    for (const blobUrl of Object.values(this.urls)) {
-      URL.revokeObjectURL(blobUrl);
-    }
-    this.requests.clear();
-    this.misses.clear();
-    this.publish({});
+    this.loader.reset();
   }
 
   private currentIconUrls(): Set<string> {
@@ -141,60 +111,5 @@ export class ModelSetupIconLoader {
         ...(result.recommendedInstalls ?? []),
       ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
-  }
-
-  private fetch(iconUrl: string): void {
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new DOMException("catalog icon fetch timed out", "TimeoutError")),
-      10_000,
-    );
-    const request = { controller, timeout };
-    this.requests.set(iconUrl, request);
-    const context = this.getContext();
-    void fetchCatalogIconBlobUrl({
-      iconUrl,
-      resourceBasePath: context.resourceBasePath,
-      gatewayUrl: context.gateway.connection.gatewayUrl,
-      auth: {
-        hello: context.gateway.snapshot.hello,
-        settings: { token: context.gateway.connection.token },
-        password: context.gateway.connection.password,
-      },
-      signal: controller.signal,
-    })
-      .then((blobUrl) => {
-        if (
-          this.requests.get(iconUrl) !== request ||
-          this.getContext().gateway.snapshot.phase !== "connected" ||
-          !this.currentIconUrls().has(iconUrl)
-        ) {
-          if (blobUrl) {
-            URL.revokeObjectURL(blobUrl);
-          }
-          return;
-        }
-        if (blobUrl) {
-          this.publish({ ...this.urls, [iconUrl]: blobUrl });
-        } else {
-          this.misses.add(iconUrl);
-        }
-      })
-      .catch(() => {
-        if (this.requests.get(iconUrl) === request) {
-          this.misses.add(iconUrl);
-        }
-      })
-      .finally(() => {
-        clearTimeout(timeout);
-        if (this.requests.get(iconUrl) === request) {
-          this.requests.delete(iconUrl);
-        }
-      });
-  }
-
-  private publish(urls: Record<string, string>): void {
-    this.urls = urls;
-    this.onChange(urls);
   }
 }

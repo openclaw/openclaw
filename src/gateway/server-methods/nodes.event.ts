@@ -6,8 +6,8 @@ import {
 import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
-import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -108,6 +108,8 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         },
         clearNodePresenceActivity: (activity) =>
           context.nodeRegistry.clearPresenceActivity(activity),
+        updateNodeDesktopAvailability: (availability) =>
+          context.nodeRegistry.updateDesktopAvailability(availability),
         updateNodeHostStats: (stats) => {
           const hostStats = context.nodeRegistry.updateHostStats(stats);
           if (hostStats && eventPairingGeneration) {

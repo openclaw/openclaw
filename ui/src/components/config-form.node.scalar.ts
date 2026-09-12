@@ -4,6 +4,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { i18n, t } from "../i18n/index.ts";
 import {
+  configValuesEqual,
   isSupportedConfigValueValid,
   normalizeNumericValue,
   numericInputConstraints,
@@ -47,7 +48,6 @@ const scalarInputState = new WeakMap<
   {
     controlIdentity: unknown;
     sourceIdentity: unknown;
-    rowIdentity: unknown;
     pathKey: string;
     presentationIdentity: string;
     renderedValue: string;
@@ -64,7 +64,6 @@ function syncScalarInputIdentity(
   element: Element | undefined,
   controlIdentity: unknown,
   sourceIdentity: unknown,
-  rowIdentity: unknown,
   pathKey: string,
   presentationIdentity: string,
   renderedValue: string,
@@ -77,7 +76,6 @@ function syncScalarInputIdentity(
   if (previous) {
     if (
       !Object.is(previous.sourceIdentity, sourceIdentity) ||
-      !Object.is(previous.rowIdentity, rowIdentity) ||
       previous.pathKey !== pathKey ||
       previous.presentationIdentity !== presentationIdentity ||
       previous.renderedValue !== renderedValue
@@ -100,7 +98,6 @@ function syncScalarInputIdentity(
   scalarInputState.set(element, {
     controlIdentity,
     sourceIdentity,
-    rowIdentity,
     pathKey,
     presentationIdentity,
     renderedValue,
@@ -206,7 +203,6 @@ function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams[
 }
 
 type NumericInputState =
-  | { kind: "badInput" }
   | { kind: "empty" }
   | { kind: "invalid" }
   | { kind: "value"; parsed: number; message: string };
@@ -220,7 +216,7 @@ function resolveNumericInputState(
 ): NumericInputState {
   const raw = target.value;
   if (raw.trim() === "") {
-    return target.validity.badInput ? { kind: "badInput" } : { kind: "empty" };
+    return target.validity.badInput ? { kind: "invalid" } : { kind: "empty" };
   }
   const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
   if (typeof parsed !== "number") {
@@ -233,10 +229,7 @@ function numericStateMessage(state: NumericInputState, isRequired: boolean): str
   if (state.kind === "value") {
     return state.message;
   }
-  if (state.kind === "invalid") {
-    return t("configForm.invalidNumber");
-  }
-  return state.kind === "badInput" || isRequired ? t("configForm.invalidNumber") : "";
+  return state.kind === "invalid" || isRequired ? t("configForm.invalidNumber") : "";
 }
 
 function applyNumericInputState(
@@ -308,7 +301,10 @@ export function renderTextInput(
       : undefined;
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
-  const controlPathKey = configFieldId(path, "scalar-identity");
+  const controlPathKey = configFieldId(
+    path.filter((segment) => typeof segment === "string"),
+    "scalar-identity",
+  );
   const renderedValue = formatConfigValueText(displayValue);
   const presentationIdentity = [
     effectiveRedacted ? "redacted" : "visible",
@@ -354,12 +350,11 @@ export function renderTextInput(
   const inputControl = html`
     <input
       ${ref((element) => {
-        syncScalarEditIdentity(element, params.rowIdentity, controlPathKey, presentationIdentity);
+        syncScalarEditIdentity(element, controlPathKey, presentationIdentity);
         syncScalarInputIdentity(
           element,
           controlIdentity,
           sourceIdentity,
-          params.rowIdentity,
           controlPathKey,
           presentationIdentity,
           renderedValue,
@@ -508,7 +503,10 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const numericStep = typeof constraints.step === "number" ? constraints.step : 1;
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
-  const controlPathKey = configFieldId(path, "scalar-identity");
+  const controlPathKey = configFieldId(
+    path.filter((segment) => typeof segment === "string"),
+    "scalar-identity",
+  );
   const renderedValue = formatConfigValueText(displayValue);
   const revalidate = (target: HTMLInputElement) => {
     setControlValidity(
@@ -532,7 +530,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       return;
     }
     const current = Number(effectiveValue);
-    const base = Number.isFinite(current) ? current : normalizeNumericValue(0, schema);
+    const base = Number.isFinite(current) ? current : 0;
     const candidate = normalizeNumericValue(base + direction * numericStep, schema);
     if (isSupportedConfigValueValid(schema, candidate)) {
       onPatch(path, candidate);
@@ -554,7 +552,6 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           element,
           controlIdentity,
           sourceIdentity,
-          params.rowIdentity,
           controlPathKey,
           "number",
           renderedValue,
@@ -640,9 +637,7 @@ export function renderSelect(
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
   const usingDefault = value === undefined && schema.default !== undefined;
   const resolvedValue = usingDefault ? schema.default : value;
-  const currentIndex = options.findIndex(
-    (option) => option === resolvedValue || String(option) === String(resolvedValue),
-  );
+  const currentIndex = options.findIndex((option) => configValuesEqual(option, resolvedValue));
   const unset = "__unset__";
   const nullValue = "__null__";
   const canSelectNull = schema.nullable && schema.enumIncludesNull;

@@ -17,7 +17,7 @@ configuration. They are different layers:
 | Layer         | Examples                                     | Meaning                                                             |
 | ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
 | Provider      | `anthropic`, `github-copilot`, `openai`      | How OpenClaw authenticates, discovers models, and names model refs. |
-| Model         | `claude-opus-4-6`, `gpt-5.6-sol`             | The model selected for the agent turn.                              |
+| Model         | `claude-opus-4-6`, `gpt-6-astra`             | The model selected for the agent turn.                              |
 | Agent runtime | `claude-cli`, `codex`, `copilot`, `openclaw` | The low-level loop or backend that executes the prepared turn.      |
 | Channel       | Discord, Slack, Telegram, WhatsApp           | Where messages enter and leave OpenClaw.                            |
 
@@ -69,7 +69,7 @@ keeps the model ref as `openai/*` and selects the `codex` runtime:
 {
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
     },
   },
 }
@@ -92,7 +92,7 @@ Decision tree:
 1. **Codex bind/control/thread/resume/steer/stop** -> native `/codex` command surface when the bundled `codex` plugin is enabled.
 2. **Codex as the embedded runtime** or the normal subscription-backed Codex agent experience -> `openai/<model>`.
 3. **OpenClaw explicitly chosen for an OpenAI model** -> keep the model ref as `openai/<model>` and set provider/model runtime policy to `agentRuntime.id: "openclaw"`. A selected `openai` OAuth profile is routed internally through OpenClaw's Codex-auth transport.
-4. **Legacy Codex model refs in config** -> repair with `openclaw doctor --fix` to `openai/<model>`; doctor keeps the Codex auth route by adding provider/model-scoped `agentRuntime.id: "codex"` where the old model ref implied it. Legacy **`codex-cli/*`** model refs repair to the same `openai/<model>` Codex app-server route; OpenClaw no longer keeps a bundled Codex CLI backend.
+4. **Legacy Codex model refs in config** -> repair with `openclaw doctor --fix` to `openai/<model>`; doctor keeps the Codex auth route by adding provider/model-scoped `agentRuntime.id: "codex"` where the old model ref implied it. Legacy **`codex-cli/*`** model refs repair to the same `openai/<model>` Codex app-server route; The bundled Codex CLI backend was removed in v2026.5.14.
 5. **ACP, acpx, or Codex ACP adapter explicitly requested** -> `runtime: "acp"` and `agentId: "codex"`.
 6. **Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or another external harness** -> ACP/acpx, not the native sub-agent runtime.
 
@@ -293,7 +293,7 @@ The Codex runtime support contract is documented in
 Status output can show both `Execution` and `Runtime` labels. Read them as
 diagnostics, not provider names:
 
-- A model ref such as `openai/gpt-5.6-sol` is the selected provider/model.
+- A model ref such as `openai/gpt-6-astra` is the selected provider/model.
 - A runtime id such as `codex` is the loop executing the turn.
 - A channel label such as Telegram or Discord is where the conversation is happening.
 
@@ -313,3 +313,5 @@ reject the turn. The completed result records the runtime that actually ran.
 - [Agent loop](/concepts/agent-loop)
 - [Models](/concepts/models)
 - [Status](/cli/status)
+- [Code Mode](/tools/code-mode) — an experimental, opt-in agent-runtime feature
+- [Agent runtime architecture](/agent-runtime-architecture) — code layout, module boundaries, and how the built-in runtime is selected

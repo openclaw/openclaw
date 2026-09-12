@@ -1632,6 +1632,7 @@ private fun GatewaySettingsScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val uriHandler = LocalUriHandler.current
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
@@ -1672,9 +1673,9 @@ private fun GatewaySettingsScreen(
   }
 
   pendingSetupResetPlan?.let { plan ->
-    AlertDialog(
+    FoldAwarePrompt(
       onDismissRequest = { pendingSetupResetPlan = null },
-      title = { Text(nativeString("Replace gateway setup?")) },
+      title = nativeString("Replace gateway setup?"),
       text = {
         Text(
           gatewaySettingsSetupResetConfirmationText(),
@@ -1682,7 +1683,10 @@ private fun GatewaySettingsScreen(
           color = ClawTheme.colors.text,
         )
       },
-      confirmButton = {
+      actions = {
+        TextButton(onClick = { pendingSetupResetPlan = null }) {
+          Text(nativeString("Cancel"))
+        }
         TextButton(
           onClick = {
             pendingSetupResetPlan = null
@@ -1692,11 +1696,6 @@ private fun GatewaySettingsScreen(
           Text(nativeString("Replace setup"))
         }
       },
-      dismissButton = {
-        TextButton(onClick = { pendingSetupResetPlan = null }) {
-          Text(nativeString("Cancel"))
-        }
-      },
       containerColor = ClawTheme.colors.surface,
     )
   }
@@ -1704,9 +1703,9 @@ private fun GatewaySettingsScreen(
   pendingForgetStableId?.let { stableId ->
     val entry = pairedGateways.firstOrNull { it.stableId == stableId }
     val gatewayName = entry?.name ?: nativeString("this gateway")
-    AlertDialog(
+    FoldAwarePrompt(
       onDismissRequest = { pendingForgetStableId = null },
-      title = { Text(nativeString("Forget gateway?")) },
+      title = nativeString("Forget gateway?"),
       text = {
         Text(
           nativeString(
@@ -1715,7 +1714,8 @@ private fun GatewaySettingsScreen(
           ),
         )
       },
-      confirmButton = {
+      actions = {
+        TextButton(onClick = { pendingForgetStableId = null }) { Text(nativeString("Cancel")) }
         TextButton(
           onClick = {
             pendingForgetStableId = null
@@ -1724,9 +1724,6 @@ private fun GatewaySettingsScreen(
         ) {
           Text(nativeString("Forget"))
         }
-      },
-      dismissButton = {
-        TextButton(onClick = { pendingForgetStableId = null }) { Text(nativeString("Cancel")) }
       },
       containerColor = ClawTheme.colors.surface,
     )
@@ -1821,6 +1818,18 @@ private fun GatewaySettingsScreen(
             style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
           )
+        }
+      }
+    }
+    gatewayConnectionDisplay.problem?.takeIf { it.isNetworkFailure }?.let { problem ->
+      Text(
+        text = recoveryGatewayAuthDetail(problem),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      gatewayNetworkRecoveryHelpUrl(problem)?.let { url ->
+        TextButton(onClick = { uriHandler.openUri(url) }) {
+          Text(nativeString("Set up Tailscale"))
         }
       }
     }
@@ -2885,7 +2894,7 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
           Modifier
             .fillMaxWidth()
             .heightIn(min = 46.dp)
-            .clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) { copyCronDetailValue(context, row.title, row.value) }
+            .clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) { copySettingsDetailValue(context, row.title, row.value) }
             .padding(vertical = 6.dp)
         } else {
           Modifier
@@ -2918,13 +2927,13 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
   }
 }
 
-private fun copyCronDetailValue(
+private fun copySettingsDetailValue(
   context: Context,
   title: String,
   value: String,
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw automation $title", value))
+  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw $title", value))
   Toast.makeText(context, nativeString("\$title copied", title), Toast.LENGTH_SHORT).show()
 }
 
@@ -3347,33 +3356,33 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
   }
 }
 
-/**
- * Reusable metric panel for settings screens with compact title/value rows.
- */
+/** These diagnostics have no detail view, so their rows must show complete values. */
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = 4.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      Row(modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(
-          text = row.title,
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.text,
-          modifier = Modifier.weight(0.9f),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-          text = row.value,
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-          modifier = Modifier.weight(1.1f),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          textAlign = TextAlign.End,
-        )
+  val context = LocalContext.current
+  ClawListPanel(items = rows) { row ->
+    val rowModifier =
+      if (row.copyable) {
+        Modifier.clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) {
+          copySettingsDetailValue(context, row.title, row.value)
+        }
+      } else {
+        Modifier
       }
-    }
+    ClawListItem(
+      title = row.title,
+      subtitle = row.value,
+      metadata = nativeString("Tap to copy").takeIf { row.copyable },
+      modifier = rowModifier,
+      trailing =
+        if (row.copyable) {
+          {
+            Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+          }
+        } else {
+          null
+        },
+    )
   }
 }
 

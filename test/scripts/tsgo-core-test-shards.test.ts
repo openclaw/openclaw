@@ -17,6 +17,40 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 describe("tsgo core test shards", () => {
+  it("covers the repository test roots exactly once with headroom below the hard cap", () => {
+    const roots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.resolve(config),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!parsed) {
+        throw new Error(`Could not parse ${config}`);
+      }
+      expect(parsed.errors, config).toEqual([]);
+      return parsed.fileNames
+        .filter((file) => /\.test\.tsx?$/u.test(file))
+        .map((file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"));
+    };
+
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
+        // Rebalance before the runner's 720-root cap blocks unrelated test-only PRs.
+        maxRoots: 700,
+        shards: TSGO_CORE_TEST_SHARDS.map((shard) => ({
+          name: shard.name,
+          roots: roots(shard.config),
+        })),
+      }),
+    ).toEqual([]);
+  });
+
   it("stripes partition the full shard list exactly once", () => {
     for (const stripeCount of [1, 2, 3, 5]) {
       const striped = Array.from(

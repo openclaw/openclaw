@@ -17,10 +17,10 @@ import {
 type NativeHookRelayBridgeDatabase = Pick<OpenClawStateKyselyDatabase, "native_hook_relay_bridges">;
 
 /** Read one native relay locator without loading the shared-state writer lifecycle. */
-export function readNativeHookRelayClientBridgeRecord(params: {
+export async function readNativeHookRelayClientBridgeRecord(params: {
   relayId: string;
   stateDbPath?: string;
-}): NativeHookRelayBridgeRecord | undefined {
+}): Promise<NativeHookRelayBridgeRecord | undefined> {
   const pathname = path.resolve(params.stateDbPath ?? resolveOpenClawStateSqlitePath());
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {

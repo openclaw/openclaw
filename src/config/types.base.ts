@@ -1,5 +1,6 @@
 // Defines base configuration types shared by multiple config sections.
-import type { ChatType } from "../channels/chat-type.js";
+import type { z } from "zod";
+import type { SessionSchema } from "./zod-schema.session-config.js";
 
 /** Reply handling mode for chat command surfaces. */
 export type ReplyMode = "text" | "command";
@@ -141,142 +142,25 @@ export type HumanDelayConfig = {
   maxMs?: number;
 };
 
-export type SessionSendPolicyAction = "allow" | "deny";
-export type SessionSendPolicyMatch = {
-  /** Channel/provider id match. */
-  channel?: string;
-  /** Direct/group/thread classification when the caller has channel metadata. */
-  chatType?: ChatType;
-  /**
-   * Session key prefix match.
-   * Note: some consumers match against a normalized key (for example, stripping `agent:<id>:`).
-   */
-  keyPrefix?: string;
-  /** Optional raw session-key prefix match for consumers that normalize session keys. */
-  rawKeyPrefix?: string;
-};
-export type SessionSendPolicyRule = {
-  /** Action applied when match criteria select this rule. */
-  action: SessionSendPolicyAction;
-  /** Optional match filter; omitted match behaves as a catch-all rule. */
-  match?: SessionSendPolicyMatch;
-};
-export type SessionSendPolicyConfig = {
-  /** Fallback action when no send-policy rule matches. */
-  default?: SessionSendPolicyAction;
-  /** Ordered allow/deny rules; first matching rule wins. */
-  rules?: SessionSendPolicyRule[];
-};
+type SessionSchemaInput = NonNullable<z.input<typeof SessionSchema>>;
 
-export type SessionResetMode = "none" | "daily" | "idle";
-export type SessionResetConfig = {
-  mode?: SessionResetMode;
-  /** Local hour (0-23) for the daily reset boundary. */
-  atHour?: number;
-  /** Sliding idle window (minutes). When set with daily mode, whichever expires first wins. */
-  idleMinutes?: number;
-};
-export type SessionResetByTypeConfig = {
-  direct?: SessionResetConfig;
-  group?: SessionResetConfig;
-  thread?: SessionResetConfig;
-};
+export type SessionSendPolicyConfig = NonNullable<SessionSchemaInput["sendPolicy"]>;
+export type SessionSendPolicyAction = NonNullable<SessionSendPolicyConfig["default"]>;
+export type SessionSendPolicyRule = NonNullable<SessionSendPolicyConfig["rules"]>[number];
+export type SessionSendPolicyMatch = NonNullable<SessionSendPolicyRule["match"]>;
 
-export type SessionThreadBindingsConfig = {
-  /**
-   * Master switch for thread-bound session routing features.
-   * Channel/provider keys can override this default.
-   */
-  enabled?: boolean;
-  /**
-   * Inactivity window for thread-bound sessions (hours).
-   * Binding expires after this amount of idle time. Set to 0 to disable. Default: 24.
-   */
-  idleHours?: number;
-  /**
-   * Optional hard max age for thread-bound sessions (hours).
-   * Binding expires once this age is reached even if active. Set to 0 to disable. Default: 0.
-   */
-  maxAgeHours?: number;
-  /**
-   * Allow channel integrations to create thread-bound work sessions from
-   * sessions_spawn or native ACP spawn flows. Channel/account keys can override.
-   * Default: true when thread bindings are enabled.
-   */
-  spawnSessions?: boolean;
-  /**
-   * Default context mode for native subagents spawned into a bound thread.
-   * Default: "fork" so the child starts from the requester transcript.
-   */
-  defaultSpawnContext?: "isolated" | "fork";
-};
+export type SessionResetConfig = NonNullable<SessionSchemaInput["reset"]>;
+export type SessionResetMode = NonNullable<SessionResetConfig["mode"]>;
+export type SessionResetByTypeConfig = NonNullable<SessionSchemaInput["resetByType"]>;
 
-export type SessionSharingConfig = {
-  /** Allow owners/admins to set sessions read-only. Default: true. */
-  readOnly?: boolean;
-  /** Allow owners/admins to select suggest mode. Default: true. */
-  suggest?: boolean;
-  /** Allow owners/admins to hide draft sessions from other operators. Default: true. */
-  drafts?: boolean;
-};
+export type SessionThreadBindingsConfig = NonNullable<SessionSchemaInput["threadBindings"]>;
 
-export type SessionConfig = {
-  scope?: SessionScope;
-  /** DM session scoping (default: "main"). */
-  dmScope?: DmScope;
-  /** Group/channel session scoping (default: "per-group"). */
-  groupScope?: GroupScope;
-  /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
-  identityLinks?: Record<string, string[]>;
-  resetTriggers?: string[];
-  reset?: SessionResetConfig;
-  resetByType?: SessionResetByTypeConfig;
-  /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
-  resetByChannel?: Record<string, SessionResetConfig>;
-  store?: string;
-  mainKey?: string;
-  sendPolicy?: SessionSendPolicyConfig;
-  /** Shared defaults for thread-bound session routing across channels/providers. */
-  threadBindings?: SessionThreadBindingsConfig;
-  /** Collaboration modes owners and administrators may select. */
-  sharing?: SessionSharingConfig;
-  /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
-  maintenance?: SessionMaintenanceConfig;
-};
+export type SessionSharingConfig = NonNullable<SessionSchemaInput["sharing"]>;
 
-export type SessionMaintenanceMode = "enforce" | "warn";
+export type SessionConfig = SessionSchemaInput;
 
-/** Session-store cleanup policy for transcript count, age, archives, and disk budget. */
-export type SessionMaintenanceConfig = {
-  /** Whether to enforce maintenance or warn only. Default: "enforce". */
-  mode?: SessionMaintenanceMode;
-  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
-  pruneAfter?: string | number;
-  /** Archive inactive dashboard sessions after this duration. Default: "7d"; false or 0 disables. */
-  archiveDashboardAfter?: string | number | false;
-  /** Maximum total session entries to keep when protection permits. Default: 500. */
-  maxEntries?: number;
-  /** Protect interactive sessions active within this duration. Default and false: disabled. */
-  preserveRecent?: string | number | false;
-  /**
-   * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
-   * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
-   * disk budget evicts them oldest-first; a duration opts into deletion.
-   */
-  resetArchiveRetention?: string | number | false;
-  /**
-   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
-   * (mode=enforce). Set `false`, `0`, or `"0"` to disable the budget entirely.
-   */
-  maxDiskBytes?: number | string | false;
-  /**
-   * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
-   * Default: 80% of maxDiskBytes. A value that resolves to zero falls back to
-   * the default instead of clearing history; negative values are invalid.
-   */
-  highWaterBytes?: number | string;
-};
+export type SessionMaintenanceConfig = NonNullable<SessionSchemaInput["maintenance"]>;
+export type SessionMaintenanceMode = NonNullable<SessionMaintenanceConfig["mode"]>;
 
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";

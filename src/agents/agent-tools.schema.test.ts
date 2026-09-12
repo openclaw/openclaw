@@ -403,6 +403,27 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it.each(["own", "inherited"] as const)(
+    "inlines definitions attached to %s array roots",
+    (kind) => {
+      const schemas = [{ $ref: "#/$defs/Value" }, { $ref: "#/definitions/Value" }];
+      const definitions = {
+        $defs: { Value: { type: "string" } },
+        definitions: { Value: { type: "integer" } },
+      };
+      if (kind === "own") {
+        Object.assign(schemas, definitions);
+      } else {
+        Object.setPrototypeOf(schemas, Object.assign(Object.create(Array.prototype), definitions));
+      }
+
+      expect(normalizeToolParameterSchema(schemas)).toEqual([
+        { type: "string" },
+        { type: "integer" },
+      ]);
+    },
+  );
+
   it("inlines nested local $ref schemas for provider-neutral tools", () => {
     expect(
       normalizeToolParameterSchema({
@@ -1369,6 +1390,9 @@ describe("normalizeToolParameters", () => {
         properties: Object.fromEntries([
           ["__proto__", { type: "array", items: {} }],
           ["emptyItems", { type: "array" }],
+          ["undefinedItems", { type: "array", items: undefined }],
+          ["unionItems", { type: ["array", "null"], items: {} }],
+          ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
           ["typedItems", { type: "array", items: { type: "string" } }],
           ["falseItems", { type: "array", items: false }],
           ["nullItems", { type: "array", items: null }],
@@ -1388,6 +1412,9 @@ describe("normalizeToolParameters", () => {
       properties: Object.fromEntries([
         ["__proto__", { type: "array" }],
         ["emptyItems", { type: "array" }],
+        ["undefinedItems", { type: "array" }],
+        ["unionItems", { type: ["array", "null"] }],
+        ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
         ["typedItems", { type: "array", items: { type: "string" } }],
         ["falseItems", { type: "array", items: false }],
         ["nullItems", { type: "array", items: null }],

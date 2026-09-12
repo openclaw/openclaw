@@ -7,8 +7,11 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
+import { getPluginRegistryState } from "../runtime-state.js";
 import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
+import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
 
 type PluginRuntimeGatewayRequestScope = {
   /** Exact placement owner captured before the local harness begins. */
@@ -51,6 +54,7 @@ type PluginRuntimeGatewayRequestScope = {
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
   pluginRegistry?: PluginRegistry;
+  declaredProviderOwners?: DeclaredProviderOwnerIndex;
 };
 
 type PluginRuntimePluginScope = {
@@ -77,6 +81,21 @@ const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayCo
   () => new WeakMap(),
 );
 
+// A closed resolver stays closed even if a late scoped loader borrows it again.
+const gatewayContextLifetimes = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayContextLifetimes"),
+  () => new WeakMap<GatewayContextResolver, AbortController>(),
+);
+
+export function getGatewayContextLifetime(resolver: GatewayContextResolver): AbortController {
+  let lifetime = gatewayContextLifetimes.get(resolver);
+  if (!lifetime) {
+    lifetime = new AbortController();
+    gatewayContextLifetimes.set(resolver, lifetime);
+  }
+  return lifetime;
+}
+
 export function bindGatewayContextResolver(
   owner: object,
   resolver: GatewayContextResolver | undefined,
@@ -87,6 +106,23 @@ export function bindGatewayContextResolver(
 }
 
 export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
+
+/** Follows explicit wrapper ownership without invoking any execution resolver. */
+export function getCanonicalGatewayContextResolver(
+  resolver: GatewayContextResolver,
+): GatewayContextResolver | undefined {
+  const seen = new Set<GatewayContextResolver>();
+  let current = resolver;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = gatewayContextResolvers.get(current);
+    if (!parent) {
+      return current;
+    }
+    current = parent;
+  }
+  return undefined;
+}
 
 /** Match the host owner without invoking a possibly retired execution resolver. */
 export function hasGatewayContextOwner(
@@ -120,7 +156,7 @@ export function getSharedGatewayContextResolver(
   }
   // Separate caller wrappers may own one instance. Recheck every captured fence;
   // never replace it with a current global resolver or permit mixed ambient routing.
-  return () => {
+  const shared = () => {
     const contexts = resolvers.map((resolve) => {
       try {
         return resolve?.();
@@ -139,6 +175,14 @@ export function getSharedGatewayContextResolver(
     }
     return contexts[0];
   };
+  const canonical = resolvers.map((resolve) =>
+    resolve ? getCanonicalGatewayContextResolver(resolve) : undefined,
+  );
+  const owner = canonical[0];
+  if (owner && canonical.every((candidate) => candidate === owner)) {
+    bindGatewayContextResolver(shared, owner);
+  }
+  return shared;
 }
 
 /**
@@ -176,13 +220,23 @@ export function withPluginRuntimeGatewayContextResolver<T>(
 export function withPluginRuntimeRegistryScope<T>(
   registry: PluginRegistry | undefined,
   run: () => T,
+  declaredProviderOwners?: DeclaredProviderOwnerIndex,
 ): T {
   if (!registry) {
     return run();
   }
   const current = pluginRuntimeGatewayRequestScope.getStore();
   return pluginRuntimeGatewayRequestScope.run(
-    { isWebchatConnect: () => false, ...current, pluginRegistry: registry },
+    {
+      isWebchatConnect: () => false,
+      ...current,
+      pluginRegistry: registry,
+      declaredProviderOwners:
+        declaredProviderOwners ??
+        // Nested calls keep this prepared registry's facts, never a different registry's index.
+        (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
+        getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
+    },
     run,
   );
 }
@@ -216,11 +270,17 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
   return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }
 
-/**
- * Runs work under the current gateway request scope while attaching plugin identity.
- */
-export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
-  return withPluginRuntimePluginScope({ pluginId }, run);
+/** Drops only generation selection; authenticated Gateway caller and authority stay attached. */
+export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  if (!current) {
+    return run();
+  }
+  // Registry selection and its declared provider index belong to the same generation.
+  return pluginRuntimeGatewayRequestScope.run(
+    { ...current, pluginRegistry: undefined, declaredProviderOwners: undefined },
+    run,
+  );
 }
 
 /**
@@ -230,4 +290,15 @@ export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
   return pluginRuntimeGatewayRequestScope.getStore();
+}
+
+/** Reads registration/request/active registry precedence without initializing a cold runtime. */
+export function getPluginRegistryForContext(): PluginRegistry | null {
+  const state = getPluginRegistryState();
+  return (
+    state?.registrationContext?.registry ??
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    state?.activeRegistry ??
+    null
+  );
 }

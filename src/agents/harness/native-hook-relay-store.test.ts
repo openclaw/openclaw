@@ -43,7 +43,7 @@ function bridgeRecord(
 }
 
 describe("native hook relay store", () => {
-  it("upserts and reads bridge records", () => {
+  it("upserts and reads bridge records", async () => {
     const first = bridgeRecord("relay-upsert");
     const replacement = bridgeRecord("relay-upsert", {
       pid: 101,
@@ -52,104 +52,104 @@ describe("native hook relay store", () => {
       expiresAtMs: 30_000,
     });
 
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: first,
       updatedAtMs: 1_000,
       stateDbPath: primaryStateDbPath,
     });
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: first.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(first);
 
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: replacement,
       updatedAtMs: 2_000,
       stateDbPath: primaryStateDbPath,
     });
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: replacement.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(replacement);
   });
 
-  it("requires matching token and pid to renew or delete a bridge", () => {
+  it("requires matching token and pid to renew or delete a bridge", async () => {
     const record = bridgeRecord("relay-owned");
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record,
       updatedAtMs: 1_000,
       stateDbPath: primaryStateDbPath,
     });
 
     expect(
-      renewOrRestoreNativeHookRelayBridgeRecord({
+      await renewOrRestoreNativeHookRelayBridgeRecord({
         record: { ...record, pid: record.pid + 1, expiresAtMs: 30_000 },
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(false);
     expect(
-      renewOrRestoreNativeHookRelayBridgeRecord({
+      await renewOrRestoreNativeHookRelayBridgeRecord({
         record: { ...record, token: "decoy-token", expiresAtMs: 30_000 },
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(false);
     expect(
-      renewOrRestoreNativeHookRelayBridgeRecord({
+      await renewOrRestoreNativeHookRelayBridgeRecord({
         record: { ...record, expiresAtMs: 30_000 },
         updatedAtMs: 2_000,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(true);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: record.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual({ ...record, expiresAtMs: 30_000 });
 
     expect(
-      deleteNativeHookRelayBridgeRecordIfOwned({
+      await deleteNativeHookRelayBridgeRecordIfOwned({
         ...record,
         pid: record.pid + 1,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(false);
     expect(
-      deleteNativeHookRelayBridgeRecordIfOwned({
+      await deleteNativeHookRelayBridgeRecordIfOwned({
         ...record,
         token: "decoy-token",
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(false);
     expect(
-      deleteNativeHookRelayBridgeRecordIfOwned({
+      await deleteNativeHookRelayBridgeRecordIfOwned({
         ...record,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(true);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: record.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBeUndefined();
   });
 
-  it("restores a missing record without overwriting another owner", () => {
+  it("restores a missing record without overwriting another owner", async () => {
     const record = bridgeRecord("relay-restored");
     expect(
-      renewOrRestoreNativeHookRelayBridgeRecord({
+      await renewOrRestoreNativeHookRelayBridgeRecord({
         record,
         updatedAtMs: 1_000,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(true);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: record.relayId,
         stateDbPath: primaryStateDbPath,
       }),
@@ -159,27 +159,27 @@ describe("native hook relay store", () => {
       pid: record.pid + 1,
       token: "test-auth-token",
     });
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: otherOwner,
       updatedAtMs: 2_000,
       stateDbPath: primaryStateDbPath,
     });
     expect(
-      renewOrRestoreNativeHookRelayBridgeRecord({
+      await renewOrRestoreNativeHookRelayBridgeRecord({
         record,
         updatedAtMs: 3_000,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(false);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: record.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(otherOwner);
   });
 
-  it("does not let an old owner delete its replacement", () => {
+  it("does not let an old owner delete its replacement", async () => {
     const oldOwner = bridgeRecord("relay-replaced", {
       pid: 100,
       token: "secret-token",
@@ -190,38 +190,38 @@ describe("native hook relay store", () => {
       token: "test-auth-token",
       expiresAtMs: 30_000,
     });
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: oldOwner,
       updatedAtMs: 1_000,
       stateDbPath: primaryStateDbPath,
     });
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: replacement,
       updatedAtMs: 2_000,
       stateDbPath: primaryStateDbPath,
     });
 
     expect(
-      deleteNativeHookRelayBridgeRecordIfOwned({
+      await deleteNativeHookRelayBridgeRecordIfOwned({
         ...oldOwner,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBe(false);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: replacement.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(replacement);
   });
 
-  it("prunes expired and dead bridges while preserving live and unknown pids", () => {
+  it("prunes expired and dead bridges while preserving live and unknown pids", async () => {
     const expired = bridgeRecord("relay-expired", { pid: 200, expiresAtMs: 9_999 });
     const dead = bridgeRecord("relay-dead", { pid: 201 });
     const live = bridgeRecord("relay-live", { pid: 202 });
     const unknown = bridgeRecord("relay-unknown", { pid: 203 });
     for (const [index, record] of [expired, dead, live, unknown].entries()) {
-      writeNativeHookRelayBridgeRecord({
+      await writeNativeHookRelayBridgeRecord({
         record,
         updatedAtMs: 1_000 + index,
         stateDbPath: primaryStateDbPath,
@@ -229,7 +229,7 @@ describe("native hook relay store", () => {
     }
     const isPidDead = vi.fn((pid: number) => pid === dead.pid);
 
-    const pruned = pruneNativeHookRelayBridgeRecords({
+    const pruned = await pruneNativeHookRelayBridgeRecords({
       currentPid: 100,
       isPidDead,
       nowMs: 10_000,
@@ -247,32 +247,32 @@ describe("native hook relay store", () => {
       new Set([dead.pid, live.pid, unknown.pid]),
     );
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: expired.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBeUndefined();
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: dead.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toBeUndefined();
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: live.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(live);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: unknown.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(unknown);
   });
 
-  it("preserves a replacement published during dead-pid planning", () => {
+  it("preserves a replacement published during dead-pid planning", async () => {
     const stale = bridgeRecord("relay-prune-race", {
       pid: 201,
       token: "secret-token",
@@ -283,17 +283,17 @@ describe("native hook relay store", () => {
       token: "test-auth-token",
       expiresAtMs: 30_000,
     });
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: stale,
       updatedAtMs: 1_000,
       stateDbPath: primaryStateDbPath,
     });
 
-    const pruned = pruneNativeHookRelayBridgeRecords({
+    const pruned = await pruneNativeHookRelayBridgeRecords({
       currentPid: 100,
-      isPidDead: (pid) => {
+      isPidDead: async (pid) => {
         expect(pid).toBe(stale.pid);
-        writeNativeHookRelayBridgeRecord({
+        await writeNativeHookRelayBridgeRecord({
           record: replacement,
           updatedAtMs: 2_000,
           stateDbPath: primaryStateDbPath,
@@ -306,14 +306,14 @@ describe("native hook relay store", () => {
 
     expect(pruned).toStrictEqual([]);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: replacement.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(replacement);
   });
 
-  it("isolates records by the exact state database path", () => {
+  it("isolates records by the exact state database path", async () => {
     const primary = bridgeRecord("relay-isolated", {
       pid: 100,
       token: "config-token",
@@ -323,11 +323,11 @@ describe("native hook relay store", () => {
       port: 18_790,
       token: "gateway-token",
     });
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: primary,
       stateDbPath: primaryStateDbPath,
     });
-    writeNativeHookRelayBridgeRecord({
+    await writeNativeHookRelayBridgeRecord({
       record: secondary,
       stateDbPath: secondaryStateDbPath,
     });
@@ -335,13 +335,13 @@ describe("native hook relay store", () => {
     expect(fs.existsSync(primaryStateDbPath)).toBe(true);
     expect(fs.existsSync(secondaryStateDbPath)).toBe(true);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: primary.relayId,
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(primary);
     expect(
-      readNativeHookRelayBridgeRecord({
+      await readNativeHookRelayBridgeRecord({
         relayId: secondary.relayId,
         stateDbPath: secondaryStateDbPath,
       }),

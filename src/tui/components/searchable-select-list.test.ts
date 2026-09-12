@@ -1,8 +1,12 @@
 // Searchable select list tests cover filtering and selection behavior.
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
+import {
+  SearchableSelectList,
+  type SearchableSelectItem,
+  type SearchableSelectListTheme,
+} from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
   selectedPrefix: (t) => `[${t}]`,
@@ -43,6 +47,14 @@ const testItems = [
 ];
 
 describe("SearchableSelectList", () => {
+  function selectByEnter(list: SearchableSelectList) {
+    const onSelect = vi.fn<(item: SearchableSelectItem) => void>();
+    list.onSelect = onSelect;
+    list.handleInput("\r");
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    return onSelect.mock.calls[0]?.[0];
+  }
+
   function typeInput(list: SearchableSelectList, text: string) {
     for (const ch of text) {
       list.handleInput(ch);
@@ -55,7 +67,7 @@ describe("SearchableSelectList", () => {
     expectedValue: string,
   ) {
     typeInput(list, query);
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe(expectedValue);
   }
 
@@ -227,7 +239,7 @@ describe("SearchableSelectList", () => {
     // Simulate typing "gemini" - unique enough to narrow down
     typeInput(list, "gemini");
 
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("google/gemini-pro");
   });
 
@@ -248,7 +260,7 @@ describe("SearchableSelectList", () => {
     typeInput(list, "opus");
 
     // First result should be "opus-direct" where "opus" appears at position 0
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("opus-direct");
   });
 
@@ -277,7 +289,7 @@ describe("SearchableSelectList", () => {
     typeInput(list, "opus");
 
     // Label match should win over description match
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("provider/opus-model");
   });
 
@@ -297,7 +309,7 @@ describe("SearchableSelectList", () => {
     // Simulate typing "gpt" which should match openai/gpt-4 models
     typeInput(list, "gpt");
 
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toContain("gpt");
   });
 
@@ -320,7 +332,7 @@ describe("SearchableSelectList", () => {
 
     typeInput(list, "g4");
 
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("gpt-4");
   });
 
@@ -361,12 +373,12 @@ describe("SearchableSelectList", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
     // Initially first item is selected
-    expect(list.getSelectedItem()?.value).toBe("anthropic/claude-3-opus");
+    expect(selectByEnter(list)?.value).toBe("anthropic/claude-3-opus");
 
     // Press down arrow (escape sequence for down arrow)
     list.handleInput("\x1b[B");
 
-    expect(list.getSelectedItem()?.value).toBe("anthropic/claude-3-sonnet");
+    expect(selectByEnter(list)?.value).toBe("anthropic/claude-3-sonnet");
   });
 
   it.each([
@@ -385,7 +397,7 @@ describe("SearchableSelectList", () => {
 
     list.handleInput(query);
 
-    expect(list.getSelectedItem()?.value).toBe(expectedValue);
+    expect(selectByEnter(list)?.value).toBe(expectedValue);
     expect(stripAnsi(list.render(80)[0] ?? "")).toContain(query);
   });
 
@@ -465,10 +477,10 @@ describe("SearchableSelectList", () => {
     };
 
     typeInput(list, query);
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     list.handleInput(key);
 
     expect(cancelled).toBe(true);
-    expect(list.getSelectedItem()).toBe(selected);
+    expect(selectByEnter(list)).toBe(selected);
   });
 });

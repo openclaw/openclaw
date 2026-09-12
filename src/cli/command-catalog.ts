@@ -17,9 +17,6 @@ export type CliPluginRegistryScope =
   | "memory"
   | "sandbox-backends"
   | "sandbox-management";
-export type CliPluginRegistryPolicy = {
-  scope: CliPluginRegistryScope;
-};
 export type CliNetworkProxyPolicy = "default" | "bypass";
 type CliNetworkProxyPolicyResolver =
   | CliNetworkProxyPolicy
@@ -45,7 +42,9 @@ export type CliCommandPathPolicy = {
   configGuard: CliConfigGuardPolicy;
   stateStoreGuard: "run" | "skip";
   loadPlugins: CliCommandPluginLoadPolicy;
-  pluginRegistry: CliPluginRegistryPolicy;
+  pluginRegistry: {
+    scope: CliPluginRegistryScope;
+  };
   ownsProtocolStdout: boolean;
   hideBanner: boolean;
   ensureCliPath: boolean;
@@ -58,7 +57,6 @@ export type CliCommandCatalogEntry = {
   policy?: Partial<CliCommandPathPolicy>;
   route?: {
     id: CliRoutedCommandId;
-    preloadPlugins?: boolean;
   };
 };
 
@@ -121,6 +119,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       hideBanner: true,
       networkProxy: "default",
     },
+  },
+  {
+    commandPath: ["transcripts"],
+    // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.
+    policy: { ownsProtocolStdout: true, hideBanner: true },
   },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },

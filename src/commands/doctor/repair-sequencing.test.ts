@@ -66,6 +66,15 @@ vi.mock("../../state/user-profiles-owner-migration.js", () => ({
 }));
 
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
+  maybeRepairLegacyAuthProfileStores: ({
+    profileIdMap,
+  }: {
+    profileIdMap: Map<string, string>;
+  }) => ({
+    changes: [],
+    warnings: [],
+    profileIdMap,
+  }),
   collectOpenAICodexAuthProfileStoreIdMap: mocks.collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
@@ -283,6 +292,8 @@ describe("doctor repair sequencing", () => {
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReturnValue(new Map());
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
       detected: [],
+      migratedProfileIds: new Set<string>(),
+      blockedProfileIds: new Set<string>(),
       changes: [],
       warnings: [],
     });
@@ -358,37 +369,6 @@ describe("doctor repair sequencing", () => {
     expect(result.changeNotes).toContain("Repaired user profile identity.");
     expect(result.warningNotes).toContain("User profile identity conflict.");
     expect(result.state.pendingChanges).toBe(false);
-  });
-
-  it("retains the exact auth profile map after import for later session-owner repair", async () => {
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
-    const candidate = {} as OpenClawConfig;
-    const profileIdMap = new Map([["openai-codex:default", "openai:chatgpt-default"]]);
-    mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReturnValue(profileIdMap);
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
-      detected: ["auth-profiles.json"],
-      changes: ["Migrated auth profile JSON into SQLite."],
-      warnings: [],
-    });
-    const result = await runDoctorRepairSequence({
-      state: { cfg: candidate, candidate, pendingChanges: false, fixHints: [] },
-      doctorFixCommand: "openclaw doctor --fix",
-      env,
-    });
-
-    expect(mocks.maybeRepairOpenAICodexAuthConfig).toHaveBeenCalledWith(candidate, {
-      profileIdMap,
-    });
-    expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
-      cfg: candidate,
-      env,
-      prompter: expect.objectContaining({ confirmAutoFix: expect.any(Function) }),
-      openAICodexAuthProfileIdMap: profileIdMap,
-    });
-    expect(result.openAICodexAuthProfileIdMap).toBe(profileIdMap);
-    expect(mocks.maybeRepairOpenAICodexAuthConfig.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
-    );
   });
 
   it("sanitizes ordered plugin repair changes, warnings, notices, and migration notes", async () => {
@@ -618,6 +598,8 @@ describe("doctor repair sequencing", () => {
       events.push("sqlite-migration");
       return {
         detected: ["auth-profiles.json"],
+        migratedProfileIds: new Set<string>(),
+        blockedProfileIds: new Set<string>(),
         changes: ["Migrated auth profile JSON into SQLite."],
         configChanged: true,
         warnings: [],
@@ -662,7 +644,10 @@ describe("doctor repair sequencing", () => {
 
   it("reports receipt-owned OpenAI auth-provider migration as an auth repair", async () => {
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValueOnce({
+      detected: [],
       changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
+      migratedProfileIds: new Set<string>(),
+      blockedProfileIds: new Set<string>(),
       warnings: [],
     });
 
@@ -764,6 +749,7 @@ describe("doctor repair sequencing", () => {
     const researchPlugin = {
       id: "research-channel",
       source: "/srv/research/.openclaw/extensions/research-channel/openclaw.plugin.json",
+      providers: [],
     };
     const manifestRegistry = { plugins: [researchPlugin], diagnostics: [] };
     mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(manifestRegistry);
@@ -810,8 +796,19 @@ describe("doctor repair sequencing", () => {
     );
   });
 
-  it("installs an external provider before validating configured model references", async () => {
+  it("installs an external provider and migrates auth before validating model references", async () => {
     let mistralInstalled = false;
+    let authMigrated = false;
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
+      authMigrated = true;
+      return {
+        detected: [],
+        migratedProfileIds: new Set<string>(),
+        blockedProfileIds: new Set<string>(),
+        changes: [],
+        warnings: [],
+      };
+    });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(async () => {
       mistralInstalled = true;
       return {
@@ -821,22 +818,27 @@ describe("doctor repair sequencing", () => {
         pluginInventoryChanged: true,
       };
     });
-    mocks.repairStaleAgentModelRefs.mockImplementationOnce((cfg: OpenClawConfig) => ({
-      config: mistralInstalled
-        ? cfg
-        : {
-            ...cfg,
-            agents: {
-              ...cfg.agents,
-              defaults: {
-                ...cfg.agents?.defaults,
-                model: { primary: "openai/gpt-5.6-sol" },
+    mocks.repairStaleAgentModelRefs.mockImplementationOnce((cfg: OpenClawConfig) => {
+      if (!authMigrated) {
+        throw new Error("model route auth requires legacy credential migration");
+      }
+      return {
+        config: mistralInstalled
+          ? cfg
+          : {
+              ...cfg,
+              agents: {
+                ...cfg.agents,
+                defaults: {
+                  ...cfg.agents?.defaults,
+                  model: { primary: "openai/gpt-5.6-sol" },
+                },
               },
             },
-          },
-      changes: mistralInstalled ? [] : ["replaced Mistral model before plugin repair"],
-      warnings: [],
-    }));
+        changes: mistralInstalled ? [] : ["replaced Mistral model before plugin repair"],
+        warnings: [],
+      };
+    });
     const config = {
       plugins: {
         allow: ["mistral"],

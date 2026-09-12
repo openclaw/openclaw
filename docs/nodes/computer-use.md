@@ -12,7 +12,7 @@ Computer use lets the gateway agent see and control a capable paired desktop. El
 
 For [cloud sessions](/gateway/cloud-sessions#desktop-and-computer-control), the tool is bound to the session's own desktop instead of searching paired nodes. Desktop-enabled Crabbox workers provision CUA in the same desktop session shown by the web Desktop panel. Their private computer endpoint is not exposed as an ordinary paired computer, and tool arguments cannot change its node or Gateway.
 
-The agent emits one uniform command, `computer.act`; it cannot choose how a node fulfills it. On macOS, **Settings → General → Capabilities** selects the node-local provider: Peekaboo is the default and preserves the existing in-process coordinate-action path, while CUA uses a driver daemon embedded in `OpenClaw.app`. The app spawns that daemon directly so it inherits OpenClaw's Accessibility and Screen Recording grants, and the app-owned node worker connects through a private socket. Windows and Linux can use the optional, experimental `cua-computer` plugin, which calls the packaged CUA Driver SDK directly.
+The agent emits one uniform command, `computer.act`; it cannot choose how a node fulfills it. On macOS, **Dashboard → Settings → This Mac → Capabilities** selects the node-local provider: Peekaboo is the default and preserves the existing in-process coordinate-action path, while CUA uses a driver daemon embedded in `OpenClaw.app`. The app spawns that daemon directly so it inherits OpenClaw's Accessibility and Screen Recording grants, and the app-owned node worker connects through a private socket. Windows and Linux can use the optional, experimental `cua-computer` plugin, which calls the packaged CUA Driver SDK directly.
 
 Provider selection never falls back per action. Switching providers closes the active execution surface, rotates the provider generation, and re-advertises the node commands. A CUA failure therefore becomes an unavailable result instead of silently running the same action through Peekaboo.
 
@@ -31,7 +31,7 @@ Provider selection never falls back per action. Switching providers closes the a
 
 The built-in `computer` tool takes one action per call. Coordinates are non-negative integer pixels in the most recent screenshot; the node maps them to display points. Coordinate actions must echo the screenshot result's `frameId`, and an explicit `screenIndex` must match that frame. OpenClaw also carries a node-issued display identity from the screenshot into the action, so a display reconnect or geometry change fails closed instead of silently retargeting the same index. These checks reject guessed tokens and tokens from another delivered frame or display. A token is not a freshness guarantee: apps can change pixels on the same display after capture, so take a new screenshot whenever the scene may have changed.
 
-- Reads: `screenshot`.
+- Reads: `screenshot` captures a desktop screen and returns `frameId`. It does not accept window, browser, element, or observation references.
 - Pointer: `left_click`, `right_click`, `middle_click`, `double_click`, `triple_click`, `mouse_move`, `left_click_drag` (with `startCoordinate`), `left_mouse_down`, `left_mouse_up`.
 - Scroll: `scroll` with `scrollDirection` (`up|down|left|right`) and `scrollAmount` (wheel ticks).
 - Keyboard: `type` (text), `key` (combo such as `cmd+shift+t` or `Return`), `hold_key` (`text` combo held for `duration` seconds).
@@ -40,6 +40,8 @@ The built-in `computer` tool takes one action per call. Coordinates are non-nega
 Providers with the v2 window/element family can additionally expose `list_apps`, `list_windows`, `get_accessibility_tree`, `get_cursor_position`, `get_window_state`, `launch_app`, `kill_app`, `bring_to_front`, `set_value`, `zoom`, `escalate_scope`, and `invoke_menu`. The provider descriptor is authoritative; unavailable actions are omitted rather than emulated through another provider.
 
 Window input coordinates follow the observation's `details.coordinateSpace`. CUA reports `image-pixels`: use pixels in the delivered image, including when OpenClaw resized it. Peekaboo reports `global-logical-points`: use desktop logical points. Accessibility element bounds retain their native screen coordinates; prefer `elementRef` when targeting those elements. Browser coordinate inputs use viewport CSS pixels.
+
+For a window image, use `get_window_state` with `windowRef` and `includeScreenshot: true`, then pass the returned `observationId` with window input. With CUA, `includeScreenshot: false` skips capture and refreshes accessibility elements and their references. This opt-out requires an updated node; default and `true` observations remain compatible with older nodes. Use those references for element actions; window pixel input still requires an observation with a delivered image. The native macOS Peekaboo provider rejects `includeScreenshot: false` because its window observations require capture. A desktop `frameId` cannot replace a window observation: the images can use different coordinate spaces. Like `screenshot`, `wait` returns a desktop capture and rejects target and observation references.
 
 The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Bind a discovered native browser window with `get_browser_state`, then use the returned opaque `browserRef`, `pageRef`, observation, and element references. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
 
@@ -73,7 +75,11 @@ CUA creates the Unix socket with mode `0600`, and OpenClaw places it in a random
 
 Loopback is also reachability, not identity: any process on the machine can connect to `127.0.0.1`. A Gateway client therefore does not receive `operator.write` merely because it arrived over loopback. It must authenticate and pass the Gateway's [device pairing and scope approval](/gateway/pairing); without a separately trusted local or shared credential, another already-authorized device must approve the requested operator scope. The driver and its socket never make that decision.
 
-The CUA descriptor advertises window, element, and browser targets; background and foreground delivery; image, accessibility, and browser observations; and recording. Peekaboo remains the default in this release and does not advertise recording.
+The CUA descriptor advertises window, element, and browser targets; background and foreground delivery; image, accessibility, and browser observations; and recording. Peekaboo remains the default provider and does not advertise recording.
+
+CUA desktop input uses the foreground desktop route. `deliveryMode` selects a route only for window-targeted input; switching it on a desktop action does not change how that action is delivered. Desktop results preserve native effect and escalation evidence, identify their desktop scope, and indicate when a requested delivery mode is not applicable. An acknowledged input is not proof that the application responded: verify the intended visible change before repeating it.
+
+The pinned CUA driver supports key taps, not sustained keyboard holds. Its Linux `left_mouse_down` and `left_mouse_up` actions require a background window pixel target with `windowRef` and a current image-bearing `observationId`; desktop and element targets do not support those holds. Use only actions exposed by the selected node. For interactive applications, first verify that movement, activation, or another intended control changes the observed state before attempting a longer task.
 
 #### Browser profiles
 
@@ -84,6 +90,8 @@ Browser targets, pages, page elements, and dialogs are opaque capabilities. Reta
 ### Maintainer live-proof rig
 
 The repository includes a development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway. The macOS path uses the signed app node; the Linux path uses the opt-in `cua-computer` plugin in a real X11 session.
+
+Both paths generate a fresh proof-only token in private config files: `gateway.auth.token` for the isolated Gateway and `gateway.remote.token` for the app or node. The Gateway launches with `--auth token --bind loopback`. The rig clears inherited Gateway credentials, URL/port overrides, and config/state/profile overrides so operator settings cannot replace the proof setup. Tokens never appear in emitted commands or `rig.json`; do not publish the generated configs or the whole scratch directory as proof.
 
 #### macOS
 
@@ -97,7 +105,7 @@ scripts/dev/computer-use-macos-live-rig.sh prepare \
 
 Run the emitted `gateway` and `app` commands in separate terminals. The split config is intentional: the externally launched daemon reads a scratch config with `gateway.mode: "local"`, while the app profile reads `gateway.mode: "remote"`, direct transport, and the daemon's loopback URL. If the app reads local mode, its Port Guardian owns the route instead of joining the external daemon. The rig keeps its validated launch fields in non-executable `rig.json`; later commands reject unknown fields or paths that do not match the scratch/profile layout. It also seeds a dedicated `node` identity, completed onboarding, unpaused state, Computer Control, and the checkout path used to start the debug node worker. There is no separate node-mode toggle.
 
-In a third terminal, rerun the emitted `nodes` command until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor. No operator-device approval step is involved: the loopback gateway silently pairs the rig's CLI identity on its first connect, and the proof runner is admitted as a local backend client without pairing at all. The rig keeps those two identities in separate state directories (`cli-state` and `agent-state`) because a paired operator device is pinned to the scopes of its first connect, and a CLI pairing would otherwise cap the proof client below `operator.write`.
+In a third terminal, rerun the emitted `nodes` command until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor. No operator-device approval step is involved: the read-only CLI does not create an identity in fresh `cli-state`, and the proof token authenticates its loopback operator calls. The proof runner uses the same token as a local backend client in separate `agent-state`, retaining `operator.write`. Node device identity and pairing checks remain enabled; do not copy identities or disable device authentication to bootstrap the rig.
 
 If the node's command surface is still pending approval, take `.pending[0].requestId` from that `nodes` output and run `scripts/dev/computer-use-macos-live-rig.sh approve "$scratch" <request-id>`.
 
@@ -119,6 +127,12 @@ sudo apt-get update
 sudo apt-get install -y at-spi2-core dbus-x11 gir1.2-gtk-3.0 jq openbox python3-gi x11-utils xdotool xvfb
 
 dbus-run-session -- bash
+```
+
+`dbus-run-session -- bash` opens a nested shell, so the block above stops there.
+Run everything below inside that new shell:
+
+```bash
 export DISPLAY=:99 XDG_SESSION_TYPE=x11 NO_AT_BRIDGE=0
 Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp &
 openbox >/tmp/openclaw-cu-openbox.log 2>&1 &
@@ -138,6 +152,8 @@ scripts/dev/computer-use-macos-live-rig.sh proof \
 ```
 
 The result and `window-before.png` / `window-after.png` stay under the scratch directory. A confirmed mutation must preserve the sentinel as the active X11 window and leave the pointer unchanged. An upstream `background_unavailable` or `background_occluded` result is valid refusal evidence only when it remains structured and no foreground retry is attempted. The rig rejects native Wayland even when `DISPLAY` is also present for XWayland; switch to X11 instead of claiming Wayland coverage.
+
+After either proof, stop only the Gateway, app/node, and fixture processes you launched for the rig. Retain only inspected proof results and synthetic captures, then remove the task-owned scratch directory. On macOS, also remove the fresh proof profile directory (`~/.openclaw-<profile>`) and its `ai.openclaw.mac.profile.<profile>` defaults domain. Never clean up the operator profile or Gateway.
 
 ### Windows and Linux (experimental, direct SDK)
 
@@ -175,30 +191,11 @@ To enable the experimental Windows or Linux node fulfiller, which uses the pinne
 
 This fulfiller currently controls only the primary display. `hold_key`, `left_mouse_down`, and `left_mouse_up` are unavailable because the CUA Driver SDK has no desktop-scope held-input contract. Modifier-held clicks, scrolling, and dragging are rejected because the typed desktop methods do not accept modifiers. The `key` action accepts named keys, letters, and modifier combos (for example `cmd+c` or `Return`); digit and punctuation keys are rejected because the driver drops their layout-dependent shift state, so send that text through the `type` action instead. Cancellation is passed to the SDK for each node invocation.
 
-The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its authorization ceiling, trusted session identity, TTLs, and action targets are owned by OpenClaw; model-facing `screen.snapshot` and `computer.act` inputs cannot select a native session or widen its authority. Because the driver reports no stable display identity, frame authorization binds to the trusted session generation plus live primary-display geometry. A new session invalidates outstanding frames, but a same-geometry primary-display substitution inside one session cannot be detected; prefer a stable single-display session for this fulfiller.
+The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its authorization ceiling, trusted session identity, TTLs, and action targets are owned by OpenClaw; model-facing `screen.snapshot` and `computer.act` inputs cannot select a native session or widen its authority. Because the driver reports no stable display identity, frame authorization binds to the trusted session generation plus live primary-display geometry. Lazy SDK loading does not change that generation, so `list_windows` can be the first action in a fresh execution. A new session invalidates outstanding frames, but a same-geometry primary-display substitution inside one session cannot be detected; prefer a stable single-display session for this fulfiller.
 
 On Windows and Linux this is a hard replacement of the former 0.10 daemon/MCP integration: OpenClaw does not spawn a CUA process or proxy an MCP client. macOS deliberately uses the app-owned embedded daemon described above so the driver remains in `OpenClaw.app`'s TCC responsibility chain. Neither path falls back to another provider for an individual action.
 
 The accepted driver record lives with the `cua-computer` package and supplies both the npm native-file digests and the macOS archive digest. Updating OpenClaw updates that record and the SDK packages together. There is no independent Windows/Linux driver updater or rollback directory because there is no separate driver installation on those hosts; roll back by installing the previous known-good OpenClaw package, then rerun the focused doctor check before restarting the node.
-
-### Troubleshooting
-
-The `cua-computer` fulfiller surfaces typed error codes in the tool result and node logs. Common ones:
-
-| Code                                                 | Cause                                                                                                                                                         | Fix                                                                                                                                                                                                      |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `COMPUTER_DRIVER_UNAVAILABLE`                        | The CUA runtime cannot initialize, the macOS app-owned endpoint is absent, or the desktop permissions/session are unavailable.                                | On macOS, verify CUA is selected and the bundled driver is ready; on Windows/Linux, run `openclaw node run` inside the interactive desktop session. Reinstall OpenClaw if the pinned runtime is missing. |
-| `COMPUTER_DRIVER_PACKAGE_MISSING`                    | The pinned SDK package, OS/CPU native package, native library, or Node runtime is absent or unreadable.                                                       | Reinstall OpenClaw on the node host, rerun `openclaw doctor --lint --only cua-computer/driver-artifacts`, then restart the node.                                                                         |
-| `COMPUTER_DRIVER_VERSION_MISMATCH`                   | The SDK package or selected native package does not match the pinned version.                                                                                 | Update or reinstall OpenClaw so both packages come from the same release; rerun the focused doctor check.                                                                                                |
-| `COMPUTER_DRIVER_DIGEST_MISMATCH`                    | A native SDK library or Node runtime is not a regular package file or does not match its pinned SHA-256 digest.                                               | Do not run or replace the file manually. Reinstall OpenClaw, rerun the focused doctor check, then restart the node.                                                                                      |
-| `COMPUTER_DRIVER_PLATFORM_UNSUPPORTED`               | The node host has no native SDK package for the pinned version, such as musl Linux or an unsupported CPU architecture.                                        | Use Windows x64/ARM64 or glibc-based Linux x64/ARM64 for this provider.                                                                                                                                  |
-| `COMPUTER_REFUSED_<code>`                            | The driver refused the action with a structured code such as `background_unavailable`, `background_occluded`, or `foreground_unavailable` (KDE/KWin Wayland). | Bring the target window forward, switch to X11, or use a supported compositor. See the compatibility notes above.                                                                                        |
-| `COMPUTER_STALE_FRAME`                               | The coordinates referenced a screenshot that is no longer current (context compaction, a display geometry change, or a reference-width change).               | Take a fresh `screenshot` before the coordinate action.                                                                                                                                                  |
-| `COMPUTER_STALE_OBSERVATION`                         | A window or browser reference belongs to an older observation, navigation, execution, or driver generation.                                                   | Run `get_window_state` or `get_browser_state` again and retry with the new opaque references.                                                                                                            |
-| `COMPUTER_UNSUPPORTED_ACTION`                        | An action this fulfiller cannot faithfully deliver: `hold_key`, `left_mouse_down`, `left_mouse_up`, or modifier-held click/drag/scroll.                       | Use a supported action. The typed CUA Driver desktop contract has no held-input or modifier argument for these calls.                                                                                    |
-| `COMPUTER_UNSUPPORTED_DISPLAY`                       | A non-primary `screenIndex`, a capture/screen geometry mismatch, or a cursor outside the primary display.                                                     | Drive the primary display only.                                                                                                                                                                          |
-| `COMPUTER_UNSUPPORTED_KEY`                           | A `key` value the driver cannot reproduce reliably: a digit or punctuation key whose shift state is layout-dependent, or an unknown key.                      | Send that text through the `type` action instead.                                                                                                                                                        |
-| `COMPUTER_DRIVER_ERROR` / `COMPUTER_INVALID_REQUEST` | The driver failed without a structured code, or the action arguments were malformed.                                                                          | Check the driver state and retake a screenshot; correct the action arguments.                                                                                                                            |
 
 ## The `computer.act` node command
 
@@ -219,7 +216,7 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
 
 ## Authorization
 
-1. Enable the platform fulfiller: on macOS, **Settings → General → Capabilities → Allow Computer Control** starts enabled, then choose Peekaboo or CUA and grant **Accessibility** and **Screen Recording** under **Settings → Permissions**; on Windows/Linux, follow the experimental `cua-computer` setup above.
+1. Enable the platform fulfiller: on macOS, **Dashboard → Settings → This Mac → Capabilities → Allow Computer Control** starts enabled, then choose Peekaboo or CUA and grant **Accessibility** and **Screen Recording** under **This Mac → Permissions**; on Windows/Linux, follow the experimental `cua-computer` setup above.
 2. Approve the pairing update on the gateway (a new command forces re-pairing).
 3. Expose the tool to the vision-capable agent. For the default `coding` profile:
 
@@ -243,22 +240,69 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 
 - Every layer (tool policy, gateway command policy, pairing, node-app setting, and platform permissions) must agree. On macOS that includes **Allow Computer Control**, Accessibility, and Screen Recording; the native Peekaboo path also requires Event Posting. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental CUA Driver fulfiller passes node cancellation to the SDK for each call.
+- On macOS, capture and input require a verified unlocked desktop. Temporary keep-awake covers an active Computer execution, including background actions, for at most one hour. Manual lock, logout, or unknown state releases assertions and retires the execution; a later unlock requires a new execution. Optional [unattended desktop hosting](/platforms/mac/permissions#desktop-availability-and-keeping-awake) keeps a connected host awake between jobs without changing persistent macOS power or lock settings.
 - CUA recording, replay, browser upload, and browser download paths are node-owned. The model receives only opaque execution-scoped resource handles; traversal, absolute paths, symlink escapes, and helper selection are rejected before driver dispatch.
 - Screenshots are model-only and never auto-sent to chat (issue [#44759](https://github.com/openclaw/openclaw/issues/44759)).
 - Treat screen content as untrusted; it can carry prompt injection.
 
-## Desktop stream troubleshooting
+## Troubleshooting
+
+### CUA Driver error codes
+
+The `cua-computer` fulfiller surfaces typed error codes in the tool result and node logs. Common ones:
+
+| Code                                                 | Cause                                                                                                                                                         | Fix                                                                                                                                                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COMPUTER_DRIVER_UNAVAILABLE`                        | The CUA runtime cannot initialize, the macOS app-owned endpoint is absent, or the desktop permissions/session are unavailable.                                | On macOS, verify CUA is selected and the bundled driver is ready; on Windows/Linux, run `openclaw node run` inside the interactive desktop session. Reinstall OpenClaw if the pinned runtime is missing. |
+| `COMPUTER_DRIVER_PACKAGE_MISSING`                    | The pinned SDK package, OS/CPU native package, native library, or Node runtime is absent or unreadable.                                                       | Reinstall OpenClaw on the node host, rerun `openclaw doctor --lint --only cua-computer/driver-artifacts`, then restart the node.                                                                         |
+| `COMPUTER_DRIVER_VERSION_MISMATCH`                   | The SDK package or selected native package does not match the pinned version.                                                                                 | Update or reinstall OpenClaw so both packages come from the same release; rerun the focused doctor check.                                                                                                |
+| `COMPUTER_DRIVER_DIGEST_MISMATCH`                    | A native SDK library or Node runtime is not a regular package file or does not match its pinned SHA-256 digest.                                               | Do not run or replace the file manually. Reinstall OpenClaw, rerun the focused doctor check, then restart the node.                                                                                      |
+| `COMPUTER_DRIVER_PLATFORM_UNSUPPORTED`               | The node host has no native SDK package for the pinned version, such as musl Linux or an unsupported CPU architecture.                                        | Use Windows x64/ARM64 or glibc-based Linux x64/ARM64 for this provider.                                                                                                                                  |
+| `COMPUTER_REFUSED_<code>`                            | The driver refused the action with a structured code such as `background_unavailable`, `background_occluded`, or `foreground_unavailable` (KDE/KWin Wayland). | Bring the target window forward, switch to X11, or use a supported compositor. See the compatibility notes above.                                                                                        |
+| `COMPUTER_STALE_FRAME`                               | The coordinates referenced a screenshot that is no longer current (context compaction, a display geometry change, or a reference-width change).               | Take a fresh `screenshot` before the coordinate action.                                                                                                                                                  |
+| `COMPUTER_STALE_OBSERVATION`                         | A window or browser reference belongs to an older observation, navigation, execution, or driver generation.                                                   | Run `get_window_state` or `get_browser_state` again and retry with the new opaque references.                                                                                                            |
+| `COMPUTER_UNSUPPORTED_ACTION`                        | An action this fulfiller cannot faithfully deliver: `hold_key`, `left_mouse_down`, `left_mouse_up`, or modifier-held click/drag/scroll.                       | Use a supported action. The typed CUA Driver desktop contract has no held-input or modifier argument for these calls.                                                                                    |
+| `COMPUTER_UNSUPPORTED_DISPLAY`                       | A non-primary `screenIndex`, a capture/screen geometry mismatch, or a cursor outside the primary display.                                                     | Drive the primary display only.                                                                                                                                                                          |
+| `COMPUTER_UNSUPPORTED_KEY`                           | A `key` value the driver cannot reproduce reliably: a digit or punctuation key whose shift state is layout-dependent, or an unknown key.                      | Send that text through the `type` action instead.                                                                                                                                                        |
+| `COMPUTER_DRIVER_ERROR` / `COMPUTER_INVALID_REQUEST` | The driver failed without a structured code, or the action arguments were malformed.                                                                          | Check the driver state and retake a screenshot; correct the action arguments.                                                                                                                            |
+
+<a id="desktop-stream-troubleshooting" />
+
+### Desktop stream
 
 For a disconnected web Desktop panel, check the [Gateway logs](/gateway/logging) for `desktop observer closed` and `node stream closed`, and the node logs for `node stream closed`. The records separate the first local cleanup `trigger` from the observed WebSocket `closeCode`; observer records also include the requested `cleanupCode`.
 
 A `closeCode` of `1006` alone does not identify a network or proxy failure: intentional owner teardown can produce it too. Compare the trigger and available source/connection identities across the Gateway and node. These records omit peer close-reason text, observer tokens, attach tickets, credentials, and desktop payloads.
 
-## macOS permission troubleshooting
+### macOS desktop availability
 
-The Computer Control status in **Settings → General → Capabilities** checks Accessibility, Event Posting, and Screen Recording separately. Screen capture can work while input remains denied because macOS stores those grants in separate TCC buckets.
+If the Desktop panel reports **This Mac is locked** or says its lock state is
+unknown, check **Dashboard → Settings → This Mac → Desktop availability**.
+OpenClaw reports native session state independently of optional activity sharing;
+neither a connected node nor captured wallpaper proves an unlocked desktop.
+
+Screen Sharing remains connected for normal sign-in. Unlock the Mac through its
+normal login screen or locally, then start a new Computer execution; the old
+execution does not resume. If macOS omits its secure login controls from the
+viewer, use a supported local or remote login path. OpenClaw's availability
+reporting does not change how macOS captures that secure screen.
+
+For a dedicated Mac that should stay awake between jobs, explicitly enable
+**Unattended desktop hosting** in **Dashboard → Settings → This Mac**. It remains
+subject to the current connection, hosting, and unlocked-session requirements.
+Screen Sharing may request an immediate lock when its last viewer disconnects;
+OpenClaw honors that lock even when unattended desktop hosting is enabled. The
+web Desktop viewer does not create an OpenClaw keep-awake execution.
+See [Desktop availability and keeping awake](/platforms/mac/permissions#desktop-availability-and-keeping-awake).
+
+<a id="macos-permission-troubleshooting" />
+
+### macOS permissions
+
+The Computer Control status in **Dashboard → Settings → This Mac → Capabilities** checks Accessibility, Event Posting, and Screen Recording separately. Screen capture can work while input remains denied because macOS stores those grants in separate TCC buckets.
 
 If the status says **Accessibility grant may be stale**, OpenClaw may already appear enabled under **System Settings → Privacy & Security → Accessibility** even though macOS rejects it. This happens when the Accessibility entry is pinned to an older app build. Select OpenClaw in that list, remove it with **−**, then re-add `/Applications/OpenClaw.app`. Quit and reopen OpenClaw after changing the grant because macOS can cache Accessibility trust for the lifetime of the process.
 
 ## Relationship to other desktop-control paths
 
-This is the agent-driven path. See [Peekaboo bridge](/platforms/mac/peekaboo) for how it relates to the PeekabooBridge host, Codex Computer Use, and the direct `cua-driver` MCP.
+This is the agent-driven path. See [Peekaboo bridge](/platforms/mac/peekaboo) for how it relates to the PeekabooBridge host, [Codex Computer Use](/plugins/codex-computer-use), and the direct `cua-driver` MCP.

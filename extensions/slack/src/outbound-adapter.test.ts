@@ -1,5 +1,8 @@
 // Slack tests cover outbound adapter plugin behavior.
-import { presentationToInteractiveControlsReply } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  presentationToInteractiveControlsReply,
+  renderPresentationForDelivery,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -8,7 +11,8 @@ vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
 }));
 
-const { slackOutbound } = await import("./outbound-adapter.js");
+const { slackPlugin } = await import("./channel.js");
+const slackOutbound = slackPlugin.outbound!;
 
 function jsonRoundTrip(value: unknown): unknown {
   // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
@@ -28,6 +32,191 @@ describe("slackOutbound", () => {
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
   });
+
+  it.each([
+    "none",
+    "raw",
+    "native",
+    "rich_text",
+    "legacy",
+    "empty",
+    "whitespace",
+    "rewritten",
+  ] as const)(
+    "preserves literal fallback and %s companions through shared presentation rendering",
+    async (variant) => {
+      const payload = {
+        text:
+          variant === "empty"
+            ? ""
+            : variant === "whitespace"
+              ? "  "
+              : variant === "rich_text"
+                ? "Run /inspect *literal*, then check the full report.\n\nKeep this continuation, including <literal> & punctuation."
+                : "Run /inspect *literal*, then check the full report.",
+        presentationTextMode: "fallback" as const,
+        presentation: {
+          title: "Inspect",
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                { label: "Inspect", action: { type: "command" as const, command: "/inspect" } },
+              ],
+            },
+          ],
+        },
+        ...(variant === "raw" || variant === "native"
+          ? {
+              channelData: {
+                slack: {
+                  blocks:
+                    variant === "native"
+                      ? [
+                          {
+                            type: "image",
+                            image_url: "https://example.com/companion.png",
+                            alt_text: "Companion",
+                          },
+                        ]
+                      : [{ type: "section", text: { type: "plain_text", text: "Companion" } }],
+                },
+              },
+            }
+          : {}),
+        ...(variant === "legacy"
+          ? { interactive: { blocks: [{ type: "text" as const, text: "Companion" }] } }
+          : {}),
+        ...(variant === "rich_text"
+          ? {
+              channelData: {
+                slack: {
+                  blocks: [
+                    {
+                      type: "rich_text",
+                      elements: [
+                        {
+                          type: "rich_text_section",
+                          elements: [{ type: "text", text: "Companion" }],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            }
+          : {}),
+      };
+      let normalized = slackOutbound.normalizePayload
+        ? slackOutbound.normalizePayload({ payload, cfg })
+        : payload;
+      if (variant === "rewritten" && normalized) {
+        const rewritten = {
+          ...normalized,
+          text: "Run /inspect *updated*, then check the new report.",
+        };
+        normalized = slackOutbound.normalizePayload
+          ? slackOutbound.normalizePayload({ payload: rewritten, cfg })
+          : rewritten;
+      }
+      if (!normalized) {
+        throw new Error("Authored fallback must not be suppressed");
+      }
+      const rendered = await renderPresentationForDelivery(
+        {
+          presentationCapabilities: slackOutbound.presentationCapabilities,
+          renderPresentation: (adapted) =>
+            slackOutbound.renderPresentation!({
+              payload: adapted,
+              presentation: adapted.presentation,
+              ctx: { cfg, to: "C123", text: "", payload: adapted },
+            }),
+        },
+        normalized,
+      );
+      sendMessageSlackMock.mockResolvedValue({ messageId: "m-fallback", channelId: "C123" });
+      await slackOutbound.sendPayload!({
+        cfg,
+        to: "C123",
+        text: rendered.text ?? "",
+        payload: rendered,
+      });
+
+      const literalCalls = sendMessageSlackMock.mock.calls.filter(
+        (call) => call[2]?.textIsSlackPlainText === true,
+      );
+      expect(literalCalls).toHaveLength(1);
+      expect(literalCalls[0]?.[1]).toBe(normalized.text?.trim() || "- Inspect: `/inspect`");
+      expect(literalCalls[0]?.[2]?.blocks).toBeUndefined();
+      if (
+        variant === "raw" ||
+        variant === "native" ||
+        variant === "rich_text" ||
+        variant === "legacy"
+      ) {
+        expect(sendMessageSlackMock.mock.calls.map((call) => call[1])).toContain("Companion");
+      }
+      if (variant === "rich_text") {
+        expect(
+          sendMessageSlackMock.mock.calls.flatMap((call) => call[2]?.blocks ?? []),
+        ).toContainEqual(payload.channelData?.slack.blocks[0]);
+      }
+    },
+  );
+
+  it.each(["", "Policy replacement"])(
+    "removes saved fallback after policy strips presentation and sets text to %j",
+    async (text) => {
+      const channelData = {
+        external: { correlation: "request-42" },
+        slack: {
+          blocks: [{ type: "section", text: { type: "plain_text", text: "Companion" } }],
+          policyLabel: "retained",
+        },
+      };
+      const normalized = slackOutbound.normalizePayload!({
+        cfg,
+        payload: {
+          text: "Old authored fallback must not return",
+          presentationTextMode: "fallback",
+          presentation: { title: "Old presentation", blocks: [{ type: "divider" }] },
+          channelData,
+        },
+      });
+      if (!normalized) {
+        throw new Error("Authored fallback must not be suppressed");
+      }
+      expect(normalized.channelData?.slack).toHaveProperty(
+        "authoredPresentationText",
+        "Old authored fallback must not return",
+      );
+      const {
+        presentation: _presentation,
+        presentationTextMode: _presentationTextMode,
+        ...policyPayload
+      } = normalized;
+      const cleared = slackOutbound.normalizePayload!({
+        cfg,
+        payload: { ...policyPayload, text },
+      });
+      if (!cleared) {
+        throw new Error("Companion blocks must not be suppressed");
+      }
+
+      expect(cleared.channelData).toEqual(channelData);
+      expect(cleared.channelData?.slack).not.toHaveProperty("authoredPresentationText");
+      sendMessageSlackMock.mockResolvedValue({ messageId: "m-policy", channelId: "C123" });
+      await slackOutbound.sendPayload!({ cfg, to: "C123", text, payload: cleared });
+
+      const sentText = sendMessageSlackMock.mock.calls.map((call) => call[1]).join("\n");
+      expect(sentText).toContain("Companion");
+      expect(sentText).not.toContain("Old authored fallback");
+      expect(sentText).not.toContain("Old presentation");
+      if (text) {
+        expect(sentText).toContain(text);
+      }
+    },
+  );
 
   it("sends mirrored question controls once at the Slack message block limit", async () => {
     sendMessageSlackMock.mockResolvedValue({ messageId: "171.001", channelId: "C123" });

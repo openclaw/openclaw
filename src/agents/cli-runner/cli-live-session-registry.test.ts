@@ -4,6 +4,9 @@ import type {
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
+import { formatSkillsForPromptCore } from "../../skills/loading/skill-contract.js";
+import { materializeSkill } from "../../skills/loading/skill-materializer.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { hasModelFallbackStop } from "../failover-error.js";
@@ -32,6 +35,7 @@ async function createOwner(
     deferExit?: boolean;
     cleanup?: () => Promise<void>;
     systemPrompt?: string;
+    skillsSnapshot?: SkillSnapshot;
     argv0?: string;
     capture?: { token: string; key: string };
     requiredGeneration?: string;
@@ -54,6 +58,7 @@ async function createOwner(
     "main",
     "registry-test",
   );
+  context.params.skillsSnapshot = options.skillsSnapshot;
   admissions.push(admission);
   context.params.admittedRunContext = await admission.admit("plugin-harness");
   const controller = new AbortController();
@@ -265,9 +270,7 @@ describe("generic plugin-owned live session registry", () => {
     expect(owner.controller.signal.aborted).toBe(false);
     expect(() => owner.capability.current()).toThrow("caller is no longer active");
     expect(() => owner.capability.activate(owner.session)).toThrow("caller is no longer active");
-    await expect(restartCliLiveSession(owner.context)).rejects.toThrow(
-      "caller is no longer active",
-    );
+    await expect(owner.capability.restart()).rejects.toThrow("caller is no longer active");
     expect(owner.close).not.toHaveBeenCalled();
     await closeCliLiveSession(owner.context, "restart");
     expect(owner.close).toHaveBeenCalledOnce();
@@ -286,7 +289,7 @@ describe("generic plugin-owned live session registry", () => {
       });
       owner.register();
       const restarting = await createOwner({ sessionId: owner.sessionId });
-      const run = restartCliLiveSession(restarting.context);
+      const run = restarting.capability.restart();
       const observed = run.then(
         () => "restarted",
         (error: unknown) => error,
@@ -341,7 +344,7 @@ describe("generic plugin-owned live session registry", () => {
         expect(cleanupScope.outcome).toBe("uncertain");
         const next = await createOwner({ sessionId: owner.sessionId });
         next.context.params.oneShotCliRun = true;
-        const nextRestart = restartCliLiveSession(next.context).then(
+        const nextRestart = next.capability.restart().then(
           () => undefined,
           (error: unknown) => error,
         );
@@ -368,7 +371,7 @@ describe("generic plugin-owned live session registry", () => {
     original.register();
     const next = await createOwner({ sessionId: original.sessionId });
     let settled = false;
-    const restarting = restartCliLiveSession(next.context).then(() => {
+    const restarting = next.capability.restart().then(() => {
       settled = true;
     });
     original.capability.remove(original.session);
@@ -435,6 +438,117 @@ describe("generic plugin-owned live session registry", () => {
       expect(() => changed.capability.current()).toThrow(
         expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
       );
+      expect(original.close).not.toHaveBeenCalled();
+      expect(original.capability.current()).toBe(original.session);
+    },
+  );
+
+  it("refuses plugin restart when the exact live generation is required", async () => {
+    const original = await createOwner({ generation: "required-live-process" });
+    original.register();
+    const resumed = await createOwner({
+      sessionId: original.sessionId,
+      requiredGeneration: original.session.generation,
+    });
+    expect(resumed.capability.current()).toBe(original.session);
+    await expect(resumed.capability.restart()).rejects.toMatchObject({
+      reason: "session_expired",
+      code: "cli_live_session_changed",
+    });
+    expect(original.close).not.toHaveBeenCalled();
+    expect(original.capability.current()).toBe(original.session);
+  });
+
+  it.each([
+    {
+      change: "refresh epoch with identical bytes",
+      identity: "known",
+      body: "Before",
+      version: 2,
+      reusable: true,
+    },
+    {
+      change: "body at the same path and epoch",
+      identity: "known",
+      body: "After",
+      version: 1,
+      reusable: false,
+    },
+    {
+      change: "body and refresh epoch",
+      identity: "known",
+      body: "After",
+      version: 2,
+      reusable: false,
+    },
+    {
+      change: "external snapshot without a digest",
+      identity: "missing",
+      body: "Before",
+      version: 2,
+      reusable: false,
+    },
+    {
+      change: "external snapshot with an empty digest",
+      identity: "empty-digest",
+      body: "Before",
+      version: 2,
+      reusable: false,
+    },
+    {
+      change: "unprepared snapshot refresh epoch",
+      identity: "unprepared",
+      body: "Before",
+      version: 2,
+      reusable: false,
+    },
+    {
+      change: "known-empty snapshot refresh epoch",
+      identity: "empty",
+      body: "Before",
+      version: 2,
+      reusable: true,
+    },
+  ] as const)(
+    "preserves required-generation skill identity after $change",
+    async ({ identity, body, version, reusable }) => {
+      const snapshot = (instructions: string, epoch: number): SkillSnapshot => {
+        const skill = materializeSkill({
+          content: `---\nname: procedure\ndescription: Review changes\n---\n# Procedure\n${instructions}\n`,
+          frontmatter: { name: "procedure", description: "Review changes" },
+          name: "procedure",
+          description: "Review changes",
+          filePath: "/workspace/skills/procedure/SKILL.md",
+          baseDir: "/workspace/skills/procedure",
+          source: "test",
+          sourceOptions: { source: "test" },
+        });
+        if (identity === "missing" || identity === "empty-digest") {
+          skill.contentHash = identity === "missing" ? undefined : "";
+        }
+        return {
+          prompt: identity === "empty" ? "" : formatSkillsForPromptCore([skill]),
+          skills: identity === "empty" ? [] : [{ name: skill.name }],
+          resolvedSkills:
+            identity === "unprepared" ? undefined : identity === "empty" ? [] : [skill],
+          version: epoch,
+        };
+      };
+      const original = await createOwner({ skillsSnapshot: snapshot("Before", 1) });
+      original.register();
+      const resumed = await createOwner({
+        sessionId: original.sessionId,
+        requiredGeneration: original.session.generation,
+        skillsSnapshot: snapshot(body, version),
+      });
+
+      if (reusable) {
+        expect(resumed.capability.current()).toBe(original.session);
+      } else {
+        expect(() => resumed.capability.current()).toThrow(
+          expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
+        );
+      }
       expect(original.close).not.toHaveBeenCalled();
       expect(original.capability.current()).toBe(original.session);
     },

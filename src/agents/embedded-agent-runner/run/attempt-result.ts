@@ -10,7 +10,10 @@ import {
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "../../failover/message-patterns.js";
+import {
+  INCOMPLETE_ASSISTANT_STREAM_RE,
+  TERMINATED_TRANSPORT_MESSAGE_RE,
+} from "../../failover/message-patterns.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
@@ -36,12 +39,16 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 export function createAttemptCarryover() {
   let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  let heartbeatToolResponse: EmbeddedRunAttemptResult["heartbeatToolResponse"];
   let modelAttempt: AgentRuntimeModelAttempt | undefined;
   return {
     apply(
       attempt: Pick<
         EmbeddedRunAttemptResult,
-        "latestMcpAppChannelView" | "latestMcpConnectAction" | "modelAttempt"
+        | "latestMcpAppChannelView"
+        | "latestMcpConnectAction"
+        | "heartbeatToolResponse"
+        | "modelAttempt"
       >,
     ): void {
       modelAttempt = attempt.modelAttempt;
@@ -49,6 +56,8 @@ export function createAttemptCarryover() {
       attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
       attempt.latestMcpConnectAction = latestMcpConnectAction;
+      heartbeatToolResponse = attempt.heartbeatToolResponse ?? heartbeatToolResponse;
+      attempt.heartbeatToolResponse = heartbeatToolResponse;
     },
     get modelAttempt() {
       return modelAttempt;
@@ -117,7 +126,11 @@ function isTransientSettledTurnFailure(failure: unknown): boolean {
     typeof failure.message === "string"
       ? failure.message.trim()
       : "";
-  return INCOMPLETE_ASSISTANT_STREAM_RE.test(message);
+  // A projected bare `terminated` can lack a retryable code. Keep settled tools
+  // eligible for the existing tool-free finalizer.
+  return (
+    INCOMPLETE_ASSISTANT_STREAM_RE.test(message) || TERMINATED_TRANSPORT_MESSAGE_RE.test(message)
+  );
 }
 
 function normalizeEmbeddedAttemptToolMetas(
@@ -190,13 +203,10 @@ export function completeEmbeddedAttemptResult(
   const { sessionRuntime, bootstrap, systemPrompt } = input.prepared;
   const {
     agentSession: { clientToolCallSlots, hasDeliveredSourceReply, hookRunner },
-    cacheTrace,
     trajectoryRecorder,
-    transport: { streamStrategy },
   } = sessionRuntime;
   const { subscription, deferredLifecycleOwner } = input.preparedStreamRuntime.stream;
   const { bootstrapPromptWarning } = bootstrap;
-  const promptCacheChangesForTurn = prompt.promptCacheChangesForTurn;
   const hookAgentId = input.setup.sessionAgentId;
   // Output hooks can reenter the runtime; project only the state settled before they run.
   const state = {
@@ -251,45 +261,6 @@ export function completeEmbeddedAttemptResult(
     toolMetas,
   } = subscription;
   const toolMetasNormalized = normalizeEmbeddedAttemptToolMetas(toolMetas);
-
-  if (input.preparedStreamRuntime.cache.observabilityEnabled) {
-    const cacheBreak = settled.cacheBreak;
-    if (cacheBreak) {
-      const changeSummary =
-        cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-        "no tracked cache input change";
-      log.warn(
-        `[prompt-cache] cache read dropped ${cacheBreak.previousCacheRead} -> ${cacheBreak.cacheRead} ` +
-          `for ${attempt.provider}/${attempt.modelId} via ${streamStrategy}; ${changeSummary}`,
-      );
-      cacheTrace?.recordStage("cache:result", {
-        options: {
-          previousCacheRead: cacheBreak.previousCacheRead,
-          cacheRead: cacheBreak.cacheRead,
-          changes: cacheBreak.changes?.map((change) => ({
-            code: change.code,
-            detail: change.detail,
-          })),
-        },
-      });
-    } else if (cacheTrace && promptCacheChangesForTurn) {
-      cacheTrace.recordStage("cache:result", {
-        note: "state changed without a cache-read break",
-        options: {
-          cacheRead: state.attemptUsage?.cacheRead ?? 0,
-          changes: promptCacheChangesForTurn.map((change) => ({
-            code: change.code,
-            detail: change.detail,
-          })),
-        },
-      });
-    } else if (cacheTrace) {
-      cacheTrace.recordStage("cache:result", {
-        note: "stable cache inputs",
-        options: { cacheRead: state.attemptUsage?.cacheRead ?? 0 },
-      });
-    }
-  }
 
   if (
     attempt.operation !== "settled-tool-finalization" &&

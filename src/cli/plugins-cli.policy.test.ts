@@ -6,11 +6,14 @@ import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-ow
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   applyExclusiveSlotSelectionMock,
   createTestInstalledPluginIndex,
   enablePluginInConfigMock,
+  resolvePluginLifecycleGatewayMock,
+  pluginLifecycleGatewayMock,
   loadPluginManifestRegistryMock,
   pluginCliConfigMock,
   replaceConfigFileMock,
@@ -166,6 +169,60 @@ describe("plugins cli policy mutations", () => {
     return config.plugins.entries;
   }
 
+  it.each(["enable", "disable"])(
+    "applies online %s through the running owner without a local config write",
+    async (command) => {
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      pluginLifecycleGatewayMock.mockResolvedValue({
+        plugin: { id: "alpha" },
+        runtime: { generation: 2 },
+      });
+      await runPluginsCommand(["plugins", command, "alpha"]);
+      expect(pluginLifecycleGatewayMock.mock.calls[0]?.slice(0, 2)).toEqual([
+        "plugins.setEnabled",
+        {
+          pluginId: "alpha",
+          enabled: command === "enable",
+          ...(command === "enable" ? { allowlistPolicy: "preserve" } : {}),
+        },
+      ]);
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"])(
+    "reloads one CLI-selected plugin through the cohort wire contract (%s)",
+    async (mode) => {
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      pluginLifecycleGatewayMock.mockResolvedValue({
+        ok: true,
+        pluginIds: ["alpha"],
+        restartRequired: false,
+        runtime: { operationId: "reload-alpha", generation: 2, pluginIds: ["alpha"] },
+      });
+      await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
+        await runPluginsCommand(["plugins", "reload", "alpha", "--accept-capabilities"]);
+      });
+      expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
+        "plugins.reload",
+        { plugins: [{ pluginId: "alpha" }] },
+        expect.any(Function),
+      );
+      expect(pluginsCliRuntimeLogs).toContain('Reloaded plugin "alpha" (generation 2).');
+      expect(configWriteMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses offline reload without modifying config or dispatching a mutation", async () => {
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(null);
+    await expect(runPluginsCommand(["plugins", "reload", "alpha"])).rejects.toThrow(
+      "The Gateway is not running. Start it before reloading a plugin.",
+    );
+    expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+  });
+
   it("refreshes the persisted plugin registry after enabling a plugin", async () => {
     const sourceConfig = {} as OpenClawConfig;
     const enabledConfig = {
@@ -181,11 +238,12 @@ describe("plugins cli policy mutations", () => {
     await runPluginsCommand(["plugins", "enable", "alpha"]);
 
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig: enabledConfig,
+      sourceConfig: enabledConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
+        assertConfigPathForWrite: expect.any(Function),
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
     expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
@@ -403,11 +461,12 @@ describe("plugins cli policy mutations", () => {
     const entries = requirePluginEntries(nextConfig);
     expect(entries.alpha).toEqual({ enabled: false });
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig,
+      sourceConfig: nextConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
+        assertConfigPathForWrite: expect.any(Function),
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -437,11 +496,12 @@ describe("plugins cli policy mutations", () => {
       await runPluginsCommand(["plugins", "enable", alias]);
 
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
-        nextConfig: enabledConfig,
+        sourceConfig: enabledConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
+          assertConfigPathForWrite: expect.any(Function),
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
       expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     },
@@ -466,11 +526,12 @@ describe("plugins cli policy mutations", () => {
       expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
-        nextConfig,
+        sourceConfig: nextConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
+          assertConfigPathForWrite: expect.any(Function),
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
     },
   );

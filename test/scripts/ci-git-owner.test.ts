@@ -75,22 +75,41 @@ function createAncestryFixture(options: {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-ancestry-"));
   const origin = join(root, "origin.git");
   fixtureGit(root, ["init", "--quiet", "--bare", origin]);
-  const tree = fixtureGit(root, [`--git-dir=${origin}`, "mktree"], "");
-  const sourceRoot = fixtureCommit(origin, tree, undefined, "source root");
-  const targetRoot = options.related
-    ? sourceRoot
-    : fixtureCommit(origin, tree, undefined, "target root");
+  const commits: string[] = [];
+  const sourceRef = "refs/heads/release-source";
+  const targetRef = "refs/heads/main";
+  const commit = (ref: string, parent: number | undefined, label: string) => {
+    const mark = commits.length + 1;
+    const message = `${label}\n`;
+    commits.push(`commit ${ref}
+mark :${mark}
+committer fixture <fixture@example.invalid> ${mark} +0000
+data ${Buffer.byteLength(message)}
+${message}${parent ? `from :${parent}\n` : ""}
+`);
+    return mark;
+  };
+  const sourceRoot = commit(sourceRef, undefined, "source root");
+  const targetRoot = options.related ? sourceRoot : commit(targetRef, undefined, "target root");
   let source = sourceRoot;
   for (let index = 0; index < options.sourceDistance; index++) {
-    source = fixtureCommit(origin, tree, source, `source ${String(index)}`);
+    source = commit(sourceRef, source, `source ${String(index)}`);
   }
   let target = targetRoot;
   for (let index = 0; index < options.targetDistance; index++) {
-    target = fixtureCommit(origin, tree, target, `target ${String(index)}`);
+    target = commit(targetRef, target, `target ${String(index)}`);
   }
-  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/release-source", source]);
-  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/main", target]);
-  return { origin, root, source, target };
+  fixtureGit(
+    origin,
+    ["fast-import", "--quiet"],
+    `${commits.join("")}reset ${sourceRef}\nfrom :${source}\n\nreset ${targetRef}\nfrom :${target}\n\n`,
+  );
+  return {
+    origin,
+    root,
+    source: fixtureGit(origin, ["rev-parse", sourceRef]),
+    target: fixtureGit(origin, ["rev-parse", targetRef]),
+  };
 }
 
 function createProvisionalMergeBaseFixture(): AncestryFixture & { base: string } {
@@ -314,6 +333,12 @@ exit "$status"`,
   );
   try {
     const checkout = cloneAncestrySource(fixture, "checkout");
+    fixtureGit(checkout, [
+      "config",
+      "--add",
+      "remote.origin.fetch",
+      "+refs/heads/*:refs/remotes/origin/*",
+    ]);
     expectPolicySuccess(
       runReleaseAncestry(checkout, "merge-base", {
         MOVE_MARKER: marker,
@@ -328,6 +353,96 @@ exit "$status"`,
       moved,
     );
     expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt(
+  "hydrates a frozen target through its branch when detached wants cannot deepen",
+  () => {
+    const fixture = createAncestryFixture({
+      sourceDistance: 8,
+      targetDistance: 220,
+      related: true,
+    });
+    const proxy = writeGitProxy(
+      fixture,
+      "detached-target-no-deepen-git",
+      `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* && " $* " == *" +${fixture.target}:refs/remotes/origin/main "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+    );
+    try {
+      const checkout = cloneAncestrySource(fixture, "checkout");
+      expectPolicySuccess(
+        runReleaseAncestry(checkout, "merge-base", {
+          PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+          REAL_GIT: proxy.realGit,
+        }),
+        "merge-base",
+      );
+      expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  },
+);
+
+releasePolicyIt("hydrates a divergent release source through its canonical branch", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 220,
+    targetDistance: 8,
+    related: true,
+  });
+  const proxy = writeGitProxy(
+    fixture,
+    "detached-source-no-deepen-git",
+    `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* && " $* " == *" +${fixture.source}:refs/remotes/origin/release-ancestry-source "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+  );
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(
+      runReleaseAncestry(checkout, "merge-base", {
+        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+        REAL_GIT: proxy.realGit,
+        RELEASE_ANCESTRY_SOURCE_REF: "refs/heads/release-source",
+      }),
+      "merge-base",
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("hydrates each release ancestry branch independently", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 220,
+    targetDistance: 8,
+    related: true,
+  });
+  const proxy = writeGitProxy(
+    fixture,
+    "independent-branch-hydration-git",
+    `if [[ " $* " == *" fetch "* && " $* " == *" --deepen="* && " $* " == *" +refs/heads/release-source:refs/remotes/origin/release-ancestry-source "* && " $* " == *" +refs/heads/main:refs/remotes/origin/release-ancestry-target-hydration "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+  );
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(
+      runReleaseAncestry(checkout, "merge-base", {
+        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+        REAL_GIT: proxy.realGit,
+        RELEASE_ANCESTRY_SOURCE_REF: "refs/heads/release-source",
+      }),
+      "merge-base",
+    );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
@@ -651,7 +766,6 @@ linuxIt.each([
       action: "ensure-base-commit",
       baseAvailableAfter: 1,
       fetchResults: [result],
-      realClock: true,
       realDrain: true,
       scenario: "scenario" in entry ? entry.scenario : undefined,
       cancelDuringCleanup: "cancelDuringCleanup" in entry,
@@ -1188,25 +1302,38 @@ posixIt.each([124, 125, 143])(
     const report = await publisherRun({
       gitFault: { match: "^push ", code, output: "GH013 repository rule violations\n" },
     });
-    expect(report.code, report.output).toBe(code);
-    expect(report.pushes).toHaveLength(1);
-    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(2);
-    expect(report.output).toContain("refusing a doomed retry");
-    expect(report.pushLog).toBe("GH013 repository rule violations\n");
+    expect(report.code, report.output).toBe(code === 124 ? 0 : code);
+    expect(report.pushes).toHaveLength(code === 124 ? 2 : 1);
+    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(
+      code === 124 ? 3 : 2,
+    );
+    if (code === 124) {
+      expect(report.output).toContain("retrying once under the same lease");
+      expect(report.githubSummary).toContain("Generated pull request:");
+    } else {
+      expect(report.output).toContain("refusing a doomed retry");
+      expect(report.pushLog).toBe("GH013 repository rule violations\n");
+    }
     expect(report.authHeaderPresent).toBe(false);
-    expect(report.githubSummary).toBe("");
+    if (code !== 124) {
+      expect(report.githubSummary).toBe("");
+    }
   },
   55_000,
 );
 
 posixIt.each(["fetch", "ls-remote", "push"])(
-  "generated publisher %s timeout has one attempt and no general retry",
+  "generated publisher %s timeout has bounded recovery",
   async (operation) => {
     const report = await publisherRun({ gitFault: { match: `^${operation} `, code: "hang" } });
-    expect(report.code, report.output).toBe(124);
+    expect(report.code, report.output).toBe(operation === "push" ? 0 : 124);
     expect(report.fetches).toHaveLength(1);
-    expect(report.pushes).toHaveLength(operation === "push" ? 1 : 0);
-    expect(report.githubSummary).toBe("");
+    expect(report.pushes).toHaveLength(operation === "push" ? 2 : 0);
+    expect(report.githubSummary).toBe(
+      operation === "push"
+        ? "Generated pull request: https://github.com/openclaw/openclaw/pull/1\n"
+        : "",
+    );
     expect(report.authHeaderPresent).toBe(false);
   },
   55_000,
@@ -1281,6 +1408,22 @@ posixIt.each([0, 2, 23, 125, 143, "hang", "cleanup-failure", "cancel"] as const)
         expect(report.output).not.toContain("Unable to determine");
       }
     }
+  },
+  55_000,
+);
+
+posixIt(
+  "generated publisher retries one timed-out push under the unchanged lease",
+  async () => {
+    const report = await publisherRun({
+      gitFault: { match: "^push ", occurrence: 1, code: "hang" },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.pushes).toHaveLength(2);
+    expect(report.pushes[0]?.args).toEqual(report.pushes[1]?.args);
+    expect(report.publication?.generatedA).toBe("desired-a");
+    expect(report.githubSummary).toContain("Generated pull request:");
+    expect(report.output).toContain("retrying once under the same lease");
   },
   55_000,
 );

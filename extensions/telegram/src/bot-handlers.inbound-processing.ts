@@ -26,6 +26,7 @@ import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js
 import type {
   RegisterTelegramHandlerParams,
   TelegramInboundDisposition,
+  TelegramPendingInboundTarget,
 } from "./bot-handlers.types.js";
 import type {
   TelegramAmbientTranscriptWatermark,
@@ -48,6 +49,7 @@ import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 export interface TelegramInboundProcessing {
+  cancelPending: (target: TelegramPendingInboundTarget) => void;
   processInboundMessage: (params: TelegramInboundMessage) => Promise<TelegramInboundDisposition>;
 }
 
@@ -99,12 +101,13 @@ export function createTelegramInboundProcessing({
     createSpooledReplayParticipantForBufferedWork,
   } = message;
   const {
+    cancelPending,
     inboundDebouncer,
     resolveTelegramDebounceEntryMs,
     shouldDebounceTelegramEntry,
     resolveTelegramDebounceLane,
     handleTextFragment,
-  } = createTelegramInboundBuffers({ params: { cfg, bot, runtime, opts }, message });
+  } = createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
 
   const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
     params: {
@@ -177,6 +180,10 @@ export function createTelegramInboundProcessing({
       return abortControlAuthorized;
     };
 
+    if (await isAuthorizedAbortControlMessage()) {
+      cancelPending({ chatId, threadSpec, senderId });
+    }
+
     if (
       await handleTextFragment({
         ctx,
@@ -185,7 +192,6 @@ export function createTelegramInboundProcessing({
         threadSpec,
         storeAllowFrom,
         isAbortControlMessage,
-        isAuthorizedAbortControlMessage,
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
@@ -342,18 +348,6 @@ export function createTelegramInboundProcessing({
           debounceLane,
         })
       : null;
-    if (senderId && (await isAuthorizedAbortControlMessage())) {
-      for (const lane of ["default", "forward"] as const) {
-        inboundDebouncer.cancelKey(
-          buildTelegramInboundDebounceKey({
-            accountId,
-            conversationKey,
-            senderId,
-            debounceLane: lane,
-          }),
-        );
-      }
-    }
     const debounceEntry: TelegramDebounceEntry = {
       ctx,
       msg,
@@ -382,5 +376,5 @@ export function createTelegramInboundProcessing({
     return shouldBufferDebounce ? { kind: "buffered", buffer: "debounce" } : { kind: "processed" };
   };
 
-  return { processInboundMessage };
+  return { processInboundMessage, cancelPending };
 }

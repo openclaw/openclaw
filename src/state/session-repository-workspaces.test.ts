@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import {
   ensureRepositoryWorkspacePendingResultSchema,
   hasRepositoryWorkspacePendingResultSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
-  closeOpenClawStateDatabaseByPath,
+  isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
 
 const roots: string[] = [];
@@ -39,6 +42,39 @@ async function fixture() {
   const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
   return { database, store: createSessionRepositoryWorkspaceStore({ database }) };
 }
+
+it("captures a lazy store location and retains it across environment changes and reopen", async () => {
+  await withOpenClawTestState({ scenario: "empty" }, async (state) => {
+    const firstPath = resolveOpenClawStateSqlitePath();
+    const secondPath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: state.statePath("second"),
+    });
+    try {
+      const store = createSessionRepositoryWorkspaceStore();
+      expect(store.path).toBe(firstPath);
+      const workspaceId = "00000000-0000-4000-8000-000000000000";
+      expect(store.artifactPath(workspaceId)).toBe(
+        path.join(path.dirname(firstPath), "repository-workspaces", `${workspaceId}.git`),
+      );
+      expect.soft(isOpenClawStateDatabaseOpen(firstPath)).toBe(false);
+      await expect.soft(fs.stat(firstPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      vi.stubEnv("OPENCLAW_STATE_DIR", state.statePath("second"));
+      const initial = store.create(source);
+      expect(store.get(initial.workspaceId)).toEqual(initial);
+      expect(isOpenClawStateDatabaseOpen(firstPath)).toBe(true);
+      closeOpenClawStateDatabaseByPath(firstPath);
+      expect(store.find(source)).toEqual(initial);
+      expect(isOpenClawStateDatabaseOpen(secondPath)).toBe(false);
+      await expect(fs.stat(secondPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      closeOpenClawStateDatabaseByPath(firstPath);
+      closeOpenClawStateDatabaseByPath(secondPath);
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 it("retries rolled-back first-use pending owner DDL and preserves the committed column on reopen", async () => {
   const { database } = await fixture();

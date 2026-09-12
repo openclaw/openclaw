@@ -1,6 +1,7 @@
 // Control UI chat module implements chat avatar behavior.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
+import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
@@ -12,15 +13,15 @@ import {
 import { icons } from "../../components/icons.ts";
 import {
   identityAvatarClass,
-  identityAvatarImage,
+  renderAgentIdentityAvatar,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
-  type IdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
+import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
-  assistantAvatarFallbackUrl,
   isRenderableControlUiAvatarUrl,
+  resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
 } from "../../lib/avatar.ts";
 import {
@@ -38,30 +39,32 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { renderChatAuthorAvatar, renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
 
 export function renderChatAvatar(
   role: string,
-  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
+  assistant?: Pick<AssistantIdentity, "agentId" | "name" | "avatar"> & {
+    textAvatar?: string | null;
+  },
   user?: { name?: string | null; avatar?: string | null },
-  resourceBasePath?: string,
   sender?: SenderIdentity | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   // Attributed multi-user messages show the author's own avatar (profile
   // upload → gateway Gravatar proxy → initials), not the local viewer's.
   if (normalized === "user" && sender) {
+    if (sender.identity?.type === "agent") {
+      return renderChatAuthorAvatar(sender, "chat-avatar assistant");
+    }
     return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
   }
   if (normalized === "assistant") {
     const name = assistant?.name?.trim() || "Assistant";
     return renderAgentAvatar(
+      assistant?.agentId ?? DEFAULT_AGENT_ID,
       name,
       assistant?.avatar,
-      html`<img
-        class="chat-avatar assistant chat-avatar--logo"
-        src=${assistantAvatarFallbackUrl(resourceBasePath ?? "")}
-        alt=${name}
-      />`,
+      assistant?.textAvatar ?? resolveAssistantTextAvatar(assistant?.avatar),
     );
   }
   const userName = resolveLocalUserName(user);
@@ -123,22 +126,29 @@ export function renderChatAvatar(
 }
 
 function renderAgentAvatar(
+  id: string,
   name: string,
   avatar: string | null | undefined,
-  fallback: TemplateResult,
+  textAvatar = resolveAssistantTextAvatar(avatar),
 ) {
   const value = avatar?.trim() || "";
-  if (isAvatarUrl(value)) {
-    return html`<img
-      class="chat-avatar assistant"
-      src=${identityAvatarImage(value)}
-      alt=${name}
-    />`;
+  const fallback = renderAgentIdentityAvatar({ id, name, textAvatar }, "chat-avatar assistant");
+  if (
+    isReservedSystemAgentId(id) ||
+    !(value.startsWith("blob:") || isRenderableControlUiAvatarUrl(value))
+  ) {
+    return fallback;
   }
-  const text = resolveAssistantTextAvatar(value);
-  return text
-    ? html`<div class="chat-avatar assistant" role="img" aria-label=${name}>${text}</div>`
-    : fallback;
+  const imageUrl = resolveAvatarImageUrl(value) ?? value;
+  const view = { imageUrl, sourceUrl: value, pending: typeof imageUrl !== "string" };
+  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+    ${renderIdentityAvatarImage({
+      view,
+      fallbackSelector: ".chat-avatar-slot",
+      className: "chat-avatar assistant",
+      alt: name,
+    })}${fallback}
+  </span>`;
 }
 
 type ForwardedAvatarOptions = {
@@ -147,7 +157,7 @@ type ForwardedAvatarOptions = {
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
   assistantName?: string;
   assistantAvatar?: string | null;
-  resourceBasePath?: string;
+  assistantTextAvatar?: string | null;
 };
 
 export function renderForwardedAvatar(agentId: string | undefined, opts: ForwardedAvatarOptions) {
@@ -156,12 +166,12 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
   // avatar for same-agent sessions, and the forward glyph only for
   // unresolvable or legacy sources.
   if (agentId && agentId === opts.agentId) {
-    return renderChatAvatar(
-      "assistant",
-      { name: opts.assistantName ?? "Assistant", avatar: opts.assistantAvatar ?? null },
-      undefined,
-      opts.resourceBasePath,
-    );
+    return renderChatAvatar("assistant", {
+      agentId,
+      name: opts.assistantName ?? "Assistant",
+      avatar: opts.assistantAvatar ?? null,
+      textAvatar: opts.assistantTextAvatar,
+    });
   }
   const agent = agentId ? opts.agents?.find((candidate) => candidate.id === agentId) : undefined;
   if (!agent) {
@@ -170,47 +180,13 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
     </div>`;
   }
   const name = agent.identity?.name?.trim() || agent.id;
+  const avatar = opts.senderAgentAvatars?.get(agent.id) ?? resolveAgentAvatarUrl(agent);
   return renderAgentAvatar(
+    agent.id,
     name,
-    opts.senderAgentAvatars?.get(agent.id),
-    renderUserAvatarSlot(
-      { fallback: resolveAvatarInitials({ id: agent.id, name }), imageUrl: null, pending: false },
-      name,
-      "assistant",
-    ),
+    avatar,
+    resolveAssistantTextAvatar(avatar) ?? resolveAgentTextAvatar(agent),
   );
-}
-
-/**
- * The avatar URL may 404 or be unreachable (missing upload, dead Gravatar,
- * stale configured URL); swap to initials instead of a broken image. Lit
- * reuses DOM parts, so a load must clear a prior identity's error state.
- */
-function renderUserAvatarSlot(view: IdentityAvatarView, label: string, role = "user") {
-  const initialsAvatar = html`<div
-    class="chat-avatar ${role} chat-avatar--sender-initials"
-    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
-    role="img"
-    aria-label="${label}"
-  >
-    ${view.fallback.initials}
-  </div>`;
-  if (!view.imageUrl) {
-    return initialsAvatar;
-  }
-  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
-    ${renderIdentityAvatarImage({
-      view,
-      fallbackSelector: ".chat-avatar-slot",
-      className: `chat-avatar ${role}`,
-      alt: label,
-    })}${initialsAvatar}
-  </span>`;
-}
-
-function isAvatarUrl(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
 }
 
 type ChatAvatarHost = {
@@ -409,18 +385,6 @@ export async function refreshSenderAgentAvatars(
     return;
   }
   senderAvatarInputs.set(host, inputs);
-  // Use the same normalized sender metadata as grouping, after each transcript commit.
-  const agentIds = host.chatMessages.flatMap((message) => {
-    if (resolveMessageRole(message) !== "assistant") {
-      return [];
-    }
-    const id = readMessageSenderSession(asOptionalRecord(message)?.senderSession)?.agentId;
-    return id ? [id] : [];
-  });
-  await loadSenderAgentAvatars(host, agentIds);
-}
-
-async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly string[]) {
   // A unique token keeps a batch retired by invalidation from becoming current again.
   const request = {};
   senderAvatarRequests.set(host, request);
@@ -429,11 +393,23 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
   const client = host.client;
   const epoch = host.connectionEpoch;
   const agents = host.agentsList?.agents;
-  const roster = new Set(agents?.map((agent) => agent.id));
-  // Bound forwarded-agent work independently of transcript size.
-  const ids = [...new Set(agentIds)]
-    .filter((id) => host.connected && id !== agentId && roster.has(id))
-    .slice(0, CHAT_AVATAR_CACHE_LIMIT - 1);
+  const remainingIds = new Set(agents?.map((agent) => agent.id));
+  // Consume each sender once, reserving one cache slot for the current agent.
+  const ids: string[] = [];
+  if (host.connected) {
+    for (const message of host.chatMessages) {
+      if (resolveMessageRole(message) !== "assistant") {
+        continue;
+      }
+      const id = readMessageSenderSession(asOptionalRecord(message)?.senderSession)?.agentId;
+      if (id && id !== agentId && remainingIds.delete(id)) {
+        ids.push(id);
+        if (ids.length === CHAT_AVATAR_CACHE_LIMIT - 1) {
+          break;
+        }
+      }
+    }
+  }
   const previousAvatars = host.senderAgentAvatars;
   // Empty/disconnected batches clear synchronously; only awaited loads need the stale fence.
   const snapshots = ids.length

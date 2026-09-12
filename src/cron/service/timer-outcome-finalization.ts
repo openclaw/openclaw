@@ -4,6 +4,7 @@ import {
   CronRunReceiptRevisionError,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
@@ -175,7 +176,7 @@ export async function finalizeCompletedCronRunOutcomes(
         jobIds: finalizedOutcomes.map((outcome) => outcome.jobId),
         operationLabel: "cron.run-finalization",
         transactionHooks,
-        mutate: ({ jobs }) => {
+        mutate: ({ database, jobs }) => {
           const upsertedJobs: CronJob[] = [];
           const removedJobs: CronJob[] = [];
           const eventPlans: Array<{ outcome: TimedCronRunOutcome; job?: CronJob }> = [];
@@ -189,6 +190,9 @@ export async function finalizeCompletedCronRunOutcomes(
               applyOutcomeToAuthoritativeJob(state, job, outcome, {
                 deferredNotifications: postPersistNotifications,
                 emit: false,
+                triggerStateRetired:
+                  outcome.runReceipt &&
+                  isCronRunTriggerStateRetiredInDatabase({ database, handle: outcome.runReceipt }),
               })
             ) {
               removedJobs.push(job);

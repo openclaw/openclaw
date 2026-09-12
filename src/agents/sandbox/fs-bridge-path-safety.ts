@@ -256,6 +256,33 @@ export class SandboxFsPathGuard {
     });
   }
 
+  /**
+   * Resolves the canonical mutation destination so callers can authorize the
+   * real target before pinning. File-backed actions resolve the canonical
+   * parent and re-attach the requested basename; directory actions
+   * (`options.directory`) canonicalize the directory itself, which an
+   * existing alias may rename, and tolerate the mount root.
+   */
+  async resolveCanonicalMutationTarget(
+    target: SandboxResolvedFsPath,
+    action: string,
+    options?: { directory?: boolean },
+  ): Promise<string> {
+    if (options?.directory) {
+      const canonicalPath = await this.resolveCanonicalContainerPath({
+        containerPath: target.containerPath,
+        allowFinalSymlinkForUnlink: false,
+      });
+      this.resolveRequiredMount(canonicalPath, action);
+      return canonicalPath;
+    }
+    const anchoredTarget = await this.resolveAnchoredSandboxEntry(target, action);
+    this.resolveRequiredMount(anchoredTarget.canonicalParentPath, action);
+    return anchoredTarget.canonicalParentPath === "/"
+      ? `/${anchoredTarget.basename}`
+      : `${anchoredTarget.canonicalParentPath}/${anchoredTarget.basename}`;
+  }
+
   async resolveAnchoredPinnedDirectoryEntry(
     target: SandboxResolvedFsPath,
     action: string,

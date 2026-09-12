@@ -2,6 +2,7 @@
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  ProviderFastModePolicyContext,
   ProviderModelRouteResolution,
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
@@ -18,12 +19,9 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  loadPluginPublicArtifactModuleSync,
-} from "./public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
-const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
+export const PROVIDER_POLICY_ARTIFACT = "provider-policy-api.js";
 
 type ProviderProjectConfiguredModelRowContext = {
   config?: OpenClawConfig;
@@ -32,6 +30,21 @@ type ProviderProjectConfiguredModelRowContext = {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
+};
+
+type ProviderProjectRealtimeVoicePublicConfigContext = {
+  providerConfig: Record<string, unknown>;
+  config: Record<string, unknown>;
+};
+
+export type RealtimeVoicePublicClientHints = {
+  modelSource?: "gateway";
+  gatewayRelaySupported?: boolean;
+};
+
+export type RealtimeVoicePublicProjection = {
+  config: Record<string, unknown>;
+  clientHints?: RealtimeVoicePublicClientHints;
 };
 
 type EmbeddingProviderSetupInspection = {
@@ -50,6 +63,7 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
@@ -78,9 +92,13 @@ export type BundledProviderPolicySurface = ProviderPolicySurface & {
   projectConfiguredModelRow?: (
     ctx: ProviderProjectConfiguredModelRowContext,
   ) => ProviderRuntimeModel | null | undefined;
+  projectRealtimeVoicePublicProjection?: (
+    ctx: ProviderProjectRealtimeVoicePublicConfigContext,
+  ) => RealtimeVoicePublicProjection | null | undefined;
 };
 
 const PROVIDER_POLICY_HOOK_KEYS = [
+  "resolveFastModeSupport",
   "normalizeConfig",
   "applyConfigDefaults",
   "resolveConfigApiKey",
@@ -92,7 +110,9 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "inspectEmbeddingProviderSetup",
 ] as const satisfies readonly (keyof ProviderPolicySurface)[];
 
-function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPolicySurface | null {
+export function extractProviderPolicySurface(
+  mod: Record<string, unknown>,
+): ProviderPolicySurface | null {
   const surface: ProviderPolicySurface = {};
   if (
     Array.isArray(mod.deprecatedProfileIds) &&
@@ -117,29 +137,12 @@ function extractBundledProviderPolicySurface(
     surface.projectConfiguredModelRow =
       mod.projectConfiguredModelRow as BundledProviderPolicySurface["projectConfiguredModelRow"];
   }
-  return Object.keys(surface).length > 0 ? surface : null;
-}
-
-function resolveProviderPolicySurface<T extends ProviderPolicySurface>(params: {
-  loadModule: (artifactBasename: string) => Record<string, unknown>;
-  missingSurfacePrefix: string;
-  extractSurface: (mod: Record<string, unknown>) => T | null;
-}): T | null {
-  for (const artifactBasename of PROVIDER_POLICY_ARTIFACT_CANDIDATES) {
-    try {
-      const mod = params.loadModule(artifactBasename);
-      const surface = params.extractSurface(mod);
-      if (surface) {
-        return surface;
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith(params.missingSurfacePrefix)) {
-        continue;
-      }
-      throw error;
-    }
+  if (typeof mod.projectRealtimeVoicePublicProjection === "function") {
+    Object.assign(surface, {
+      projectRealtimeVoicePublicProjection: mod.projectRealtimeVoicePublicProjection,
+    });
   }
-  return null;
+  return Object.keys(surface).length > 0 ? surface : null;
 }
 
 /** Loads policy hooks directly by canonical bundled plugin id. */
@@ -157,33 +160,9 @@ export function resolveDirectBundledProviderPolicySurface(
   ) {
     return null;
   }
-  return resolveProviderPolicySurface({
-    loadModule: (artifactBasename) =>
-      loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: pluginId,
-        artifactBasename,
-      }),
-    missingSurfacePrefix: "Unable to resolve bundled plugin public surface ",
-    extractSurface: extractBundledProviderPolicySurface,
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    dirName: pluginId,
+    artifactCandidates: [PROVIDER_POLICY_ARTIFACT],
   });
-}
-
-/** Loads policy hooks from a host-verified official external plugin install. */
-export function resolveTrustedExternalProviderPolicySurface(params: {
-  pluginId: string;
-  pluginRoot: string;
-  trustedOfficialInstall?: boolean;
-}): ProviderPolicySurface | null {
-  if (params.trustedOfficialInstall !== true) {
-    return null;
-  }
-  return resolveProviderPolicySurface({
-    loadModule: (artifactBasename) =>
-      loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        pluginRoot: params.pluginRoot,
-        artifactBasename,
-      }),
-    missingSurfacePrefix: "Unable to resolve plugin public surface ",
-    extractSurface: extractProviderPolicySurface,
-  });
+  return mod ? extractBundledProviderPolicySurface(mod) : null;
 }

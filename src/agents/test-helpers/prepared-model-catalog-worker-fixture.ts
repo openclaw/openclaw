@@ -12,7 +12,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-run
 
 export function usePreparedCatalogWorkerFixtures() {
   const waitTimeoutMs = 30_000;
-  const retirements = new Set<() => void>();
+  const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
   // Synchronous capture also covers failures before a worker request is awaited.
   const workerChannel = channel("worker_threads");
@@ -36,10 +36,10 @@ export function usePreparedCatalogWorkerFixtures() {
       // Direct snapshots bypass registered owners. Fence them even when worker warmup times out,
       // before late continuations can use a removed fixture or enter the next test's catalog queue.
       for (const retire of retirements) {
-        retire();
+        await retire();
       }
       retirements.clear();
-      resetPreparedModelRuntimeSnapshotsForTest();
+      await resetPreparedModelRuntimeSnapshotsForTest();
       try {
         await waitForWorkers();
       } finally {
@@ -55,7 +55,7 @@ export function usePreparedCatalogWorkerFixtures() {
   });
   return {
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
-    retireAfterTest: (retire: () => void) => {
+    retireAfterTest: (retire: () => void | Promise<void>) => {
       retirements.add(retire);
     },
     waitForWorkers,

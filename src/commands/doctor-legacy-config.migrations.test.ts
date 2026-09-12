@@ -924,7 +924,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           defaults: {
             model: {
               primary: "deleted/default-primary",
-              fallbacks: ["custom/kept", "openai/gpt-5.6-sol", "deleted/default-fallback"],
+              fallbacks: ["custom/kept", "openai/gpt-6-astra", "deleted/default-fallback"],
             },
             models: {
               "custom/kept": { alias: "kept" },
@@ -950,27 +950,27 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.6-sol",
+      primary: "openai/gpt-6-astra",
       fallbacks: ["custom/kept"],
     });
     expect(result.config.agents?.defaults?.models).toEqual({
       "custom/kept": { alias: "kept" },
-      "openai/gpt-5.6-sol": {},
+      "openai/gpt-6-astra": {},
     });
     expect(result.config.agents?.list?.[0]).toMatchObject({
       id: "main",
-      models: { "plugin-provider/kept": {}, "openai/gpt-5.6-sol": {} },
+      models: { "plugin-provider/kept": {}, "openai/gpt-6-astra": {} },
     });
     expect(result.config.agents?.list?.[0]?.model).toBeUndefined();
     expect(result.changes).toEqual([
-      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-5.6-sol" (provider "deleted" is unavailable).',
+      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-6-astra" (provider "deleted" is unavailable).',
       'Removed stale agents.defaults.model fallback "deleted/default-fallback" (provider "deleted" is unavailable).',
-      'Removed duplicate agents.defaults.model fallback "openai/gpt-5.6-sol" after selecting it as the default primary.',
+      'Removed duplicate agents.defaults.model fallback "openai/gpt-6-astra" after selecting it as the default primary.',
       'Removed stale agents.defaults.models entry "deleted/models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
       'Removed stale agents.list.main.model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
       'Removed stale agents.list.main.models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.list.main.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.list.main.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
     ]);
   });
 
@@ -1076,9 +1076,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     );
 
-    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-6-astra");
     expect(result.changes).toEqual([
-      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-5.6-sol" (provider "agent-local" is unavailable).',
+      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-6-astra" (provider "agent-local" is unavailable).',
     ]);
   });
 
@@ -1102,7 +1102,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     );
 
-    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-6-astra");
     expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
     expect(result.changes).toContain(
       'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
@@ -1122,9 +1122,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
     );
 
-    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-5.6-sol": {} });
+    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
     expect(result.changes).toContain(
-      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
     );
   });
 
@@ -1479,7 +1479,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "claude-cli/claude-opus-4-7": { alias: "Opus" },
       "anthropic/claude-opus-4-7": {
         alias: "Anthropic Opus",
         agentRuntime: { id: "claude-cli" },
@@ -1609,7 +1608,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("preserves selected legacy keys outside the migrated allowlist runtime", () => {
+  it("retires selected legacy keys while preserving each model runtime", () => {
     const res = normalizeCompatibilityConfigValues(
       legacyConfig({
         agents: {
@@ -1632,7 +1631,6 @@ describe("normalizeCompatibilityConfigValues", () => {
         alias: "Claude CLI",
         agentRuntime: { id: "claude-cli" },
       },
-      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini CLI",
         agentRuntime: { id: "google-gemini-cli" },
@@ -1760,7 +1758,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.5": { alias: "Codex CLI" },
       "openai/gpt-5.5": { alias: "OpenAI GPT", agentRuntime: { id: "codex" } },
       "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
     });
@@ -1788,7 +1785,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       fallbacks: ["openai/gpt-5.4"],
     });
     expect(res.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
       "openai/gpt-5.4": {
         alias: "Legacy CLI fallback",
         agentRuntime: { id: "codex" },
@@ -1810,7 +1806,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(res.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
       "openai/gpt-5.4": {
         alias: "Legacy CLI fallback",
         agentRuntime: { id: "codex" },
@@ -1948,7 +1943,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini API",
         agentRuntime: { id: "google-gemini-cli" },
@@ -1959,7 +1953,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("preserves legacy runtime fallback-only refs because runtime is container-scoped", () => {
+  it("migrates fallback-only refs with model-scoped runtime intent", () => {
     const input = legacyConfig({
       agents: {
         defaults: {
@@ -1976,8 +1970,17 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     const res = normalizeCompatibilityConfigValues(input);
 
-    expect(res.config).toEqual(input);
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {
+        alias: "CLI fallback",
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(normalizeCompatibilityConfigValues(res.config).changes).toStrictEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {

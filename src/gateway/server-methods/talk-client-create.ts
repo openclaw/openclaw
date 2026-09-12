@@ -24,6 +24,7 @@ import {
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } from "../../talk/describe-view-tool.js";
 import {
   cancelInternalRealtimeVoiceBrowserSession,
+  projectInternalRealtimeVoicePublicConfig,
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
 } from "../../talk/provider-internal.js";
 import {
@@ -150,6 +151,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
       agentId,
       defaultModel: realtimeConfig.model,
       surface: "browser-session",
+      requiredCapabilities: { supportsVideoFrames: wantsCameraFrames },
     });
     const providerCapabilities = resolveRealtimeVoiceProviderCapabilities({
       provider: resolution.provider,
@@ -186,26 +188,35 @@ export const createTalkClient: GatewayRequestHandler = async ({
     sessionMutationAuthorization?.assertCurrent();
     if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
       const agentSessionId = resolveClientVoiceAgentSessionId(sessionTarget);
+      const { readRestoredSessionTranscript } =
+        await import("../../config/sessions/session-cold-storage-read.js");
       const initialItems = agentSessionId
-        ? boundTalkClientRealtimeInitialItems(
-            readSessionPreviewItemsFromTranscript(
-              {
-                ...sessionTarget,
-                sessionId: agentSessionId,
-              },
-              REALTIME_VOICE_CONTEXT_MAX_ITEMS,
-              REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
-              "model-context",
-            ).filter(
-              (
-                item,
-              ): item is {
-                role: "user" | "assistant";
-                text: string;
-              } => item.role === "user" || item.role === "assistant",
-            ),
+        ? await readRestoredSessionTranscript(
+            { ...sessionTarget, sessionId: agentSessionId },
+            () => {
+              sessionMutationAuthorization?.assertCurrent();
+              return boundTalkClientRealtimeInitialItems(
+                readSessionPreviewItemsFromTranscript(
+                  {
+                    ...sessionTarget,
+                    sessionId: agentSessionId,
+                  },
+                  REALTIME_VOICE_CONTEXT_MAX_ITEMS,
+                  REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
+                  "model-context",
+                ).filter(
+                  (
+                    item,
+                  ): item is {
+                    role: "user" | "assistant";
+                    text: string;
+                  } => item.role === "user" || item.role === "assistant",
+                ),
+              );
+            },
           )
         : [];
+      sessionMutationAuthorization?.assertCurrent();
       const controlSource =
         providerCapabilities?.handlesAgentConsult === true ? "delegation" : "transcript";
       const tools =
@@ -264,7 +275,8 @@ export const createTalkClient: GatewayRequestHandler = async ({
                 throw new Error("Realtime voice client disconnected");
               }
             },
-            runAgentConsult: consultRunner.runArgs,
+            runToolAgentConsult: consultRunner.runArgs,
+            runAgentConsult: consultRunner.runOwnedArgs,
             getToolAuthorityOverlay: (source) =>
               consultRunner.getToolAuthorityOverlay(undefined, source),
             appendTranscript: ({ entryId, role, text }) =>
@@ -404,7 +416,11 @@ export const createTalkClient: GatewayRequestHandler = async ({
           respond(
             true,
             {
-              ...session,
+              ...projectInternalRealtimeVoicePublicConfig({
+                provider: resolution.provider,
+                providerConfig: resolution.providerConfig,
+                config: session,
+              }),
               voiceSessionId,
               ...(clientControl ? { clientControl } : {}),
             },

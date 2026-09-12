@@ -4,7 +4,14 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import { createChannelManager } from "../server-channels.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -71,7 +78,7 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
-async function runChannelsStart(running: boolean) {
+async function runChannelsStart(running: boolean, publicationPending?: boolean) {
   const startChannel = vi.fn(async () => new Map([["default-account", { status: "handed-off" }]]));
   const respond = vi.fn();
 
@@ -87,6 +94,8 @@ async function runChannelsStart(running: boolean) {
           getRuntimeConfig: mocks.getRuntimeConfig,
           startChannel,
           getRuntimeSnapshot: vi.fn(() => createChannelRuntimeSnapshot(running)),
+          getDeferredChannelReloads: () =>
+            publicationPending === undefined ? [] : [{ channel: "whatsapp", publicationPending }],
         } as unknown as GatewayRequestHandlerOptions["context"],
       },
     ),
@@ -142,6 +151,26 @@ describe("channelsHandlers channels.start", () => {
         started: false,
         outcome: { status: "handed-off" },
       },
+      undefined,
+    );
+  });
+
+  it("explains a successful manual start while configuration publication is deferred", async () => {
+    const { respond, startChannel } = await runChannelsStart(true, true);
+    expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account", { manual: true });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        started: true,
+        statusIssues: [
+          expect.objectContaining({
+            channel: "whatsapp",
+            accountId: "default-account",
+            kind: "config",
+            message: expect.stringContaining("previous configuration is still in use"),
+          }),
+        ],
+      }),
       undefined,
     );
   });
@@ -321,4 +350,115 @@ describe("channelsHandlers channels.logout", () => {
       expect.objectContaining({ code: "UNAVAILABLE", message: "Error: stop failed" }),
     );
   });
+});
+
+describe("channel controls remain independent of diagnostic inspection", () => {
+  it("stops the recorded default account while plugin callbacks are paused", async () => {
+    const refuse = vi.fn(() => {
+      throw new Error("plugin is quiesced");
+    });
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      config: { defaultAccountId: refuse, listAccountIds: refuse, resolveAccount: refuse },
+    });
+    const options = createOptions({ channel: "whatsapp" });
+    const stopChannel = vi.fn(async () => undefined);
+    options.context.stopChannel = stopChannel;
+    options.context.getRuntimeSnapshot = () => ({
+      ...createChannelRuntimeSnapshot(false),
+      reloadingChannels: new Map([["whatsapp", "default-account"]]),
+    });
+    await expectDefined(channelsHandlers["channels.stop"], "channel stop handler")(options);
+    expect(stopChannel).toHaveBeenCalledExactlyOnceWith("whatsapp", "default-account");
+    expect(options.respond).toHaveBeenCalledWith(
+      true,
+      { channel: "whatsapp", accountId: "default-account", stopped: true },
+      undefined,
+    );
+    expect(refuse).not.toHaveBeenCalled();
+  });
+
+  it.each(["start", "stop"] as const)(
+    "controls the default account on %s without inspecting another configured account",
+    async (action) => {
+      const inspectAccount = vi.fn((_cfg: unknown, accountId?: string | null) => {
+        if (accountId === "diagnostic-only") {
+          throw new Error("diagnostic inspector unavailable");
+        }
+        return { accountId, enabled: true, configured: true };
+      });
+      const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          if (abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      });
+      const stopAccount = vi.fn(async () => undefined);
+      const plugin = {
+        ...createChannelTestPluginBase({
+          id: "whatsapp",
+          config: {
+            defaultAccountId: () => "default-account",
+            listAccountIds: () => ["default-account", "diagnostic-only"],
+            resolveAccount: (_cfg, accountId) => ({ accountId, enabled: true }),
+            isConfigured: () => true,
+            inspectAccount,
+          },
+        }),
+        gateway: { startAccount, stopAccount },
+      };
+      const registry = createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]);
+      setActivePluginRegistry(registry);
+      mocks.getRuntimeConfig.mockReturnValue({});
+      mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+      mocks.getChannelPlugin.mockReturnValue(plugin);
+      const manager = createChannelManager({
+        getRuntimeConfig: mocks.getRuntimeConfig,
+        getPluginRegistry: () => registry,
+        channelLogs: {},
+        channelRuntimeEnvs: {},
+      });
+      const startChannel = vi.spyOn(manager, "startChannel");
+      const stopChannel = vi.spyOn(manager, "stopChannel");
+      try {
+        if (action === "stop") {
+          await manager.startChannel("whatsapp", "default-account");
+        }
+        const options = createOptions({ channel: "whatsapp" });
+        options.context = {
+          ...options.context,
+          startChannel,
+          stopChannel,
+          getRuntimeSnapshot: manager.getRuntimeSnapshot,
+        };
+        await expectDefined(
+          channelsHandlers[`channels.${action}`],
+          "channel control handler",
+        )(options);
+        expect(action === "start" ? startChannel : stopChannel).toHaveBeenCalledWith(
+          "whatsapp",
+          "default-account",
+          ...(action === "start" ? [{ manual: true }] : []),
+        );
+        expect(options.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            channel: "whatsapp",
+            accountId: "default-account",
+            [action === "start" ? "started" : "stopped"]: true,
+          }),
+          undefined,
+        );
+        expect(inspectAccount).not.toHaveBeenCalled();
+      } finally {
+        await manager.stopChannel("whatsapp");
+        resetPluginRuntimeStateForTest();
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
 });

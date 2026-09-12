@@ -15,6 +15,11 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 
+type ResetCommandParams = Omit<
+  HandleCommandsParams,
+  "resolvedThinkLevel" | "resolvedReasoningLevel"
+>;
+
 type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
@@ -25,7 +30,7 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   ctx.AcpDispatchTailAfterReset = true;
 }
 
-function isResetAuthorized(params: HandleCommandsParams): boolean {
+function isResetAuthorized(params: ResetCommandParams): boolean {
   return isResetAuthorizedForContext({
     ctx: params.ctx,
     cfg: params.cfg,
@@ -35,7 +40,7 @@ function isResetAuthorized(params: HandleCommandsParams): boolean {
 
 /** Handles reset/new commands or returns null when another command handler should continue. */
 export async function maybeHandleResetCommand(
-  params: HandleCommandsParams,
+  params: ResetCommandParams,
 ): Promise<CommandHandlerResult | null> {
   const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
   if (!resetMatch) {

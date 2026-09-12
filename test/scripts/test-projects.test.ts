@@ -55,6 +55,13 @@ describe("test runtime prerequisites", () => {
     ["QA directory", ["extensions/qa-lab"], "private-qa"],
     ["tooling config", ["test/vitest/vitest.tooling.config.ts"], "private-qa"],
     ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
+    [
+      "sticker provider runtime",
+      ["extensions/telegram/src/sticker-cache.selection.test.ts"],
+      "runtime",
+    ],
+    ["Telegram config", ["test/vitest/vitest.extension-telegram.config.ts"], "runtime"],
+    ["ordinary Telegram test", ["extensions/telegram/src/sequential-key.test.ts"], undefined],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["root config", ["vitest.config.ts"], "private-qa"],
@@ -84,6 +91,75 @@ describe("test runtime prerequisites", () => {
       "runtime",
     ],
     ["infra config", ["test/vitest/vitest.infra.config.ts"], "runtime"],
+    ["native SDK generation", ["src/plugins/plugin-module-generation.sdk.test.ts"], "runtime"],
+    ["config startup SDK", ["src/config/config-startup-corpus.test.ts"], "runtime"],
+    ["state startup SDK", ["src/config/state-startup-corpus.test.ts"], "runtime"],
+    ["runtime config project", ["test/vitest/vitest.runtime-config.config.ts"], "runtime"],
+    [
+      "context engine sandbox SDK",
+      ["src/agents/runtime-plugins.context-engine.integration.test.ts"],
+      "runtime",
+    ],
+    ["native direct loader SDK", ["src/plugins/loader.test.ts"], "runtime"],
+    ["native setup registry SDK", ["src/plugins/setup-registry.migrations.test.ts"], "runtime"],
+    ["native source checkout SDK", ["src/plugins/source-checkout-runtime.test.ts"], "runtime"],
+    ["native provider contract SDK", ["extensions/deepinfra/provider.contract.test.ts"], "runtime"],
+    ["native catalog auth SDK", ["test/openai-model-discovery-auth-order.test.ts"], "runtime"],
+    ["models.list native catalog", ["test/plugins/codex-model-catalog.gateway.test.ts"], "runtime"],
+    ["native package setup SDK", ["test/plugin-npm-runtime-build.test.ts"], "runtime"],
+    ["native Linux node SDK", ["src/node-host/linux-node-plugin.integration.test.ts"], "runtime"],
+    [
+      "native catalog worker SDK",
+      ["src/agents/prepared-model-catalog-worker.integration.test.ts"],
+      "runtime",
+    ],
+    [
+      "native Google Meet SDK",
+      ["extensions/google-meet/src/transports/chrome-startup.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel directory config SDK",
+      ["src/channels/plugins/contracts/directory.registry-backed-shard-b.contract.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel directory session SDK",
+      ["src/channels/plugins/contracts/directory.registry-backed-shard-d.contract.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel surfaces session SDK",
+      ["src/channels/plugins/contracts/surfaces-only.registry-backed-shard-d.contract.test.ts"],
+      "runtime",
+    ],
+    [
+      "native channel shape SDK",
+      ["src/channels/plugins/contracts/plugin-shape.contract.test.ts"],
+      "private-qa",
+    ],
+    [
+      "native SDK companion lifecycle",
+      ["src/plugin-sdk/channel-entry-contract.lifecycle.test.ts"],
+      "runtime",
+    ],
+    [
+      "native completion transport SDK",
+      ["src/agents/simple-completion-runtime.plugin-scope.test.ts"],
+      "runtime",
+    ],
+    ["agent core config", ["test/vitest/vitest.agents-core.config.ts"], "runtime"],
+    ["agent umbrella config", ["test/vitest/vitest.agents.config.ts"], "runtime"],
+    ["ordinary completion unit", ["src/agents/simple-completion-runtime.test.ts"], undefined],
+    [
+      "direct completion fixture without SDK imports",
+      ["src/plugins/runtime/runtime-llm.prepared-owner.test.ts"],
+      undefined,
+    ],
+    ["native inspection fixture", ["src/plugins/status.runtime-inspection.test.ts"], undefined],
+    ["source module generation", ["src/plugins/plugin-module-generation.test.ts"], undefined],
+    ["native module interop", ["src/plugins/plugin-module-generation.interop.test.ts"], undefined],
+    ["plugins config", ["test/vitest/vitest.plugins.config.ts"], "runtime"],
     ["ordinary update unit test", ["src/infra/update-candidate-canary.test.ts"], undefined],
     ["CLI directory", ["src/cli"], "runtime"],
     ["CLI config", ["test/vitest/vitest.cli.config.ts"], undefined],
@@ -162,6 +238,44 @@ describe("test runtime prerequisites", () => {
   });
 
   it.each([
+    ["bundled", ["src/plugins/loader.test.ts"], undefined],
+    ["unit-fast", ["src/plugins/*.test.ts"], undefined],
+    ["contracts-channel-config", ["src/channels/plugins/contracts/**"], undefined],
+    ["contracts-channel-session", ["src/channels/plugins/contracts/**"], undefined],
+    ["contracts-channel-registry", ["src/channels/plugins/contracts/**"], undefined],
+    ["unit", ["src/node-host/**"], undefined],
+    ["unit-src", ["src/node-host/**"], undefined],
+    ["extensions", ["deepinfra/**"], "runtime"],
+    ["extensions", ["deepinfra/**", "google-meet/**"], undefined],
+    ["tooling", ["test/**"], undefined],
+    ["plugins", ["plugin-module-generation.sdk.test.ts"], undefined],
+    ["runtime-config", ["config/config-startup-corpus.test.ts"], "runtime"],
+    ["runtime-config", ["config/state-startup-corpus.test.ts"], "runtime"],
+    [
+      "runtime-config",
+      ["config/config-startup-corpus.test.ts", "config/state-startup-corpus.test.ts"],
+      undefined,
+    ],
+    ["agents-core", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
+    ["agents", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
+    [
+      "agents-core",
+      [
+        "simple-completion-runtime.plugin-scope.test.ts",
+        "prepared-model-catalog-worker.integration.test.ts",
+        "runtime-plugins.context-engine.integration.test.ts",
+      ],
+      undefined,
+    ],
+    [
+      "agents",
+      [
+        "simple-completion-runtime.plugin-scope.test.ts",
+        "prepared-model-catalog-worker.integration.test.ts",
+        "runtime-plugins.context-engine.integration.test.ts",
+      ],
+      undefined,
+    ],
     ["gateway-core", ["gateway-*.test.ts"], undefined],
     ["gateway-server", ["server-sidecar-retention.test.ts"], "runtime"],
     ["gateway-server", ["server.config-patch.test.ts"], "runtime"],
@@ -173,6 +287,7 @@ describe("test runtime prerequisites", () => {
     ["gateway", ["gateway-*.test.ts"], "runtime"],
     ["gateway", ["server*.test.ts"], "runtime"],
     ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    ["extension-telegram", ["**/sticker-cache.selection.test.ts"], undefined],
   ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
     const selections = resolveVitestRuntimeCliSelections(
       `test/vitest/vitest.${project}.config.ts`,
@@ -452,7 +567,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
-    "src/system-agent/setup-inference-persist.ts",
+    "src/system-agent/setup-inference-turn.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ])(
     "routes setup inference transcript ownership changes through both regressions for %s",
@@ -531,7 +646,11 @@ describe("scripts/test-projects changed-target routing", () => {
     (scriptPath) => {
       expectChangedTargets(
         [scriptPath],
-        ["test/scripts/direct-run-entrypoints.test.ts", "test/scripts/lint-status.test.ts"],
+        [
+          "test/scripts/direct-run-entrypoints.test.ts",
+          "test/scripts/lint-status.test.ts",
+          "test/scripts/local-check-runtime.test.ts",
+        ],
       );
     },
   );
@@ -1091,7 +1210,7 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTargets: ["test/scripts/install-trufflehog.test.ts"],
+      exactTargets: ["test/scripts/setup-node-env-bun.test.ts"],
     },
   ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(
@@ -1108,6 +1227,13 @@ describe("scripts/test-projects changed-target routing", () => {
         expect(targets).toContain("test/scripts/direct-workflow-reference.test.ts");
         expect(targets).toContain("test/scripts/ci-workflow-guards.test.ts");
       },
+    );
+  });
+
+  it("routes the Bun image consumer to its executable action regression", () => {
+    expectChangedTargets(
+      [".github/actions/setup-node-env/seed-bun-from-image.mjs"],
+      ["test/scripts/setup-node-env-bun.test.ts"],
     );
   });
 
@@ -1159,9 +1285,11 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
+        "test/scripts/frv.test.ts",
         "test/scripts/npm-prepared-bundle.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
+        "test/scripts/verify-stable-main-closeout.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
@@ -1190,9 +1318,14 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/clawhub-parent-authorization.test.ts",
         "test/scripts/clawhub-postpublish.test.ts",
+        "test/scripts/frv.test.ts",
+        "test/scripts/openclaw-release-ready.test.ts",
+        "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
+        "test/scripts/release-beta-verifier.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/release-publish-draft.test.ts",
         "test/scripts/release-tooling-bootstrap.test.ts",
         "test/scripts/validate-release-publish-approval.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
@@ -1254,7 +1387,6 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps PR automation workflow edits on workflow guard tests", () => {
     for (const workflowPath of [
       ".github/workflows/auto-response.yml",
-      ".github/workflows/clawsweeper-dispatch.yml",
       ".github/workflows/labeler.yml",
       ".github/workflows/real-behavior-proof.yml",
       ".github/workflows/stale.yml",
@@ -1270,6 +1402,10 @@ describe("scripts/test-projects changed-target routing", () => {
           : ["test/scripts/ci-workflow-guards.test.ts"],
       );
     }
+    expectChangedTargets(
+      [".github/workflows/clawsweeper-dispatch.yml"],
+      ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/clawsweeper-dispatch.test.ts"],
+    );
   });
 
   it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
@@ -1290,7 +1426,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/changed-lanes.test.ts",
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/pr-prepare-gates.test.ts",
           "test/scripts/testbox-base.test.ts",
@@ -1302,7 +1437,6 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/testbox-base.test.ts",
         ],
@@ -1310,7 +1444,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         [
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
@@ -1322,6 +1455,7 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/setup-pnpm-store-cache-image.test.ts",
         ],
       ],
     ]);
@@ -1386,6 +1520,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-platform-checkout.test.ts",
         "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        ...(workflow === "docs-sync-publish" ? ["test/scripts/docs-mirror-freshness.test.ts"] : []),
       ],
     );
     const plans = buildVitestRunPlans(["test/scripts/ci-linux-git.test.ts"]);
@@ -1412,7 +1547,12 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
       [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
-        ["test/scripts/mantis-web-ui-chat-proof-workflow.test.ts", ...packageAcceptanceTargets],
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
+          ...packageAcceptanceTargets,
+          "test/scripts/mantis-request-proof.test.ts",
+          "test/scripts/mantis-telegram-proof.test.ts",
+        ],
       ],
     ]);
 
@@ -1441,6 +1581,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/package-source-preflight.test.ts",
         "test/scripts/release-ci-summary.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/upgrade-survivor-baselines.test.ts",
       ],
     );
   });
@@ -2270,7 +2411,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes mac restart helpers through restart-mac owner tests", () => {
     expectChangedTargets(
       ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/restart-mac.test.ts"],
+      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
     );
   });
 
@@ -2381,7 +2522,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/system-agent/system-agent.test.ts",
       "src/system-agent/operations.test.ts",
       "src/system-agent/overview.test.ts",
-      "src/system-agent/setup-inference.test.ts",
       "src/system-agent/audit.test.ts",
       "src/system-agent/rescue-policy.test.ts",
       "src/system-agent/rescue-message.test.ts",
@@ -2448,6 +2588,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
           "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
+          "test/scripts/node-runtime-recovery.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -3014,6 +3155,23 @@ describe("scripts/test-projects changed-target routing", () => {
         "unknown/file.txt",
       ]),
     ).toStrictEqual([]);
+  });
+
+  it("fails safe for raw Git paths that explicit-path normalization would rewrite", () => {
+    for (const changedPath of [
+      " scripts/changed-lanes.mts",
+      String.raw`scripts\changed-lanes.mts`,
+    ]) {
+      expect(
+        resolveChangedTestTargetPlanForArgs(
+          ["--changed", "origin/main"],
+          process.cwd(),
+          () => [changedPath],
+          { broad: true },
+        ),
+        changedPath,
+      ).toEqual({ mode: "broad", targets: [] });
+    }
   });
 
   it("keeps unknown root surface skip reasons available to changed-mode callers", () => {
@@ -4039,17 +4197,17 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
-    "src/gateway/gateway.test.ts",
-    "src/gateway/server.startup-matrix-migration.integration.test.ts",
-    "src/gateway/sessions-history-http.test.ts",
-  ])("routes gateway integration fixture %s to the e2e lane", (target) => {
+    ["src/gateway/gateway.test.ts", "e2e"],
+    ["src/gateway/server.startup-matrix-migration.integration.test.ts", "e2e"],
+    ["src/gateway/sessions-history-http.test.ts", "gateway"],
+  ])("routes gateway integration fixture %s to the %s lane", (target, lane) => {
     const plans = buildVitestRunPlans([target], process.cwd());
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.e2e.config.ts",
-        forwardedArgs: [target],
-        includePatterns: null,
+        config: `test/vitest/vitest.${lane}.config.ts`,
+        forwardedArgs: lane === "e2e" ? [target] : [],
+        includePatterns: lane === "e2e" ? null : [target],
         watchMode: false,
       },
     ]);
@@ -4186,6 +4344,17 @@ describe("scripts/test-projects full-suite sharding", () => {
     };
 
     expect(orderFullSuiteSpecsForParallelRun([runtime, tooling])).toEqual([tooling, runtime]);
+  });
+
+  it("prices expanded chunk files without enabling include-file filtering", () => {
+    const chunk = {
+      config: "test/vitest/vitest.tooling.config.ts",
+      includePatterns: null,
+      timingTargets: ["test/scripts/vitest-worker-artifacts.test.ts"],
+    };
+    const whole = { config: "test/vitest/vitest.runtime-config.config.ts", includePatterns: null };
+
+    expect(orderFullSuiteSpecsForParallelRun([whole, chunk])).toEqual([chunk, whole]);
   });
 
   it("uses observed selection timings without substituting a whole-config sample", () => {
@@ -4497,6 +4666,10 @@ describe("scripts/test-projects full-suite sharding", () => {
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
         expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        for (const plan of plans.filter((entry) => entry.forwardedArgs.length > 0)) {
+          expect(plan.timingTargets).toEqual(plan.forwardedArgs);
+          expect(plan.includePatterns).toBeNull();
+        }
       },
     );
   });

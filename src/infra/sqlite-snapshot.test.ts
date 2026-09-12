@@ -273,6 +273,32 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
+  it.each([undefined, false, true])(
+    "preserves implicit row IDs only when requested (%s), including committed WAL data",
+    async (preserveRowIds) => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      try {
+        source.exec(
+          "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'online turn')",
+        );
+        await createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds });
+        withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+          expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
+            { rowid: preserveRowIds ? 71 : 1, value: "online turn" },
+          ]);
+          expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+          expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+        });
+        await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        source.close();
+      }
+    },
+  );
+
   it("captures committed WAL state and removes deleted page contents", async () => {
     const deletedValue = `deleted-secret-${"x".repeat(256)}`;
     const source = new sqlite.DatabaseSync(sourcePath);
@@ -316,8 +342,13 @@ describe("createVerifiedSqliteSnapshot", () => {
 
       await expectSnapshotSuccess({ sourcePath, targetPath });
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      expect((await fs.readFile(sourcePath)).equals(sourceBefore), "source bytes unchanged").toBe(
+        true,
+      );
+      expect(
+        (await fs.readFile(`${sourcePath}-journal`)).equals(journalBefore),
+        "journal bytes unchanged",
+      ).toBe(true);
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(
           snapshot.prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'").get(),
@@ -377,8 +408,13 @@ describe("createVerifiedSqliteSnapshot", () => {
         /super-journal.*cannot be recovered privately/iu,
       );
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      expect((await fs.readFile(sourcePath)).equals(sourceBefore), "source bytes unchanged").toBe(
+        true,
+      );
+      expect(
+        (await fs.readFile(`${sourcePath}-journal`)).equals(journalBefore),
+        "journal bytes unchanged",
+      ).toBe(true);
       await expect(fs.readFile(superJournalPath)).resolves.toEqual(superJournalBefore);
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     },

@@ -3,6 +3,8 @@
  */
 export type {
   CreateSandboxBackendParams,
+  CreateReservedSandboxBackendParamsV1,
+  ReservedSandboxBackendFactoryV1,
   RemoteShellSandboxHandle,
   RunSshSandboxCommandParams,
   SandboxBackendCommandParams,
@@ -72,3 +74,14 @@ export {
   withTempWorkspace,
   withTempWorkspaceSync,
 } from "../infra/private-temp-workspace.js";
+export { SandboxRuntimeRetiredError } from "../agents/sandbox/provisioning-error.js";
+export {
+  createRemoteShellSandboxBackend,
+  type RemoteShellSandboxBackendOptions,
+} from "../agents/sandbox/remote-shell-backend.js";
+export {
+  createRemoteShellSandboxSession,
+  type RemoteShellCommandSpec,
+  type RemoteShellSandboxSession,
+  type RemoteShellSessionOptions,
+} from "../agents/sandbox/remote-shell-transport.js";

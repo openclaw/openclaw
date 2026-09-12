@@ -257,16 +257,10 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels failed room info response bodies before releasing their guard", async () => {
-    const cancelBody = vi.fn();
+  it("releases failed room info requests", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(
-        new ReadableStream<Uint8Array>({
-          cancel: cancelBody,
-        }),
-        { status: 503 },
-      ),
+      response: new Response("", { status: 503 }),
       release,
     });
     await expect(
@@ -275,7 +269,6 @@ describe("nextcloud talk room info", () => {
         roomToken: "test-room",
       }),
     ).rejects.toThrow("Nextcloud Talk room lookup failed (503)");
-    expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
 

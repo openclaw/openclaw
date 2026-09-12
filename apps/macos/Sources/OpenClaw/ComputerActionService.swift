@@ -60,35 +60,40 @@ final class ComputerActionExecutionQueue {
         let id: UUID
         let params: OpenClawComputerActParams
         let lifecycleGeneration: UInt64
+        let inputScopeId: UUID
         let operation: Operation
         let continuation: CheckedContinuation<OpenClawComputerActResult, Error>
         let cancellationState: ComputerActionCancellationState
     }
 
-    private let onLifecycleRelease: @MainActor () -> Bool
+    private let onInputRelease: @MainActor (UUID?) -> Bool
+    private let defaultInputScopeId = UUID()
     private let scheduleCancellationHop: CancellationHop
     private var lifecycleGeneration: UInt64 = 0
     private var pendingActions: [QueuedAction] = []
     private var drainTask: Task<Void, Never>?
     private var currentActionID: UUID?
     private var currentActionGeneration: UInt64?
+    private var currentActionScopeId: UUID?
     private var currentActionCancellationState: ComputerActionCancellationState?
     private var currentActionTask: Task<OpenClawComputerActResult, Error>?
     private var lifecycleReleasePending = false
+    private var scopeReleasesPending: Set<UUID> = []
 
     init(
-        onLifecycleRelease: @escaping @MainActor () -> Bool,
+        onInputRelease: @escaping @MainActor (UUID?) -> Bool,
         scheduleCancellationHop: @escaping CancellationHop = { operation in
             Task { @MainActor in operation() }
         })
     {
-        self.onLifecycleRelease = onLifecycleRelease
+        self.onInputRelease = onInputRelease
         self.scheduleCancellationHop = scheduleCancellationHop
     }
 
     func perform(
         _ params: OpenClawComputerActParams,
         lifecycleGeneration: UInt64,
+        inputScopeId: UUID? = nil,
         operation: @escaping Operation) async throws -> OpenClawComputerActResult
     {
         let actionID = UUID()
@@ -113,6 +118,7 @@ final class ComputerActionExecutionQueue {
                     id: actionID,
                     params: params,
                     lifecycleGeneration: lifecycleGeneration,
+                    inputScopeId: inputScopeId ?? self.defaultInputScopeId,
                     operation: operation,
                     continuation: continuation,
                     cancellationState: cancellationState))
@@ -137,6 +143,24 @@ final class ComputerActionExecutionQueue {
             _ = try? await activeTask.value
         }
         try? await self.waitForLifecycleRelease(lifecycleGeneration: lifecycleGeneration)
+    }
+
+    func releaseHeldInput(inputScopeId: UUID) async {
+        let generation = self.lifecycleGeneration
+        let activeTask = self.currentActionScopeId == inputScopeId ? self.currentActionTask : nil
+        if self.currentActionScopeId == inputScopeId {
+            _ = self.currentActionCancellationState?.requestCancellation()
+            self.currentActionTask?.cancel()
+        }
+        let matching = self.pendingActions.filter { $0.inputScopeId == inputScopeId }
+        self.pendingActions.removeAll { $0.inputScopeId == inputScopeId }
+        for queued in matching {
+            _ = queued.cancellationState.finish()
+            queued.continuation.resume(throwing: CancellationError())
+        }
+        self.attemptInputRelease(inputScopeId: inputScopeId)
+        if let activeTask { _ = try? await activeTask.value }
+        try? await self.waitForLifecycleRelease(lifecycleGeneration: generation)
     }
 
     func checkExecutionAllowed(lifecycleGeneration: UInt64) throws {
@@ -175,13 +199,30 @@ final class ComputerActionExecutionQueue {
                     throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
                 continue
             }
+            self.currentActionID = queued.id
+            self.currentActionGeneration = queued.lifecycleGeneration
+            self.currentActionScopeId = queued.inputScopeId
+            self.currentActionCancellationState = queued.cancellationState
+            defer {
+                self.currentActionID = nil
+                self.currentActionGeneration = nil
+                self.currentActionScopeId = nil
+                self.currentActionCancellationState = nil
+                self.currentActionTask = nil
+            }
             do {
                 try await self.waitForLifecycleRelease(
                     lifecycleGeneration: queued.lifecycleGeneration,
                     cancellationState: queued.cancellationState)
             } catch {
                 _ = queued.cancellationState.finish()
-                queued.continuation.resume(throwing: error)
+                queued.continuation.resume(throwing: queued.lifecycleGeneration == self.lifecycleGeneration
+                    ? error : ComputerActionService.ComputerActionError.lifecycleChanged)
+                continue
+            }
+            guard queued.lifecycleGeneration == self.lifecycleGeneration else {
+                _ = queued.cancellationState.finish()
+                queued.continuation.resume(throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
                 continue
             }
             guard !queued.cancellationState.isCancelled else {
@@ -190,9 +231,6 @@ final class ComputerActionExecutionQueue {
                 continue
             }
 
-            self.currentActionID = queued.id
-            self.currentActionGeneration = queued.lifecycleGeneration
-            self.currentActionCancellationState = queued.cancellationState
             let operationTask = Task { @MainActor [weak self] in
                 guard let self else { throw CancellationError() }
                 defer {
@@ -203,7 +241,7 @@ final class ComputerActionExecutionQueue {
                     if Task.isCancelled || callerCancelled
                         || queued.lifecycleGeneration != self.lifecycleGeneration
                     {
-                        let released = self.attemptLifecycleRelease()
+                        let released = self.attemptInputRelease(inputScopeId: queued.inputScopeId)
                         if callerCancelled, released {
                             queued.cancellationState.recordOperationReleaseSuccess()
                         }
@@ -227,21 +265,16 @@ final class ComputerActionExecutionQueue {
                 // Cancellation can win after the operation defer but before the
                 // result is committed. Release here so the actor hop cannot miss
                 // a just-finished left_mouse_down.
-                self.attemptLifecycleRelease()
+                self.attemptInputRelease(inputScopeId: queued.inputScopeId)
             }
             if cancellation.wasCancelled {
-                // A failed synthetic mouse-up keeps lifecycleReleasePending set.
+                // A failed synthetic mouse-up keeps its scoped release pending.
                 // Cancellation is not complete until the owned button is released
                 // or a newer lifecycle takes responsibility for the retry.
                 try? await self.waitForLifecycleRelease(
                     lifecycleGeneration: queued.lifecycleGeneration)
             }
             let lifecycleChanged = queued.lifecycleGeneration != self.lifecycleGeneration
-            self.currentActionID = nil
-            self.currentActionGeneration = nil
-            self.currentActionCancellationState = nil
-            self.currentActionTask = nil
-
             if lifecycleChanged {
                 queued.continuation.resume(
                     throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
@@ -259,9 +292,10 @@ final class ComputerActionExecutionQueue {
         self.lifecycleGeneration = generation
 
         if let currentActionGeneration, currentActionGeneration < generation {
+            _ = self.currentActionCancellationState?.requestCancellation()
             self.currentActionTask?.cancel()
         }
-        self.attemptLifecycleRelease()
+        self.attemptInputRelease(inputScopeId: nil)
 
         let staleActions = self.pendingActions.filter { $0.lifecycleGeneration < generation }
         self.pendingActions.removeAll { $0.lifecycleGeneration < generation }
@@ -282,14 +316,23 @@ final class ComputerActionExecutionQueue {
         guard self.currentActionID == id else { return }
         // A canceled action may already have posted left_mouse_down. Release now,
         // and let the operation-task defer catch any later cancellation-ignoring post.
-        self.attemptLifecycleRelease()
+        if let scope = self.currentActionScopeId { self.attemptInputRelease(inputScopeId: scope) }
         self.currentActionTask?.cancel()
     }
 
     @discardableResult
-    private func attemptLifecycleRelease() -> Bool {
-        let released = self.onLifecycleRelease()
-        self.lifecycleReleasePending = !released
+    private func attemptInputRelease(inputScopeId: UUID?) -> Bool {
+        let released = self.onInputRelease(inputScopeId)
+        if let inputScopeId {
+            if released {
+                self.scopeReleasesPending.remove(inputScopeId)
+            } else {
+                self.scopeReleasesPending.insert(inputScopeId)
+            }
+        } else {
+            self.lifecycleReleasePending = !released
+            if released { self.scopeReleasesPending.removeAll() }
+        }
         return released
     }
 
@@ -297,7 +340,7 @@ final class ComputerActionExecutionQueue {
         lifecycleGeneration: UInt64,
         cancellationState: ComputerActionCancellationState? = nil) async throws
     {
-        while self.lifecycleReleasePending {
+        while self.lifecycleReleasePending || !self.scopeReleasesPending.isEmpty {
             try Task.checkCancellation()
             if cancellationState?.isCancelled == true {
                 throw CancellationError()
@@ -305,8 +348,14 @@ final class ComputerActionExecutionQueue {
             guard lifecycleGeneration == self.lifecycleGeneration else {
                 throw ComputerActionService.ComputerActionError.lifecycleChanged
             }
-            self.attemptLifecycleRelease()
-            guard self.lifecycleReleasePending else { return }
+            if self.lifecycleReleasePending {
+                self.attemptInputRelease(inputScopeId: nil)
+            } else {
+                for scope in self.scopeReleasesPending {
+                    self.attemptInputRelease(inputScopeId: scope)
+                }
+            }
+            guard self.lifecycleReleasePending || !self.scopeReleasesPending.isEmpty else { return }
             try await Task.sleep(for: .milliseconds(100))
         }
     }
@@ -483,9 +532,10 @@ final class ComputerActionService {
     }
 
     private let screen: ComputerScreenActionExecutor
+    private let defaultInputScopeId = UUID()
     private lazy var window = ComputerWindowActionExecutor()
-    private lazy var executionQueue = ComputerActionExecutionQueue { [weak self] in
-        self?.screen.releaseCurrentHeldButton() ?? true
+    private lazy var executionQueue = ComputerActionExecutionQueue { [weak self] scope in
+        self?.screen.releaseCurrentHeldButton(inputScopeId: scope) ?? true
     }
 
     init() {
@@ -500,24 +550,34 @@ final class ComputerActionService {
 
     func perform(
         _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64,
+        inputScopeId: UUID? = nil,
+        checkScopeAllowed: @escaping @MainActor () throws -> Void = {}) async throws -> OpenClawComputerActResult
     {
-        try await self.executionQueue.perform(
+        try checkScopeAllowed()
+        let scope = inputScopeId ?? self.defaultInputScopeId
+        return try await self.executionQueue.perform(
             params,
-            lifecycleGeneration: lifecycleGeneration)
+            lifecycleGeneration: lifecycleGeneration,
+            inputScopeId: scope)
         { [weak self] params, lifecycleGeneration in
             guard let self else { throw CancellationError() }
             return try await self.performImmediately(
                 params,
-                lifecycleGeneration: lifecycleGeneration)
+                lifecycleGeneration: lifecycleGeneration,
+                inputScopeId: scope,
+                checkScopeAllowed: checkScopeAllowed)
         }
     }
 
     private func performImmediately(
         _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64,
+        inputScopeId: UUID,
+        checkScopeAllowed: @escaping @MainActor () throws -> Void) async throws -> OpenClawComputerActResult
     {
         try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+        try checkScopeAllowed()
         if params.deliveryMode == .background,
            params.windowRef == nil,
            !params.action.isWindowScopedOnly
@@ -533,6 +593,7 @@ final class ComputerActionService {
             guard let self else { throw CancellationError() }
             try self.executionQueue.checkExecutionAllowed(
                 lifecycleGeneration: lifecycleGeneration)
+            try checkScopeAllowed()
         }
         if params.isWindowScopedRequest {
             return try await self.window.perform(
@@ -542,6 +603,7 @@ final class ComputerActionService {
         }
         return try await self.screen.perform(
             params,
+            inputScopeId: inputScopeId,
             checkExecutionAllowed: checkExecutionAllowed)
     }
 
@@ -566,6 +628,10 @@ final class ComputerActionService {
         await self.executionQueue.releaseHeldInput(lifecycleGeneration: lifecycleGeneration)
     }
 
+    func releaseHeldInput(inputScopeId: UUID?) async {
+        await self.executionQueue.releaseHeldInput(inputScopeId: inputScopeId ?? self.defaultInputScopeId)
+    }
+
     #if DEBUG
     var lifecycleGenerationForTesting: UInt64 {
         self.executionQueue.lifecycleGenerationForTesting
@@ -573,12 +639,14 @@ final class ComputerActionService {
 
     func typeTextForTesting(
         _ text: String,
-        lifecycleGeneration: UInt64 = 0) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64 = 0,
+        inputScopeId: UUID? = nil) async throws -> OpenClawComputerActResult
     {
         let params = OpenClawComputerActParams(action: .type, text: text)
         return try await self.executionQueue.perform(
             params,
-            lifecycleGeneration: lifecycleGeneration)
+            lifecycleGeneration: lifecycleGeneration,
+            inputScopeId: inputScopeId ?? self.defaultInputScopeId)
         { [weak self] _, generation in
             guard let self else { throw CancellationError() }
             try await self.screen.typeText(text) { [weak self] in

@@ -672,6 +672,7 @@ describe("recent session prefetch", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ cursor: "cursor-1", sessionKey }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
       deltaCursor: "cursor-2",

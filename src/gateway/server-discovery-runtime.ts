@@ -7,6 +7,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
+import { getPluginValueInstance, runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 import {
   formatBonjourInstanceName,
@@ -25,8 +26,10 @@ export type GatewayDiscovery = {
 };
 type DiscoveryGeneration = {
   mode: MdnsDiscoveryMode;
-  services: Iterator<PluginGatewayDiscoveryServiceRegistration>;
-  stops: Array<() => void | Promise<void>>;
+  services: Map<
+    PluginGatewayDiscoveryServiceRegistration,
+    { started?: boolean; stop?: () => void | Promise<void> }
+  >;
   claim: GatewayPluginRuntimeClaim;
   waiting: boolean;
 };
@@ -59,8 +62,16 @@ export async function startGatewayDiscovery(params: {
     return cleanup;
   };
   const stopGeneration = async (generation?: DiscoveryGeneration) => {
-    for (const stop of generation?.stops.splice(0).toReversed() ?? []) {
-      void stopService(stop);
+    for (const [entry, advertisement] of [...(generation?.services ?? [])].toReversed()) {
+      if (current !== generation && current?.services.get(entry) === advertisement) {
+        continue;
+      }
+      generation?.services.delete(entry);
+      const stop = advertisement.stop;
+      advertisement.stop = undefined;
+      if (stop) {
+        void stopService(stop);
+      }
     }
     // Timed-out starts may acquire handles while another stop is awaiting I/O.
     // Drain those acquired callbacks too, without joining unresolved starts.
@@ -158,12 +169,12 @@ export async function startGatewayDiscovery(params: {
           process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS?.trim(),
         ),
       ) ?? 5_000;
-    for (;;) {
-      const drained = cleanup;
-      await drained;
-      if (drained !== cleanup) {
-        continue;
-      }
+    for (const [entry, advertisement] of generation.services) {
+      let drained: Promise<void>;
+      do {
+        drained = cleanup;
+        await drained;
+      } while (drained !== cleanup);
       // Keep cleanup, ownership checks, and publication in one continuation.
       if (!localEnabled || !isCurrent(generation)) {
         return;
@@ -172,36 +183,50 @@ export async function startGatewayDiscovery(params: {
         waitForClaim(generation);
         return;
       }
-      const next = generation.services.next();
-      if (next.done) {
-        return;
+      if (advertisement.started) {
+        continue;
       }
-      const entry = next.value;
+      advertisement.started = true;
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const started = (async () => entry.service.advertise(context))()
-        .then(async (handle) => {
-          if (handle?.stop) {
-            if (isCurrent(generation)) {
-              generation.stops.push(handle.stop);
-              if (!generation.claim.isCurrent()) {
-                waitForClaim(generation);
-              }
-            } else {
-              await stopService(handle.stop);
+      const instance = entry.instance ?? getPluginValueInstance(entry.service);
+      const start = async () => {
+        let handle: Awaited<ReturnType<typeof entry.service.advertise>>;
+        try {
+          handle = await entry.service.advertise(context);
+        } catch (error) {
+          // A settled acquisition failure can retry on the next update; acquired handles cannot.
+          advertisement.started = false;
+          throw error;
+        }
+        if (handle?.stop) {
+          const stop = handle.stop;
+          const invokeStop = () => stop.call(handle);
+          const stopOwned = () =>
+            instance ? instance.runCleanup(invokeStop) : runPluginCleanup(stop, invokeStop);
+          if (!closed && current?.services.get(entry) === advertisement) {
+            advertisement.stop = stopOwned;
+            if (!current.claim.isCurrent()) {
+              waitForClaim(current);
             }
+          } else {
+            await stopService(stopOwned);
           }
-          if (timedOut) {
-            params.logDiscovery.warn(
-              `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
-            );
-          }
-        })
-        .catch((err: unknown) => {
+        }
+        if (timedOut) {
+          params.logDiscovery.warn(
+            `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
+          );
+        }
+      };
+      // Admission spans handle adoption, including cleanup of a late acquisition.
+      const started = (async () => (instance ? instance.run(start) : start()))().catch(
+        (err: unknown) => {
           params.logDiscovery.warn(
             `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
           );
-        });
+        },
+      );
       await Promise.race([
         started,
         new Promise<void>((resolve) => {
@@ -227,15 +252,15 @@ export async function startGatewayDiscovery(params: {
     ) {
       return Promise.resolve();
     }
+    const previous = current;
+    const retained = mode === nextMode ? previous?.services : undefined;
     mode = nextMode;
     services = nextServices;
     claim = nextClaim;
-    const previous = current;
-    // Fence before awaiting cleanup so late startup cannot retain an obsolete beacon.
+    // Exact retained registrations keep acquired and pending handles across publication.
     const generation = (current = {
       mode,
-      services: services.values(),
-      stops: [],
+      services: new Map(services.map((entry) => [entry, retained?.get(entry) ?? {}])),
       claim,
       waiting: false,
     });
