@@ -234,7 +234,7 @@ suite.define(() => {
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await place.getByText("Machine", { exact: true }).waitFor();
-      await place.getByRole("button", { name: /Fast/ }).click();
+      await place.locator('[data-value="machine:fast"]').click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Where: aws, Fast");
@@ -418,7 +418,7 @@ suite.define(() => {
       const retainedCloudProfile = place.locator('[data-value="cloud:aws"]');
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
       await retainedCloudProfile.hover();
-      const retainedMachine = place.getByRole("button", { name: /Fast/ });
+      const retainedMachine = place.locator('[data-value="machine:fast"]');
       await expect.poll(() => retainedMachine.isVisible()).toBe(true);
       await expect.poll(() => retainedMachine.getAttribute("aria-pressed")).toBe("true");
       if (captureUiProofEnabled) {
