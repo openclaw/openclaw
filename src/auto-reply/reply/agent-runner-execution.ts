@@ -524,6 +524,9 @@ async function executeAgentTurnInternalLoop(
     ...(terminalRunFailed && fallbackCycleState.postCompactionModelAttempted
       ? { postCompactionModelFailure: true as const }
       : {}),
+    ...(!terminalRunFailed && fallbackCycleState.sessionCompactionRequest
+      ? { agentCompactionRequest: fallbackCycleState.sessionCompactionRequest }
+      : {}),
   };
 }
 
@@ -559,8 +562,9 @@ async function executeAgentTurnInternal(
     sessionFile: params.followupRun.run.sessionFile,
     abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
   });
+  let internalResult: AgentTurnInternalResult;
   try {
-    return await executeAgentTurnInternalLoop(
+    internalResult = await executeAgentTurnInternalLoop(
       params,
       commitTerminalOutcome,
       commitMcpAppModelContext,
@@ -578,6 +582,12 @@ async function executeAgentTurnInternal(
       );
     }
   }
+  // The recorded agent-compaction request, if any, travels on the internal
+  // result; the finalize side schedules it after delivery settlement (see
+  // scheduleReplyRequestedTurnCompaction). Running it here would make a
+  // non-streamed final reply wait for the whole summarization request, and
+  // running it before lifecycle completion would trip the `active_run` guard.
+  return internalResult;
 }
 
 /** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
@@ -685,6 +695,7 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         kind: "settled",
         maintenanceAuthProfile: internal.maintenanceAuthProfile,
         compactionRequestBudget: internal.compactionRequestBudget,
+        agentCompactionRequest: internal.agentCompactionRequest,
         ...terminalStatus,
         result: internal.result,
         resolved: { provider, model },

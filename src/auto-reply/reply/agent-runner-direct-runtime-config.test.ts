@@ -92,6 +92,7 @@ vi.mock("./reply-media-paths.js", () => ({
 vi.mock("./agent-runner-memory.js", () => ({
   runSessionCompactionIfNeeded: (...args: unknown[]) => runSessionCompactionIfNeededMock(...args),
   runMemoryFlushIfNeeded: (...args: unknown[]) => runMemoryFlushIfNeededMock(...args),
+  runAgentRequestedCompactionIfNeeded: async () => {},
 }));
 
 vi.mock("./agent-runner-execution.js", async () => {

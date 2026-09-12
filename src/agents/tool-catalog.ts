@@ -250,6 +250,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "session_compact",
+    description: "Summarize and archive the session's older context",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "subagents",
     description: "Background work: subagents, media gen, automation runs. list/cancel.",
     sectionId: "sessions",

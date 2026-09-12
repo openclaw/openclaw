@@ -334,6 +334,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             skillUsagePaths: params.skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: params.onYield,
+            onRequestSessionCompaction: attempt.onRequestSessionCompaction,
           });
           // The built-in harness retains its existing authoritative wrappers.
           // Only plugin harnesses receive and require the projected host capability.
