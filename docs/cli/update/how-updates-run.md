@@ -69,7 +69,9 @@ host links target the staged candidate. Path aliases that resolve to a running
 package's bundled plugin use the staged bundled plugin with the same ID when
 available, preserving bundled trust. External path installs keep their existing
 classification. The live plugin files and host links stay unchanged. Channels,
-cron, automatic updates, and other side services are suppressed in this canary.
+cron, automatic updates, background task maintenance, and other side services are
+suppressed in this canary. Copied task records remain available for startup
+validation without recovery or pruning.
 
 Candidate build and rehearsal processes resolve source-linked plugin SDKs from
 the candidate root, even when the serving source launcher passed its own checkout
