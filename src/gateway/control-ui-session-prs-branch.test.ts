@@ -153,6 +153,30 @@ describe("session branch diff stats", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("discovers GitHub identity locally and skips network for default, non-GitHub, and detached checkouts", async () => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await trackRemote("main");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    const fetchImpl = routedFetch([]);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:discovery", refresh: true },
+        { fetchImpl, resolveGitRoot: async () => root },
+      );
+    await expect(load()).resolves.toEqual({
+      pullRequests: [],
+      rateLimited: false,
+      repository: { owner: "openclaw", repo: "openclaw" },
+    });
+    await git("remote", "set-url", "origin", "https://gitlab.com/openclaw/openclaw.git");
+    await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
+    await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("checkout", "--detach");
+    await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
+    expect(fetchImpl.mock.calls).toHaveLength(0);
+  });
+
   it("counts committed and uncommitted changes vs the origin default merge base", async () => {
     await initializeFeatureBranch("one\ntwo\n");
     // Stand in for the remote default branch without a real remote.
@@ -471,16 +495,21 @@ describe("session branch diff stats", () => {
     });
   });
 
-  it("omits the branch payload when the default branch is unknown", async () => {
-    await initializeRepo();
-    await git("checkout", "-b", "feature");
-    await trackRemote("feature");
-
-    const result = await loadBranchState({
-      // No defaultBranch: origin/HEAD unresolvable in this checkout.
-      defaultBranch: null,
-    });
-    // Fail closed: without a default branch there is nothing to compare against.
-    expect(result.branch).toBeUndefined();
-  });
+  it.each([null, "main"])(
+    "handles a missing default tracking ref when the known default branch is %s",
+    async (defaultBranch) => {
+      await initializeRepo();
+      await git("checkout", "-b", "feature");
+      await trackRemote("feature");
+      const result = await loadBranchState({ defaultBranch });
+      if (defaultBranch) {
+        // An unavailable local comparison must not hide a known pushed branch.
+        expect(result.branch?.createUrl).toBe(
+          "https://github.com/openclaw/openclaw/pull/new/feature",
+        );
+      } else {
+        expect(result.branch).toBeUndefined();
+      }
+    },
+  );
 });

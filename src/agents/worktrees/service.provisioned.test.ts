@@ -6,9 +6,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as commandRunner from "../../process/exec-runner.js";
+import * as commandSpawner from "../../process/exec-spawn.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
 import { snapshotProvisionedFiles } from "./provisioned-files.js";
 import {
+  getRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
@@ -81,6 +85,86 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("reuses snapshot inventories while round-tripping Git and provisioned contents", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\nignored/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure provisioned snapshot");
+    await fs.writeFile(path.join(repo, "settings.local"), "synthetic source\n");
+    const created = await service.create({ repoRoot: repo, name: "inventory", baseRef: "HEAD" });
+    await fs.writeFile(path.join(created.path, "README.md"), "edited tracked content\n");
+    await fs.writeFile(path.join(created.path, "untracked.txt"), "new content\n");
+    await fs.writeFile(path.join(created.path, "settings.local"), "synthetic local\n");
+    await fs.mkdir(path.join(created.path, "ignored"));
+    await fs.writeFile(path.join(created.path, "ignored", "cache.txt"), "rebuildable\n");
+    const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
+    try {
+      await service.remove({ id: created.id, reason: "test" });
+      const broad = commands.mock.calls
+        .map(([argv]) => argv)
+        .filter((argv) => argv[0] === "git" && !argv.includes("--"));
+      expect(
+        broad.filter((argv) => argv.includes("ls-files") && !argv.includes("--others")).length,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        broad.filter(
+          (argv) =>
+            argv.includes("ls-files") &&
+            argv.includes("--ignored") &&
+            argv.includes("--exclude-standard"),
+        ).length,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        broad.filter((argv) => argv.includes("ls-tree") && argv.includes("-r")).length,
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      commands.mockRestore();
+    }
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "edited tracked content\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
+      "new content\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, "settings.local"), "utf8")).toBe(
+      "synthetic local\n",
+    );
+    await expect(fs.stat(path.join(restored.path, "ignored", "cache.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("preserves the checkout when HEAD changes during snapshot preparation", async () => {
+    const created = await service.create({ repoRoot: repo, name: "head-change", baseRef: "HEAD" });
+    const runCommand = commandRunner.runCommandBuffersWithTimeout;
+    let changed = false;
+    const commands = vi
+      .spyOn(commandRunner, "runCommandBuffersWithTimeout")
+      .mockImplementation(async (...args) => {
+        if (args[0][0] === "git" && args[0].includes("read-tree") && !changed) {
+          changed = true;
+          await fs.writeFile(path.join(created.path, "later.txt"), "later commit\n");
+          await git(created.path, "add", "later.txt");
+          await git(created.path, "commit", "-m", "advance HEAD during preparation");
+        }
+        return await runCommand(...args);
+      });
+    try {
+      await expect(service.remove({ id: created.id, reason: "test" })).rejects.toThrow(
+        "HEAD changed",
+      );
+      expect(changed).toBe(true);
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+      expect(await fs.readFile(path.join(created.path, "later.txt"), "utf8")).toBe(
+        "later commit\n",
+      );
+    } finally {
+      commands.mockRestore();
+    }
+  });
+
   it.each([false, true])(
     "skips inventories for absent provisioned contents and restores their state (deleted=%s)",
     async (deleted) => {
@@ -102,16 +186,20 @@ describe("ManagedWorktreeService provisioned state", () => {
       const oldBytes = new TextEncoder().encode("old");
       insertRegistryWorktreeProvisionedChunk(env, { ...oldChunk, data: oldBytes });
       const guard = vi.fn();
-      const commands = vi.spyOn(commandRunner, "runCommandWithTimeout");
+      const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
       try {
         await expect(
-          snapshotProvisionedFiles(env, created.id, created.path, ledger, () => {
-            throw new Error("authority changed");
+          snapshotProvisionedFiles(env, created.id, created.path, ledger, {
+            assertCurrent: () => {
+              throw new Error("authority changed");
+            },
           }),
         ).rejects.toThrow("authority changed");
         expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
         expect(
-          await snapshotProvisionedFiles(env, created.id, created.path, ledger, guard),
+          await snapshotProvisionedFiles(env, created.id, created.path, ledger, {
+            assertCurrent: guard,
+          }),
         ).toEqual(expected);
         expect(guard).toHaveBeenCalled();
         expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
@@ -131,6 +219,62 @@ describe("ManagedWorktreeService provisioned state", () => {
       });
     },
   );
+
+  it("cancels and joins a parent provisioned-membership child before removal settles", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure provisioned cancellation");
+    await fs.writeFile(path.join(repo, "settings.local"), "synthetic provisioned bytes\n");
+    const created = await service.create({ repoRoot: repo, name: "cancelled", baseRef: "HEAD" });
+    const marker = path.join(root, "membership-child.pid");
+    const runCommand = commandRunner.runCommandWithTimeout;
+    let membershipStarted = false;
+    const commands = vi
+      .spyOn(commandRunner, "runCommandWithTimeout")
+      .mockImplementation(async (argv, options) => {
+        if (argv.includes("--literal-pathspecs") && argv.includes("--ignored")) {
+          membershipStarted = true;
+          // Use a real held child to exercise cancellation at the process boundary.
+          return await runCommand(
+            [
+              process.execPath,
+              "-e",
+              'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);',
+              marker,
+            ],
+            options,
+          );
+        }
+        return await runCommand(argv, options);
+      });
+    const abort = new AbortController();
+    const pending = service.remove({ id: created.id, reason: "test", signal: abort.signal }).then(
+      () => false,
+      () => true,
+    );
+    let pid: number | undefined;
+    try {
+      pid = await waitForPidFile(marker);
+      expect(membershipStarted).toBe(true);
+      expect(isPidAlive(pid!)).toBe(true);
+      abort.abort(new Error("fixture membership cancelled"));
+      await vi.waitFor(() => expect(isPidAlive(pid!)).toBe(false), { timeout: 5_000 });
+      expect(await pending).toBe(true);
+      expect(isPidAlive(pid!)).toBe(false);
+      expect(await fs.readFile(path.join(created.path, "settings.local"), "utf8")).toBe(
+        "synthetic provisioned bytes\n",
+      );
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+    } finally {
+      abort.abort();
+      killPidIfAlive(pid);
+      await pending;
+      commands.mockRestore();
+    }
+    expect((await service.remove({ id: created.id, reason: "retry" })).removed).toBe(true);
+  });
 
   it("snapshots large provisioned files without buffering them in the service", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "large.local\n");
@@ -432,9 +576,9 @@ describe("ManagedWorktreeService provisioned state", () => {
     const originalHead = await git(created.path, "rev-parse", "HEAD");
     const localPath = path.join(created.path, "README.md");
     await fs.rm(localPath);
-    const runCommand = commandRunner.runCommandWithTimeout;
+    const runCommand = commandRunner.runCommandBuffersWithTimeout;
     let reappeared = false;
-    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
+    const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
     commandSpy.mockImplementation(async (...args) => {
       const argv = args[0];
       if (argv[0] === "git" && argv.includes("update-index") && argv.includes("--stdin")) {
@@ -480,13 +624,13 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.rm(parentPath);
     await fs.mkdir(parentPath);
     await fs.writeFile(childPath, "discovered child\n");
-    const runCommand = commandRunner.runCommandWithTimeout;
+    const runCommand = commandRunner.runCommandBuffersWithTimeout;
     let disappeared = false;
     let reappeared = false;
-    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
+    const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
     commandSpy.mockImplementation(async (...args) => {
       const argv = args[0];
-      if (argv[0] === "git" && argv.includes("read-tree") && argv.at(-1) === "HEAD") {
+      if (argv[0] === "git" && argv.includes("read-tree") && argv.at(-1) === originalHead) {
         const result = await runCommand(...args);
         expect(result.code).toBe(0);
         expect(disappeared).toBe(false);

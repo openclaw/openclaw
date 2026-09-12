@@ -1,10 +1,10 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
-import { createSessionPullRequestCache } from "./control-ui-session-pr-cache.js";
+import { createRetainedCache } from "./retained-cache.js";
 
-describe("session PR cache retention", () => {
+describe("retained cache", () => {
   it("retains watched entries beyond the unobserved bound and releases them on retirement", () => {
-    const cache = createSessionPullRequestCache<number>();
+    const cache = createRetainedCache<number>();
     const watchers = Array.from({ length: 300 }, () => new AbortController());
     for (const [index, watcher] of watchers.entries()) {
       cache.set(String(index), index, watcher.signal);
@@ -23,7 +23,7 @@ describe("session PR cache retention", () => {
   });
 
   it("shares refreshed entries while releasing only the departing watcher's pin", () => {
-    const cache = createSessionPullRequestCache<number>();
+    const cache = createRetainedCache<number>();
     const first = new AbortController();
     const second = new AbortController();
     cache.set("shared", 1, first.signal);
@@ -40,7 +40,7 @@ describe("session PR cache retention", () => {
   });
 
   it("releases replaced keys and cannot repin after abort or accumulate listeners", () => {
-    const cache = createSessionPullRequestCache<number>();
+    const cache = createRetainedCache<number>();
     const watcher = new AbortController();
     for (let index = 0; index < 300; index++) {
       cache.get(String(index), watcher.signal);

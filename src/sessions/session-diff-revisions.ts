@@ -1,8 +1,5 @@
 import type { SessionsDiffResult } from "../../packages/gateway-protocol/src/index.js";
 import { runGit } from "../agents/worktrees/git.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
-
-const emptyTreesInFlight = new Map<string, Promise<string>>();
 
 type GitOutput = (
   cwd: string,
@@ -13,6 +10,7 @@ type GitOutput = (
 /** Picks the merge base used for branch-relative session diffs. */
 export async function resolveSessionDiffBase(params: {
   branch: string | undefined;
+  head: string;
   gitOut: GitOutput;
   root: string;
 }): Promise<{ base: string; baseRef: string }> {
@@ -24,7 +22,7 @@ export async function resolveSessionDiffBase(params: {
   const remoteDefault = defaultRef?.trim() || null;
   const defaultShort = remoteDefault?.replace(/^origin\//, "");
   if (remoteDefault && defaultShort && params.branch && params.branch !== defaultShort) {
-    const mergeBase = await params.gitOut(params.root, ["merge-base", remoteDefault, "HEAD"]);
+    const mergeBase = await params.gitOut(params.root, ["merge-base", remoteDefault, params.head]);
     if (mergeBase?.trim()) {
       return { base: mergeBase.trim(), baseRef: defaultShort };
     }
@@ -39,14 +37,18 @@ export async function resolveSessionDiffBase(params: {
         candidate,
       ]);
       if (verified?.trim()) {
-        const mergeBase = await params.gitOut(params.root, ["merge-base", candidate, "HEAD"]);
+        const mergeBase = await params.gitOut(params.root, [
+          "merge-base",
+          verified.trim(),
+          params.head,
+        ]);
         if (mergeBase?.trim()) {
           return { base: mergeBase.trim(), baseRef: candidate };
         }
       }
     }
   }
-  return { base: "HEAD", baseRef: "HEAD" };
+  return { base: params.head, baseRef: "HEAD" };
 }
 
 /** Resolves the repository-format-specific empty tree without writing it. */
@@ -54,17 +56,8 @@ export async function resolveSessionDiffEmptyTree(
   root: string,
 ): Promise<{ base: string; baseRef?: string } | null> {
   try {
-    // Concurrent starts share this immutable hash, never HEAD or file contents.
-    // Evict on settlement so a replaced repository or failed command is read afresh.
-    const emptyTree = await getOrCreatePromise(
-      emptyTreesInFlight,
-      root,
-      async () => {
-        const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
-        return result.code === 0 ? result.stdout.trim() : "";
-      },
-      { evictOnSettled: true },
-    );
+    const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
+    const emptyTree = result.code === 0 ? result.stdout.trim() : "";
     return emptyTree ? { base: emptyTree } : null;
   } catch {
     return null;
@@ -100,7 +93,7 @@ export async function loadSessionDiffBranchMetadata(params: {
   if (params.base === "HEAD" || params.base === params.head) {
     return {};
   }
-  const range = `${params.base}..HEAD`;
+  const range = `${params.base}..${params.head}`;
   const [aheadText, commitsText, mergeBaseText] = await Promise.all([
     params.gitOut(params.root, ["rev-list", "--count", range]),
     params.gitOut(params.root, ["log", "--max-count=50", "--format=%h%x00%s", range, "--"]),

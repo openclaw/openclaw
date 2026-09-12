@@ -33,6 +33,17 @@ import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
+function isWorktreeAdd(argv: readonly string[]): boolean {
+  if (argv[0] !== "git") {
+    return false;
+  }
+  let command = 1;
+  while (argv[command] === "-c" || argv[command] === "-C") {
+    command += 2;
+  }
+  return argv[command] === "worktree" && argv[command + 1] === "add";
+}
+
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
   checkoutBases: string[],
@@ -40,7 +51,7 @@ function expectCheckoutTimeouts(
   const gitCommands = commandSpy.mock.calls
     .filter(([argv]) => argv[0] === "git")
     .map(([argv, options]) => ({
-      checkout: argv[3] === "worktree" && argv[4] === "add",
+      checkout: isWorktreeAdd(argv),
       base: argv.at(-1),
       timeoutMs: typeof options === "number" ? options : options.timeoutMs,
     }));
@@ -477,9 +488,11 @@ describe("ManagedWorktreeService", () => {
       const controller = new AbortController();
       const closed = new Error("admission closed");
       let authorityClosed = false;
+      let checkoutFailed = false;
       commandSpy.mockImplementation(async (...args) => {
         const result = await runCommand(...args);
-        if (args[0][3] === "worktree" && args[0][4] === "add" && result.code !== 0) {
+        if (isWorktreeAdd(args[0]) && result.code !== 0) {
+          checkoutFailed = true;
           if (admission === "aborted") {
             controller.abort(closed);
           }
@@ -501,12 +514,14 @@ describe("ManagedWorktreeService", () => {
         await expect(creation).rejects.toMatchObject(
           admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
         );
+        expect(checkoutFailed).toBe(true);
         expectCheckoutTimeouts(commandSpy, ["origin/main"]);
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
         expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
         return;
       }
       const created = await creation;
+      expect(checkoutFailed).toBe(true);
       expect(created.baseRef).toBe("HEAD");
       expect(await git(created.path, "rev-parse", "HEAD")).toBe(
         await git(repo, "rev-parse", "HEAD"),

@@ -15,7 +15,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset.test-support.js";
@@ -286,10 +286,10 @@ describe("resetReplyRunSession", () => {
     });
     expect(activeSessionEntry?.sessionDiffBaselineCapture).toBeUndefined();
     await fs.writeFile(path.join(workspace, "after-reset.txt"), "resumed turn\n", "utf8");
-    const diff = await loadCheckoutDiff({ cwd: workspace, sessionKey });
-    const filtered = await applySessionDiffBaseline({
+    const filtered = await loadCheckoutDiff({
+      cwd: workspace,
+      sessionKey,
       baseline: activeSessionEntry?.sessionDiffBaseline,
-      diff,
       sessionId: "session",
     });
     expect(filtered.files.map((file) => file.path)).toEqual(["after-reset.txt"]);

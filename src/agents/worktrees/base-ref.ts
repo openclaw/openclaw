@@ -22,6 +22,7 @@ export async function resolveWorktreeBase(
   repoRoot: string,
   baseRef?: string,
   signal?: AbortSignal,
+  assertCurrent?: () => void,
 ): Promise<ResolvedWorktreeBase> {
   if (baseRef) {
     const verified = await runGit(
@@ -34,7 +35,7 @@ export async function resolveWorktreeBase(
         "--end-of-options",
         `${baseRef === "-" ? "@{-1}" : baseRef}^{commit}`,
       ],
-      { signal },
+      { signal, beforeRun: assertCurrent },
     );
     signal?.throwIfAborted();
     if (
@@ -57,7 +58,7 @@ export async function resolveWorktreeBase(
     const gitOperand = baseRef !== "-" && baseRef.startsWith("-") ? commit : baseRef;
     return { commit, gitOperand, recordRef: baseRef, remote: false };
   }
-  const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal });
+  const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal, beforeRun: assertCurrent });
   signal?.throwIfAborted();
   if (fetched.termination === "exit" && fetched.code === 0) {
     const remoteHead = await runGit(repoRoot, [
@@ -68,9 +69,9 @@ export async function resolveWorktreeBase(
     ]);
     if (remoteHead.termination === "exit" && remoteHead.code === 0 && remoteHead.stdout.trim()) {
       const remoteRef = remoteHead.stdout.trim();
-      const resolved = await resolveWorktreeBase(repoRoot, remoteRef, signal);
+      const resolved = await resolveWorktreeBase(repoRoot, remoteRef, signal, assertCurrent);
       return { ...resolved, remote: true };
     }
   }
-  return await resolveWorktreeBase(repoRoot, "HEAD", signal);
+  return await resolveWorktreeBase(repoRoot, "HEAD", signal, assertCurrent);
 }

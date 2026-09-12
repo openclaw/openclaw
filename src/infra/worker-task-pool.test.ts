@@ -182,6 +182,46 @@ describe("worker task pool", () => {
     },
   );
 
+  it("moves worker-owned host request bytes out of the worker", async () => {
+    const pool = createPool();
+    let transferred: ArrayBuffer | undefined;
+    const result = await pool.run(
+      { label: "request bytes", exchanges: 2, relayBuffer: true },
+      {
+        timeoutMs: 10_000,
+        onRequest: async (value) => {
+          const request = value as { buffer?: ArrayBuffer };
+          if (request.buffer) {
+            transferred = request.buffer;
+            return { input: null, timeoutMs: 10_000 };
+          }
+          const bytes = new ArrayBuffer(1024 * 1024);
+          new Uint8Array(bytes).set([31, 47]);
+          return { input: bytes, transferList: [bytes], timeoutMs: 10_000 };
+        },
+      },
+    );
+    expect(result.relayedBufferBytes).toBe(0);
+    expect(transferred?.byteLength).toBe(1024 * 1024);
+    expect(new Uint8Array(transferred!).slice(0, 2)).toEqual(new Uint8Array([31, 47]));
+  });
+
+  it("transfers owned host reply bytes without retaining a copy in the parent", async () => {
+    const pool = createPool();
+    const bytes = new ArrayBuffer(1024 * 1024);
+    new Uint8Array(bytes).set([17, 29, 43]);
+    const result = await pool.run(
+      { label: "host bytes", exchanges: 1 },
+      {
+        timeoutMs: 10_000,
+        onRequest: async () => ({ input: bytes, transferList: [bytes], timeoutMs: 10_000 }),
+      },
+    );
+    expect(bytes.byteLength).toBe(0);
+    expect(result.buffer?.byteLength).toBe(1024 * 1024);
+    expect(new Uint8Array(result.buffer!).slice(0, 3)).toEqual(new Uint8Array([17, 29, 43]));
+  });
+
   it.each(["abort", "close"] as const)(
     "keeps host cancellation callbacks in the admitted caller context on %s",
     async (ending) => {

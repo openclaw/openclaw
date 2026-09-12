@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createRetainedCache } from "../infra/retained-cache.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import { createSessionPullRequestCache } from "./control-ui-session-pr-cache.js";
 import {
   createControlUiSessionPullRequestSubscriptions,
   parseControlUiSessionPullRequestsSubscribeParams,
@@ -34,7 +34,7 @@ describe("control UI session PR subscriptions", () => {
   ])(
     "retires cache retention before late completion on $cleanup with failing=$failing",
     async ({ cleanup, failing }) => {
-      const cache = createSessionPullRequestCache<number>();
+      const cache = createRetainedCache<number>();
       const entered = createDeferred();
       const held = createDeferred();
       const signals: AbortSignal[] = [];

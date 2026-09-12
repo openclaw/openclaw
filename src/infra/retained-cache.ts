@@ -1,11 +1,11 @@
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 const UNWATCHED_CACHE_LIMIT = 100;
 
-/** Watched keys retain one canonical entry per cache until their lifetime ends. */
-export function createSessionPullRequestCache<T>() {
+/** Signal-scoped watchers retain one canonical entry beyond the unobserved bound. */
+export function createRetainedCache<T>() {
   const entries = new Map<string, T>();
-  const retained = new Map<string, { entry: T; watchers: Set<AbortSignal> }>();
+  const retained = new Map<string, { entry: T | undefined; watchers: Set<AbortSignal> }>();
   const pins = new WeakMap<AbortSignal, { key: string; release: () => void }>();
 
   const release = (signal?: AbortSignal) => {
@@ -55,6 +55,23 @@ export function createSessionPullRequestCache<T>() {
       entries.set(key, entry);
       pruneMapToMaxSize(entries, UNWATCHED_CACHE_LIMIT);
       retain(key, entry, signal);
+    },
+    delete(key: string, expected: T): void {
+      if (entries.get(key) === expected) {
+        entries.delete(key);
+      }
+      const current = retained.get(key);
+      if (current && current.entry === expected) {
+        current.entry = undefined;
+      }
+    },
+    clear(): void {
+      for (const current of retained.values()) {
+        for (const signal of current.watchers) {
+          release(signal);
+        }
+      }
+      entries.clear();
     },
     release,
   };

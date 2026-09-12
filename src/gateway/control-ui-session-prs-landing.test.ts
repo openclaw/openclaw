@@ -39,14 +39,12 @@ describe("resolveBranchLanding", () => {
       mergedHeads: [{ sha: "1".repeat(40), baseRef: "release" }],
     },
   ])(
-    "resolves an unpublished branch with $scenario without reading an unused HEAD",
+    "resolves an unpublished branch with $scenario against captured revisions",
     async ({ mergedHeads }) => {
       const base = await sha("HEAD");
       await git("checkout", "-b", "feature");
       await fs.appendFile(path.join(root, "a.txt"), "two\n");
       await git("commit", "-am", "unpublished work");
-      const runGit = vi.spyOn(worktreeGit, "runGit");
-
       expect(
         await resolveBranchLanding(root, {
           branch: "feature",
@@ -55,11 +53,11 @@ describe("resolveBranchLanding", () => {
         }),
       ).toEqual({
         pushedSha: null,
+        defaultSha: base,
         statsBase: base,
         hasLandedPullRequest: false,
         provenNewPushedWork: false,
       });
-      expect(runGit).not.toHaveBeenCalledWith(root, ["rev-parse", "HEAD"]);
     },
   );
 
@@ -79,6 +77,7 @@ describe("resolveBranchLanding", () => {
 
     expect(landing).toEqual({
       pushedSha: mergedHead,
+      defaultSha: await sha("refs/remotes/origin/main"),
       statsBase: mergedHead,
       hasLandedPullRequest: true,
       provenNewPushedWork: false,

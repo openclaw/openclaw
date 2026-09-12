@@ -4,13 +4,12 @@
 // (the Create PR gate). Pure local-git reasoning; GitHub facts come in as
 // MergedPullHead records.
 import { runGit } from "../agents/worktrees/git.js";
-
-/** Lowercased merged-PR head, the base it merged into, and its merge commit. */
-export type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
+import type { GitMergedPullHead as MergedPullHead } from "../infra/git-read-operations.js";
 
 type BranchLanding = {
   /** origin/<branch> tip when the remote-tracking ref resolves. */
   pushedSha: string | null;
+  defaultSha: string | null;
   /** Newest known-published commit to diff the working tree against. */
   statsBase: string | null;
   /** At least one merged PR provably landed on the default branch. */
@@ -99,8 +98,7 @@ export async function resolveBranchLanding(
     (head) =>
       head.baseRef === params.defaultBranch || Boolean(params.defaultBranch && head.mergeCommitSha),
   );
-  // Only possible landings consume HEAD; keep its read order for those records.
-  const headSha = possibleLandings.length ? await gitOutput(root, ["rev-parse", "HEAD"]) : null;
+  const headSha = await gitOutput(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
   // Only merges whose content reached this checkout's default branch prove
   // the tip landed there: a direct default-base merge, or a landing through
   // another branch (feature -> release -> main) whose merge commit is now
@@ -108,21 +106,25 @@ export async function resolveBranchLanding(
   // release/staging branch must not hide Create PR. Filtered here, not in
   // the snapshot cache, because the cache key has no default branch.
   const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
+  const defaultSha = defaultRef
+    ? await gitOutput(root, ["rev-parse", "--verify", "--quiet", defaultRef])
+    : null;
   const landedHeads: MergedPullHead[] = [];
   for (const head of possibleLandings) {
     if (head.baseRef === params.defaultBranch) {
       landedHeads.push(head);
     } else if (
-      defaultRef &&
+      defaultSha &&
       head.mergeCommitSha &&
-      (await isAncestor(root, head.mergeCommitSha, defaultRef))
+      (await isAncestor(root, head.mergeCommitSha, defaultSha))
     ) {
       landedHeads.push(head);
     }
   }
   // PRs may share a head; their distinct landing receipts still need individual checks below.
   const landedShas = new Set(landedHeads.map((head) => head.sha));
-  const mergeBase = defaultRef ? await gitOutput(root, ["merge-base", defaultRef, "HEAD"]) : null;
+  const mergeBase =
+    defaultSha && headSha ? await gitOutput(root, ["merge-base", defaultSha, headSha]) : null;
   // The stats base is the newest commit whose content is known-published:
   // the ordinary default-branch merge base, or a merged PR head related to
   // HEAD by ancestry (a HEAD trailing the merged tip is fully landed, so
@@ -166,6 +168,7 @@ export async function resolveBranchLanding(
   }
   return {
     pushedSha,
+    defaultSha,
     statsBase,
     hasLandedPullRequest: landedHeads.length > 0,
     provenNewPushedWork,

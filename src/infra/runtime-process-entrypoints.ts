@@ -9,6 +9,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../media/image-processor.worker",
     distWorkerPath: "media/image-processor.worker.js",
   },
+  gitOperations: {
+    currentModuleUrl,
+    sourceWorkerName: "git-operation.worker",
+    distWorkerPath: "infra/git-operation.worker.js",
+  },
   sharedStateStore: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-state.worker",
