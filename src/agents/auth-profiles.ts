@@ -47,6 +47,7 @@ export {
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
   findPersistedAuthProfileCredential,
+  getScopedAuthProfileEnv,
   resolvePersistedAuthProfileOwnerAgentDir,
   withEnvOnlyAuthProfileStore,
   withAuthProfileStoreAgentDir,

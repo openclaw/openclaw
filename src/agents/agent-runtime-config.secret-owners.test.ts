@@ -147,7 +147,7 @@ describe("agent execution respects prepared secret owners", () => {
     const revision = getRuntimeConfigSnapshotMetadata()?.revision;
     const clone = vi.spyOn(globalThis, "structuredClone");
 
-    const result = await resolveAgentRuntimeConfig(runtime);
+    const { cfg: result } = await resolveAgentRuntimeConfig(runtime);
 
     expect(clone).not.toHaveBeenCalledWith(active?.sourceConfig);
     expect(result).toBe(active?.config);
@@ -165,7 +165,7 @@ describe("agent execution respects prepared secret owners", () => {
       const config =
         entry === "reply"
           ? await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig)
-          : await resolveAgentRuntimeConfig(runtime);
+          : (await resolveAgentRuntimeConfig(runtime)).cfg;
       expect(config).toBe(getRuntimeConfigSnapshot());
       expect(config.models?.providers?.healthy?.apiKey).toBe("prepared-fixture-key");
       expect(config.models?.providers?.ollama?.apiKey).toEqual(
@@ -250,7 +250,7 @@ describe("agent execution respects prepared secret owners", () => {
       vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
       for (const config of [
         await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        await resolveAgentRuntimeConfig(runtime),
+        (await resolveAgentRuntimeConfig(runtime)).cfg,
       ]) {
         await expect(
           resolveApiKeyForProviderCore({
@@ -321,7 +321,7 @@ describe("agent execution respects prepared secret owners", () => {
       expect(getActiveSecretsRuntimeConfigSnapshot()?.configRefsPrepared).toBe(true);
       for (const config of [
         await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        await resolveAgentRuntimeConfig(runtime),
+        (await resolveAgentRuntimeConfig(runtime)).cfg,
       ]) {
         expect(config.skills).toEqual(source.skills);
         await expect(
@@ -465,7 +465,7 @@ describe("agent execution respects prepared secret owners", () => {
       resolveAgentRuntimeConfig(runtime, {
         runtimeChannelSecretScope: { channel: "telegram", accountId: "healthy" },
       }),
-    ).resolves.toEqual(snapshot.config);
+    ).resolves.toMatchObject({ cfg: snapshot.config });
     expect(callGatewayMock).not.toHaveBeenCalled();
     await expect(
       resolveQueuedReplyExecutionConfig(snapshot.sourceConfig, {
@@ -511,7 +511,11 @@ describe("agent execution respects prepared secret owners", () => {
 
       const resolved =
         command === "agent"
-          ? await resolveAgentRuntimeConfig(runtime)
+          ? await (async () => {
+              const { cfg, prepareSecretsSnapshot } = await resolveAgentRuntimeConfig(runtime);
+              await prepareSecretsSnapshot?.({});
+              return cfg;
+            })()
           : (
               await resolveCommandConfigWithSecrets({
                 config,
@@ -550,7 +554,7 @@ describe("agent execution respects prepared secret owners", () => {
     callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
     vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
     const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
-    const result = await resolveAgentRuntimeConfig(runtime);
+    const { cfg: result } = await resolveAgentRuntimeConfig(runtime);
     expect(result.models?.providers?.healthy?.apiKey).toBe("local-fixture-key");
     expect(result.channels).toEqual(config.channels);
     expect(result.gateway).toEqual(config.gateway);

@@ -210,7 +210,8 @@ export function withAuthProfileStoreAgentDir<T>(
   return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir, sharedStore, env }, run);
 }
 
-function getScopedAuthProfileEnv(): NodeJS.ProcessEnv | undefined {
+/** Returns the auth-profile owner env (original shared state root) for the active scope, if any. */
+export function getScopedAuthProfileEnv(): NodeJS.ProcessEnv | undefined {
   const mode = authProfileRuntimeMode.getStore();
   return mode?.kind === "agent-dir" ? mode.env : undefined;
 }

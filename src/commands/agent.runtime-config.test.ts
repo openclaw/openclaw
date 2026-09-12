@@ -106,6 +106,8 @@ const prepareSecretsRuntimeSnapshotMock = vi.hoisted(() =>
       config: OpenClawConfig;
       assignmentConfig: OpenClawConfig;
       pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
+      pinnedProfileId?: string;
+      configBoundProfileIds?: ReadonlySet<string>;
     }) => ({
       sourceConfig: params.config,
       config: params.assignmentConfig,
@@ -195,7 +197,8 @@ describe("agentCommand runtime config", () => {
       });
       getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue(null);
 
-      await resolveAgentRuntimeConfig(runtime);
+      const { cfg, prepareSecretsSnapshot } = await resolveAgentRuntimeConfig(runtime);
+      await prepareSecretsSnapshot?.({});
 
       expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
         config: sourceConfig,
@@ -210,6 +213,54 @@ describe("agentCommand runtime config", () => {
         expect.objectContaining({ sourceConfig, config: loadedConfig }),
       );
       expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
+      expect(prepareSecretsSnapshot).toBeTypeOf("function");
+      expect(cfg).toBe(loadedConfig);
+    });
+  });
+
+  it("forwards the authoritative session auth-profile pin into deferred secret prep", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      const sourceConfig = { ...loadedConfig, secrets: { providers: {} } } as OpenClawConfig;
+      readConfigFileSnapshotForWriteMock.mockResolvedValue({
+        snapshot: { valid: true, resolved: sourceConfig },
+        writeOptions: {},
+      });
+      getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue(null);
+
+      const { prepareSecretsSnapshot } = await resolveAgentRuntimeConfig(runtime);
+      await prepareSecretsSnapshot?.({ pinnedProfileId: "nvidia:test" });
+
+      expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith(
+        expect.objectContaining({ config: sourceConfig, assignmentConfig: loadedConfig }),
+      );
+      expect(prepareSecretsRuntimeSnapshotMock.mock.calls[0]?.[0].pinnedProfileId).toBe(
+        "nvidia:test",
+      );
+    });
+  });
+
+  it("forwards extra config-bound auth profiles into deferred secret prep", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      const sourceConfig = { ...loadedConfig, secrets: { providers: {} } } as OpenClawConfig;
+      readConfigFileSnapshotForWriteMock.mockResolvedValue({
+        snapshot: { valid: true, resolved: sourceConfig },
+        writeOptions: {},
+      });
+      getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue(null);
+
+      const { prepareSecretsSnapshot } = await resolveAgentRuntimeConfig(runtime);
+      await prepareSecretsSnapshot?.({ configBoundProfileIds: new Set(["anthropic:verified"]) });
+
+      expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith(
+        expect.objectContaining({ config: sourceConfig, assignmentConfig: loadedConfig }),
+      );
+      expect(prepareSecretsRuntimeSnapshotMock.mock.calls[0]?.[0].configBoundProfileIds).toEqual(
+        new Set(["anthropic:verified"]),
+      );
     });
   });
 
@@ -276,7 +327,7 @@ describe("agentCommand runtime config", () => {
         diagnostics: [],
       });
 
-      const prepared = await resolveAgentRuntimeConfig(runtime);
+      const { cfg, prepareSecretsSnapshot } = await resolveAgentRuntimeConfig(runtime);
 
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
         config: loadedConfig,
@@ -289,7 +340,8 @@ describe("agentCommand runtime config", () => {
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-      expect(prepared).toBe(resolvedConfig);
+      expect(cfg).toBe(resolvedConfig);
+      expect(prepareSecretsSnapshot).toBeUndefined();
     });
   });
 
@@ -436,12 +488,12 @@ describe("agentCommand runtime config", () => {
       const store = path.join(home, "sessions.json");
       const loadedConfig = mockConfig(home, store);
 
-      const prepared = await resolveAgentRuntimeConfig(runtime);
+      const { cfg } = await resolveAgentRuntimeConfig(runtime);
 
       expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
       expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
-      expect(prepared).toBe(loadedConfig);
+      expect(cfg).toBe(loadedConfig);
     });
   });
 

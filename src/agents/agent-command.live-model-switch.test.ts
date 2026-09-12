@@ -77,6 +77,20 @@ const state = vi.hoisted(() => ({
     },
   },
   runtimeConfigMock: undefined as unknown,
+  defaultPrepareSecretsSnapshot: undefined,
+  prepareSecretsSnapshotMock: undefined as
+    | ((params?: {
+        pinnedProfileId?: string;
+        configBoundProfileIds?: ReadonlySet<string>;
+      }) => Promise<void>)
+    | undefined,
+  prepareSecretsSnapshotCalls: [] as (
+    | {
+        pinnedProfileId?: string;
+        configBoundProfileIds?: ReadonlySet<string>;
+      }
+    | undefined
+  )[],
   acpResolveSessionMock: vi.fn((..._args: unknown[]): unknown => null),
   acpRunTurnMock: vi.fn((..._args: unknown[]): unknown => undefined),
   buildAcpResultMock: vi.fn(),
@@ -411,7 +425,11 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("./agent-runtime-config.js", () => {
   return {
-    resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+    resolveAgentRuntimeConfig: async () => ({
+      cfg: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+      prepareSecretsSnapshot:
+        state.prepareSecretsSnapshotMock ?? state.defaultPrepareSecretsSnapshot,
+    }),
   };
 });
 
@@ -1244,6 +1262,78 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.objectContaining({ pluginMetadataSnapshot: manifestMetadataSnapshot }),
     );
     expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("feeds the configured default-model auth-profile binding into secret preparation", async () => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      agents: {
+        defaults: {
+          ...state.defaultRuntimeConfig.agents?.defaults,
+          model: "anthropic/claude@anthropic:verified",
+        },
+      },
+    };
+    const { prepareSecretsSnapshotMock } = state;
+    void prepareSecretsSnapshotMock;
+    state.prepareSecretsSnapshotCalls.length = 0;
+    const callParams: Array<{
+      pinnedProfileId?: string;
+      configBoundProfileIds?: ReadonlySet<string>;
+    }> = [];
+    state.prepareSecretsSnapshotMock = async (params) => {
+      if (params) {
+        callParams.push(params);
+      }
+    };
+
+    const pluginGeneration = {
+      pluginMetadataSnapshot: manifestMetadataSnapshot,
+    } as never;
+    await prepareAgentCommandExecution({ message: "/demo", to: "+1234567890" }, {} as never, {
+      config: {},
+      pluginGeneration,
+    });
+
+    expect(callParams.length).toBe(1);
+    expect(callParams[0]?.configBoundProfileIds?.has("anthropic:verified")).toBe(true);
+  });
+
+  it("does not feed the configured-model binding when an override leaves the default model", async () => {
+    state.prepareSecretsSnapshotCalls.length = 0;
+    const callParams: Array<{
+      pinnedProfileId?: string;
+      configBoundProfileIds?: ReadonlySet<string>;
+    }> = [];
+    state.prepareSecretsSnapshotMock = async (params) => {
+      if (params) {
+        callParams.push(params);
+      }
+    };
+
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      agents: {
+        defaults: {
+          ...state.defaultRuntimeConfig.agents?.defaults,
+          model: "anthropic/claude@anthropic:verified",
+        },
+      },
+    };
+    const pluginGeneration = {
+      pluginMetadataSnapshot: manifestMetadataSnapshot,
+    } as never;
+    await prepareAgentCommandExecution(
+      { message: "/demo", to: "+1234567890", model: "openai/gpt-5.4@openai:other" },
+      {} as never,
+      { config: {}, pluginGeneration },
+    );
+
+    // The override leaves the default model, so the configured-model binding must
+    // not be injected at all (no #145740-on-steroids startup requirement): the
+    // finalizer is still called once (pin pass-through) but with no binding set.
+    expect(callParams.length).toBe(1);
+    expect(callParams[0]?.configBoundProfileIds).toBeUndefined();
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {

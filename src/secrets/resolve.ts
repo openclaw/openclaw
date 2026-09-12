@@ -69,6 +69,8 @@ export type { SecretRefResolveCache } from "./resolve-types.js";
 type ResolveSecretRefOptions = {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  /** Original auth-profile owner env (shared state root) for store-ref resolution. */
+  storeOwnerEnv?: NodeJS.ProcessEnv;
   cache?: SecretRefResolveCache;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
@@ -595,7 +597,9 @@ async function resolveProviderRefs(params: {
       return resolveStoreRefs({
         refs: params.refs,
         providerName: params.providerName,
-        database: { env: params.options.env ?? process.env },
+        database: {
+          env: params.options.storeOwnerEnv ?? params.options.env ?? process.env,
+        },
       });
     }
     if (params.providerConfig.source === "exec") {

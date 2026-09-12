@@ -76,7 +76,10 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./agent-runtime-config.js", () => ({
-  resolveAgentRuntimeConfig: async () => compactionTestState.cfg,
+  resolveAgentRuntimeConfig: async () => ({
+    cfg: compactionTestState.cfg,
+    prepareSecretsSnapshot: undefined,
+  }),
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
