@@ -2,10 +2,13 @@
  * Direct completion fallback and source-delivery evidence for subagent announcements.
  */
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
+import type { ChannelId } from "../../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveOutboundSessionRoute } from "../../../infra/outbound/outbound-session.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
@@ -29,6 +32,46 @@ import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 
 const FAILED_COMPLETION_NOTICE =
   "A delegated task failed before it could report a result. Please retry the task.";
+const MAX_MESSAGING_TOOL_DELIVERY_VERIFICATION_TIMEOUT_MS = 10_000;
+
+async function resolveEquivalentMessagingToolTarget(
+  params: {
+    cfg: OpenClawConfig;
+    requesterSessionKey: string;
+    requesterAgentId?: string;
+    signal?: AbortSignal;
+  },
+  target: MessagingToolDeliveryTarget,
+  expected: SourceDeliveryTarget,
+): Promise<string | undefined> {
+  const agentId = tryResolveSubagentRequesterAgentId(
+    params.cfg,
+    params.requesterSessionKey,
+    params.requesterAgentId,
+  );
+  const channel = normalizeMessageChannel(expected.channel);
+  const provider = target.provider?.trim().toLowerCase();
+  if (
+    !channel ||
+    !agentId ||
+    !target.to?.trim() ||
+    (provider && provider !== "message" && provider !== channel) ||
+    (expected.accountId && target.accountId !== expected.accountId)
+  ) {
+    return undefined;
+  }
+  params.signal?.throwIfAborted();
+  const route = await resolveOutboundSessionRoute({
+    cfg: params.cfg,
+    channel: channel as ChannelId,
+    agentId,
+    accountId: target.accountId ?? expected.accountId ?? null,
+    target: target.to,
+    threadId: target.threadId ?? null,
+    signal: params.signal,
+  });
+  return route?.recipientSessionExact === true ? route.to : undefined;
+}
 
 export function isGatewayAgentRunPending(response: unknown): boolean {
   if (!response || typeof response !== "object") {
@@ -199,20 +242,38 @@ export async function deliverCompletionDirect(params: {
   }
 }
 
-export function hasMessagingToolDeliveryToSource(
-  result: {
-    didDeliverSourceReplyViaMessageTool?: unknown;
-    didSendViaMessagingTool?: unknown;
-    messagingToolSentTargets?: unknown;
-    messagingToolSourceReplyPayloads?: unknown;
-  },
-  deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
-  options?: { requireFinalReply?: boolean },
-): boolean {
+type MessagingToolDeliveryTarget = Parameters<typeof sourceDeliveryTargetsMatch>[0];
+export type SourceDeliveryTarget = Parameters<typeof sourceDeliveryTargetsMatch>[1];
+
+type MessagingToolDeliveryMatchOptions = {
+  requireFinalReply?: boolean;
+  signal?: AbortSignal;
+  /** Resolve provider-native delivery identities to the configured source target. */
+  resolveEquivalentTarget?: (
+    target: MessagingToolDeliveryTarget,
+    deliveryTarget: SourceDeliveryTarget,
+    signal?: AbortSignal,
+  ) => Promise<string | undefined>;
+};
+
+export type MessagingToolDeliveryResult = {
+  didDeliverSourceReplyViaMessageTool?: unknown;
+  didSendViaMessagingTool?: unknown;
+  messagingToolSentTargets?: unknown;
+  messagingToolSourceReplyPayloads?: unknown;
+};
+
+async function hasMessagingToolDeliveryToSource(
+  result: MessagingToolDeliveryResult,
+  deliveryTarget: SourceDeliveryTarget,
+  options?: MessagingToolDeliveryMatchOptions,
+): Promise<boolean> {
   const targets = Array.isArray(result.messagingToolSentTargets)
     ? result.messagingToolSentTargets
     : [];
-  const sourceTargets = targets.filter((target) => {
+  const sourceTargets: MessagingToolDeliveryTarget[] = [];
+  const equivalentTargetCandidates: MessagingToolDeliveryTarget[] = [];
+  for (const target of targets) {
     if (
       !target ||
       typeof target !== "object" ||
@@ -220,17 +281,31 @@ export function hasMessagingToolDeliveryToSource(
       !deliveryTarget.channel ||
       !deliveryTarget.to
     ) {
-      return false;
+      continue;
     }
-    const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
+    // SAFETY: the preceding guards establish the object shape required by this receipt record.
+    const record = target as MessagingToolDeliveryTarget;
     // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
     const sourceTarget =
       typeof record.to === "string" && record.to.trim()
         ? record
         : { ...record, to: deliveryTarget.to };
-    return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
-  });
-  if (options?.requireFinalReply) {
+    if (sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget)) {
+      sourceTargets.push(sourceTarget);
+      continue;
+    }
+    if (!options?.resolveEquivalentTarget || !record.to?.trim()) {
+      continue;
+    }
+    // The existing exact-match path preserves legacy receipts, but a provider
+    // lookup must never turn a missing account into a wildcard.
+    if (deliveryTarget.accountId && record.accountId !== deliveryTarget.accountId) {
+      continue;
+    }
+    equivalentTargetCandidates.push(sourceTarget);
+  }
+
+  const hasFinalSourceDelivery = () => {
     const hasCommittedSourceDelivery =
       hasCommittedSourceReplyDeliveryEvidence(result) ||
       (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
@@ -243,17 +318,172 @@ export function hasMessagingToolDeliveryToSource(
         messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
       }) !== false
     );
-  }
-  if (
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
-    hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
-  ) {
+  };
+  const hasSourceDelivery = () => {
+    if (
+      hasCommittedSourceReplyDeliveryEvidence(result) ||
+      hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
+    ) {
+      return true;
+    }
+
+    if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
+      return hasMessagingToolDeliveryEvidence(result);
+    }
+
+    return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
+  };
+
+  // Exact source receipts are already authoritative. Evaluate them before any
+  // provider-native lookup, so a slow or stuck unrelated lookup cannot erase a
+  // delivery that was confirmed by the gateway result itself.
+  if (options?.requireFinalReply ? hasFinalSourceDelivery() : hasSourceDelivery()) {
     return true;
   }
 
-  if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
-    return hasMessagingToolDeliveryEvidence(result);
+  const resolveEquivalentTarget = options?.resolveEquivalentTarget;
+  if (resolveEquivalentTarget && equivalentTargetCandidates.length > 0) {
+    // Provider-native IDs (for example Slack's D… DM channels) can represent
+    // the configured source user without being textually equal. Resolve all
+    // candidates concurrently: one unrelated lookup may stall, but a source
+    // match that completes must still be allowed to settle the announcement.
+    const hasResolvedSourceDelivery = await Promise.any(
+      equivalentTargetCandidates.map(async (sourceTarget) => {
+        try {
+          const equivalentTarget = await resolveEquivalentTarget(
+            sourceTarget,
+            deliveryTarget,
+            options.signal,
+          );
+          if (
+            equivalentTarget &&
+            sourceDeliveryTargetsMatch({ ...sourceTarget, to: equivalentTarget }, deliveryTarget)
+          ) {
+            sourceTargets.push({ ...sourceTarget, to: equivalentTarget });
+            if (options.requireFinalReply ? hasFinalSourceDelivery() : hasSourceDelivery()) {
+              return true;
+            }
+          }
+        } catch {
+          // Keep the completion owed when the provider cannot verify the recipient.
+        }
+        throw new Error("provider-native source delivery was not verified");
+      }),
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (hasResolvedSourceDelivery) {
+      return true;
+    }
   }
 
-  return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
+  if (options?.requireFinalReply) {
+    return hasFinalSourceDelivery();
+  }
+  return hasSourceDelivery();
+}
+
+export async function resolveMessagingToolDeliveryEvidence(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  result: MessagingToolDeliveryResult;
+  deliveryTarget: SourceDeliveryTarget;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  resolveEquivalentTarget?: MessagingToolDeliveryMatchOptions["resolveEquivalentTarget"];
+}): Promise<{ hasFinalMessagingToolDelivery: boolean; hasMessagingToolDelivery: boolean }> {
+  const verificationTimeoutMs = Math.min(
+    Math.max(params.timeoutMs ?? MAX_MESSAGING_TOOL_DELIVERY_VERIFICATION_TIMEOUT_MS, 1),
+    MAX_MESSAGING_TOOL_DELIVERY_VERIFICATION_TIMEOUT_MS,
+  );
+  const verificationDeadline = new AbortController();
+  const timer = setTimeout(
+    () => verificationDeadline.abort(new Error("messaging tool delivery verification timed out")),
+    verificationTimeoutMs,
+  );
+  timer.unref?.();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, verificationDeadline.signal])
+    : verificationDeadline.signal;
+  const noDelivery: {
+    hasFinalMessagingToolDelivery: boolean;
+    hasMessagingToolDelivery: boolean;
+  } = {
+    hasFinalMessagingToolDelivery: false,
+    hasMessagingToolDelivery: false,
+  };
+  let confirmedMessagingToolDelivery = false;
+  const verificationAborted = new Promise<typeof noDelivery>((resolve) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      resolve({
+        ...noDelivery,
+        // A source progress receipt is independently confirmed even when
+        // final-reply verification is still waiting on another target.
+        hasMessagingToolDelivery: confirmedMessagingToolDelivery,
+      });
+    };
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+  try {
+    const verification = (async () => {
+      const equivalentTargetResolver =
+        params.resolveEquivalentTarget ??
+        ((
+          target: MessagingToolDeliveryTarget,
+          deliveryTarget: SourceDeliveryTarget,
+          callbackSignal?: AbortSignal,
+        ) =>
+          resolveEquivalentMessagingToolTarget(
+            {
+              cfg: params.cfg,
+              requesterSessionKey: params.requesterSessionKey,
+              requesterAgentId: params.requesterAgentId,
+              signal: callbackSignal ?? signal,
+            },
+            target,
+            deliveryTarget,
+          ));
+      const matchOptions = { resolveEquivalentTarget: equivalentTargetResolver, signal };
+      // Capture exact or aggregate evidence before provider-native final
+      // verification can stall. This deliberately omits a resolver so an
+      // unverified native target cannot be credited as delivered.
+      confirmedMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
+        params.result,
+        params.deliveryTarget,
+        { signal },
+      );
+      const hasFinalMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
+        params.result,
+        params.deliveryTarget,
+        { ...matchOptions, requireFinalReply: true },
+      );
+      return {
+        hasFinalMessagingToolDelivery,
+        hasMessagingToolDelivery:
+          hasFinalMessagingToolDelivery ||
+          confirmedMessagingToolDelivery ||
+          (await hasMessagingToolDeliveryToSource(
+            params.result,
+            params.deliveryTarget,
+            matchOptions,
+          )),
+      };
+    })();
+    // The provider callback is cooperative, but completion settlement must not
+    // inherit that implementation detail. Abort the callback when possible and
+    // independently release the completion owner when it ignores the signal.
+    return await Promise.race([verification, verificationAborted]);
+  } finally {
+    clearTimeout(timer);
+    // Verification owns this controller so a successful match also cancels
+    // any concurrent provider lookups that lost the race.
+    verificationDeadline.abort();
+  }
 }

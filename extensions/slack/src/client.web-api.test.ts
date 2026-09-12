@@ -324,6 +324,45 @@ describe("Slack Web API routing", () => {
     }
   });
 
+  it("aborts a lookup when the caller cancels the request", async () => {
+    const controller = new AbortController();
+    let resolveFetchStarted: () => void = () => {};
+    const fetchStarted = new Promise<void>((resolve) => {
+      resolveFetchStarted = resolve;
+    });
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: unknown, init?: { signal?: AbortSignal }) => {
+      requestSignal = init?.signal;
+      resolveFetchStarted();
+      return new Promise<never>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              init.signal?.reason instanceof Error
+                ? init.signal.reason
+                : new Error("request aborted"),
+            ),
+          { once: true },
+        );
+      });
+    });
+    const client = createSlackLookupClient("lookup-cancellation-fixture", {
+      fetch: fetchMock as never,
+      signal: controller.signal,
+      timeout: 30_000,
+    });
+
+    const pending = client.auth.test();
+    await fetchStarted;
+    controller.abort(new Error("caller cancelled lookup"));
+
+    await expect(pending).rejects.toThrow();
+    expect(requestSignal).toBeInstanceOf(AbortSignal);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("rejects rate limits without sleeping through Retry-After", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {

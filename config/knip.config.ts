@@ -18,6 +18,9 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
   "scripts/render-proof-video.mts!",
+  // The PR body invokes these loopback production-path proofs directly.
+  "scripts/proof-announcement-delivery-live.ts!",
+  "scripts/proof-announcement-delivery-settlement.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // mobile-release-authority invokes this helper from composite-action YAML.
