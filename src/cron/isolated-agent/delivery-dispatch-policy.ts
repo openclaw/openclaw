@@ -1,5 +1,5 @@
 /** Formatting, retry, and idempotency policy for direct cron delivery. */
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
@@ -190,23 +190,84 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   });
 }
 
-export function resolveCronDeliveryScheduledAtMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
+function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
   const scheduledAt = params.job.state?.nextRunAtMs;
   return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
 }
 
-export function resolveCronDeliveryStartDelayMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
+function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
   return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
 }
 
-export function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
+function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
   return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+}
+
+/** Closed disposition for a delivery whose run started well past its schedule. */
+export type StaleCronDeliveryAction =
+  | { kind: "fresh" }
+  | { kind: "skip"; deliveryError: string; logMessage: string }
+  | { kind: "deliver-annotated"; notice: string; logMessage: string };
+
+/**
+ * Recurring schedules keep the stale skip: a newer run supersedes the delayed
+ * one, and delivering both would collide (#50092). Nothing supersedes a
+ * one-shot's output, so it delivers with a lateness annotation instead of
+ * being discarded as a false success (#131491).
+ */
+export function resolveStaleCronDeliveryAction(params: {
+  job: CronJob;
+  runStartedAt: number;
+}): StaleCronDeliveryAction {
+  if (!isStaleCronDelivery(params)) {
+    return { kind: "fresh" };
+  }
+  const scheduledAtMs = resolveCronDeliveryScheduledAtMs(params);
+  const scheduledAtIso = new Date(scheduledAtMs).toISOString();
+  const lateMinutes = Math.round(resolveCronDeliveryStartDelayMs(params) / 60_000);
+  const scheduleKind = params.job.schedule.kind;
+  if (scheduleKind !== "at" && scheduleKind !== "on-exit") {
+    const deliveryError = `skipping stale delivery scheduled at ${scheduledAtIso}, started ${lateMinutes}m late, current age ${Math.round((Date.now() - scheduledAtMs) / 60_000)}m`;
+    return { kind: "skip", deliveryError, logMessage: deliveryError };
+  }
+  return {
+    kind: "deliver-annotated",
+    notice: `⏰ Late automation run: scheduled for ${scheduledAtIso}, started ${lateMinutes}m late.`,
+    logMessage: `delivering stale run scheduled at ${scheduledAtIso}, started ${lateMinutes}m late`,
+  };
+}
+
+/** Prepends the lateness notice to the first text payload, or leads with it. */
+export function prependStaleCronDeliveryNotice(
+  payloads: ReplyPayload[],
+  notice: string,
+): ReplyPayload[] {
+  const firstTextIndex = payloads.findIndex((p) => p.text?.trim());
+  const firstTextPayload = payloads[firstTextIndex];
+  if (firstTextIndex === -1 || !firstTextPayload) {
+    // Media-only batches carry no fallbackText linkage (it needs a text
+    // source), so leading with the notice cannot break linked indices.
+    return [{ text: notice }, ...payloads];
+  }
+  const annotatedText = `${notice}\n\n${firstTextPayload.text}`;
+  return payloads.map((payload, index) => {
+    if (index === firstTextIndex) {
+      // Keep WeakMap speech/presentation facts on the annotated clone; TTS
+      // reads them immediately downstream (tagged mode skips synthesis, and
+      // always mode must speak the authored speech, not the notice).
+      return copyReplyPayloadMetadata(payload, { ...payload, text: annotatedText });
+    }
+    // Channel batch normalizers merge a metadata-only payload into its source
+    // only while payload.text, fallbackText.text, and the source text stay
+    // equal; annotating just the source would send an unannotated duplicate.
+    return payload.fallbackText?.replacesPayloadIndex === firstTextIndex
+      ? copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text: annotatedText,
+          fallbackText: { ...payload.fallbackText, text: annotatedText },
+        })
+      : payload;
+  });
 }
 
 export async function maybeApplyTtsToCronPayloads(params: {
