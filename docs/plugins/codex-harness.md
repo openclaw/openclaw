@@ -59,6 +59,17 @@ The sandbox exec-server option does not bypass those tool restrictions. Node-bac
 `remote-exec` on a paired device or cloud worker instead uses its
 placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection. Ending the connection removes that Codex state and preserves the prepared project home.
 
+Some placements require native execution. Node-backed `remote-exec` turns reject
+a limited profile when they cannot run without native tools. A native-owned
+attached Codex thread can also reject a restricted turn when applying the policy
+would require replacing that externally owned thread. This can interrupt an
+existing conversation after an upgrade. To retain a limited profile, use a
+Gateway-managed conversation or runtime with a compatible execution environment.
+If native shell and filesystem access is intended, the operator can choose
+`coding` or `full`. Other explicit tool and sandbox restrictions still apply;
+an explicit finite tool allowlist still blocks native execution. OpenClaw does
+not broaden tool access or replace externally owned threads automatically.
+
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
 needs OpenClaw-managed Gateway environment access, including Secret Store
