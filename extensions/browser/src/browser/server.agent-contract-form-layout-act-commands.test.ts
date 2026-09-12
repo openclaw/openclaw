@@ -868,6 +868,7 @@ describe("browser control server", () => {
     expect(typeof waitCall.cdpUrl).toBe("string");
     expectRecordFields(waitCall, "wait download call", {
       targetId: "abcd1234",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     expect(waitCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(waitCall.path)).toContain("safe-wait.pdf");
@@ -932,6 +933,7 @@ describe("browser control server", () => {
     expectRecordFields(downloadCall, "download call", {
       targetId: "abcd1234",
       ref: "e12",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     expect(downloadCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(downloadCall.path)).toContain("safe-download.pdf");

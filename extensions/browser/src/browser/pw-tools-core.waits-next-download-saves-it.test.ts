@@ -5,6 +5,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreSessionMocks,
+  getPwToolsCoreNavigationGuardMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
@@ -25,6 +26,7 @@ vi.mock("./chrome.js", () => chromeMocks);
 vi.mock("./client-fetch.js", () => clientFetchMocks);
 
 const sessionMocks = getPwToolsCoreSessionMocks();
+const navigationGuardMocks = getPwToolsCoreNavigationGuardMocks();
 
 let mod: Pick<
   typeof import("./pw-tools-core.downloads.js"),
@@ -411,17 +413,98 @@ describe("pw-tools-core", () => {
         ref: "e12",
         path: targetPath,
         timeoutMs: 1000,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       });
 
       await Promise.resolve();
       harness.expectArmed();
-      expect(click).toHaveBeenCalledWith({ timeout: 1000 });
+      expect(click).toHaveBeenCalledWith({ timeout: 1000, signal: expect.any(AbortSignal) });
+      expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        }),
+      );
 
       harness.trigger(download);
 
       const res = await p;
+      expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+        url: "https://example.com/report.pdf",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        browserProxyMode: undefined,
+        signal: undefined,
+      });
       await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
+    });
+  });
+
+  it("rejects a policy-denied waited download before saving it", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const targetPath = path.join(tempDir, "metadata.bin");
+      const saveAs = vi.fn(async () => {});
+      navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+        new Error("browser navigation blocked by policy"),
+      );
+
+      const pending = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: targetPath,
+        timeoutMs: 1000,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "http://169.254.169.254/latest/meta-data/",
+        suggestedFilename: () => "metadata.bin",
+        saveAs,
+      });
+
+      await expect(pending).rejects.toThrow("browser navigation blocked by policy");
+      expect(saveAs).not.toHaveBeenCalled();
+      expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+        url: "http://169.254.169.254/latest/meta-data/",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        browserProxyMode: undefined,
+        signal: undefined,
+      });
+    });
+  });
+
+  it("propagates a policy-denied clicked download before saving it", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const click = vi.fn(async () => {});
+      const saveAs = vi.fn(async () => {});
+      setPwToolsCoreCurrentRefLocator({ click });
+      navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+        new Error("browser navigation blocked by policy"),
+      );
+
+      const pending = mod.downloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "e12",
+        path: path.join(tempDir, "metadata.bin"),
+        timeoutMs: 1000,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "http://169.254.169.254/latest/meta-data/",
+        suggestedFilename: () => "metadata.bin",
+        saveAs,
+      });
+
+      await expect(pending).rejects.toThrow("browser navigation blocked by policy");
+      expect(click).toHaveBeenCalledOnce();
+      expect(saveAs).not.toHaveBeenCalled();
     });
   });
 
