@@ -36,6 +36,10 @@ import {
 } from "../infra/sqlite-wal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  assertAgentCreationClaimAccess,
+  registerAgentCreationClaimHandle,
+} from "./agent-creation-claim.js";
+import {
   assertAgentDeletionCleanupAliases,
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
@@ -387,19 +391,12 @@ function* openOpenClawAgentDatabaseSteps(
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
     registerAgentDatabaseMaintenanceAccess(db);
-    const cleanup = registerAgentDeletionDatabaseCleanup(database, databaseOptions);
-    if (cleanup) {
-      const release = retainAgentDatabase(db);
-      cleanup.registerClose(() => {
-        release();
-        // The scope owns this connection, not a later cache entry at the same pathname.
-        if (cache.databases.get(database.path) === database) {
-          closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
-        } else if (database.db.isOpen) {
-          throw new Error("Agent deletion cleanup lost its database close owner.");
-        }
-      });
-    }
+    registerAgentDeletionDatabaseCleanup(database, databaseOptions)?.registerClose(
+      createScopeOwnedClose(database, "Agent deletion cleanup"),
+    );
+    registerAgentCreationClaimHandle(database, databaseOptions)?.registerClose(
+      createScopeOwnedClose(database, "Agent creation claim"),
+    );
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
       setValidatedOpenClawAgentDatabaseOwner(pathname, agentId);
@@ -470,6 +467,19 @@ function* openOpenClawAgentDatabaseSteps(
   }
 }
 
+/** A lifecycle scope closes exactly the connection it admitted, never a later cache entry. */
+function createScopeOwnedClose(database: OpenClawAgentDatabase, owner: string): () => void {
+  const release = retainAgentDatabase(database.db);
+  return () => {
+    release();
+    if (cache.databases.get(database.path) === database) {
+      closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+    } else if (database.db.isOpen) {
+      throw new Error(`${owner} lost its database close owner.`);
+    }
+  };
+}
+
 /** Queue a non-throwing runtime publication on the outer database commit edge. */
 export function deferOpenClawAgentPostCommitPublication(
   database: OpenClawAgentDatabase,
@@ -493,6 +503,7 @@ export function runOpenClawAgentWriteTransaction<T>(
       database.db,
       () => {
         assertAgentDeletionDatabaseCleanupAccess(database, options);
+        assertAgentCreationClaimAccess(database, options);
         const operationResult = operation(database);
         if (!enteredNestedTransaction && !cache.incognito.has(database)) {
           // Permission failure must roll back with the write. Repairing after
@@ -553,6 +564,7 @@ export function getOpenClawAgentDatabaseIfOpen(
     );
   }
   assertAgentDeletionDatabaseCleanupAccess(database, options);
+  assertAgentCreationClaimAccess(database, options);
   assertAgentDatabaseMaintenanceAccess(database.db);
   return database;
 }

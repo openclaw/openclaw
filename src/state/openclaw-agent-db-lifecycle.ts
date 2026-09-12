@@ -11,6 +11,7 @@ import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { releaseAgentCreationClaimHandle } from "./agent-creation-claim.js";
 import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type {
   OpenClawAgentDatabase,
@@ -157,6 +158,7 @@ export function closeCachedOpenClawAgentDatabase(
     cache.leases.delete(database.path);
   }
   releaseAgentDeletionDatabaseCleanup(database);
+  releaseAgentCreationClaimHandle(database);
 }
 
 export function evictLruAgentDatabaseHandles(): void {

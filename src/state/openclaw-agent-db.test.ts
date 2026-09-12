@@ -1,10 +1,12 @@
 // OpenClaw agent database tests cover agent-scoped DB storage and migrations.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   executeSqliteQuerySync,
@@ -17,6 +19,7 @@ import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.t
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
+import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
 import {
   assertAgentDeletionPathFence,
   beginAgentDeletionJournal,
@@ -3385,6 +3388,139 @@ describe("openclaw agent database", () => {
       registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env }),
     ).not.toThrow();
     unregisterOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
+  });
+
+  it("lets only the creating identity lease over its own completed tombstone", async () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentDir = path.join(stateDir, "agents", "worker-1", "agent");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    const deletion = beginAgentDeletionJournal(
+      {
+        operationId: "deletion",
+        deleteFiles: true,
+        agentId: "worker-1",
+        agentDir,
+        workspaceDir: path.join(stateDir, "workspace-worker-1"),
+        sessionsDir: path.join(stateDir, "sessions-worker-1"),
+      },
+      { env },
+    );
+    const claimAsWorker = () =>
+      claimOpenClawAgentDatabaseLease({ agentId: "worker-1", path: databasePath, env });
+
+    // Creation never bypasses a deletion whose cleanup is still pending.
+    await runWithAgentCreationClaim({ agentId: "worker-1", env }, async () => {
+      expect(claimAsWorker).toThrow("agent worker-1 is deleted");
+    });
+    runOpenClawStateWriteTransaction(
+      (sharedStateDatabase) =>
+        completeAgentDeletionJournalInDatabase(
+          sharedStateDatabase,
+          deletion.agentId,
+          deletion.operationId,
+        ),
+      { env },
+    );
+
+    // A completed tombstone still fences everything outside the creation lifecycle.
+    expect(claimAsWorker).toThrow("agent worker-1 is deleted");
+    await runWithAgentCreationClaim({ agentId: "other", env }, async () => {
+      expect(claimAsWorker).toThrow("agent worker-1 is deleted");
+    });
+    const foreignStateEnv = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    await runWithAgentCreationClaim({ agentId: "worker-1", env: foreignStateEnv }, async () => {
+      expect(claimAsWorker).toThrow("agent worker-1 is deleted");
+    });
+
+    await runWithAgentCreationClaim({ agentId: "worker-1", env }, async () => {
+      const leaseId = claimAsWorker();
+      releaseOpenClawAgentDatabaseLease(leaseId, { env });
+      registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
+      unregisterOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
+    });
+    expect(claimCompletedAgentDeletionJournal("worker-1", deletion.operationId, { env })).toBe(
+      true,
+    );
+  });
+
+  it("keeps creation-claimed handles private and closes them when the claim settles", async () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentDir = path.join(stateDir, "agents", "worker-1", "agent");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    const deletion = beginAgentDeletionJournal(
+      {
+        operationId: "deletion",
+        deleteFiles: true,
+        agentId: "worker-1",
+        agentDir,
+        workspaceDir: path.join(stateDir, "workspace-worker-1"),
+        sessionsDir: path.join(stateDir, "sessions-worker-1"),
+      },
+      { env },
+    );
+    runOpenClawStateWriteTransaction(
+      (sharedStateDatabase) =>
+        completeAgentDeletionJournalInDatabase(
+          sharedStateDatabase,
+          deletion.agentId,
+          deletion.operationId,
+        ),
+      { env },
+    );
+    const options = { agentId: "worker-1", path: databasePath, env };
+    const writeMarker = (marker: string) =>
+      runOpenClawAgentWriteTransaction((database) => {
+        const agentDb = getNodeSqliteKysely<AgentDbTestDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          agentDb.insertInto("memory_index_sources").values({
+            path: `${marker}.md`,
+            source: "memory",
+            hash: marker,
+            mtime: 1,
+            size: 1,
+          }),
+        );
+      }, options);
+    const claimAsWorker = () => claimOpenClawAgentDatabaseLease(options);
+    // Ordinary writers run outside the creation scope even while it is live.
+    const outsideCreation = AsyncLocalStorage.snapshot();
+    const settled = createDeferred();
+    let retainedClaim: Promise<string> | undefined;
+
+    await runWithAgentCreationClaim({ agentId: "worker-1", env }, async () => {
+      writeMarker("inside");
+      expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(true);
+      expect(() => outsideCreation(() => writeMarker("outside"))).toThrow(
+        "active agent creation claim",
+      );
+      // A continuation retained past settlement keeps this store but no authority.
+      retainedClaim = settled.promise.then(claimAsWorker);
+    });
+
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+    expect(claimAsWorker).toThrow("agent worker-1 is deleted");
+    expect(() => writeMarker("after")).toThrow("agent worker-1 is deleted");
+    settled.resolve();
+    await expect(retainedClaim).rejects.toThrow("agent worker-1 is deleted");
+
+    // A failed creation still settles its handles before the error surfaces.
+    await expect(
+      runWithAgentCreationClaim({ agentId: "worker-1", env }, async () => {
+        writeMarker("failed");
+        throw new Error("creation failed");
+      }),
+    ).rejects.toThrow("creation failed");
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+    expect(() => writeMarker("after-failure")).toThrow("agent worker-1 is deleted");
+
+    expect(claimCompletedAgentDeletionJournal("worker-1", deletion.operationId, { env })).toBe(
+      true,
+    );
+    writeMarker("published");
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(true);
   });
 
   it("serializes database leases with the durable deletion fence", () => {

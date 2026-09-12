@@ -20,6 +20,7 @@ import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -255,6 +256,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   }
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
+  // Staged auth for a recreated identity must open that identity's databases beneath its
+  // completed deletion record. The scope covers only the receipt, so early exits never hold it.
+  const withCreationClaim = <T>(run: () => Promise<T>) =>
+    runWithAgentCreationClaim({ agentId }, run);
 
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
@@ -469,9 +474,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             });
           }
           // The receipt owns compensation until the config transform publishes this result.
+          // Capture it inside the scope: a failing scope close must still reach rollback.
           params.beforePersistentApply?.();
-          const preparedReceipt = await params.prepareConfigCommit?.();
-          configCommitReceipt = preparedReceipt ? preparedReceipt : undefined;
+          await withCreationClaim(async () => {
+            configCommitReceipt = (await params.prepareConfigCommit?.()) ?? undefined;
+          });
 
           return {
             nextConfig,
@@ -492,7 +499,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       // even after delegated authority closes; it must not roll staged state back.
       const committedReceipt = configCommitReceipt;
       configCommitReceipt = undefined;
-      await committedReceipt?.commit();
+      await withCreationClaim(async () => await committedReceipt?.commit());
       if (
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
@@ -516,8 +523,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     });
   } catch (error) {
     if (configCommitReceipt) {
+      const stagedReceipt = configCommitReceipt;
       try {
-        await configCommitReceipt.rollback();
+        await withCreationClaim(async () => await stagedReceipt.rollback());
       } catch (rollbackError) {
         throw new Error(
           `${String(error)}\nstaged config rollback failed: ${String(rollbackError)}`,
