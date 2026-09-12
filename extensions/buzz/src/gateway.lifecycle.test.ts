@@ -13,6 +13,7 @@ const gatewayMocks = vi.hoisted(() => ({
         message: import("./message-event.js").BuzzInboundMessage,
         bus: BuzzBus,
         signal: AbortSignal,
+        assertCurrent: () => void,
       ) => Promise<void>)
     | undefined,
   onMessageError: undefined as ((error: Error) => void) | undefined,
@@ -20,6 +21,7 @@ const gatewayMocks = vi.hoisted(() => ({
   onRoomDirectoryChanged: undefined as (() => void) | undefined,
   resolveAgentIdentity: vi.fn(),
   resolveAgentRoute: vi.fn(),
+  recoveryLookup: vi.fn(),
   startBuzzBus: vi.fn(),
 }));
 
@@ -121,6 +123,13 @@ function createMockBus(): BuzzBus {
   };
 }
 
+function resolveBusSince(callIndex: number): number {
+  const since = gatewayMocks.startBuzzBus.mock.calls[callIndex]?.[0].since as (
+    channelId: string,
+  ) => number;
+  return since(CHANNEL_ID);
+}
+
 describe("Buzz gateway lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -133,6 +142,8 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
     gatewayMocks.resolveAgentIdentity.mockReset().mockReturnValue(undefined);
     gatewayMocks.resolveAgentRoute.mockReset().mockReturnValue({ agentId: "main" });
+    const recoveryRooms = new Map<string, { seconds: number }>();
+    gatewayMocks.recoveryLookup.mockImplementation(async (key: string) => recoveryRooms.get(key));
     setBuzzRuntime({
       agent: {
         resolveAgentIdentity: gatewayMocks.resolveAgentIdentity,
@@ -146,6 +157,16 @@ describe("Buzz gateway lifecycle", () => {
           convertMarkdownTables: (text: string) => text,
         },
       },
+      state: {
+        openKeyedStore: () => ({
+          lookup: gatewayMocks.recoveryLookup,
+          register: async (key: string, value: { seconds: number }) => {
+            recoveryRooms.set(key, value);
+          },
+          entries: async () => Array.from(recoveryRooms, ([key, value]) => ({ key, value })),
+          delete: async (key: string) => recoveryRooms.delete(key),
+        }),
+      },
     } as never);
     gatewayMocks.startBuzzBus.mockImplementation(
       async (options: {
@@ -153,6 +174,7 @@ describe("Buzz gateway lifecycle", () => {
           message: import("./message-event.js").BuzzInboundMessage,
           bus: BuzzBus,
           signal: AbortSignal,
+          assertCurrent: () => void,
         ) => Promise<void>;
         onMessageError?: (error: Error) => void;
         onFatalError?: (error: Error) => void;
@@ -183,6 +205,25 @@ describe("Buzz gateway lifecycle", () => {
     expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
     gatewayMocks.onRoomDirectoryChanged?.();
     expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
+  });
+
+  it("reports unreadable recovery state without connecting or skipping room history", async () => {
+    gatewayMocks.recoveryLookup.mockRejectedValueOnce(new Error("room activation unreadable"));
+    const setStatus = vi.fn();
+    const { abortController, lifecycle } = startTestGateway({ setStatus });
+
+    await vi.waitFor(() =>
+      expect(setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: false,
+        lifecycle: "recovering",
+        lastError: "room activation unreadable",
+      }),
+    );
+    expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
 
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();
@@ -254,6 +295,28 @@ describe("Buzz gateway lifecycle", () => {
       to: CHANNEL_ID,
       messageId: "standalone-event-id",
     });
+  });
+
+  it("preserves an explicit send's thread even when automatic replies are flat", async () => {
+    const cfg = createBuzzConfig();
+    const flatCfg = {
+      ...cfg,
+      channels: { ...cfg.channels, buzz: { ...cfg.channels?.buzz, replyToMode: "off" as const } },
+    };
+    await buzzOutboundAdapter.sendText({
+      cfg: flatCfg,
+      to: CHANNEL_ID,
+      text: "explicit thread send",
+      threadId: "requested-thread",
+      replyToId: "requested-parent",
+    });
+    expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "requested-thread",
+        replyToId: "requested-parent",
+        text: "explicit thread send",
+      }),
+    );
   });
 
   it("blocks direct sends before opening a relay when an auth-tag SecretRef is unavailable", async () => {
@@ -432,37 +495,44 @@ describe("Buzz gateway lifecycle", () => {
     await expect(lifecycle).resolves.toBeUndefined();
   });
 
-  it("uses the active bus for heartbeat typing without destabilizing the account", async () => {
-    const { abortController, cfg, lifecycle } = startTestGateway();
-    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+  it.each(["all", "off"] as const)(
+    "uses %s-mode heartbeat typing without destabilizing the account",
+    async (replyToMode) => {
+      const { abortController, cfg, lifecycle } = startTestGateway();
+      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+      const typingCfg = {
+        ...cfg,
+        channels: { ...cfg.channels, buzz: { ...cfg.channels?.buzz, replyToMode } },
+      };
 
-    await sendBuzzTyping({
-      cfg,
-      to: `buzz:${CHANNEL_ID}`,
-      accountId: "default",
-      threadId: "root-id",
-    });
-    expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
-      channelId: CHANNEL_ID,
-      threadId: "root-id",
-    });
-
-    gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
-    await expect(
-      sendBuzzTyping({
-        cfg,
+      await sendBuzzTyping({
+        cfg: typingCfg,
         to: `buzz:${CHANNEL_ID}`,
         accountId: "default",
-      }),
-    ).rejects.toThrow("socket closing");
-    expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
-    expect(gatewayMocks.close).not.toHaveBeenCalled();
+        threadId: "root-id",
+      });
+      expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
+        channelId: CHANNEL_ID,
+        threadId: replyToMode === "off" ? undefined : "root-id",
+      });
 
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
-  });
+      gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
+      await expect(
+        sendBuzzTyping({
+          cfg,
+          to: `buzz:${CHANNEL_ID}`,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("socket closing");
+      expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
+      expect(gatewayMocks.close).not.toHaveBeenCalled();
 
-  it("uses the rolling lookback after a failed initial session", async () => {
+      abortController.abort();
+      await expect(lifecycle).resolves.toBeUndefined();
+    },
+  );
+
+  it("preserves room activation after a failed initial session", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     gatewayMocks.startBuzzBus.mockRejectedValueOnce(new Error("connect failed"));
     const { abortController, lifecycle } = startTestGateway();
@@ -471,9 +541,9 @@ describe("Buzz gateway lifecycle", () => {
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
     });
-    const firstSince = gatewayMocks.startBuzzBus.mock.calls[0]?.[0].since as number;
-    const secondSince = gatewayMocks.startBuzzBus.mock.calls[1]?.[0].since as number;
-    expect(secondSince).toBeLessThanOrEqual(firstSince - 24 * 60 * 60 + 2);
+    const firstSince = resolveBusSince(0);
+    const secondSince = resolveBusSince(1);
+    expect(secondSince).toBe(firstSince);
 
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();
@@ -498,7 +568,7 @@ describe("Buzz gateway lifecycle", () => {
     });
   });
 
-  it("reconnects with a rolling lookback without trusting sender time", async () => {
+  it("preserves the activation floor on reconnect without trusting sender time", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const invalidateDirectoryCache = vi.fn();
     const { abortController, lifecycle } = startTestGateway({ invalidateDirectoryCache });
@@ -517,6 +587,7 @@ describe("Buzz gateway lifecycle", () => {
       },
       createMockBus(),
       new AbortController().signal,
+      () => {},
     );
     const reconnectStartedAt = Math.floor(Date.now() / 1000);
     gatewayMocks.onFatalError?.(new Error("relay failed"));
@@ -526,9 +597,9 @@ describe("Buzz gateway lifecycle", () => {
       timeout: 3_000,
     });
     expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
-    const secondSince = gatewayMocks.startBuzzBus.mock.calls[1]?.[0].since as number;
-    expect(secondSince).toBeGreaterThanOrEqual(reconnectStartedAt - 24 * 60 * 60);
-    expect(secondSince).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 24 * 60 * 60);
+    const secondSince = resolveBusSince(1);
+    expect(secondSince).toBe(resolveBusSince(0));
+    expect(secondSince).toBeLessThanOrEqual(reconnectStartedAt);
     expect(secondSince).toBeLessThan(createdAt);
 
     abortController.abort();

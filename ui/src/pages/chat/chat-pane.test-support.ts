@@ -114,7 +114,7 @@ export type TestChatPane = HTMLElement & {
   performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
-    transcriptLoad: Promise<unknown>,
+    transcriptLoad: Promise<boolean>,
   ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
@@ -220,6 +220,7 @@ export function createInitializationContext(): ApplicationContext {
     },
     placementStartup: {
       get: () => null,
+      hasPendingTurn: () => false,
       retry: () => undefined,
       subscribe: () => () => {},
     },
@@ -337,6 +338,9 @@ export function createTestChatPane(params: {
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
+    chatModelCatalog: [],
+    chatModelCatalogError: null,
+    chatModelsLoading: false,
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -352,6 +356,7 @@ export function createTestChatPane(params: {
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
+    attachmentSidebarContent: null,
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,
     sidebarLayout: { columns: [] },

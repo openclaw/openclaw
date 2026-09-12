@@ -1,10 +1,7 @@
 import type { PresenceEntry } from "../api/types.ts";
+import { readPresenceEntries } from "../app/user-profile.ts";
 
-export type PresenceViewer = {
-  id: string;
-  name?: string;
-  email?: string;
-  avatarUrl?: string;
+export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
   watchedSessions: readonly string[];
   entries?: readonly PresenceEntry[];
 };
@@ -22,16 +19,6 @@ function firstSorted(values: Iterable<string | null | undefined>): string | unde
     .map(normalized)
     .filter((value): value is string => value !== undefined)
     .toSorted()[0];
-}
-
-function readPresenceEntries(value: unknown): PresenceEntry[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  // SAFETY: Gateway snapshots are protocol-validated before reaching UI projections.
-  const presence = (value as { presence?: unknown }).presence;
-  // SAFETY: The validated presence array carries PresenceEntry protocol records.
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : [];
 }
 
 function presenceEntrySortKey(entry: PresenceEntry): string {
@@ -76,6 +63,11 @@ function projectPresenceViewers(
       .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([id, userEntries]) => ({
         id,
+        // Raw-id grouping can combine qualified and unqualified connections.
+        // Carry provenance only when every connection supplies the same fact.
+        identity: userEntries.every((entry) => entry.user?.identity?.id === id)
+          ? userEntries[0]?.user?.identity
+          : undefined,
         name: firstSorted(userEntries.map((entry) => entry.user?.name)),
         email: firstSorted(userEntries.map((entry) => entry.user?.email)),
         avatarUrl: firstSorted(userEntries.map((entry) => entry.user?.avatarUrl)),
@@ -87,14 +79,6 @@ function projectPresenceViewers(
         ),
       })),
   };
-}
-
-export function projectPresenceEntries(
-  entries: readonly PresenceEntry[],
-  authenticatedSelfUserId?: string,
-  selfInstanceId?: string,
-) {
-  return projectPresenceViewers(entries, authenticatedSelfUserId, selfInstanceId);
 }
 
 let cachedPresencePayload: unknown;
@@ -119,14 +103,14 @@ export function projectPresencePayload(
   cachedAuthenticatedSelfUserId = authenticatedSelfUserId;
   cachedSelfInstanceId = selfInstanceId;
   cachedPresenceProjection = projectPresenceViewers(
-    readPresenceEntries(value),
+    readPresenceEntries(value) ?? [],
     authenticatedSelfUserId,
     selfInstanceId,
   );
   return cachedPresenceProjection;
 }
 
-export function presenceViewerLabel(user: PresenceViewer): string {
+export function presenceViewerLabel(user: Pick<PresenceViewer, "id" | "name" | "email">): string {
   return user.name ?? user.email ?? user.id;
 }
 

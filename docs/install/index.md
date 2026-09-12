@@ -10,7 +10,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is the recommended default; the installer script provisions it automatically when Node is missing.
+- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
@@ -133,13 +133,15 @@ If you already manage Node yourself:
   <Tab title="bun">
     ```bash
     bun add -g --trust openclaw@latest
-    openclaw onboard --install-daemon
+    bun run --bun openclaw onboard --install-daemon --daemon-runtime bun
     ```
 
     <Note>
     `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
-    can install the global package, but the resulting `openclaw` executable
-    requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
+    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    remains the primary runtime, so the plain `openclaw` executable keeps its
+    Node shebang. `bun run --bun` forces the Bun runtime, while
+    `--daemon-runtime bun` installs the managed Gateway under Bun.
     </Note>
 
   </Tab>
@@ -153,11 +155,13 @@ For contributors or anyone who wants to run from a local checkout:
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 pnpm install && pnpm build && pnpm ui:build
-pnpm link --global
+pnpm add --global .
 openclaw onboard --install-daemon
 ```
 
-Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+`pnpm add --global .` links the CLI to this checkout without changing its package files. If pnpm reports that its global bin directory is not on `PATH`, run `pnpm setup`, reopen your shell, and retry.
+
+Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
 ### Install from the GitHub main checkout
 

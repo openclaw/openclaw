@@ -126,6 +126,7 @@ function attributedSuggestionClient(
       syntheticClient: true,
       senderAttribution: {
         id: suggestion.authorId,
+        identity: { type: "profile", id: suggestion.authorId },
         name: `Suggested by ${label}`,
       },
     },
@@ -560,6 +561,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (role === "viewer" && visibility !== "shared" && visibility !== "suggest") {
       respond(true, { ok: true, broadcast: false });
       return;
+    }
+    if (params.typing) {
+      context.recordClientActivity?.(client);
     }
     const sessionKeys = new Set([
       params.sessionKey,

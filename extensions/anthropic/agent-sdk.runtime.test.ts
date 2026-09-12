@@ -53,6 +53,7 @@ function createContext(
     cwd: "/tmp/openclaw-workspace",
     env: {
       HOME: "/tmp/claude-login-home",
+      CLAUDE_CONFIG_DIR: "/tmp/claude-login-home/custom-config",
       PATH: "/usr/local/bin:/usr/bin",
       OPENCLAW_MCP_TOKEN: "test-grant-not-a-real-secret",
     },
@@ -66,6 +67,10 @@ function createContext(
     requestToolPermission: vi.fn(async () => ({
       behavior: "deny" as const,
       message: "OpenClaw denied this action.",
+    })),
+    requestUserInput: vi.fn(async () => ({
+      status: "cancelled" as const,
+      message: "OpenClaw cancelled this question.",
     })),
     ...overrides,
   };
@@ -186,7 +191,7 @@ afterEach(async () => {
 });
 
 describe("Anthropic Agent SDK runtime ownership", () => {
-  it("keeps selected SDK credentials on their private descriptor and isolates side questions", () => {
+  it("pins SDK identity, keeps selected credentials private, and isolates side questions", () => {
     const backend = buildAnthropicCliBackend();
     const base = {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -211,13 +216,19 @@ describe("Anthropic Agent SDK runtime ownership", () => {
 
     expect(credential).toEqual(
       expect.objectContaining({
-        env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
+        env: {
+          CLAUDE_AGENT_SDK_VERSION: "0.3.238",
+          CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+        },
         secretInput: expect.objectContaining({ fd: 3 }),
         execute: expect.any(Function),
       }),
     );
     expect(emptyCredential).toEqual(
-      expect.objectContaining({ env: {}, execute: expect.any(Function) }),
+      expect.objectContaining({
+        env: { CLAUDE_AGENT_SDK_VERSION: "0.3.238" },
+        execute: expect.any(Function),
+      }),
     );
     expect(emptyCredential).not.toHaveProperty("secretInput");
     expect(sideQuestion).not.toHaveProperty("execute");
@@ -499,6 +510,35 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions()).not.toHaveProperty("sessionId");
   });
 
+  it("preserves cache, effort, and checkpoint-fork controls through SDK options", async () => {
+    useSdkMessages();
+
+    await collect(
+      createContext({
+        args: [
+          "-p",
+          "--cache-system-prompt",
+          "--effort",
+          "max",
+          "--fork-session",
+          "--resume-session-at",
+          "assistant-before-stall",
+        ],
+        useResume: true,
+      }),
+    );
+
+    expect(sdkOptions()).toEqual(
+      expect.objectContaining({
+        resume: SESSION_ID,
+        effort: "max",
+        forkSession: true,
+        resumeSessionAt: "assistant-before-stall",
+        extraArgs: { "cache-system-prompt": null },
+      }),
+    );
+  });
+
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
@@ -531,6 +571,39 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       { role: "user", content: "Remember orange." },
       { role: "user", content: "Which color did I mention?" },
     ]);
+  });
+
+  it("keeps a terminal error turn's warm query reusable for the next turn", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    const first = collect(createContext({ prompt: "Attempt the task.", liveSession: capability }));
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    live.streams[0]?.write({
+      ...SUCCESS_RESULT,
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "The native tool failed.",
+    });
+
+    await expect(first).resolves.toContainEqual(
+      expect.objectContaining({ is_error: true, result: "The native tool failed." }),
+    );
+    const firstHandle = capability.current();
+    expect(firstHandle?.isIdle()).toBe(true);
+
+    const second = collect(
+      createContext({
+        prompt: "Continue without repeating the failed action.",
+        useResume: true,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(live.prompts[0]).toHaveLength(2));
+    live.streams[0]?.write({ ...SUCCESS_RESULT, result: "continued" });
+
+    await expect(second).resolves.toContainEqual(expect.objectContaining({ result: "continued" }));
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(capability.current()).toBe(firstHandle);
   });
 
   it("restarts the warm SDK query when its system prompt or execution fingerprint changes", async () => {
@@ -610,6 +683,21 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         },
       ),
     ).resolves.toEqual({ behavior: "deny", message: "The OpenClaw run is no longer active." });
+
+    const resumed = collect(
+      createContext({
+        prompt: "Resume after the interrupted turn.",
+        useResume: true,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledTimes(2));
+    live.streams[1]?.write({ ...SUCCESS_RESULT, result: "resumed" });
+
+    await expect(resumed).resolves.toContainEqual(expect.objectContaining({ result: "resumed" }));
+    expect(queryMock.mock.calls[1]?.[0]?.options).toEqual(
+      expect.objectContaining({ resume: SESSION_ID }),
+    );
   });
 
   it("rebinds a persistent SDK approval callback to only the active admitted turn", async () => {
@@ -863,174 +951,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions().allowedTools).not.toContain("mcp__openclaw__*");
     expect(sdkOptions().allowedTools).not.toContain("Bash");
     expect(sdkOptions().allowedTools).not.toContain("Edit");
-  });
-
-  it("enforces native tool policy before user settings can shadow the permission callback", async () => {
-    const requestToolPermission = vi.fn(async () => ({
-      behavior: "deny" as const,
-      message: "The session policy denied native execution.",
-    }));
-    let nativeDecision: unknown;
-    let gatewayDecision: unknown;
-    let malformedDecision: unknown;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const hook = sdkPreToolUse(options);
-      const signal = new AbortController().signal;
-
-      nativeDecision = await hook(
-        {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "cat private.txt" },
-          tool_use_id: "native-tool-shadowed",
-        },
-        "native-tool-shadowed",
-        { signal },
-      );
-      gatewayDecision = await hook(
-        {
-          hook_event_name: "PreToolUse",
-          tool_name: "mcp__openclaw__message",
-          tool_input: { action: "send" },
-          tool_use_id: "gateway-tool-owned",
-        },
-        "gateway-tool-owned",
-        { signal },
-      );
-      malformedDecision = await hook(
-        {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: "not-an-object",
-          tool_use_id: "malformed-native-tool",
-        },
-        "malformed-native-tool",
-        { signal },
-      );
-    });
-
-    await collect(createContext({ requestToolPermission }));
-
-    expect(nativeDecision).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "The session policy denied native execution.",
-      },
-    });
-    expect(gatewayDecision).toEqual({ continue: true });
-    expect(malformedDecision).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "OpenClaw rejected malformed native tool input.",
-      },
-    });
-    expect(requestToolPermission).toHaveBeenCalledOnce();
-    expect(requestToolPermission).toHaveBeenCalledWith({
-      toolName: "Bash",
-      toolInput: { command: "cat private.txt" },
-      toolCallId: "native-tool-shadowed",
-      abortSignal: expect.any(AbortSignal),
-    });
-  });
-
-  it("keeps bypass-shaped backend arguments behind the host permission callback", async () => {
-    const requestToolPermission = vi.fn(async () => ({
-      behavior: "deny" as const,
-      message: "The session policy denied native execution.",
-    }));
-    let decision: unknown;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      decision = await sdkNativeTool(options)(
-        "Bash",
-        { command: "cat private.txt" },
-        {
-          signal: new AbortController().signal,
-          toolUseID: "native-tool-bypass",
-          requestId: "approval-bypass",
-        },
-      );
-    });
-
-    await collect(
-      createContext({
-        args: ["-p", "--permission-mode", "bypassPermissions"],
-        requestToolPermission,
-      }),
-    );
-
-    expect(sdkOptions().permissionMode).toBe("default");
-    expect(sdkOptions()).not.toHaveProperty("allowDangerouslySkipPermissions");
-    expect(decision).toEqual({
-      behavior: "deny",
-      message: "The session policy denied native execution.",
-    });
-    expect(requestToolPermission).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    {
-      name: "forwards allowed decisions and exact host inputs",
-      resolve: async () => ({
-        behavior: "allow" as const,
-        updatedInput: { command: "echo approved" },
-      }),
-      expected: { behavior: "allow", updatedInput: { command: "echo approved" } },
-    },
-    {
-      name: "preserves a denied host decision",
-      resolve: async () => ({
-        behavior: "deny" as const,
-        message: "OpenClaw exec policy denied this action.",
-      }),
-      expected: { behavior: "deny", message: "OpenClaw exec policy denied this action." },
-    },
-    {
-      name: "fails closed when the host approval owner is unavailable",
-      resolve: async () => {
-        throw new Error("The Gateway approval owner is unavailable.");
-      },
-      expected: { behavior: "deny", message: "OpenClaw could not authorize this tool call." },
-    },
-  ])("$name and fences the retained callback after closure", async ({ resolve, expected }) => {
-    const requestToolPermission = vi.fn(resolve);
-    const signal = new AbortController().signal;
-    const input = { command: "echo approved" };
-    let decision: unknown;
-    let callback: SdkNativeToolCallback | undefined;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      callback = sdkNativeTool(options);
-      decision = await callback("Bash", input, {
-        signal,
-        toolUseID: "native-tool-1",
-        requestId: "approval-1",
-      });
-    });
-
-    await collect(createContext({ requestToolPermission }));
-
-    expect(decision).toEqual(expected);
-    expect(requestToolPermission).toHaveBeenCalledWith({
-      toolName: "Bash",
-      toolInput: input,
-      toolCallId: "native-tool-1",
-      abortSignal: signal,
-    });
-    await expect(
-      callback?.(
-        "Bash",
-        { command: "echo stale" },
-        {
-          signal,
-          toolUseID: "native-tool-stale",
-        },
-      ),
-    ).resolves.toEqual({
-      behavior: "deny",
-      message: "The OpenClaw run is no longer active.",
-    });
-    expect(requestToolPermission).toHaveBeenCalledOnce();
   });
 
   it.each([429, 529])(

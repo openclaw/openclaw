@@ -46,13 +46,20 @@ describe("pending session placement recovery state", () => {
       message: "run remotely",
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
-      createParams: { agentId: "cloud", message: "", thinkingLevel: "high", worktree: true },
+      createParams: {
+        agentId: "cloud",
+        message: "",
+        thinkingLevel: "high",
+        contextWindow: "large",
+        worktree: true,
+      },
     });
 
     expect(createParams).toMatchObject({
       agentId: "cloud",
       key: expect.stringMatching(/^agent:cloud:dashboard:/),
       thinkingLevel: "high",
+      contextWindow: "large",
       worktree: true,
     });
     expect(
@@ -64,6 +71,55 @@ describe("pending session placement recovery state", () => {
       createParams,
     });
   });
+
+  it("preserves the requested permission mode in placement recovery", () => {
+    const pending = new PendingSessionPlacementRecoveryState();
+    const createParams = pending.stageCreate({
+      agentId: "cloud",
+      target: { kind: "profile", profileId: "aws" },
+      message: "run remotely with guarded permissions",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: {
+        agentId: "cloud",
+        message: "",
+        permissionMode: "guarded",
+        worktree: true,
+      },
+    });
+
+    expect(createParams).toMatchObject({ permissionMode: "guarded" });
+    expect(
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+    ).toMatchObject({ createParams: { permissionMode: "guarded" } });
+  });
+
+  it.each([false, true])(
+    "does not promote over a replacement submission (canonical key changes: %s)",
+    (changesKey) => {
+      const pending = new PendingSessionPlacementRecoveryState();
+      expect(
+        pending.stageCreate({
+          agentId: "cloud",
+          target: { kind: "device", deviceId: "device-1" },
+          message: "old input",
+          gatewayUrl: "ws://gateway.example",
+          recoveryScope: "principal-a",
+          createParams: { agentId: "cloud", message: "", worktree: true },
+        }),
+      ).not.toBeNull();
+      const previous = pending.capture();
+      expect(previous).not.toBeNull();
+      const replacement = { ...previous!, messageId: "new-submission", message: "new input" };
+      expect(writeSessionPlacementRecovery(replacement)).toBe(true);
+      expect(
+        pending.promoteToDispatching(changesKey ? "agent:cloud:canonical" : pending.sessionKey),
+      ).toBe(false);
+      expect(
+        readSessionPlacementRecovery(pending.gatewayUrl, pending.recoveryScope, pending.sessionKey),
+      ).toEqual(replacement);
+    },
+  );
 
   it.each(["", "x".repeat(129)])(
     "rejects an invalid persisted machine class %#",
@@ -333,7 +389,6 @@ describe("pending session placement recovery state", () => {
         createParams: { agentId: "cloud", message: "", worktree: true },
       }),
     ).not.toBeNull();
-    const staleKey = pending.sessionKey;
     const newerRecovery = {
       sessionKey: "agent:cloud:newer",
       messageId: "message-newer",
@@ -346,7 +401,7 @@ describe("pending session placement recovery state", () => {
     };
     expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
 
-    pending.clearFor("ws://gateway.example", "principal-a", staleKey);
+    pending.clear();
 
     expect(pending.sessionKey).toBe("");
     expect(

@@ -209,7 +209,7 @@ describe("install.sh", () => {
   });
 
   it.each(["apt-get", "dnf", "yum"])(
-    "rejects an invalid NodeSource response before %s repository setup",
+    "uses the LTS NodeSource stream and rejects an invalid response before %s setup",
     (packageManager) => {
       const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nodesource-validation-"));
       const marker = join(tmp, "configured");
@@ -234,6 +234,7 @@ describe("install.sh", () => {
               builtin command "$@"
             }
             download_file() {
+              printf 'download:%s\n' "$1"
               printf '<html>unexpected response</html>\n' > "$2"
             }
             ui_info() { printf 'info:%s\n' "$*"; }
@@ -256,6 +257,9 @@ describe("install.sh", () => {
         );
 
         expect(result.status).toBe(1);
+        expect(result.stdout).toContain(
+          `download:https://${packageManager === "apt-get" ? "deb" : "rpm"}.nodesource.com/setup_24.x`,
+        );
         expect(result.stdout).toContain("step:Downloading NodeSource setup script");
         expect(result.stdout).not.toContain("unexpected response");
         expect(existsSync(marker)).toBe(false);
@@ -1465,6 +1469,84 @@ EOF
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
   });
 
+  it.each([
+    {
+      args: "--install-method git --git-dir /cli-target",
+      envGitDir: "/env-target",
+      expected: "/cli-target",
+      name: "prefers --git-dir over the environment and detected checkout",
+    },
+    {
+      args: "--install-method git --dir '/target with spaces'",
+      expected: "/target with spaces",
+      name: "prefers --dir with spaces over the detected checkout",
+    },
+    {
+      args: "--install-method git",
+      envGitDir: "/env-target",
+      expected: "/env-target",
+      name: "prefers OPENCLAW_GIT_DIR over the detected checkout",
+    },
+    {
+      args: "--install-method git --git-dir /effective-home/openclaw",
+      expected: "/effective-home/openclaw",
+      name: "honors an explicit target equal to the default",
+    },
+    {
+      args: "--install-method git --git-dir /first --dir /last",
+      expected: "/last",
+      name: "uses the last explicit target",
+    },
+    {
+      args: "--install-method git --git-dir './relative target'",
+      expected: "./relative target",
+      name: "preserves an explicit relative target for the install owner",
+    },
+    {
+      args: "--install-method git",
+      expected: "/detected-checkout",
+      name: "uses the detected checkout when no target is explicit",
+    },
+    {
+      args: "--install-method git --git-dir ''",
+      envGitDir: "/env-target",
+      expected: "/detected-checkout",
+      name: "treats an empty CLI target as non-explicit",
+    },
+  ])("selects the git install target: $name", ({ args, envGitDir, expected }) => {
+    const result = runInstallShell(
+      `
+        source "${SCRIPT_PATH}"
+        parse_args ${args}
+        bootstrap_gum_temp() { :; }
+        print_installer_banner() { :; }
+        print_gum_status() { :; }
+        detect_os_or_die() { OS=linux; }
+        detect_openclaw_checkout() { printf '/detected-checkout\\n'; }
+        show_install_plan() { :; }
+        check_existing_openclaw() { return 1; }
+        load_nvm_for_node_detection() { :; }
+        check_node() { return 0; }
+        activate_supported_node_on_path() { :; }
+        ensure_default_node_active_shell() { return 0; }
+        npm() { return 1; }
+        install_openclaw_from_git() {
+          printf 'target=%s\\n' "$1"
+          return 23
+        }
+        main
+      `,
+      {
+        OPENCLAW_GIT_DIR: envGitDir,
+        OPENCLAW_HOME: "/effective-home",
+        TERM: "dumb",
+      },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stdout).toContain(`target=${expected}\n`);
+  });
+
   it("uses a blobless partial clone for new git installs", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -2421,7 +2503,7 @@ EOF
       [
         "#!/usr/bin/env bash",
         'if [[ "$1" == "prefix" && "$2" == "-g" ]]; then',
-        "  sleep 2",
+        "  sleep 3",
         "  exit 0",
         "fi",
         'if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then',
@@ -2438,7 +2520,7 @@ EOF
       const result = runInstallShell(
         [`source ${JSON.stringify(SCRIPT_PATH)}`, "npm_global_bin_dir"].join("\n"),
         {
-          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1",
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "1",
           PATH: `${tmp}:${process.env.PATH ?? ""}`,
         },
       );
@@ -3443,7 +3525,7 @@ EOF
         is_gateway_daemon_loaded() { return 0; }
         run_quiet_step() {
           case "$1" in
-            "Restarting gateway service"|"Checking gateway service") return 1 ;;
+            "Checking gateway service") return 1 ;;
             *) return 0 ;;
           esac
         }
@@ -3456,8 +3538,107 @@ EOF
 
     const quotedBin = openclawBin.replace(/ /g, "\\ ");
     expect(result?.status).toBe(0);
-    expect(result?.stdout).toContain(`Run: ${quotedBin} gateway restart`);
+    expect(result?.stdout).not.toContain(`Run: ${quotedBin} gateway restart`);
     expect(result?.stdout).toContain(`Run: ${quotedBin} gateway status --deep`);
+  });
+
+  it("does not explicitly restart after force-installing a loaded gateway", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-gateway-transition-"));
+    const openclawBin = join(tmp, "openclaw");
+    const commandLog = join(tmp, "commands.log");
+    writeFileSync(openclawBin, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n');
+    chmodSync(openclawBin, 0o755);
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          OPENCLAW_BIN=${JSON.stringify(openclawBin)}
+          is_gateway_daemon_loaded() { return 0; }
+          run_quiet_step() {
+            local title="$1"
+            shift
+            "$@"
+          }
+          refresh_gateway_service_if_loaded
+        `,
+        { COMMAND_LOG: commandLog },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+        "gateway install --force",
+        "gateway status --deep",
+      ]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stderr" },
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stdout" },
+    { error: "SERVICE_DEFINITION_UNKNOWN: inaccessible", stream: "stderr" },
+    { error: "service manager unavailable", stream: "stderr" },
+  ])("handles a traced $error refresh in $stream", ({ error, stream }) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-install-definition-"));
+    const openclaw = join(root, "openclaw");
+    const secretCanary = "installer-sh-secret-canary-never-render";
+    const commandLog = join(root, "commands.log");
+    writeFileSync(
+      openclaw,
+      [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+        'if [[ "$*" == "gateway install --force" ]]; then',
+        '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
+        '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
+        "fi",
+      ].join("\n"),
+    );
+    chmodSync(openclaw, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `OPENCLAW_BIN=${JSON.stringify(openclaw)}`,
+          "is_gateway_daemon_loaded() { return 0; }",
+          "set -x",
+          "refresh_gateway_service_if_loaded",
+          "printf 'INSTALL_COMPLETE\\n'",
+        ].join("\n"),
+        {
+          COMMAND_LOG: commandLog,
+          SECRET_CANARY: secretCanary,
+          SERVICE_ERROR: error,
+          SERVICE_STREAM: stream,
+          TERM: "dumb",
+        },
+      );
+
+      const denied = error.startsWith("SERVICE_DEFINITION_");
+      expect(readFileSync(commandLog, "utf8").split("\n")).not.toContain("gateway restart");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("+ refresh_gateway_service_if_loaded");
+      expect(result.stdout + result.stderr).not.toContain(secretCanary);
+      if (denied) {
+        expect(result.stdout).toContain("gateway service definition left unchanged");
+        expect(result.stdout).toContain(
+          error.includes("SEALED")
+            ? "privileged deployment owner"
+            : "inspect service-definition access",
+        );
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      } else {
+        expect(result.stdout).toContain("Gateway service refresh failed; continuing");
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("refreshes the shell command cache after loading a persisted PATH update", () => {
@@ -3502,41 +3683,272 @@ EOF
     expect(result.stdout).toContain("main=main");
   });
 
-  it("fetches moving git refs without tags for git installs", () => {
-    expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
+  it("keeps ref resolution and rebase failures explicit", () => {
+    expect(script).toContain(
+      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"',
+    );
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
     );
-    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+    expect(script).toContain('git -C "$repo_dir" ls-remote --exit-code origin');
+    expect(script).toContain(
+      'run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"',
+    );
+    expect(script).toContain('git -C "$repo_dir" rebase origin/main');
+    expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+  });
 
-    const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
-    const tagFetchIndex = script.indexOf("fetch --tags origin");
-    expect(branchCheckIndex).toBeGreaterThan(-1);
-    expect(tagFetchIndex).toBeGreaterThan(-1);
-    expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
+  it("prefers a release tag over a same-named branch", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2026.5.12
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'tag\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm tag
+      tag_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" tag "$ref"
+      git -C "$seed" push -q origin "refs/tags/$ref"
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s tag=%s branch=%s kind=%s\n' "$selected" "$tag_head" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$tag_head" && "$selected" != "$branch_head" && "$GIT_REF_KIND" == "immutable" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("selected=");
+  });
+
+  it("falls back to a v-prefixed branch when no matching release tag exists", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2-hotfix
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s branch=%s kind=%s\\n' "$selected" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$branch_head" && "$GIT_REF_KIND" == "moving" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=moving");
+    expect(result.stdout).toContain("selected=");
+  });
+
+  it("updates a stale existing main checkout from the remote tracking ref", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      source_repo="$tmp/source"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$source_repo"
+      git -C "$source_repo" config user.email test@example.invalid
+      git -C "$source_repo" config user.name test
+      printf 'base\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" add state.txt
+      git -C "$source_repo" commit -qm base
+      git -C "$source_repo" remote add origin "$remote"
+      git -C "$source_repo" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'target\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" commit -qam target
+      git -C "$source_repo" push -q origin main
+      base="$(git -C "$repo" rev-parse HEAD)"
+      stale_tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      [[ "$base" == "$stale_tracking" ]]
+      run_quiet_step() { shift; "$@"; }
+      GIT_UPDATE=1
+      checkout_git_openclaw_ref "$repo" main
+      head="$(git -C "$repo" rev-parse HEAD)"
+      tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      remote_head="$(git --git-dir="$remote" rev-parse refs/heads/main)"
+      printf 'head=%s\\ntracking=%s\\nremote=%s\\n' "$head" "$tracking" "$remote_head"
+      [[ "$head" == "$remote_head" && "$tracking" == "$remote_head" && "$head" != "$base" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("head=");
+    expect(result.stdout).toContain("tracking=");
+    expect(result.stdout).toContain("remote=");
+  });
+
+  it("restores an existing main checkout after a failed rebase", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'remote\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam remote
+      git -C "$seed" push -q origin main
+      printf 'local\\n' > "$repo/state.txt"
+      git -C "$repo" commit -qam local
+      printf 'keep this user change\\n' > "$repo/user-note.txt"
+      expected_head="$(git -C "$repo" rev-parse HEAD)"
+      expected_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      set +e
+      output="$(checkout_git_openclaw_ref "$repo" main 2>&1)"
+      status=$?
+      set -e
+      [[ "$status" -ne 0 ]]
+      actual_head="$(git -C "$repo" rev-parse HEAD)"
+      actual_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      rebase_merge="$(git -C "$repo" rev-parse --git-path rebase-merge)"
+      rebase_apply="$(git -C "$repo" rev-parse --git-path rebase-apply)"
+      [[ "$actual_head" == "$expected_head" ]]
+      [[ "$actual_status" == "$expected_status" ]]
+      [[ "$(cat "$repo/user-note.txt")" == "keep this user change" ]]
+      [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+      [[ "$output" == *"restored to its pre-update state"* ]]
+      printf 'recovery=head-restored status-clean rebase-state-cleared\\n'
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("recovery=head-restored status-clean rebase-state-cleared");
+  });
+
+  it("verifies unchanged state when a hook refuses rebase before it starts", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() { shift; "$@"; }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      printf 'remote\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam remote
+      git -C "$seed" push -q origin main
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'local\\n' > "$repo/local.txt"
+      git -C "$repo" add local.txt
+      git -C "$repo" commit -qm local
+      cat > "$repo/.git/hooks/pre-rebase" <<'HOOK'
+#!/usr/bin/env bash
+exit 42
+HOOK
+      chmod +x "$repo/.git/hooks/pre-rebase"
+      printf 'keep this user change\\n' > "$repo/user-note.txt"
+      expected_head="$(git -C "$repo" rev-parse HEAD)"
+      expected_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      set +e
+      output="$(GIT_UPDATE=1 checkout_git_openclaw_ref "$repo" main 2>&1)"
+      status=$?
+      set -e
+      actual_head="$(git -C "$repo" rev-parse HEAD)"
+      actual_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      rebase_merge="$(git -C "$repo" rev-parse --git-path rebase-merge)"
+      rebase_apply="$(git -C "$repo" rev-parse --git-path rebase-apply)"
+      [[ "$status" -ne 0 ]]
+      [[ "$actual_head" == "$expected_head" ]]
+      [[ "$actual_status" == "$expected_status" ]]
+      [[ "$(cat "$repo/user-note.txt")" == "keep this user change" ]]
+      [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+      [[ "$output" == *"restored to its pre-update state"* ]]
+      printf 'hook-refusal=head-verified status-verified rebase-state-absent\\n'
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "hook-refusal=head-verified status-verified rebase-state-absent",
+    );
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
-      git() {
-        if [[ "$1" == "-C" && "$3" == "ls-remote" && "\${7:-}" == "feature" ]]; then
-          return 0
-        fi
-        return 1
-      }
-      printf 'main=%s\\n' "$(git_install_lockfile_flag /repo main)"
-      printf 'branch=%s\\n' "$(git_install_lockfile_flag /repo feature)"
-      printf 'tag=%s\\n' "$(git_install_lockfile_flag /repo v2026.5.12)"
+      printf 'moving=%s\\n' "$(git_install_lockfile_flag moving)"
+      printf 'immutable=%s\\n' "$(git_install_lockfile_flag immutable)"
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("main=--no-frozen-lockfile");
-    expect(result.stdout).toContain("branch=--no-frozen-lockfile");
-    expect(result.stdout).toContain("tag=--frozen-lockfile");
+    expect(result.stdout).toContain("moving=--no-frozen-lockfile");
+    expect(result.stdout).toContain("immutable=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
     );
   });
 
@@ -3544,6 +3956,51 @@ EOF
     expect(script).toContain("activate_repo_pnpm_version()");
     expect(script).toContain('corepack prepare "pnpm@${version}" --activate');
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+  });
+
+  it("preserves explicit pnpm prefer-offline settings", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_pnpm() { printf 'undefined\n'; }
+      unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline
+      if should_prefer_offline_pnpm_install; then printf 'default=true\\n'; fi
+      PNPM_CONFIG_PREFER_OFFLINE=false
+      if should_prefer_offline_pnpm_install; then printf 'upper=true\\n'; else printf 'upper=false\\n'; fi
+      unset PNPM_CONFIG_PREFER_OFFLINE
+      pnpm_config_prefer_offline=false
+      if should_prefer_offline_pnpm_install; then printf 'lower=true\\n'; else printf 'lower=false\\n'; fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("default=true");
+    expect(result.stdout).toContain("upper=false");
+    expect(result.stdout).toContain("lower=false");
+    expect(script).toContain(
+      'run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
+    );
+  });
+
+  it.each([
+    ["undefined", "true"],
+    ["null", "true"],
+    ["false", "false"],
+    ["true", "false"],
+    ["failure", "false"],
+  ])("uses pnpm's effective prefer-offline config when it returns %s", (configured, expected) => {
+    const result = runInstallShell(
+      [
+        "set -euo pipefail",
+        `source "${SCRIPT_PATH}"`,
+        'run_pnpm() { [[ "$*" == "-C $PWD config get prefer-offline" ]]; [[ "$CONFIGURED" != "failure" ]] || return 1; printf "%s\\n" "$CONFIGURED"; }',
+        "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+        'if should_prefer_offline_pnpm_install "$PWD"; then printf "result=true\\n"; else printf "result=false\\n"; fi',
+      ].join("\n"),
+      { CONFIGURED: configured },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`result=${expected}`);
   });
 
   it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {

@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { chromium, type BrowserContext } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { chromeMcpSessions } from "../src/browser/chrome-mcp-state.js";
 import {
   chromeProductRoots,
   generateChromeExtensionIdForPath,
@@ -14,10 +15,14 @@ import {
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
 import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
+import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
 import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
+import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.js";
+import chromeExtensionManifest from "./manifest.json" with { type: "json" };
+import { holdNavigationAccessCheck } from "./navigation-race.test-support.js";
 import { relayTestKey } from "./relay-key.test-support.js";
 
 declare const chrome: {
@@ -144,6 +149,11 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
   it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
+    const diagnostic = createBootstrapDiagnostic();
+    cleanups.push(async () => {
+      diagnostic.dispose();
+      diagnostic.flush();
+    });
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extension-e2e-")),
     );
@@ -205,7 +215,14 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           nodePath: tsxPath,
           nativeHostPath,
         };
-        const gatewayServer = http.createServer((_req, res) => {
+        const gatewayServer = http.createServer((req, res) => {
+          if (req.url === "/browser-owner-proof") {
+            diagnostic.mark("http.request", true);
+            res.once("finish", () => diagnostic.mark("http.finish", res.statusCode));
+            res.writeHead(200, { "content-type": "text/html" });
+            res.end("<title>OpenClaw selected tab</title>");
+            return;
+          }
           res.writeHead(426);
           res.end();
         });
@@ -218,10 +235,30 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         cleanups.push(
           async () =>
             await new Promise<void>((resolve) => {
-              gatewayServer.close(() => resolve());
+              gatewayServer.close(() => {
+                diagnostic.mark("http.closed", !gatewayServer.listening);
+                resolve();
+              });
             }),
         );
-        cleanups.push(stopBrowserControlService);
+        cleanups.push(async () => {
+          const bridge = getBrowserControlState()?.extensionRelays?.get("e2e")?.bridge;
+          const sessions = [...chromeMcpSessions.values()].slice(0, 8);
+          try {
+            await stopBrowserControlService();
+          } finally {
+            diagnostic.mark(
+              "relay.closed",
+              Boolean(bridge && !bridge.extensionConnected && bridge.cdpClientCount === 0),
+            );
+            for (const session of sessions) {
+              diagnostic.mark(
+                "mcp.closed",
+                session.transport.pid === null && session.processCleanup?.status === "closed",
+              );
+            }
+          }
+        });
         const browserEnv: NodeJS.ProcessEnv = {
           ...process.env,
           HOME: homeDir,
@@ -345,6 +382,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         if (!relay || relay.port !== relayPort) {
           throw new Error("Gateway wakeup did not start the configured extension relay");
         }
+        diagnostic.watchRelay(relay.bridge);
         const browserState = getBrowserControlState();
         const extensionProfile = browserState?.resolved.profiles.e2e;
         if (!browserState || !extensionProfile) {
@@ -381,6 +419,24 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           refreshConfigFromDisk: false,
         });
         const dispatcher = createBrowserRouteDispatcher(routeContext);
+        const matchingDoctor = await dispatcher.dispatch({
+          method: "GET",
+          path: "/doctor",
+          query: { profile: "e2e" },
+        });
+        expect(matchingDoctor.status).toBe(200);
+        expect(matchingDoctor.body).toMatchObject({
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              id: "extension-version",
+              status: "pass",
+              summary: `running ${chromeExtensionManifest.version}; bundled ${chromeExtensionManifest.version} (match)`,
+            }),
+          ]),
+        });
+        process.stderr.write(
+          `[browser-extension-e2e] doctor version match ${chromeExtensionManifest.version}\n`,
+        );
         const tabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",
@@ -466,6 +522,99 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         }, screenshotDataUrl);
         expect(orangePixels).toBeGreaterThan(20);
         process.stderr.write(`[browser-extension-e2e] screenshot proof ${proofPath}\n`);
+
+        const distractingPage = await context.newPage();
+        const distractingUrl = `data:text/html,${encodeURIComponent("<title>Unrelated tab</title>")}`;
+        await distractingPage.goto(distractingUrl);
+        await expect
+          .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.url === distractingUrl))
+          .toBe(true);
+        const liveTabsResponse = await dispatcher.dispatch({
+          method: "GET",
+          path: "/tabs",
+          query: { profile: "e2e" },
+        });
+        const liveTabs = (
+          liveTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+        ).tabs;
+        const selectedTab = liveTabs?.find((tab) => tab.url === controlled.url());
+        const unrelatedTab = liveTabs?.find((tab) => tab.url === distractingUrl);
+        if (!selectedTab?.targetId || !unrelatedTab?.targetId) {
+          throw new Error(`Extension navigation proof tabs missing: ${JSON.stringify(liveTabs)}`);
+        }
+        expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
+        const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
+        browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
+        const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
+        const proofUrl = `http://127.0.0.1:${gatewayPort}/browser-owner-proof`;
+        diagnostic.arm(selectedTab.targetId, unrelatedTab.targetId);
+        diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
+        for (const session of [...chromeMcpSessions.values()].slice(0, 8)) {
+          diagnostic.peer(session.client.getServerVersion());
+        }
+        const stopPageObservation = diagnostic.watchPage(controlled, proofUrl);
+        const selectedOwner = relay.bridge.captureOperationTarget(selectedTab.targetId);
+        const unrelatedOwner = relay.bridge.captureOperationTarget(unrelatedTab.targetId);
+        const actedPage = await getPageForTargetId({
+          cdpUrl: extensionCdpUrl,
+          targetId: selectedTab.targetId,
+          ssrfPolicy: browserState.resolved.ssrfPolicy,
+        });
+        const detachedNavigation = vi.spyOn(actedPage, "goto").mockImplementationOnce(() => {
+          diagnostic.mark("injection.used", true);
+          return Promise.reject(new Error("page.goto: Frame has been detached"));
+        });
+        const worker = context
+          .serviceWorkers()
+          .find((entry) => entry.url().startsWith(`chrome-extension://${extensionId}/`));
+        if (!worker) {
+          throw new Error("Extension service worker missing");
+        }
+        const finishNavigationProbe = await holdNavigationAccessCheck(worker, proofUrl);
+        try {
+          const navigationResponse = await dispatcher.dispatch({
+            method: "POST",
+            path: "/navigate",
+            query: { profile: "e2e" },
+            body: {
+              targetId: selectedTab.targetId,
+              url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+            },
+          });
+          diagnostic.mark("navigate.status", navigationResponse.status);
+          expect(navigationResponse.status, JSON.stringify(navigationResponse.body)).toBe(200);
+          expect(navigationResponse.body).toMatchObject({
+            ok: true,
+            targetId: selectedTab.targetId,
+            url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+          });
+          expect(detachedNavigation).toHaveBeenCalledTimes(1);
+          const recoveredPage = await getPageForTargetId({
+            cdpUrl: extensionCdpUrl,
+            targetId: selectedTab.targetId,
+            ssrfPolicy: browserState.resolved.ssrfPolicy,
+          });
+          diagnostic.mark("adapter.fresh", recoveredPage !== actedPage);
+          expect(recoveredPage).not.toBe(actedPage);
+          expect(distractingPage.url()).toBe(distractingUrl);
+          process.stderr.write(
+            "[browser-extension-e2e] injected-detach=1 production-reconnect=1 owner-target-preserved=1 unrelated-tab-unchanged=1 status=200\n",
+          );
+        } finally {
+          diagnostic.mark("injection.calls", detachedNavigation.mock.calls.length);
+          diagnostic.mark("owner.selected", selectedOwner?.() === selectedTab.targetId);
+          diagnostic.mark("owner.unrelated", unrelatedOwner?.() === unrelatedTab.targetId);
+          diagnostic.mark("direct.url", controlled.url() === proofUrl);
+          diagnostic.mark("unrelated.url", distractingPage.url() === distractingUrl);
+          diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
+          stopPageObservation();
+          diagnostic.flush();
+          detachedNavigation.mockRestore();
+          browserState.resolved.ssrfPolicy = previousSsrfPolicy;
+          const probe = await finishNavigationProbe();
+          expect(probe.heldReads).toBeGreaterThan(0);
+          expect(probe.sawLoad).toBe(true);
+        }
 
         const registration = status.registrations.find(
           (entry) => relevantManifestPaths.includes(entry.manifestPath) && entry.state === "owned",
@@ -563,8 +712,45 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.tabId === tabId))
           .toBe(false);
 
+        const installedManifestPath = path.join(installed, "manifest.json");
+        const installedManifest = JSON.parse(await fs.readFile(installedManifestPath, "utf8")) as {
+          version: string;
+        };
+        const outdatedVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
+        await fs.writeFile(
+          installedManifestPath,
+          `${JSON.stringify({ ...installedManifest, version: outdatedVersion }, null, 2)}\n`,
+        );
+        await context.close();
+        context = await launchChromium();
+        await loadUnpackedExtension(context, installed);
+        expect(await waitForExtensionId(context, installed)).toBe(extensionId);
+        const outdatedExtensionPage = await context.newPage();
+        await outdatedExtensionPage.goto(`chrome-extension://${extensionId}/options.html`);
+        await expect.poll(() => relay.bridge.identity?.extensionVersion).toBe(outdatedVersion);
+        const outdatedDoctor = await dispatcher.dispatch({
+          method: "GET",
+          path: "/doctor",
+          query: { profile: "e2e" },
+        });
+        expect(outdatedDoctor.status).toBe(200);
+        expect(outdatedDoctor.body).toMatchObject({
+          ok: true,
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              id: "extension-version",
+              status: "warn",
+              summary: `running ${outdatedVersion}; bundled ${chromeExtensionManifest.version} (mismatch)`,
+              fixHint: expect.stringMatching(/reload/i),
+            }),
+          ]),
+        });
+        process.stderr.write(
+          `[browser-extension-e2e] doctor version mismatch running=${outdatedVersion} bundled=${chromeExtensionManifest.version} status=WARN\n`,
+        );
+
         const extensionContext = routeContext.forProfile("e2e");
-        await extensionPage.evaluate(
+        await outdatedExtensionPage.evaluate(
           async () => await chrome.runtime.sendMessage({ type: "unpair" }),
         );
         await expect.poll(() => relay.bridge.extensionConnected).toBe(false);

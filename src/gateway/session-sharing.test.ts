@@ -175,6 +175,7 @@ describe("session sharing policy", () => {
       for (const [method, requestParams] of [
         ["agent", { sessionKey }],
         ["chat.send", { sessionKey }],
+        ["sessions.goal.update", { sessionKey, action: "resume" }],
         ["message.action", { sessionKey }],
         ["send", { sessionKey }],
         ["sessions.dispatch", { key: sessionKey }],
@@ -191,14 +192,17 @@ describe("session sharing policy", () => {
           method,
         ).toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("main") });
       }
-      expect(
-        resolveSessionMutationAuthorization({
-          client: writer,
-          method: "sessions.patch",
-          requestParams: { key: sessionKey },
-          context,
-        }).error,
-      ).toBeNull();
+      for (const [method, requestParams] of [
+        ["sessions.patch", { key: sessionKey }],
+        ["sessions.goal.update", { sessionKey, action: "pause" }],
+        ["sessions.goal.clear", { sessionKey }],
+      ] as const) {
+        expect(
+          resolveSessionMutationAuthorization({ client: writer, method, requestParams, context })
+            .error,
+          method,
+        ).toBeNull();
+      }
     });
   });
 
@@ -380,18 +384,20 @@ describe("session sharing policy", () => {
     });
   });
 
-  it("hides foreign sessions with none access across listings, direct reads, mutation, and broadcasts", async () => {
+  it("hides foreign cron sessions with none access across listings, reads, mutations, and broadcasts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      const creator = roleClient("none", "cron-creator");
+      const creatorId = creator.authenticatedUserProfile!.profileId;
       const restricted = roleClient("none", "restricted");
       const restrictedId = restricted.authenticatedUserProfile!.profileId;
-      const foreignKey = "agent:main:team-private";
+      const foreignKey = "agent:main:cron:job-1:run:run-1";
       const ownKey = "agent:main:team-own";
       const foreignEntry = {
-        sessionId: "session-team-private",
+        sessionId: "session-cron-run",
         updatedAt: 1,
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, id: "another-profile" },
+        createdVia: "cron" as const,
+        createdActor: { type: "human" as const, id: creatorId },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey: foreignKey }, foreignEntry);
       await upsertSessionEntryCore(
@@ -405,15 +411,13 @@ describe("session sharing policy", () => {
       );
       addSessionMember(
         { agentId: "main", sessionKey: foreignKey },
-        {
-          identityId: restrictedId,
-          addedBy: "another-profile",
-          expectedSessionId: "session-team-private",
-        },
+        { identityId: restrictedId, addedBy: creatorId, expectedSessionId: foreignEntry.sessionId },
       );
 
       const entryFilter = createSessionListEntryFilter({ cfg, client: restricted });
+      const creatorEntryFilter = createSessionListEntryFilter({ cfg, client: creator });
       expect(entryFilter?.(foreignKey, foreignEntry)).toBe(false);
+      expect(creatorEntryFilter?.(foreignKey, foreignEntry)).toBe(true);
       expect(
         entryFilter?.(ownKey, {
           sessionId: "session-team-own",
@@ -424,6 +428,9 @@ describe("session sharing policy", () => {
       expect(
         canReceiveSessionEvent({ cfg, client: restricted as never, sessionKeys: [foreignKey] }),
       ).toBe(false);
+      expect(
+        canReceiveSessionEvent({ cfg, client: creator as never, sessionKeys: [foreignKey] }),
+      ).toBe(true);
       expect(
         canReceiveSessionEvent({ cfg, client: restricted as never, sessionKeys: [ownKey] }),
       ).toBe(true);
@@ -470,6 +477,17 @@ describe("session sharing policy", () => {
           code: "INVALID_REQUEST",
           message: `Session "${foreignKey}" was not found.`,
         });
+      }
+      for (const method of ["chat.history", "chat.send"] as const) {
+        expect(
+          resolveSessionMutationAuthorization({
+            client: creator,
+            method,
+            requestParams: { sessionKey: foreignKey },
+            context,
+          }).error,
+          `creator ${method}`,
+        ).toBeNull();
       }
       expect(
         resolveSessionMutationAuthorization({

@@ -20,6 +20,9 @@ NODE_DEFAULT_MAJOR=26
 # Homebrew ships the current Node line as plain "node" (no versioned node@26
 # formula exists); versioned formulas only cover LTS lines like node@24.
 NODE_BREW_FORMULA="node"
+# Linux package repositories can publish builds ahead of the Node release line.
+# Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
+NODE_LINUX_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
 NODE_22_MIN_MINOR=22
 NODE_22_MIN_PATCH=3
@@ -181,7 +184,7 @@ run_remote_bash() {
     /bin/bash "$tmp"
 }
 
-GUM_VERSION="${OPENCLAW_GUM_VERSION:-0.17.0}"
+GUM_VERSION="${OPENCLAW_GUM_VERSION:-2.0.0}"
 GUM=""
 GUM_STATUS="skipped"
 GUM_REASON=""
@@ -1005,9 +1008,14 @@ npm_builtin_config_path() {
 npm_config_has_raw_key() {
     local npm_cmd="$1"
     local key="$2"
+    local project_dir="${3:-}"
     local raw=""
     local file=""
     local -a files=()
+
+    if [[ -n "$project_dir" ]]; then
+        files+=("${project_dir}/.npmrc")
+    fi
 
     raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
     if [[ -n "$raw" ]]; then
@@ -1385,8 +1393,8 @@ DRY_RUN=${OPENCLAW_DRY_RUN:-0}
 INSTALL_METHOD=${OPENCLAW_INSTALL_METHOD:-}
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-latest}
 USE_BETA=${OPENCLAW_BETA:-0}
-GIT_DIR_DEFAULT="$(resolve_openclaw_effective_home)/openclaw"
-GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
+GIT_DIR=${OPENCLAW_GIT_DIR:-"$(resolve_openclaw_effective_home)/openclaw"}
+GIT_DIR_EXPLICIT=${OPENCLAW_GIT_DIR:+1}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
@@ -1394,6 +1402,7 @@ VERBOSE="${OPENCLAW_VERBOSE:-0}"
 VERIFY_INSTALL="${OPENCLAW_VERIFY_INSTALL:-0}"
 OPENCLAW_BIN=""
 PNPM_CMD=()
+GIT_REF_KIND=""
 HELP=0
 
 print_usage() {
@@ -1504,6 +1513,7 @@ parse_args() {
                     return 2
                 fi
                 GIT_DIR="$2"
+                GIT_DIR_EXPLICIT=${2:+1}
                 shift 2
                 ;;
             --no-git-update)
@@ -2276,7 +2286,7 @@ install_node() {
         ui_info "Installing Node.js via NodeSource"
         if command -v apt-get &> /dev/null; then
             local tmp setup_url
-            setup_url="https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
+            setup_url="https://deb.nodesource.com/setup_${NODE_LINUX_DEFAULT_MAJOR}.x"
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
@@ -2288,7 +2298,7 @@ install_node() {
             fi
         elif command -v dnf &> /dev/null; then
             local tmp setup_url
-            setup_url="https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
+            setup_url="https://rpm.nodesource.com/setup_${NODE_LINUX_DEFAULT_MAJOR}.x"
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
@@ -2300,7 +2310,7 @@ install_node() {
             fi
         elif command -v yum &> /dev/null; then
             local tmp setup_url
-            setup_url="https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
+            setup_url="https://rpm.nodesource.com/setup_${NODE_LINUX_DEFAULT_MAJOR}.x"
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
@@ -2581,6 +2591,14 @@ run_pnpm() {
     "${PNPM_CMD[@]}" "$@"
 }
 
+should_prefer_offline_pnpm_install() {
+    local project_dir="${1:-$PWD}"
+    [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]] || return 1
+    local configured=""
+    configured="$(run_pnpm -C "$project_dir" config get prefer-offline 2>/dev/null)" || return 1
+    [[ -z "$configured" || "$configured" == "undefined" || "$configured" == "null" ]]
+}
+
 resolve_git_openclaw_ref() {
     local requested="${OPENCLAW_VERSION:-latest}"
     local resolved_version=""
@@ -2623,46 +2641,103 @@ resolve_git_openclaw_ref() {
     esac
 }
 
+verify_git_rebase_recovery() {
+    local repo_dir="$1"
+    local expected_head="$2"
+    local expected_status="$3"
+    local git_dir
+
+    git_dir="$(git -C "$repo_dir" rev-parse --absolute-git-dir)" || return 1
+    if [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" ]]; then
+        git -C "$repo_dir" rebase --abort >/dev/null 2>&1 || return 1
+    fi
+
+    [[ "$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" == "$expected_head" ]] &&
+        [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)" == "$expected_status" ]] &&
+        [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
+}
+
 checkout_git_openclaw_ref() {
     local repo_dir="$1"
     local ref="$2"
+    local original_head=""
+    local original_status=""
+    local namespaces=(heads tags)
+
+    GIT_REF_KIND=""
 
     if [[ -z "$ref" ]]; then
         return 0
     fi
 
     if [[ "$ref" == "main" ]]; then
-        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin main
+        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
         run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
+            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
+                ui_error "Could not record repository state before updating from origin/main"
+                return 1
+            fi
+            if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+                ui_error "Could not record repository state before updating from origin/main"
+                return 1
+            fi
+            if ! run_quiet_step "Updating repository" git -C "$repo_dir" rebase origin/main; then
+                if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
+                    ui_error "Could not update repository from origin/main; the checkout was restored to its pre-update state"
+                else
+                    ui_error "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
+                fi
+                return 1
+            fi
         fi
+        GIT_REF_KIND="moving"
         return 0
     fi
 
-    if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-        if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
+    # Normalized release selectors prefer immutable tags. A same-name branch
+    # remains a fallback for operator-supplied v-prefixed branch names.
+    if [[ "$ref" == v[0-9]* ]]; then
+        namespaces=(tags heads)
+    fi
+
+    local namespace=""
+    local probe_status=0
+    for namespace in "${namespaces[@]}"; do
+        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
+            if [[ "$namespace" == "heads" ]]; then
+                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
+                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+                GIT_REF_KIND="moving"
+            else
+                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
+                if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+                    ui_error "Requested git version is not a commit: ${ref}"
+                    return 1
+                fi
+                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
+                GIT_REF_KIND="immutable"
+            fi
+            return 0
+        else
+            probe_status=$?
         fi
-        return 0
-    fi
-
-    run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --tags origin
-
-    if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-        return 0
-    fi
-
-    if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-        return 0
-    fi
+        if (( probe_status != 2 )); then
+            ui_error "Could not resolve requested git ref: ${ref}"
+            return 1
+        fi
+    done
 
     ui_error "Requested git version not found: ${ref}"
     return 1
+}
+
+git_install_lockfile_flag() {
+    if [[ "$1" == "moving" ]]; then
+        echo "--no-frozen-lockfile"
+    else
+        echo "--frozen-lockfile"
+    fi
 }
 
 validate_git_checkout_head() {
@@ -2760,18 +2835,6 @@ NODE
         ui_info "Inspect the destination for partial files, move it or choose another --git-dir, then retry."
         return 1
     fi
-}
-
-git_install_lockfile_flag() {
-    local repo_dir="$1"
-    local ref="$2"
-
-    if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-        echo "--no-frozen-lockfile"
-        return 0
-    fi
-
-    echo "--frozen-lockfile"
 }
 
 repo_pnpm_spec() {
@@ -3254,14 +3317,23 @@ install_openclaw_from_git() {
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
     else
         ui_info "Repo has local changes; skipping git checkout/update"
+        if git -C "$repo_dir" symbolic-ref --quiet HEAD >/dev/null; then
+            GIT_REF_KIND="moving"
+        else
+            GIT_REF_KIND="immutable"
+        fi
     fi
 
     cleanup_legacy_submodules "$repo_dir"
     activate_repo_pnpm_version "$repo_dir"
 
     local install_lockfile_flag
-    install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+    install_lockfile_flag="$(git_install_lockfile_flag "$GIT_REF_KIND")"
+    local -a pnpm_prefer_offline_args=()
+    if should_prefer_offline_pnpm_install "$repo_dir"; then
+        pnpm_prefer_offline_args=(--prefer-offline)
+    fi
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
@@ -3570,7 +3642,7 @@ try {
 }
 
 refresh_gateway_service_if_loaded() {
-    local claw="${OPENCLAW_BIN:-}"
+    local claw="${OPENCLAW_BIN:-}" refresh_output
     if [[ -z "$claw" ]]; then
         claw="$(resolve_openclaw_bin || true)"
     fi
@@ -3583,22 +3655,22 @@ refresh_gateway_service_if_loaded() {
     fi
 
     ui_info "Refreshing loaded gateway service"
-    if run_quiet_step "Refreshing gateway service" "$claw" gateway install --force; then
+    if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+        if [[ -n "$refresh_output" ]]; then
+            ui_warn "Code installed; gateway service definition left unchanged; ${refresh_output}"
+            ui_info "Run openclaw gateway status --deep, verify the installation owner, and restart it manually if needed."
+            return 0
+        else
+            ui_warn "Gateway service refresh failed; continuing"
+            return 0
+        fi
+    else
         ui_success "Gateway service metadata refreshed"
-    else
-        ui_warn "Gateway service refresh failed; continuing"
-        return 0
     fi
 
-    if run_quiet_step "Restarting gateway service" "$claw" gateway restart; then
-        ui_success "Gateway service restarted"
-    else
-        local user_claw
-        user_claw="$(openclaw_command_for_user "$claw")"
-        ui_warn "Gateway service restart failed; continuing. Run: ${user_claw} gateway restart"
-        return 0
-    fi
-
+    # `gateway install --force` activates the replacement service. Keep the
+    # explicit lifecycle restart in the finalization phase so doctor/plugin
+    # changes can still be applied without restarting twice here.
     run_quiet_step "Probing gateway service" "$claw" gateway status --deep || true
 }
 
@@ -3774,12 +3846,11 @@ main() {
             had_npm_owner=true
         fi
 
-        local repo_dir="$GIT_DIR"
-        if [[ -n "$detected_checkout" ]]; then
-            repo_dir="$detected_checkout"
+        final_git_dir="$GIT_DIR"
+        if [[ -z "$GIT_DIR_EXPLICIT" && -n "$detected_checkout" ]]; then
+            final_git_dir="$detected_checkout"
         fi
-        final_git_dir="$repo_dir"
-        install_openclaw_from_git "$repo_dir"
+        install_openclaw_from_git "$final_git_dir"
         if [[ "$had_npm_owner" == "true" ]]; then
             retire_npm_owner_after_git_install || return $?
         fi

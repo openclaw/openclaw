@@ -108,8 +108,7 @@ type ChatRunRecord = {
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen?: number;
+  assistantScope?: { itemId: string; prefix: string };
   deltaLastBroadcastText?: string;
   agentText?: {
     assistant?: ChatRunAgentTextState;
@@ -236,7 +235,7 @@ export type ChatRunState = {
   resolveBuffer: (runId: string) => { text: string; suppress: boolean };
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
-  recordProgressEvent: (runId: string, event: AgentEventPayload) => void;
+  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -247,10 +246,15 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
 
-  const recordProgressEvent = (runId: string, event: AgentEventPayload) => {
+  const recordProgressEvent = (
+    runId: string,
+    event: AgentEventPayload,
+    mode?: "full" | "summary",
+  ) => {
     const progressSnapshot = updateChatRunProgressSnapshot(
       store.runs.get(runId)?.progressSnapshot,
       event,
+      mode,
     );
     if (progressSnapshot) {
       store.getOrCreate(runId).progressSnapshot = progressSnapshot;
@@ -269,7 +273,7 @@ export function createChatRunState(): ChatRunState {
     delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
-    delete record.deltaLastBroadcastLen;
+    delete record.assistantScope;
     delete record.deltaLastBroadcastText;
     clearPendingLiveTextFlushes(record);
     delete record.agentText;

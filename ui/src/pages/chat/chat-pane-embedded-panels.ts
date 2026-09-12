@@ -1,9 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ProgressCard } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  renderPanelLoadingSkeleton,
+  type PanelLoadingSkeletonVariant,
+} from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -12,7 +15,10 @@ import {
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
+import {
+  isSessionWorkspaceItemLoading,
+  resolveSessionDiffSidebarContent,
+} from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
@@ -40,8 +46,6 @@ type SidebarPanelDefinitionParams = {
   startedAt: number | undefined;
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
-  progressCard: ProgressCard | null;
-  onDismissProgressCard?: (card: ProgressCard) => void;
   companion: ChatSessionCompanionThread;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
@@ -50,6 +54,7 @@ type SidebarPanelDefinitionParams = {
   pendingQuestion: string | null;
   onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
+  discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
 };
@@ -64,6 +69,18 @@ type SidebarPanelTextKey =
   | "review"
   | "tasks"
   | "terminal";
+
+const SIDEBAR_PANEL_LOADING_VARIANTS = {
+  browser: "browser",
+  chat: "chat",
+  companion: "chat",
+  desktop: "desktop",
+  detail: "review",
+  discussion: "discussion",
+  tasks: "tasks",
+  terminal: "terminal",
+  workspace: "files",
+} satisfies Record<SidebarSlotId, PanelLoadingSkeletonVariant>;
 
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
@@ -88,6 +105,7 @@ export function sidebarPanelDefinitions(
     icon,
     available: options?.available ?? hasPaneContext,
     content,
+    loading: renderPanelLoadingSkeleton(SIDEBAR_PANEL_LOADING_VARIANTS[slot], t("common.loading")),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
     ...(options?.headerAction ? { headerAction: options.headerAction } : {}),
     ...(options?.shortcut ? { shortcut: options.shortcut } : {}),
@@ -125,8 +143,6 @@ export function sidebarPanelDefinitions(
         .activeRunId=${params.activeRunId}
         .startedAt=${params.startedAt}
         .lastReadAt=${params.lastReadAt}
-        .progressCard=${params.progressCard}
-        .onDismissProgressCard=${params.onDismissProgressCard}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
@@ -156,22 +172,34 @@ export function sidebarPanelDefinitions(
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
     : null;
+  const attachmentContent = state?.attachmentSidebarContent ?? null;
+  const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
   const detailContent =
     state?.sidebarContent ??
-    (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
+    (state && params?.detailOpen && !detailLoading
+      ? resolveSessionDiffSidebarContent(state)
+      : null);
+  const workspaceContent =
+    attachmentContent && params
+      ? params.renderDetail(attachmentContent)
+      : (params?.workspace ?? null);
   return [
     definePanel(
       "detail",
       "review",
       icons.diff,
-      detailContent && params ? params.renderDetail(detailContent) : null,
+      detailLoading
+        ? renderPanelLoadingSkeleton("review", t("common.loading"))
+        : detailContent && params
+          ? params.renderDetail(detailContent)
+          : null,
     ),
     definePanel("terminal", "terminal", icons.terminal, terminal, {
       available: terminalAvailable,
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
     }),
     definePanel("browser", "browser", icons.globe, browser, { available: browserAvailable }),
-    definePanel("workspace", "files", icons.fileText, params?.workspace ?? null, {
+    definePanel("workspace", "files", icons.fileText, workspaceContent, {
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
     definePanel(
@@ -228,7 +256,7 @@ export function sidebarPanelDefinitions(
         : {}),
     }),
     definePanel("discussion", "discussion", icons.messageSquare, discussion, {
-      available: discussion !== null,
+      available: discussion !== null && params?.discussionAvailable === true,
       ...(params?.discussionOpenUrl
         ? {
             headerAction: html`<a

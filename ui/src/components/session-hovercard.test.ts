@@ -14,7 +14,12 @@ function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSessio
     createdAt: Date.now() - 2 * 60 * 60_000,
     startedAt: Date.now() - 2 * 60 * 60_000,
     updatedAt: Date.now() - 5 * 60_000,
-    createdActor: { type: "human", id: "alice", label: "Alice Baker" },
+    createdActor: {
+      type: "human",
+      id: "alice",
+      identity: { type: "profile", id: "alice" },
+      label: "Alice Baker",
+    },
     subtitle: "openclaw ⎇ feature/session-hovercard",
     workContext: {
       kind: "project",
@@ -308,6 +313,23 @@ describe("renderSessionHovercard", () => {
     expect(container.textContent).not.toContain("This must not appear.");
   });
 
+  it("uses the session terminal status and endedAt for progress activity", () => {
+    const container = document.createElement("div");
+    const endedAt = Date.now() - 30_000;
+    render(
+      renderSessionHovercard({
+        row: row({ status: "failed", endedAt }),
+        progressCard: progressCard(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector("time")?.textContent).toBe("Failed just now");
+    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
+      new Date(endedAt).toISOString(),
+    );
+  });
+
   it("deduplicates creator and self from the compact participant identity", () => {
     const container = document.createElement("div");
     render(
@@ -315,11 +337,11 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "alice", label: "Alice Baker" },
-            { type: "human", id: "self", label: "You" },
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
-            { type: "human", id: "mira", label: "Mira duplicate" },
+            { identity: { type: "profile", id: "alice" }, label: "Alice Baker" },
+            { identity: { type: "profile", id: "self" }, label: "You" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira duplicate" },
           ],
           participantCount: 7,
         }),
@@ -369,9 +391,9 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "self", label: "You" },
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
+            { identity: { type: "profile", id: "self" }, label: "You" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
           ],
           participantCount: 5,
         }),
@@ -415,10 +437,10 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
-            { type: "human", id: "sam", label: "Sam" },
-            { type: "human", id: "lee", label: "Lee" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "sam" }, label: "Sam" },
+            { identity: { type: "profile", id: "lee" }, label: "Lee" },
           ],
           participantCount: 5,
         }),

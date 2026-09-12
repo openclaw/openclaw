@@ -19,9 +19,8 @@ import {
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
-import type { SpawnResult } from "../../process/exec.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTurnLaunchRequest } from "./tunnel-contract.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -109,7 +108,7 @@ describe("worker turn launcher reclaimed placement", () => {
       }
       return active;
     };
-    const launchTurn = vi.fn(async (request: WorkerTurnLaunchRequest): Promise<SpawnResult> => {
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
       workerStarted.resolve();
       await resumeWorker.promise;
@@ -494,6 +493,10 @@ describe("worker turn launcher reclaimed placement", () => {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
+    });
+    placements.fail({
+      sessionId: SESSION_ID,
+      recoveryError: "stale terminal worker failure",
     });
     placements.fail({
       sessionId: SESSION_ID,

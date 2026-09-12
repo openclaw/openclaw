@@ -160,7 +160,10 @@ function mergeManagedMediaIntoAssistantContent(params: {
     });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;
-      merged.push({ ...rest, text: visibleText });
+      merged.push({
+        ...rest,
+        text: visibleText,
+      });
     }
     if (split.mediaUrls?.length && !replaced) {
       merged.push(...managedBlocks);
@@ -396,11 +399,13 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
         return event;
       }
       return Object.assign({}, event as Record<string, unknown>, {
-        message: {
+        message: applyAssistantDeliveryDirectives({
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
-          content: replacement.request.state.persistedContent,
-        },
+          content: replacement.request.state.persistedContent.map((block) =>
+            Object.assign({}, block),
+          ),
+        }),
       });
     });
     await transcript.replaceEvents(rewrittenEvents);
@@ -429,10 +434,10 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     const rewrittenEvents = events.map((event) =>
       transcriptEventId(event) === target.messageId
         ? Object.assign({}, event as Record<string, unknown>, {
-            message: {
+            message: applyAssistantDeliveryDirectives({
               ...target.message,
-              content: params.content,
-            },
+              content: params.content.map((block) => Object.assign({}, block)),
+            }),
           })
         : event,
     );

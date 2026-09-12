@@ -2,10 +2,8 @@
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import type { HealthSummary } from "./health/types.js";
-const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
-const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { HealthSummary } from "./health/types.js";
 import { createChatAbortMarker } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
@@ -94,7 +92,7 @@ function seedStaleRunBuffers(deps: MaintenanceTimerDeps, runId: string): void {
     rawBuffer: "raw buffer",
     bufferUpdatedAt: staleRunTimestamp(),
     deltaSentAt: staleRunTimestamp(),
-    deltaLastBroadcastLen: 6,
+    assistantScope: { itemId: "assistant-1", prefix: "" },
     deltaLastBroadcastText: "buffer",
   });
 }
@@ -105,7 +103,7 @@ function expectStaleRunBuffersPresent(deps: MaintenanceTimerDeps, runId: string)
     rawBuffer: "raw buffer",
     bufferUpdatedAt: expect.any(Number),
     deltaSentAt: expect.any(Number),
-    deltaLastBroadcastLen: 6,
+    assistantScope: { itemId: "assistant-1", prefix: "" },
     deltaLastBroadcastText: "buffer",
   });
 }
@@ -116,7 +114,7 @@ function expectStaleRunBuffersSwept(deps: MaintenanceTimerDeps, runId: string): 
   expect(run?.rawBuffer).toBeUndefined();
   expect(run?.bufferUpdatedAt).toBeUndefined();
   expect(run?.deltaSentAt).toBeUndefined();
-  expect(run?.deltaLastBroadcastLen).toBeUndefined();
+  expect(run?.assistantScope).toBeUndefined();
   expect(run?.deltaLastBroadcastText).toBeUndefined();
 }
 
@@ -157,14 +155,12 @@ async function stopMaintenanceTimers(timers: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<"drained" | "timed-out">;
   worktreeCleanup: NodeJS.Timeout;
-  skillCuratorCleanup: () => void;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
   clearInterval(timers.worktreeCleanup);
   await timers.stopMediaCleanup();
-  timers.skillCuratorCleanup();
 }
 
 describe("startGatewayMaintenanceTimers", () => {
@@ -315,39 +311,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(2);
     expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(2);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("delays collection review and does not overlap runs", async () => {
-    vi.useFakeTimers();
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    let resolveSweep = () => {};
-    const sweep = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveSweep = resolve;
-        }),
-    );
-    const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
-      enableSkillCurator: true,
-      runSkillCollectionReconcile: sweep,
-    });
-
-    await vi.advanceTimersByTimeAsync(CURATOR_INITIAL_DELAY_MS - 1);
-    expect(sweep).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(sweep).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(CURATOR_SWEEP_INTERVAL_MS);
-    expect(sweep).toHaveBeenCalledTimes(1);
-
-    resolveSweep();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(CURATOR_SWEEP_INTERVAL_MS);
-    expect(sweep).toHaveBeenCalledTimes(2);
-    resolveSweep();
-    await vi.advanceTimersByTimeAsync(0);
 
     await stopMaintenanceTimers(timers);
   });
@@ -825,7 +788,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("clears deltaLastBroadcastLen when aborted runs age out", async () => {
+  it("clears assistant snapshot scope when aborted runs age out", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
