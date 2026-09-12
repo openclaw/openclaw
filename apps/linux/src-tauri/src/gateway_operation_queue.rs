@@ -46,7 +46,7 @@ impl GatewayOperationQueue {
     }
 
     pub(crate) fn submit_connect(&self) {
-        self.submit_detached(GatewayOperation::ConnectExplicitLocal);
+        self.submit_detached(GatewayOperation::Connect);
     }
 
     pub(crate) fn submit_action(&self, action: GatewayAction) {
@@ -97,7 +97,7 @@ mod tests {
         let queue = GatewayOperationQueue::new(
             move |operation| {
                 let observed = match operation {
-                    GatewayOperation::ConnectExplicitLocal => 0,
+                    GatewayOperation::Connect => 0,
                     GatewayOperation::Action(GatewayAction::Stop) => 1,
                     _ => panic!("unexpected operation"),
                 };
@@ -137,7 +137,7 @@ mod tests {
                         thread::sleep(Duration::from_millis(100));
                         ObservedOperation::Stop
                     }
-                    GatewayOperation::ConnectExplicitLocal => ObservedOperation::Connect,
+                    GatewayOperation::Connect => ObservedOperation::Connect,
                     _ => panic!("unexpected operation"),
                 };
                 observed_sender.send(observed).expect("record operation");

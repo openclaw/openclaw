@@ -86,10 +86,17 @@ struct DaemonStatus {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ServiceStatus {
-    loaded: bool,
+    loaded: Option<bool>,
+    load_state: Option<ServiceLoadState>,
     command: Option<serde_json::Value>,
     runtime: Option<ServiceRuntime>,
+}
+
+#[derive(Deserialize)]
+struct ServiceLoadState {
+    detail: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,7 +134,27 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     let value = cli
         .json::<DaemonStatus, _, _>(["gateway", "status", "--json"])
         .map_err(|error| error.to_string())?;
-    let installed = value.service.command.is_some() || value.service.loaded;
+    let reachable = value.rpc.as_ref().is_some_and(|rpc| rpc.ok);
+    // A failed service inspection is not evidence that installation is missing.
+    // A healthy RPC can still attach without inspecting or changing the service.
+    if !reachable && value.service.loaded.is_none() {
+        let service_detail = value
+            .service
+            .load_state
+            .as_ref()
+            .and_then(|state| state.detail.as_deref())
+            .unwrap_or("The CLI could not determine the Gateway service state.");
+        let rpc_detail = value
+            .rpc
+            .as_ref()
+            .and_then(|rpc| rpc.error.as_deref())
+            .unwrap_or("The Gateway RPC probe did not report a healthy connection.");
+        return Err(format!(
+            "{service_detail}\n{rpc_detail}\nRun `openclaw gateway status` in a terminal \
+             to inspect service access and Gateway credentials, then retry."
+        ));
+    }
+    let installed = value.service.command.is_some() || value.service.loaded == Some(true);
     let runtime_status = value
         .service
         .runtime
@@ -135,7 +162,6 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
         .and_then(|runtime| runtime.status.as_deref())
         .unwrap_or("stopped");
     let running = runtime_status == "running";
-    let reachable = value.rpc.as_ref().is_some_and(|rpc| rpc.ok);
     let (phase, status) = if reachable {
         ("connected", "Connected")
     } else if !installed {
@@ -283,6 +309,10 @@ fn dashboard_token(dashboard_url: &str) -> Result<Option<String>, String> {
         .map(|(_, value)| value.into_owned())
         .filter(|value| !value.is_empty()))
 }
+
+#[cfg(all(test, unix))]
+#[path = "gateway_status_tests.rs"]
+mod status_tests;
 
 #[cfg(test)]
 mod dashboard_tests {
