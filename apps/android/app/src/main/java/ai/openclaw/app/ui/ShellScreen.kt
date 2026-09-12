@@ -151,11 +151,11 @@ fun ShellScreen(
     FoldAwareContent(
       features = features,
       modifier = modifier.background(ClawTheme.colors.canvas),
-      bookPanesEnabled = !commandOpen && pendingTrust == null,
+      sidebarPanesEnabled = !commandOpen && pendingTrust == null,
       tabletopEnabled = nav.activeTab == Tab.Chat && !commandOpen && pendingTrust == null,
     ) { foldBounds ->
-      val bookPanes = foldBounds.book
-      val permanentSidebar = bookPanes != null
+      val sidebarPanes = foldBounds.sidebar
+      val permanentSidebar = sidebarPanes != null
       // Mode changes discard modal operations and their drag state, not the two content slots.
       val sidebarDrawerState = key(permanentSidebar) { rememberDrawerState(initialValue = DrawerValue.Closed) }
       var sidebarRowDragging by remember(sidebarDrawerState) { mutableStateOf(false) }
@@ -249,7 +249,7 @@ fun ShellScreen(
       Box(modifier = Modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
         SidebarNavigationShell(
           drawerState = sidebarDrawerState,
-          bookPanes = bookPanes,
+          sidebarPanes = sidebarPanes,
           sidebarBand = foldBounds.sidebarBand,
           gesturesEnabled = !sidebarRowDragging,
           drawerContent = {

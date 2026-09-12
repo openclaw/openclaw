@@ -8,6 +8,7 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.gateway.GatewayEndpoint
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
@@ -19,19 +20,27 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -57,14 +66,22 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeWithVelocity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -80,8 +97,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.After
@@ -97,6 +117,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.util.ReflectionHelpers
 import java.util.Collections
 import java.util.UUID
@@ -112,6 +133,7 @@ class RootScreenFoldTest {
   private lateinit var backDispatcher: OnBackPressedDispatcher
   private lateinit var focusManager: FocusManager
   private var direction by mutableStateOf(LayoutDirection.Ltr)
+  private var viewportWidth by mutableStateOf(800.dp)
 
   @Before
   @SuppressLint("RestrictedApi") // Use WindowManager's own decorator boundary, not a production test hook.
@@ -149,10 +171,37 @@ class RootScreenFoldTest {
   }
 
   @Test
+  @Config(qualifiers = "w1000dp-h1000dp-mdpi")
+  fun flatExpandedWindowShowsPermanentSidebar() {
+    withRoot(completed = true, destination = HomeDestination.Chat, width = 1000.dp) {
+      emit(emptyList())
+      assertEquals("The mdpi fixture must expose a 1000dp window", 1000, view.width)
+      val composer = composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
+      val sidebar = composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
+      assertTrue("The destination must remain beside the sidebar", windowBounds(composer).left >= windowBounds(sidebar).right)
+      composeRule.onNodeWithContentDescription("Show Sidebar").assertDoesNotExist()
+      val editor = composeRule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("chat-composer-surface")))
+      editor.performClick().performTextReplacement("Expanded window draft")
+      editor.assertIsFocused().assertTextEquals("Expanded window draft")
+      composeRule
+        .onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-permanent")))
+        .performScrollTo()
+        .performTouchInput { click() }
+      composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
+      sidebar.assertIsDisplayed()
+      composeRule.onNodeWithTag("sidebar-open-settings").assertDoesNotExist()
+    }
+  }
+
+  @Test
   fun onboardingActionsAvoidTheHingeAndKeepDraftFocusAndBackNavigation() {
     withRoot(completed = false) {
       // No WindowLayoutInfo emission yet: onboarding must render normally.
       val action = composeRule.onNodeWithText("Continue").assertIsDisplayed()
+      resize(1000.dp)
+      action.assertIsDisplayed()
+      composeRule.onNodeWithTag("sidebar-permanent").assertDoesNotExist()
+      resize(800.dp)
       val original = windowBounds(action)
       val hinge = Rect(original.centerX() - 10, 0, original.centerX() + 10, view.height)
       assertTrue("The baseline action must cross the future hinge", Rect.intersects(original, hinge))
@@ -176,6 +225,141 @@ class RootScreenFoldTest {
   }
 
   @Test
+  fun gatewayTrustSuppressesExpandedNavigationUntilThePromptCloses() {
+    lateinit var pending: MutableStateFlow<NodeRuntime.GatewayTrustPrompt?>
+    withRoot(
+      completed = true,
+      width = 1000.dp,
+      configureRuntime = { pending = ReflectionHelpers.getField(it, "_pendingGatewayTrust") },
+    ) {
+      composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
+      composeRule.runOnIdle {
+        pending.value =
+          NodeRuntime.GatewayTrustPrompt(
+            endpoint = GatewayEndpoint(stableId = "test-gateway", name = "Test gateway", host = "gateway.test", port = 443),
+            fingerprintSha256 = "ab".repeat(32),
+            auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
+          )
+      }
+      for (width in listOf(840.dp, 839.dp, 1000.dp)) {
+        resize(width)
+        composeRule.onNodeWithText("Trust this gateway?").assertIsDisplayed()
+        composeRule.onNodeWithTag("sidebar-permanent").assertDoesNotExist()
+      }
+      composeRule.runOnIdle { pending.value = null }
+      composeRule.onNodeWithText("Trust this gateway?").assertDoesNotExist()
+      composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
+      composeRule.onNodeWithContentDescription("Search settings").performTouchInput { click() }
+      composeRule.onNodeWithContentDescription("Close search").assertIsDisplayed()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w1000dp-h650dp-mdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun expandedWidthRoundTripPreservesAnOffTailLogicalGlyphAndExplicitFollowing() {
+    val text = (1..80).joinToString("\n") { "Reading point $it: this earlier response must remain readable while navigation changes beside it." }
+    withRoot(
+      completed = true,
+      destination = HomeDestination.Chat,
+      configureRuntime = { runtime ->
+        val controller = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+        val original =
+          ReflectionHelpers.getField<suspend (String, String, String?) -> String>(controller, "requestGatewayForGateway")
+        val requester: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+          val response = original(gatewayId, method, params)
+          if (method == "chat.history") {
+            val history = Json.parseToJsonElement(response).jsonObject
+            val messages =
+              history.getValue("messages").jsonArray.mapIndexed { index, message ->
+                if (index == 12) JsonObject(message.jsonObject + ("content" to JsonPrimitive(text))) else message
+              }
+            JsonObject(history + ("messages" to JsonArray(messages))).toString()
+          } else {
+            response
+          }
+        }
+        ReflectionHelpers.setField(controller, "requestGatewayForGateway", requester)
+      },
+    ) { model ->
+      composeRule.runOnIdle { model.refreshChat() }
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          !model.chatHistoryLoading.value && model.chatMessages.value.size >= 24 &&
+            model.chatMessages.value.any { message ->
+              message.role == "assistant" && message.content.any { it.type == "text" && it.text == text }
+            }
+        }
+      }
+      composeRule.runOnIdle {
+        val syntheticMessages =
+          model.chatMessages.value.filter { message ->
+            message.role == "assistant" && message.content.any { it.type == "text" && it.text == text }
+          }
+        assertEquals("Load exactly one complete synthetic earlier response before scrolling", 1, syntheticMessages.size)
+        val syntheticMessage = syntheticMessages.single()
+        assertEquals(text, syntheticMessage.content.single().text)
+        assertFalse("The synthetic earlier response must not be truncated", syntheticMessage.truncated)
+      }
+      val transcript = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+      transcript.performScrollToNode(hasText(text))
+      val (initialText, initialLayout) = renderedText(text)
+      val initialClip = transcript.fetchSemanticsNode().boundsInRoot
+      assertTrue(
+        "The reader fixture must span the viewport: node=${initialText.size}, layout=${initialLayout.size}, " +
+          "lineCount=${initialLayout.lineCount}, viewport=$initialClip, " +
+          "density=${initialLayout.layoutInput.density.density}, fontScale=${initialLayout.layoutInput.density.fontScale}",
+        initialText.size.height > initialClip.height * 2,
+      )
+      val towardInterior = if (initialText.positionInRoot.y < initialClip.top) 100f else -100f
+      transcript.performTouchInput { swipeWithVelocity(center, center + Offset(0f, towardInterior), endVelocity = 0f) }
+      composeRule.waitForIdle()
+      composeRule.onNodeWithContentDescription("Jump to latest").assertIsDisplayed()
+      val clip = transcript.fetchSemanticsNode().boundsInRoot
+      val before = renderedText(text)
+      val character =
+        text.indices.first { index ->
+          val glyph = before.second.getBoundingBox(index).translate(before.first.positionInRoot)
+          !text[index].isWhitespace() && glyph.width > 0f && glyph.height > 0f &&
+            glyph.top >= clip.top && glyph.bottom <= clip.bottom
+        }
+      val originalGlyph = before.second.getBoundingBox(character).translate(before.first.positionInRoot)
+      assertTrue("Read inside the old response, not its beginning or the live tail", character > 0 && character < text.lastIndex)
+      val relativeY = originalGlyph.top - clip.top
+      val session = model.chatSessionKey.value
+      val messages = model.chatMessages.value
+      for (width in listOf(840.dp, 1000.dp, 839.dp, 800.dp)) {
+        resize(width)
+        val currentClip = transcript.fetchSemanticsNode().boundsInRoot
+        val after = renderedText(text)
+        val glyph = after.second.getBoundingBox(character).translate(after.first.positionInRoot)
+        assertEquals(text, after.second.layoutInput.text.text)
+        assertEquals(session, model.chatSessionKey.value)
+        assertEquals("Resizing must not replace or append history", messages, model.chatMessages.value)
+        if (width == 840.dp) {
+          assertTrue("The sidebar must narrow the real transcript", currentClip.width < clip.width)
+          assertTrue("The same paragraph must actually reflow", after.second.lineCount > before.second.lineCount)
+        }
+        assertEquals("Keep the same logical reading point after reflow at $width", currentClip.top + relativeY, glyph.top, 1f)
+        assertTrue(
+          "The retained glyph must be fully visible at $width: $glyph inside $currentClip",
+          glyph.width > 0f && glyph.height > 0f &&
+            glyph.left >= currentClip.left && glyph.right <= currentClip.right &&
+            glyph.top >= currentClip.top && glyph.bottom <= currentClip.bottom,
+        )
+        composeRule.onNodeWithContentDescription("Jump to latest").assertIsDisplayed()
+      }
+      composeRule.onNodeWithContentDescription("Jump to latest").performClick()
+      composeRule.onNodeWithContentDescription("Jump to latest").assertDoesNotExist()
+      for (width in listOf(1000.dp, 800.dp)) {
+        resize(width)
+        composeRule.onNodeWithContentDescription("Jump to latest").assertDoesNotExist()
+        assertEquals(0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+      }
+    }
+  }
+
+  @Test
   fun authenticatedSettingsKeepSearchDraftAndReturnRouteAcrossFoldChanges() {
     withRoot(completed = true) {
       composeRule.onNodeWithContentDescription("Search settings").performClick()
@@ -189,6 +373,13 @@ class RootScreenFoldTest {
         search.assertTextEquals("Appearance").assertIsFocused()
         assertEquals(editorId, search.fetchSemanticsNode().id)
         if (features.isNotEmpty()) assertClearOfHinge(search, hinge)
+      }
+      emit(emptyList())
+      for (width in listOf(840.dp, 1000.dp, 839.dp, 800.dp, 1000.dp)) {
+        resize(width)
+        search.assertTextEquals("Appearance").assertIsFocused()
+        assertEquals(editorId, search.fetchSemanticsNode().id)
+        composeRule.onNodeWithTag("sidebar-permanent").assertDoesNotExist()
       }
       composeRule.onNodeWithContentDescription("Close search").performClick()
       composeRule.onNodeWithTag("sidebar-search-toggle").assertIsDisplayed()
@@ -556,6 +747,28 @@ class RootScreenFoldTest {
       composeRule.runOnIdle { backDispatcher.onBackPressed() }
       editor.assertIsDisplayed().assertTextEquals("Keep this draftbf")
       assertEquals("Keep editor focus through both reparentings", listOf(true, true), focusedAfterMove)
+      editor.performTextInputSelection(TextRange(0, 4))
+      for (width in listOf(840.dp, 1000.dp, 839.dp, 800.dp)) {
+        resize(width)
+        editor.assertIsFocused().assertTextEquals("Keep this draftbf")
+        assertEquals(editorId, editor.fetchSemanticsNode().id)
+        assertEquals(TextRange(0, 4), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+        if (width >= 840.dp) {
+          val sidebar = composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
+          val bounds = windowBounds(sidebar)
+          for (bottom in listOf(320, 0)) {
+            keyboard(bottom)
+            assertEquals("IME must not change navigation allocation", bounds, windowBounds(sidebar))
+            editor.assertIsFocused().assertTextEquals("Keep this draftbf")
+            assertEquals(TextRange(0, 4), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+          }
+        } else {
+          composeRule.onNodeWithContentDescription("Show Sidebar").assertIsDisplayed()
+          composeRule.onNodeWithTag("sidebar-permanent").assertDoesNotExist()
+        }
+      }
+      composeRule.onRoot().performKeyInput { pressKey(Key.Z) }
+      editor.assertTextEquals("z this draftbf")
     }
   }
 
@@ -589,6 +802,15 @@ class RootScreenFoldTest {
       assertEquals(editorId, editor.fetchSemanticsNode().id)
       composeRule.onRoot().performKeyInput { pressKey(Key.F) }
       editor.assertTextContains("Unsaved brf")
+      editor.performTextInputSelection(TextRange(8, 11))
+      for (width in listOf(840.dp, 839.dp, 1000.dp, 800.dp)) {
+        resize(width)
+        editor.assertIsFocused().assertTextContains("Unsaved brf")
+        assertEquals(editorId, editor.fetchSemanticsNode().id)
+        assertEquals(TextRange(8, 11), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+      }
+      composeRule.onRoot().performKeyInput { pressKey(Key.Z) }
+      editor.assertTextContains("Unsaved z")
       composeRule.runOnIdle {
         assertEquals("Layout changes must not save the draft", savedName, model.displayName.value)
         backDispatcher.onBackPressed()
@@ -607,6 +829,10 @@ class RootScreenFoldTest {
       emit(fold)
       editor.assertIsNotFocused()
       emit(emptyList())
+      editor.assertIsNotFocused()
+      resize(1000.dp)
+      editor.assertIsNotFocused()
+      resize(800.dp)
       editor.assertIsNotFocused()
       editor.performClick().performTextReplacement("Do not refocus")
       composeRule.runOnIdle { focusManager.clearFocus() }
@@ -632,6 +858,16 @@ class RootScreenFoldTest {
       emit(emptyList())
       editor.assertIsFocused()
       search.assertIsNotFocused()
+      resize(1000.dp)
+      editor.assertIsFocused()
+      search.assertIsNotFocused()
+      search.performClick().assertIsFocused()
+      resize(800.dp)
+      search.assertIsNotDisplayed().assertIsNotFocused()
+      editor.assertIsNotFocused()
+      resize(1000.dp)
+      search.assertIsNotFocused()
+      editor.assertIsNotFocused()
     }
   }
 
@@ -663,6 +899,17 @@ class RootScreenFoldTest {
       search.assertTextContains("retained search").assertIsDisplayed()
       assertEquals(editorId, search.fetchSemanticsNode().id)
       assertEquals("Keep search focus through the book and RTL transitions", listOf(true, true), focusedAfterMove)
+      search.performClick().performTextInputSelection(TextRange(9, 15))
+      resize(1000.dp)
+      search.assertIsFocused().assertTextContains("retained search")
+      assertEquals(TextRange(9, 15), search.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+      assertTrue("RTL navigation must use the physical right side", windowBounds(search).left >= 640)
+      resize(800.dp)
+      search.assertIsNotDisplayed().assertIsNotFocused()
+      composeRule.onNodeWithTag("sidebar-open-settings").performClick()
+      search.assertIsDisplayed().assertTextContains("retained search")
+      assertEquals(editorId, search.fetchSemanticsNode().id)
+      assertEquals(TextRange(9, 15), search.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
     }
   }
 
@@ -693,6 +940,21 @@ class RootScreenFoldTest {
           .config[SemanticsProperties.VerticalScrollAxisRange]
           .value(),
       )
+      emit(emptyList())
+      for (width in listOf(1000.dp, 800.dp, 840.dp, 800.dp)) {
+        resize(width)
+        if (width < 840.dp) composeRule.onNodeWithTag("sidebar-open-settings").performClick()
+        composeRule.onNodeWithText("Android QA").assertIsDisplayed()
+        assertEquals(
+          "Expanded sidebar state must survive width changes",
+          scroll,
+          composeRule
+            .onNode(sidebarScroll)
+            .fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange]
+            .value(),
+        )
+      }
       emit(listOf(testFold(hinge)))
       assertEquals(
         scroll,
@@ -721,69 +983,74 @@ class RootScreenFoldTest {
   }
 
   @Test
-  fun bookModeCancelsOpeningAndClosingDrawerAnimationsWithoutStrandingBack() {
-    withRoot(completed = true) {
-      val hinge = Rect(400, 0, 420, view.height)
-      Settings.Global.putFloat(view.context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
-      composeRule.mainClock.autoAdvance = false
-      composeRule.onNodeWithTag("sidebar-open-settings").performClick()
-      composeRule.mainClock.advanceTimeBy(32)
-      emit(listOf(testFold(hinge)))
-      composeRule.mainClock.autoAdvance = true
-      composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
-      composeRule.onNodeWithContentDescription("Close navigation menu").assertDoesNotExist()
-      composeRule.onNodeWithTag("sidebar-drawer").assertIsNotDisplayed()
-      composeRule.runOnIdle { backDispatcher.onBackPressed() }
-      composeRule.onNodeWithContentDescription("Search settings").assertDoesNotExist()
-      emit(emptyList())
-      composeRule.onNodeWithTag("sidebar-open-overview").performClick()
-      composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-      composeRule.onNodeWithContentDescription("Close navigation menu").assertIsDisplayed()
-      composeRule.mainClock.autoAdvance = false
-      composeRule.onNodeWithTag("sidebar-close").performClick()
-      composeRule.mainClock.advanceTimeBy(32)
-      emit(listOf(testFold(hinge)))
-      composeRule.mainClock.autoAdvance = true
-      composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
-      composeRule.onNodeWithTag("sidebar-drawer").assertIsNotDisplayed()
-      Settings.Global.putFloat(view.context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-      composeRule.onNode(hasText("Home") and hasAnyAncestor(hasTestTag("sidebar-permanent"))).performTouchInput { click() }
-      composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
-      emit(emptyList())
-      composeRule.runOnIdle { backDispatcher.onBackPressed() }
-      composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
+  fun permanentModeCancelsOpeningAndClosingDrawerAnimationsWithoutStrandingBack() {
+    withRoot(completed = true) { model ->
+      for (expandedWindow in listOf(false, true)) {
+        composeRule.runOnIdle { model.requestHomeDestination(HomeDestination.Settings) }
+        composeRule.waitForIdle()
+        Settings.Global.putFloat(view.context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        composeRule.mainClock.autoAdvance = false
+        composeRule.onNodeWithTag("sidebar-open-settings").performClick()
+        composeRule.mainClock.advanceTimeBy(32)
+        setPermanentSidebar(expandedWindow, visible = true)
+        composeRule.mainClock.autoAdvance = true
+        composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Close navigation menu").assertDoesNotExist()
+        composeRule.onNodeWithTag("sidebar-drawer").assertIsNotDisplayed()
+        composeRule.runOnIdle { backDispatcher.onBackPressed() }
+        composeRule.onNodeWithContentDescription("Search settings").assertDoesNotExist()
+        setPermanentSidebar(expandedWindow, visible = false)
+        composeRule.onNodeWithTag("sidebar-open-overview").performClick()
+        composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Close navigation menu").assertIsDisplayed()
+        composeRule.mainClock.autoAdvance = false
+        composeRule.onNodeWithTag("sidebar-close").performClick()
+        composeRule.mainClock.advanceTimeBy(32)
+        setPermanentSidebar(expandedWindow, visible = true)
+        composeRule.mainClock.autoAdvance = true
+        composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
+        composeRule.onNodeWithTag("sidebar-drawer").assertIsNotDisplayed()
+        Settings.Global.putFloat(view.context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+        composeRule.onNode(hasText("Home") and hasAnyAncestor(hasTestTag("sidebar-permanent"))).performTouchInput { click() }
+        composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
+        setPermanentSidebar(expandedWindow, visible = false)
+        composeRule.runOnIdle { backDispatcher.onBackPressed() }
+        composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
+      }
     }
   }
 
   @Test
-  fun bookInterruptsPredictiveDrawerBackWithoutInterceptingPaneTapsOrRouteBack() {
+  fun permanentModeInterruptsPredictiveDrawerBackWithoutInterceptingPaneTapsOrRouteBack() {
     withRoot(completed = true) {
-      composeRule.onNodeWithTag("sidebar-open-settings").performClick()
-      composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-      composeRule.onNodeWithContentDescription("Close navigation menu").assertIsDisplayed()
-      composeRule.runOnIdle {
-        backDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT))
-        backDispatcher.dispatchOnBackProgressed(BackEventCompat(80f, 300f, 0.4f, BackEventCompat.EDGE_LEFT))
+      for (expandedWindow in listOf(false, true)) {
+        composeRule.onNodeWithTag("sidebar-open-settings").performClick()
+        composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Close navigation menu").assertIsDisplayed()
+        composeRule.runOnIdle {
+          backDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT))
+          backDispatcher.dispatchOnBackProgressed(BackEventCompat(80f, 300f, 0.4f, BackEventCompat.EDGE_LEFT))
+        }
+        setPermanentSidebar(expandedWindow, visible = true)
+        composeRule.runOnIdle { backDispatcher.dispatchOnBackCancelled() }
+        val inactiveSheet = composeRule.onNodeWithTag("sidebar-drawer").assertIsNotDisplayed()
+        assertTrue("The inactive sheet must retain real measured anchors", windowBounds(inactiveSheet).width() > 0)
+        composeRule.onNodeWithContentDescription("Close navigation menu").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Open profile").performTouchInput { click() }
+        composeRule.onNodeWithText("Save Profile").assertIsDisplayed()
+        composeRule.runOnIdle { backDispatcher.onBackPressed() }
+        composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
+        setPermanentSidebar(expandedWindow, visible = false)
+        composeRule.onNodeWithTag("sidebar-open-settings").performClick()
+        composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
+        composeRule.runOnIdle {
+          backDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT))
+          backDispatcher.dispatchOnBackProgressed(BackEventCompat(80f, 300f, 0.4f, BackEventCompat.EDGE_LEFT))
+          backDispatcher.onBackPressed()
+        }
+        composeRule.onNodeWithTag("sidebar-close").assertIsNotDisplayed()
+        composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
       }
-      emit(listOf(testFold(Rect(400, 0, 420, view.height))))
-      composeRule.runOnIdle { backDispatcher.dispatchOnBackCancelled() }
-      val inactiveSheet = composeRule.onNodeWithTag("sidebar-drawer").assertIsNotDisplayed()
-      assertTrue("The inactive sheet must retain real measured anchors", windowBounds(inactiveSheet).width() > 0)
-      composeRule.onNodeWithContentDescription("Close navigation menu").assertDoesNotExist()
-      composeRule.onNodeWithContentDescription("Open profile").performTouchInput { click() }
-      composeRule.onNodeWithText("Save Profile").assertIsDisplayed()
-      composeRule.runOnIdle { backDispatcher.onBackPressed() }
-      composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
-      emit(emptyList())
-      composeRule.onNodeWithTag("sidebar-open-settings").performClick()
-      composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-      composeRule.runOnIdle {
-        backDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT))
-        backDispatcher.dispatchOnBackProgressed(BackEventCompat(80f, 300f, 0.4f, BackEventCompat.EDGE_LEFT))
-        backDispatcher.onBackPressed()
-      }
-      composeRule.onNodeWithTag("sidebar-close").assertIsNotDisplayed()
-      composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
     }
   }
 
@@ -808,27 +1075,29 @@ class RootScreenFoldTest {
   }
 
   @Test
-  fun bookTransitionCancelsHeldSidebarDragAndRestoresFlatDrawerGestures() {
+  fun permanentTransitionCancelsHeldSidebarDragAndRestoresCompactDrawerGestures() {
     withRoot(completed = true) { model ->
-      composeRule.onNodeWithTag("sidebar-open-settings").performClick()
-      val order = model.sidebarPageOrder.value
-      composeRule.onNode(hasText("Home") and hasAnyAncestor(hasTestTag("sidebar-drawer"))).performTouchInput {
-        down(center)
-        advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
-        moveBy(Offset(0f, 1f))
+      for (expandedWindow in listOf(false, true)) {
+        composeRule.onNodeWithTag("sidebar-open-settings").performClick()
+        val order = model.sidebarPageOrder.value
+        composeRule.onNode(hasText("Home") and hasAnyAncestor(hasTestTag("sidebar-drawer"))).performTouchInput {
+          down(center)
+          advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
+          moveBy(Offset(0f, 1f))
+        }
+        setPermanentSidebar(expandedWindow, visible = true)
+        composeRule.onRoot().performTouchInput {
+          moveBy(Offset(0f, 130f))
+          up()
+        }
+        composeRule.runOnIdle { assertEquals("A stale drag must not reorder the new host", order, model.sidebarPageOrder.value) }
+        setPermanentSidebar(expandedWindow, visible = false)
+        composeRule.onNodeWithTag("sidebar-open-settings").performClick()
+        composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
+        composeRule.onNodeWithTag("sidebar-drawer").performTouchInput { swipeLeft() }
+        composeRule.onNodeWithTag("sidebar-close").assertIsNotDisplayed()
+        composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
       }
-      emit(listOf(testFold(Rect(400, 0, 420, view.height))))
-      composeRule.onRoot().performTouchInput {
-        moveBy(Offset(0f, 130f))
-        up()
-      }
-      composeRule.runOnIdle { assertEquals("A stale drag must not reorder the new host", order, model.sidebarPageOrder.value) }
-      emit(emptyList())
-      composeRule.onNodeWithTag("sidebar-open-settings").performClick()
-      composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-      composeRule.onNodeWithTag("sidebar-drawer").performTouchInput { swipeLeft() }
-      composeRule.onNodeWithTag("sidebar-close").assertIsNotDisplayed()
-      composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
     }
   }
 
@@ -907,6 +1176,7 @@ class RootScreenFoldTest {
   private fun withRoot(
     completed: Boolean,
     destination: HomeDestination = HomeDestination.Settings,
+    width: Dp = 800.dp,
     configureRuntime: (NodeRuntime) -> Unit = {},
     verify: (MainViewModel) -> Unit,
   ) {
@@ -922,6 +1192,7 @@ class RootScreenFoldTest {
       models.put("root-fold", model)
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(model, "runtimeRef").value = runtime
       if (completed) model.requestHomeDestination(destination)
+      viewportWidth = width
       composeRule.setContent {
         val activity = requireNotNull(LocalActivity.current)
         view = LocalView.current
@@ -929,13 +1200,19 @@ class RootScreenFoldTest {
         backDispatcher = requireNotNull(LocalOnBackPressedDispatcherOwner.current).onBackPressedDispatcher
         LaunchedEffect(activity) { WindowCompat.setDecorFitsSystemWindows(activity.window, false) }
         CompositionLocalProvider(LocalLayoutDirection provides direction) {
-          RootScreen(model)
+          Box(Modifier.fillMaxSize(), contentAlignment = AbsoluteAlignment.TopLeft) {
+            Box(Modifier.width(viewportWidth).fillMaxHeight().testTag("root-viewport")) {
+              RootScreen(model)
+            }
+          }
         }
       }
       composeRule.waitForIdle()
       val rootId = composeRule.onRoot().fetchSemanticsNode().id
       val host = composeRule.onNode(SemanticsMatcher("original activity content root") { it.id == rootId })
       val originalRoot = host.getUnclippedBoundsInRoot()
+      val viewportBounds = composeRule.onNodeWithTag("root-viewport").getUnclippedBoundsInRoot()
+      assertEquals(width, viewportBounds.right - viewportBounds.left)
       verify(model)
       assertEquals("Only the pane may move, never the window host", originalRoot, host.getUnclippedBoundsInRoot())
     } finally {
@@ -945,6 +1222,53 @@ class RootScreenFoldTest {
         closeNodeRuntimeTestFixture(runtime)
       }
     }
+  }
+
+  private fun resize(width: Dp) {
+    val viewport = composeRule.onNodeWithTag("root-viewport")
+    val id = viewport.fetchSemanticsNode().id
+    val before = viewport.getUnclippedBoundsInRoot()
+    composeRule.runOnIdle { viewportWidth = width }
+    if (!composeRule.mainClock.autoAdvance) composeRule.mainClock.advanceTimeBy(32)
+    val after = viewport.getUnclippedBoundsInRoot()
+    assertEquals("Resize must change real parent constraints", width, after.right - after.left)
+    assertEquals(before.left, after.left)
+    assertEquals(before.top, after.top)
+    assertEquals(before.bottom - before.top, after.bottom - after.top)
+    assertEquals("Resize must not replace the mounted host", id, viewport.fetchSemanticsNode().id)
+  }
+
+  private fun setPermanentSidebar(
+    expandedWindow: Boolean,
+    visible: Boolean,
+  ) {
+    if (expandedWindow) {
+      resize(if (visible) 1000.dp else 800.dp)
+    } else {
+      emit(if (visible) listOf(testFold(Rect(400, 0, 420, view.height))) else emptyList())
+    }
+  }
+
+  private fun keyboard(bottom: Int) {
+    composeRule.runOnIdle {
+      ViewCompat.dispatchApplyWindowInsets(
+        view,
+        WindowInsetsCompat
+          .Builder()
+          .setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, 24))
+          .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, bottom))
+          .setVisible(WindowInsetsCompat.Type.ime(), bottom > 0)
+          .build(),
+      )
+    }
+    composeRule.waitForIdle()
+  }
+
+  private fun renderedText(text: String): Pair<SemanticsNode, TextLayoutResult> {
+    val node = composeRule.onNodeWithText(text, useUnmergedTree = true)
+    val layouts = mutableListOf<TextLayoutResult>()
+    node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+    return node.fetchSemanticsNode() to layouts.single()
   }
 
   private fun windowBounds(node: SemanticsNodeInteraction): Rect {
