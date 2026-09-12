@@ -234,10 +234,7 @@ describe("channel-auth", () => {
 
       await run({ channel: "whatsapp" }, runtime);
 
-      expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-        config: sourceConfig,
-        env: process.env,
-      });
+      expect(mocks.applyPluginAutoEnable).not.toHaveBeenCalled();
       expect(readFirstCallArg(action).cfg).toBe(runtimeConfig);
       expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     },
@@ -477,70 +474,72 @@ describe("channel-auth", () => {
     expect(mocks.login).not.toHaveBeenCalled();
   });
 
-  it("auto-picks the single auth-capable channel from the auto-enabled config snapshot", async () => {
+  it("auto-picks from the runtime view without persisting unrelated plugin activation", async () => {
     const sourceConfig: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
       channels: { whatsapp: {} },
       plugins: { allow: ["whatsapp"] },
     };
     const autoEnabledCfg = {
       ...sourceConfig,
       channels: { whatsapp: { enabled: true } },
+      plugins: {
+        allow: ["whatsapp"],
+        entries: { codex: { enabled: true }, whatsapp: { enabled: true } },
+      },
     };
-    const runtimeConfig = { ...sourceConfig, agents: { defaults: { maxConcurrent: 4 } } };
-    const refreshedRuntimeConfig = {
-      ...autoEnabledCfg,
-      agents: { defaults: { maxConcurrent: 4 } },
+    const runtimeConfig = {
+      ...sourceConfig,
+      agents: { defaults: { model: "openai/gpt-5.5", maxConcurrent: 4 } },
     };
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1", valid: true, sourceConfig });
     mocks.loadConfig.mockReturnValue(runtimeConfig);
-    mocks.applyPluginAutoEnable.mockImplementation(({ config }: { config: OpenClawConfig }) =>
-      materializePluginAutoEnableCandidates({
-        config,
-        candidates: [{ pluginId: "whatsapp", kind: "channel-configured", channelId: "whatsapp" }],
-        manifestRegistry: makeRegistry([
-          { id: "whatsapp", channels: ["whatsapp"], origin: "bundled" },
-        ]),
-      }),
-    );
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledCfg,
+      changes: ["codex", "whatsapp"],
+    });
     mocks.resolveAccount.mockImplementation((cfg: OpenClawConfig) => ({
       enabled: cfg.channels?.whatsapp?.enabled === true,
     }));
-    mocks.replaceConfigFile.mockImplementation(async () => {
-      mocks.loadConfig.mockReturnValue(refreshedRuntimeConfig);
-    });
 
     await runChannelLogin({}, runtime);
 
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledTimes(1);
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: sourceConfig,
+      config: runtimeConfig,
       env: process.env,
     });
     expectFields(readFirstCallArg(mocks.login), {
-      cfg: refreshedRuntimeConfig,
+      cfg: runtimeConfig,
       channelInput: "whatsapp",
     });
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: autoEnabledCfg,
-      baseHash: "config-1",
-    });
-    expect(mocks.resolveAccount.mock.calls[0]?.[0]).toEqual(refreshedRuntimeConfig);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.resolveAccount.mock.calls[0]?.[0]).toEqual(autoEnabledCfg);
   });
 
-  it("persists auto-enabled config during logout auto-pick too", async () => {
-    const autoEnabledCfg = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
-    mocks.loadConfig.mockReturnValue({});
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledCfg, changes: ["whatsapp"] });
+  it("does not persist auto-enabled config during logout auto-pick", async () => {
+    const sourceConfig = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
+    const autoEnabledCfg = {
+      ...sourceConfig,
+      plugins: {
+        allow: ["whatsapp"],
+        entries: { codex: { enabled: true }, whatsapp: { enabled: true } },
+      },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1", valid: true, sourceConfig });
+    mocks.loadConfig.mockReturnValue(sourceConfig);
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledCfg,
+      changes: ["codex", "whatsapp"],
+    });
 
     await runChannelLogout({}, runtime);
 
     expectFields(readFirstCallArg(mocks.callGateway), {
-      config: autoEnabledCfg,
+      config: sourceConfig,
       method: "channels.logout",
     });
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: autoEnabledCfg,
-      baseHash: "config-1",
-    });
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("ignores configured channels that do not support login when channel is omitted", async () => {
