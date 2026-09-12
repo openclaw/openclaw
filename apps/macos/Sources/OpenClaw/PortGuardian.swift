@@ -461,12 +461,17 @@ actor PortGuardian {
         }
     }
 
-    func diagnose(mode: AppState.ConnectionMode, hostsLocalGateway: Bool = false) async -> [PortReport] {
+    func diagnose(
+        mode: AppState.ConnectionMode,
+        activeTunnelPort: UInt16?,
+        hostsLocalGateway: Bool = false) async -> [PortReport]
+    {
         guard mode != .unconfigured else { return [] }
         let root = OpenClawConfigFile.loadDict()
         var ports: [(port: Int, mode: AppState.ConnectionMode)] = []
         if mode == .remote, GatewayRemoteConfig.resolveTransport(root: root) == .ssh {
-            ports.append((RemotePortTunnel.localPort(root: root), .remote))
+            let tunnelPort = activeTunnelPort.map(Int.init) ?? RemotePortTunnel.localPort(root: root)
+            ports.append((tunnelPort, .remote))
         }
         if mode == .local || hostsLocalGateway {
             let localPort = GatewayEnvironment.gatewayPort(root: root)

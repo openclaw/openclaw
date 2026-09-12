@@ -231,9 +231,12 @@ enum DebugActions {
     @MainActor
     static func checkGatewayPorts() async -> [PortReport] {
         let mode = CommandResolver.connectionSettings().mode
+        let hostsLocalGateway = AppStateStore.shared.hostsLocalGatewayWithRemotePrimary
+        let tunnel = await RemoteTunnelManager.shared.controlTunnelStatus()
         return await PortGuardian.shared.diagnose(
             mode: mode,
-            hostsLocalGateway: AppStateStore.shared.hostsLocalGatewayWithRemotePrimary)
+            activeTunnelPort: tunnel.localPort,
+            hostsLocalGateway: hostsLocalGateway)
     }
 
     static func killProcess(_ pid: Int) async -> Result<Void, DebugActionError> {

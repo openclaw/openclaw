@@ -338,8 +338,11 @@ progress cancels the remaining reset steps. **Restart Gateway** is available onl
 when the primary Gateway runs locally on this Mac.
 
 **Check gateway ports** inspects local listeners: the SSH tunnel when used, and
-any local Gateway hosted by the app. A direct remote primary does not require a
-local listener and does not produce a missing-local-port warning.
+any local Gateway hosted by the app. For a running SSH tunnel, diagnostics inspect
+its allocated port, including when the preferred port was occupied and SSH uses
+another local port. With no running tunnel, diagnostics inspect the configured
+port. A direct remote primary does not require a local listener and does not
+produce a missing-local-port warning.
 
 ## Permissions
 
