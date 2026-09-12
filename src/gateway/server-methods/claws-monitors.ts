@@ -74,7 +74,9 @@ function inspectMonitors(
 ): ClawMonitorSnapshot[] {
   const cfg = context.getRuntimeConfig();
   const specs = [
-    ...resolveHeartbeatMonitorPlan(cfg, jobs).specs,
+    ...resolveHeartbeatMonitorPlan(cfg, jobs, {
+      cronEnabled: process.env.OPENCLAW_SKIP_CRON !== "1" && cfg.cron?.enabled !== false,
+    }).specs,
     ...resolveSkillCollectionReviewMonitorSpecs(cfg),
   ].filter((spec) => spec.agentId === agentId);
   const storeKey = cronStoreKey(context.cronStorePath);

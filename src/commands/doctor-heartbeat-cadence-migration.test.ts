@@ -10,6 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
+  ensureHeartbeatMonitorJobs,
   maybeMigrateHeartbeatCadenceToCron,
 } from "./doctor-heartbeat-cadence-migration.js";
 
@@ -205,6 +206,28 @@ describe("heartbeat cadence cron migration", () => {
     );
     expect(gammaAfter?.id).not.toBe(betaBefore?.id);
     expect(await loadMonitor(fixture.storePath, "beta")).toBeUndefined();
+  });
+
+  it("keeps monitors disabled through the cadence-then-scratch sequence when cron is off", async () => {
+    const fixture = await createFixture();
+    const cfg = { ...fixture.cfg, cron: { enabled: false } } as OpenClawConfig;
+
+    const repaired = await maybeMigrateHeartbeatCadenceToCron({
+      cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+    expect(repaired.warnings).toEqual([]);
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+
+    const monitors = await ensureHeartbeatMonitorJobs(cfg, fixture.storePath, fixture.env);
+    expect(monitors.get("main")).toEqual(expect.objectContaining({ enabled: false }));
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+    await expect(collectHeartbeatCadenceMigrationFindings(cfg, fixture.env)).resolves.toEqual([]);
   });
 
   it("uses the supplied environment for the writable scheduler seed", async () => {

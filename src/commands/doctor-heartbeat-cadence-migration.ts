@@ -54,7 +54,10 @@ async function loadHeartbeatMonitorPlanReadOnly(
 ): Promise<HeartbeatMonitorPlan> {
   const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
   const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env, readOnly: true });
-  return resolveHeartbeatMonitorPlan(cfg, loaded.store.jobs, { schedulerSeed });
+  return resolveHeartbeatMonitorPlan(cfg, loaded.store.jobs, {
+    schedulerSeed,
+    cronEnabled: cfg.cron?.enabled !== false,
+  });
 }
 
 function describePlannedChange(change: HeartbeatMonitorChange): string {
@@ -122,7 +125,10 @@ export async function ensureHeartbeatMonitorJobs(
   const cron = createDoctorCronService(storePath, cfg);
   const jobs = await cron.list({ includeDisabled: true });
   const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
-  const { specs } = resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed });
+  const { specs } = resolveHeartbeatMonitorPlan(cfg, jobs, {
+    schedulerSeed,
+    cronEnabled: cfg.cron?.enabled !== false,
+  });
   const monitors = new Map<string, CronJob>();
   for (const spec of specs) {
     const result = await cron.add(spec.input, heartbeatMonitorAddOptions(spec.agentId));
@@ -164,6 +170,7 @@ export async function maybeMigrateHeartbeatCadenceToCron(params: {
     cron,
     cfg: params.cfg,
     schedulerSeed,
+    cronEnabled: params.cfg.cron?.enabled !== false,
   });
   changes.push(...result.applied.map(describePlannedChange));
   for (const failure of result.failures) {
