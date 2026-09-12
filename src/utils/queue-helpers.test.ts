@@ -200,7 +200,7 @@ describe("drainNextQueueItem", () => {
     expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
   });
 
-  it("acknowledges after success while keeping the in-memory identity during run", async () => {
+  it("keeps the in-memory identity during run and settles it before acknowledging", async () => {
     type Item = { id: string };
     const item: Item = { id: "ack-after" };
     const items: Item[] = [item];
@@ -220,7 +220,10 @@ describe("drainNextQueueItem", () => {
       },
     );
 
-    expect(events).toEqual(["run:items=1:inFlight=true", "ack:items=0:inFlight=true"]);
+    // The acknowledgement is the durable settle point. It must observe the item
+    // already out of both the queue and the in-flight set, or the persisted row
+    // keeps claiming a delivered identity until the next item settles.
+    expect(events).toEqual(["run:items=1:inFlight=true", "ack:items=0:inFlight=false"]);
     expect(items).toEqual([]);
     expect(inFlight.size).toBe(0);
   });

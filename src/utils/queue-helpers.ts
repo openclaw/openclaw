@@ -276,6 +276,11 @@ export async function drainNextQueueItem<T>(
   try {
     await run(next);
     removeQueuedItemsByRef(items, [next]);
+    // Delivery settled inside run(), so drop the in-flight mark before the
+    // acknowledgement persists. Settling while the mark is still set writes a
+    // durable row that still claims this identity, and nothing rewrites it
+    // until the next item settles — so a restart in between replays it.
+    options?.inFlight?.delete(next);
     if (acknowledgeAfterSuccess) {
       acknowledgeAfterSuccess(next);
     }

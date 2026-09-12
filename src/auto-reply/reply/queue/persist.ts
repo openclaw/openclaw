@@ -23,8 +23,12 @@ import {
 } from "./persist-codec-policy.js";
 import {
   createExplicitSkillRestoreResolver,
-  describeFollowupForLog,
   hasInvalidExplicitSkillSelections,
+  type ExplicitSkillRestoreResolution,
+  type RestoredExplicitSkillSelections,
+} from "./persist-codec-skills.js";
+import {
+  describeFollowupForLog,
   hasInvalidInputProvenance,
   hasInvalidRestrictiveExecOverrides,
   hasInvalidScheduledToolPolicy,
@@ -45,10 +49,8 @@ import {
   rehydratePersistedFollowupRun,
   rehydrateRun,
   toPersistedQueueEntry,
-  type ExplicitSkillRestoreResolution,
   type PersistedFollowupRun,
   type PersistedQueueEntry,
-  type RestoredExplicitSkillSelections,
 } from "./persist-codec.js";
 import type { FollowupQueueState, FollowupRun, QueueDropPolicy } from "./types.js";
 

@@ -1,11 +1,11 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import {
   resolveSessionPermissionCoreToolPolicy,
   resolveSessionPermissionExecMode,
 } from "../../agents/session-permission-exec-mode.js";
+import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import {
   followupQueueEntryContainsPrompt,
   loadFollowupQueueEntries,

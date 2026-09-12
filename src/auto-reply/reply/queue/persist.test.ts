@@ -74,13 +74,50 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(Array.isArray(persisted?.items)).toBe(true);
   });
 
-  it("clears shared SQLite rows when all queues are empty", () => {
+  it("clears shared SQLite rows when all restored queues are empty", () => {
     replaceFollowupQueueEntries({
       entries: [[TEST_KEY, { items: [], mode: "steer", droppedCount: 0, summaryLines: [] }]],
     });
     expect(hasPersistedFollowupQueues()).toBe(true);
+    // Reading the row transfers delete authority to this process.
+    restoreFollowupQueues();
     persistFollowupQueues();
     expect(hasPersistedFollowupQueues()).toBe(false);
+  });
+
+  it("retains durable rows this process has not restored", () => {
+    replaceFollowupQueueEntries({
+      entries: [
+        ["other-process-key", { items: [], mode: "steer", droppedCount: 0, summaryLines: [] }],
+      ],
+    });
+    // A live enqueue before restore completes must not let the memory-only
+    // snapshot delete rows the previous process owned.
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("fresh work"));
+    persistFollowupQueuesOrThrow();
+    expect(listFollowupQueueKeys().sort()).toEqual(["other-process-key", TEST_KEY].sort());
+  });
+
+  it("keeps incognito queues out of the durable snapshot", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-abc123";
+    const queue = getFollowupQueue(incognitoKey, SETTINGS);
+    queue.items.push(makeFollowupRun("secret prompt"));
+    persistFollowupQueuesOrThrow();
+    expect(listFollowupQueueKeys()).not.toContain(incognitoKey);
+    expect(followupQueueEntryContainsPrompt(incognitoKey, "secret prompt")).toBe(false);
+  });
+
+  it("removes incognito rows leaked by an older build", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-leaked";
+    replaceFollowupQueueEntries({
+      entries: [[incognitoKey, { items: [], mode: "steer", droppedCount: 0, summaryLines: [] }]],
+    });
+    expect(listFollowupQueueKeys()).toContain(incognitoKey);
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("ordinary work"));
+    persistFollowupQueuesOrThrow();
+    expect(listFollowupQueueKeys()).not.toContain(incognitoKey);
   });
 
   it("round-trips prompt and routing through persist+restore", () => {
