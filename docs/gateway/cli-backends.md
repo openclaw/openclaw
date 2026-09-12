@@ -220,7 +220,7 @@ Claude Code can drive a Chrome browser through the [Claude in Chrome extension](
 
 The backend maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. For models that allow fixed thinking budgets, it also launches Claude Code with `MAX_THINKING_TOKENS`: `off=0`, `minimal=1024`, `low=2048`, `medium=8192`, `high`/`xhigh=16384`, and `max=32768`. Positive fixed budgets disable adaptive thinking. Models that require adaptive thinking omit the fixed budget and continue to use `--effort`. `adaptive` removes configured effort flags and fixed-budget environment overrides, so Claude Code resolves effective thinking from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to map the selected level before `/think` affects the spawned CLI.
 
-Before OpenClaw can use `claude-cli`, Claude Code itself must be logged in on the same host:
+For native login, sign in to Claude Code on the Gateway host:
 
 ```bash
 claude auth login
@@ -228,7 +228,20 @@ claude auth status --text
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
-Docker installs need Claude Code installed and logged in inside the persisted container home, not only on the host. See [Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
+Normal agent turns can also use a saved subscription token without a native login:
+
+```bash
+openclaw models auth paste-token --provider anthropic
+```
+
+New sessions select saved subscription credentials through the configured account
+order and forward them to the CLI through a protected file descriptor. Existing
+sessions keep their account until you select another or remove its saved profile.
+Explicit account selections and empty account orders remain authoritative. API keys saved
+for the `anthropic` provider require an explicit selection; they do not replace
+native subscription login automatically.
+
+Docker installs need Claude Code and the chosen credentials inside the persisted container home, not only on the host. See [Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
 
 The gateway service must resolve `claude` on `PATH`. For a nonstandard path,
 register a small wrapper backend plugin.

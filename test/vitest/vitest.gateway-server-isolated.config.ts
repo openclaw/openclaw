@@ -25,8 +25,7 @@ export function createGatewayServerIsolatedVitestConfig(
     test: {
       ...sharedTest,
       name: "gateway-server-isolated",
-      // These files replace a module the Gateway reaches through re-exports, so a
-      // neighbour that already bound the real implementation would defeat the mock.
+      // Keep each file's real or mocked Gateway modules out of neighboring graphs.
       isolate: true,
       runner: undefined,
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],

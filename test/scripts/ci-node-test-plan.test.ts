@@ -38,6 +38,7 @@ import { createGatewayClientVitestConfig } from "../vitest/vitest.gateway-client
 import { createGatewayCoreVitestConfig } from "../vitest/vitest.gateway-core.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "../vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.ts";
+import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest/vitest.media-understanding.config.ts";
@@ -1481,6 +1482,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
       ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
     ];
+    const gatewayServerIsolatedOwnerFiles = listMatchedTestFiles(
+      createGatewayServerIsolatedVitestConfig({}),
+    );
     const compactGroups = compact.flatMap((shard) => shard.groups);
     const pullRequestCompactGroups = pullRequestCompact.flatMap((shard) => shard.groups);
     const expectedGroupNames = base.flatMap((shard) =>
@@ -1563,6 +1567,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           );
         } else if (owner.shardName === "agentic-gateway-methods") {
           expect(actual.toSorted()).toEqual(gatewayMethodsOwnerFiles.toSorted());
+        } else if (owner.shardName === "agentic-gateway-server-isolated") {
+          expect(actual.toSorted()).toEqual(gatewayServerIsolatedOwnerFiles.toSorted());
         }
       }
     }
@@ -1579,6 +1585,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .concat(
           embeddedBaseOwnerFiles,
           gatewayMethodsOwnerFiles,
+          gatewayServerIsolatedOwnerFiles,
           listMatchedTestFiles(createCliProcessVitestConfig({})),
           listMatchedTestFiles(createPluginSdkVitestConfig({})),
           listMatchedTestFiles(createPluginSdkLightVitestConfig({})),
@@ -1596,6 +1603,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .concat(
           embeddedBaseOwnerFiles,
           gatewayMethodsOwnerFiles,
+          gatewayServerIsolatedOwnerFiles,
           listMatchedTestFiles(createCliProcessVitestConfig({})),
           listMatchedTestFiles(createPluginSdkVitestConfig({})),
           listMatchedTestFiles(createPluginSdkLightVitestConfig({})),
