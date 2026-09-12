@@ -1,6 +1,7 @@
 import { initialState, Task } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
@@ -55,6 +56,10 @@ export class ModelProviderCoreLoader {
       return Promise.resolve();
     }
     if (reason === "publication") {
+      if (this.publicationPending) {
+        // Auth refresh can create a display copy after this publication was queued.
+        invalidateModelCatalogCache(client, { agentId });
+      }
       this.publicationPending = false;
     }
     this.active = true;
@@ -77,7 +82,6 @@ export class ModelProviderCoreLoader {
     // Task commits its status and value after onComplete/onError returns.
     queueMicrotask(() => {
       if (this.publicationPending && !this.active && !this.options.isCatalogLoading()) {
-        this.publicationPending = false;
         this.options.refreshPublication();
       }
     });
