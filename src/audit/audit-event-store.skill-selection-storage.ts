@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type { ColumnType, Insertable } from "kysely";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
@@ -12,25 +20,24 @@ import {
 const SKILL_SELECTION_AUDIT_MAX_ROWS = 100_000;
 const SKILL_SELECTION_AUDIT_PRUNE_BATCH_ROWS = 1_024;
 
-type SkillSelectionAuditRow = {
-  sequence: number | bigint;
-  event_id: string;
-  source_id: string;
-  schema_version: number | bigint;
-  source_sequence: number | bigint;
-  occurred_at: number | bigint;
-  tool_name: string | null;
-  action: string | null;
-  status: string | null;
-  actor_type: string | null;
-  actor_id: string | null;
-  agent_id: string | null;
-  session_key: string | null;
-  session_id: string | null;
-  run_id: string | null;
+type SkillSelectionAuditTable = OpenClawStateKyselyDatabase["audit_skill_selection_events"];
+type SqliteSequenceTable = {
+  name: string;
+  seq: ColumnType<unknown, number, number>;
+};
+type AuditSkillSelectionDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "audit_events" | "audit_skill_selection_events"
+> & {
+  sqlite_sequence: SqliteSequenceTable;
 };
 
+function getSkillSelectionAuditKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<AuditSkillSelectionDatabase>(db);
+}
+
 function ensureSkillSelectionAuditSchema(db: DatabaseSync): void {
+  // sqlite-allow-raw -- Canonical additive DDL only; skill-selection rows use Kysely.
   db.exec(`
     CREATE TABLE IF NOT EXISTS audit_skill_selection_events (
       sequence INTEGER PRIMARY KEY,
@@ -63,32 +70,30 @@ function ensureSkillSelectionAuditSchema(db: DatabaseSync): void {
 }
 
 function countSkillSelectionAuditEvents(db: DatabaseSync): number {
-  const row = db.prepare("SELECT COUNT(*) AS count FROM audit_skill_selection_events").get() as
-    | { count?: unknown }
-    | undefined;
-  if (typeof row?.count === "number") {
-    return row.count;
-  }
-  if (typeof row?.count === "bigint" && row.count <= BigInt(Number.MAX_SAFE_INTEGER)) {
-    return Number(row.count);
-  }
-  return 0;
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getSkillSelectionAuditKysely(db)
+      .selectFrom("audit_skill_selection_events")
+      .select((expression) => expression.fn.countAll<number>().as("count")),
+  );
+  return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
 
 function deleteExpiredSkillSelectionAuditEvents(db: DatabaseSync, retainedAfter: number): number {
   ensureSkillSelectionAuditSchema(db);
-  const result = db
-    .prepare(
-      `DELETE FROM audit_skill_selection_events
-        WHERE sequence IN (
-          SELECT sequence FROM audit_skill_selection_events
-          WHERE occurred_at < ?
-          ORDER BY occurred_at ASC, sequence ASC
-          LIMIT ?
-        )`,
-    )
-    .run(retainedAfter, SKILL_SELECTION_AUDIT_PRUNE_BATCH_ROWS);
-  return Number(result.changes ?? 0);
+  const kysely = getSkillSelectionAuditKysely(db);
+  const expiredSequences = kysely
+    .selectFrom("audit_skill_selection_events")
+    .select("sequence")
+    .where("occurred_at", "<", retainedAfter)
+    .orderBy("occurred_at", "asc")
+    .orderBy("sequence", "asc")
+    .limit(SKILL_SELECTION_AUDIT_PRUNE_BATCH_ROWS);
+  const result = executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("audit_skill_selection_events").where("sequence", "in", expiredSequences),
+  );
+  return Number(result.numAffectedRows ?? 0n);
 }
 
 function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAfter: number): void {
@@ -101,23 +106,24 @@ function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAft
     0,
     SKILL_SELECTION_AUDIT_MAX_ROWS - SKILL_SELECTION_AUDIT_PRUNE_BATCH_ROWS,
   );
-  const cutoff = db
-    .prepare(
-      `SELECT sequence FROM audit_skill_selection_events
-        ORDER BY sequence DESC
-        LIMIT 1 OFFSET ?`,
-    )
-    .get(retainedRows) as { sequence?: unknown } | undefined;
-  const sequenceCutoff =
-    typeof cutoff?.sequence === "number"
-      ? cutoff.sequence
-      : typeof cutoff?.sequence === "bigint" && cutoff.sequence <= BigInt(Number.MAX_SAFE_INTEGER)
-        ? Number(cutoff.sequence)
-        : undefined;
+  const kysely = getSkillSelectionAuditKysely(db);
+  const cutoff = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("audit_skill_selection_events")
+      .select("sequence")
+      .orderBy("sequence", "desc")
+      .offset(retainedRows)
+      .limit(1),
+  );
+  const sequenceCutoff = cutoff ? normalizeSqliteNumber(cutoff.sequence) : undefined;
   if (sequenceCutoff === undefined) {
     return;
   }
-  db.prepare("DELETE FROM audit_skill_selection_events WHERE sequence <= ?").run(sequenceCutoff);
+  executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("audit_skill_selection_events").where("sequence", "<=", sequenceCutoff),
+  );
 }
 
 function normalizeSequenceHighWater(value: unknown): number {
@@ -141,16 +147,22 @@ function normalizeSequenceHighWater(value: unknown): number {
 }
 
 function readAuditSequenceHighWater(db: DatabaseSync): number {
-  const sequenceRow = db
-    .prepare("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'audit_events'")
-    .get() as { seq?: unknown } | undefined;
-  const auditRow = db.prepare("SELECT MAX(sequence) AS sequence FROM audit_events").get() as
-    | { sequence?: unknown }
-    | undefined;
+  const kysely = getSkillSelectionAuditKysely(db);
+  const sequenceRow = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely.selectFrom("sqlite_sequence").select("seq").where("name", "=", "audit_events"),
+  );
+  const auditRow = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely.selectFrom("audit_events").select((eb) => eb.fn.max("sequence").as("sequence")),
+  );
   const skillRow = tableExists(db, "audit_skill_selection_events")
-    ? (db.prepare("SELECT MAX(sequence) AS sequence FROM audit_skill_selection_events").get() as
-        | { sequence?: unknown }
-        | undefined)
+    ? executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("audit_skill_selection_events")
+          .select((eb) => eb.fn.max("sequence").as("sequence")),
+      )
     : undefined;
   return Math.max(
     normalizeSequenceHighWater(sequenceRow?.seq),
@@ -164,12 +176,18 @@ function allocateAuditSequence(db: DatabaseSync): number {
   if (!Number.isSafeInteger(nextSequence) || nextSequence < 1) {
     throw new Error("audit event sequence is outside the supported integer range");
   }
-  const updated = db
-    .prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'audit_events'")
-    .run(nextSequence);
-  if (Number(updated.changes ?? 0) === 0) {
-    db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('audit_events', ?)").run(
-      nextSequence,
+  const kysely = getSkillSelectionAuditKysely(db);
+  const updated = executeSqliteQuerySync(
+    db,
+    kysely
+      .updateTable("sqlite_sequence")
+      .set({ seq: nextSequence })
+      .where("name", "=", "audit_events"),
+  );
+  if (Number(updated.numAffectedRows ?? 0n) === 0) {
+    executeSqliteQuerySync(
+      db,
+      kysely.insertInto("sqlite_sequence").values({ name: "audit_events", seq: nextSequence }),
     );
   }
   return nextSequence;
@@ -178,7 +196,7 @@ function allocateAuditSequence(db: DatabaseSync): number {
 function bindSkillSelectionAuditEvent(
   sequence: number,
   input: Extract<AuditEventInput, { kind: "skill_selection" }>,
-): SkillSelectionAuditRow {
+): Insertable<SkillSelectionAuditTable> {
   return {
     sequence,
     event_id: randomUUID(),
@@ -206,38 +224,19 @@ export function recordSkillSelectionAuditEvent(
   ensureSkillSelectionAuditSchema(db);
   const sequence = allocateAuditSequence(db);
   const row = bindSkillSelectionAuditEvent(sequence, input);
-  const result = db
-    .prepare(
-      `INSERT OR IGNORE INTO audit_skill_selection_events (
-        sequence, event_id, source_id, schema_version, source_sequence, occurred_at,
-        action, status, actor_type, actor_id, agent_id, session_key, session_id, run_id, tool_name
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      row.sequence,
-      row.event_id,
-      row.source_id,
-      row.schema_version,
-      row.source_sequence,
-      row.occurred_at,
-      row.action,
-      row.status,
-      row.actor_type,
-      row.actor_id,
-      row.agent_id,
-      row.session_key,
-      row.session_id,
-      row.run_id,
-      row.tool_name,
-    );
-  if (Number(result.changes ?? 0) === 0) {
+  const inserted = executeSqliteQueryTakeFirstSync(
+    db,
+    getSkillSelectionAuditKysely(db)
+      .insertInto("audit_skill_selection_events")
+      .values(row)
+      .onConflict((conflict) => conflict.column("source_id").doNothing())
+      .returningAll(),
+  );
+  if (inserted === undefined) {
     return undefined;
   }
   pruneSkillSelectionAuditEventsAfterInsert(db, retainedAfter);
-  const inserted = db
-    .prepare("SELECT * FROM audit_skill_selection_events WHERE sequence = ?")
-    .get(sequence) as SkillSelectionAuditRow | undefined;
-  return inserted ? parseSkillSelectionAuditRow(inserted) : undefined;
+  return parseSkillSelectionAuditRow(inserted);
 }
 
 export function listSkillSelectionAuditEvents(params: {
@@ -257,44 +256,35 @@ export function listSkillSelectionAuditEvents(params: {
   ) {
     return [];
   }
-  const clauses = ["occurred_at >= ?"];
-  const values: Array<string | number> = [params.retainedAfter];
+  let query = getSkillSelectionAuditKysely(params.db)
+    .selectFrom("audit_skill_selection_events")
+    .selectAll()
+    .where("occurred_at", ">=", params.retainedAfter);
   if (params.cursor !== undefined) {
-    clauses.push("sequence < ?");
-    values.push(params.cursor);
+    query = query.where("sequence", "<", params.cursor);
   }
   if (params.filters.agentId) {
-    clauses.push("agent_id = ?");
-    values.push(params.filters.agentId);
+    query = query.where("agent_id", "=", params.filters.agentId);
   }
   if (params.filters.sessionKey) {
-    clauses.push("session_key = ?");
-    values.push(params.filters.sessionKey);
+    query = query.where("session_key", "=", params.filters.sessionKey);
   }
   if (params.filters.runId) {
-    clauses.push("run_id = ?");
-    values.push(params.filters.runId);
+    query = query.where("run_id", "=", params.filters.runId);
   }
   if (params.filters.status) {
-    clauses.push("status = ?");
-    values.push(params.filters.status);
+    query = query.where("status", "=", params.filters.status);
   }
   if (params.filters.after !== undefined) {
-    clauses.push("occurred_at >= ?");
-    values.push(params.filters.after);
+    query = query.where("occurred_at", ">=", params.filters.after);
   }
   if (params.filters.before !== undefined) {
-    clauses.push("occurred_at <= ?");
-    values.push(params.filters.before);
+    query = query.where("occurred_at", "<=", params.filters.before);
   }
-  const rows = params.db
-    .prepare(
-      `SELECT * FROM audit_skill_selection_events
-        WHERE ${clauses.join(" AND ")}
-        ORDER BY sequence DESC
-        LIMIT ?`,
-    )
-    .all(...values, params.limit) as SkillSelectionAuditRow[];
+  const rows = executeSqliteQuerySync(
+    params.db,
+    query.orderBy("sequence", "desc").limit(params.limit),
+  ).rows;
   return rows.map(parseSkillSelectionAuditRow);
 }
 

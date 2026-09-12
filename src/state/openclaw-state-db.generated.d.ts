@@ -145,6 +145,24 @@ export interface AuditIdentityKeys {
   key_id: string;
 }
 
+export interface AuditSkillSelectionEvents {
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string;
+  event_id: string;
+  occurred_at: number;
+  run_id: string;
+  schema_version: Generated<number>;
+  sequence: Generated<number>;
+  session_id: string | null;
+  session_key: string | null;
+  source_id: string;
+  source_sequence: number;
+  status: string;
+  tool_name: string;
+}
+
 export interface BackupRuns {
   archive_path: string;
   created_at: number;
@@ -1727,6 +1745,7 @@ export interface DB {
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
+  audit_skill_selection_events: AuditSkillSelectionEvents;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;

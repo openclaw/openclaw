@@ -30,6 +30,9 @@ Current-head validation after merging `upstream/main` and removing the unrelated
 ```bash
 pnpm tsgo:core
 pnpm protocol:check:swift
+pnpm db:kysely:check
+pnpm lint:kysely
+pnpm check:architecture
 pnpm test src/agents/workspace.bootstrap-privacy.test.ts src/audit/audit-events.test.ts src/gateway/server-methods/audit.test.ts packages/gateway-protocol/src/schema/audit.test.ts
 ```
 
@@ -37,11 +40,15 @@ Results:
 
 - `pnpm tsgo:core` passed.
 - `pnpm protocol:check:swift` passed after regenerating `GatewayModels.swift`.
+- `pnpm db:kysely:check` passed after regenerating `src/state/openclaw-state-db.generated.d.ts`.
+- `pnpm lint:kysely` passed after moving ordinary companion-table insert/read/prune queries to the sync Kysely owner.
+- `pnpm check:architecture` passed, including generated Kysely verification, Kysely guardrails, and database-first legacy-store guard.
 - Targeted Vitest run passed 4 shards in 22.13s.
 - `audit-events.test.ts`: 54 tests passed, including companion-table storage, bounded retention, and observed runtime projection.
 - `server-methods/audit.test.ts`: 34 tests passed, including explicit `skill_selection`/`observed` activity access and V1-compatible unfiltered activity.
 - `audit.test.ts`: 7 protocol schema tests passed, including activity schema discrimination.
 - `workspace.bootstrap-privacy.test.ts`: 9 tests passed; shared sessions now drop only root `MEMORY.md`, leaving `USER.md` behavior unchanged.
+- `pnpm exec oxlint src/audit/audit-event-store.skill-selection-storage.ts src/state/openclaw-state-db.generated.d.ts` passed. A full local `pnpm lint:core` was started but manually stopped after 6+ minutes with no diagnostic output; CI remains the authoritative full core-lint signal.
 
 Upgrade/reopen proof against an existing database created from `upstream/main` schema:
 
@@ -52,12 +59,21 @@ Upgrade/reopen proof against an existing database created from `upstream/main` s
 - unfiltered `listAuditEvents(...)` returned only `["agent_run"]`, preserving the old reader/default activity behavior.
 - after closing and reopening the candidate database, `audit_skill_selection_events` still had 1 row.
 
+Older-reader open/use compatibility proof:
+
+- candidate head wrote a `skill_selection` record into a fresh state DB: `skillSequences: [1]`.
+- `upstream/main` at `ca28965b39b` then opened the same DB and wrote an `agent_run` record: `visibleSequences: [2]`, `kinds: ["agent_run"]`.
+- candidate head reopened the DB and wrote a second `skill_selection` record.
+- candidate readback returned `skillSequences: [3, 1]`; default activity returned only `defaultKinds: ["agent_run"]`, `defaultSequences: [2]`.
+- physical SQLite readback confirmed shared ordering: `audit_events` contained sequence `2`, `audit_skill_selection_events` contained sequences `1` and `3`, and `sqlite_sequence` for `audit_events` was `3`.
+
 ## Changed Files
 
 - `src/skills/runtime-skill-selection.ts` — observed-only metadata marker.
 - `src/agents/agent-tools.before-tool-call.wrapper.ts` — emits `skill_selection` from the existing observed skill-usage boundary.
 - `src/audit/agent-event-audit.ts` — projects observed-only skill-selection records and routes them outside run-start deduplication.
-- `src/audit/audit-event-store.ts` / `src/audit/audit-event-types.ts` — durable store/types for observed skill-selection metadata.
+- `src/audit/audit-event-store.ts` / `src/audit/audit-event-store.skill-selection-storage.ts` / `src/audit/audit-event-types.ts` — durable store/types for observed skill-selection metadata, with ordinary companion-table access through Kysely.
+- `src/state/openclaw-state-db.generated.d.ts` — generated Kysely declarations for the companion table.
 - `src/gateway/server-methods/audit.ts` — exposes skill-selection through `audit.activity.list` while preserving legacy `audit.list`.
 - `packages/gateway-protocol/src/schema/audit-activity.ts` — versioned activity schema includes `skill_selection`.
 - `packages/gateway-protocol/src/schema/audit.ts` — legacy audit schema stays run/tool-only.
