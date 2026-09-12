@@ -736,11 +736,29 @@ async function assertNativeCodexAccountMatchesRoute(
   if (!authRequirement) {
     return;
   }
-  const response = await client.request<CodexGetAccountResponse>(
+  // Subscription routes on shared native homes race mid-rewrite windows (token
+  // refresh, workspace switch, Codex Desktop updates, concurrent app-server
+  // spawns). A single stale read should not look like a configuration error;
+  // one bounded refresh through the app-server gives a transient
+  // token-refresh window a chance to settle before we throw, matching the read
+  // path the standalone codex CLI uses on the same home. API-key routes skip
+  // the retry: an absent account there is the legitimate env-var fallback path
+  // and the existing fallback-API-key tests cover it.
+  let response = await client.request<CodexGetAccountResponse>(
     "account/read",
     { refreshToken: false },
     { assertCurrent },
   );
+  if (
+    authRequirement === "subscription" &&
+    !isJsonObject(response.account)
+  ) {
+    response = await client.request<CodexGetAccountResponse>(
+      "account/read",
+      { refreshToken: true },
+      { assertCurrent },
+    );
+  }
   const accountType = isJsonObject(response.account) ? response.account.type : undefined;
   if (authRequirement === "subscription") {
     if (accountType !== "chatgpt") {
