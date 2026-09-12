@@ -3294,10 +3294,10 @@ export const en: TranslationMap & {
       description:
         "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
+
     swarm: {
       title: "Swarm",
       groupTitle: "Parallel tasks",
-      description: "Coordinate parallel subagents and collect their results.",
       defaultPhase: "Unphased",
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed",
@@ -3313,21 +3313,7 @@ export const en: TranslationMap & {
       description:
         "Local models use Tool Search automatically. Enable this override to defer tool schemas for all models; turning it off restores each model's default.",
     },
-    loopDetection: {
-      title: "Tool-loop detection",
-      description:
-        "Enable rolling-history guards that warn or block repeated tool calls when an agent stops making progress.",
-    },
-    localModelLean: {
-      title: "Lean tools for local models",
-      description:
-        "Remove optional tools such as browser and automations. Leave this off to keep those capabilities available through Tool Search.",
-    },
-    cliAgents: {
-      title: "CLI agents",
-      description:
-        "Show external CLI session engines in the new-session model picker when their plugins support creating sessions.",
-    },
+
     customPluginUi: {
       title: "Custom plugin UI",
       description:
@@ -3335,11 +3321,7 @@ export const en: TranslationMap & {
       restartRequired:
         "Restart the Gateway and reload this browser tab after changing this setting.",
     },
-    auditMessages: {
-      title: "Message audit metadata",
-      description:
-        "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
-    },
+
     hostDesktop: {
       title: "Host Desktop",
       description:
