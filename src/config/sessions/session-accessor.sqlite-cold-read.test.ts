@@ -309,7 +309,7 @@ it("copies one source snapshot when a peer archives during cross-store canonical
     const destinationOptions = {
       agentId: "main",
       env: state.env,
-      path: state.path("destination.sqlite"),
+      path: state.statePath("destination.sqlite"),
     };
     const entry = { sessionId: race.scope.sessionId, updatedAt: 1 };
     await replaceSessionEntry({ ...race.scope, storePath: destinationOptions.path }, entry);

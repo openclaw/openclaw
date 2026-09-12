@@ -370,6 +370,47 @@ function sqliteTranscriptJsonlByteSize() {
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
 }
 
+function createTranscriptStatsQueries(database: Pick<OpenClawAgentDatabase, "db">) {
+  const db = getSessionKysely(database.db);
+  return {
+    events: prepareSqliteQuerySync<
+      string,
+      { event_count: number; max_seq: number | null; size_bytes: number }
+    >(database.db, (parameter) =>
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => [
+          eb.fn.count<number>("seq").as("event_count"),
+          eb.fn.max<number>("seq").as("max_seq"),
+          sqliteTranscriptJsonlByteSize(),
+        ])
+        .where(
+          "session_id",
+          "=",
+          parameter((sessionId) => sessionId),
+        ),
+    ),
+    session: prepareSqliteQuerySync<
+      string,
+      { transcript_observed_at: number | null; transcript_updated_at: number | null }
+    >(database.db, (parameter) =>
+      db
+        .selectFrom("session_windows")
+        .select(["transcript_observed_at", "transcript_updated_at"])
+        .where(
+          "session_id",
+          "=",
+          parameter((sessionId) => sessionId),
+        ),
+    ),
+  };
+}
+
+const transcriptStatsQueries = new WeakMap<
+  OpenClawAgentDatabase["db"],
+  ReturnType<typeof createTranscriptStatsQueries>
+>();
+
 /** Reads transcript freshness and byte size without materializing event rows. */
 function readTranscriptStatsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -379,25 +420,13 @@ function readTranscriptStatsFromDatabase(
     database.db,
     () => {
       const cold = readSessionColdTranscript(database.db, sessionId);
-      const db = getSessionKysely(database.db);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("transcript_events")
-          .select((eb) => [
-            eb.fn.count<number>("seq").as("event_count"),
-            eb.fn.max<number>("seq").as("max_seq"),
-            sqliteTranscriptJsonlByteSize(),
-          ])
-          .where("session_id", "=", sessionId),
-      );
-      const session = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_windows")
-          .select(["transcript_observed_at", "transcript_updated_at"])
-          .where("session_id", "=", sessionId),
-      );
+      let queries = transcriptStatsQueries.get(database.db);
+      if (!queries) {
+        queries = createTranscriptStatsQueries(database);
+        transcriptStatsQueries.set(database.db, queries);
+      }
+      const row = queries.events(sessionId).rows[0];
+      const session = queries.session(sessionId).rows[0];
       return {
         eventCount: cold?.event_count ?? row?.event_count ?? 0,
         ...(session?.transcript_updated_at !== null && session?.transcript_updated_at !== undefined
