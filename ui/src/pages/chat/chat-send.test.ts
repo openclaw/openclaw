@@ -3522,7 +3522,7 @@ describe("handleSendChat", () => {
     const retry = retryQueuedChatMessage(host, "retry-send");
 
     expect(await raceWithMacrotask(retry)).toBe("pending");
-    expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
       sendState: "waiting-model",
@@ -4576,7 +4576,7 @@ describe("handleSendChat", () => {
       message: "steer without waiting for history",
       queueMode: "steer",
     });
-    expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
   });
 
   it("leaves active-run resolution to the Gateway while its effective mode is loading", async () => {
