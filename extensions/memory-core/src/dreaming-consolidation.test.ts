@@ -852,6 +852,12 @@ describe("memory consolidation", () => {
     });
 
     expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates).toEqual([
+      expect.objectContaining({
+        category: "candidate changed",
+        reason: "candidate changed during apply",
+      }),
+    ]);
     await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe("# Memory\n\n- Original fact.\n");
   });
 
@@ -916,6 +922,12 @@ describe("memory consolidation", () => {
     });
 
     expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates).toEqual([
+      expect.objectContaining({
+        category: "candidate changed",
+        reason: "candidate changed during apply",
+      }),
+    ]);
     await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe("# Memory\n\n- Original fact.\n");
     const recallStore = await shortTermTestState.readRecallStore(
       workspaceDir,
