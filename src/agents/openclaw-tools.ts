@@ -92,6 +92,24 @@ import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
+/**
+ * Default project recorded for a `suggest_task` card.
+ *
+ * Accepting a card creates the follow-up session with `sessions.create` on the Gateway
+ * host. A sandboxed run's cwd is the container workdir (for example the Docker
+ * `/workspace`), which cannot exist on the host, so that path must not become the card's
+ * project; fall back to the agent's host workspace instead. Unsandboxed runs keep their
+ * own runtime cwd.
+ */
+export function resolveSuggestedTaskCwd(params: {
+  sandboxed?: boolean;
+  cwd?: string;
+  workspaceDir?: string;
+}): string {
+  const hostCwd = params.sandboxed ? params.workspaceDir : (params.cwd ?? params.workspaceDir);
+  return resolveWorkspaceRoot(hostCwd ?? params.workspaceDir);
+}
+
 export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const resolvedConfig = options?.config;
   const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
@@ -122,6 +140,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       : resolveAgentWorkspaceDir(resolvedConfig, sessionAgentId);
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
   const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
+  const suggestionCwd = resolveSuggestedTaskCwd({
+    sandboxed: options?.sandboxed,
+    cwd: options?.cwd,
+    workspaceDir: options?.workspaceDir ?? inferredWorkspaceDir,
+  });
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const widgetPresentation = resolveWidgetPresentationForRun(options);
   const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
@@ -420,7 +443,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       ? createTaskSuggestionTools({
           sessionKey,
           agentId: sessionAgentId,
-          cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
+          // A sandboxed run's cwd is the container workdir, which cannot resolve on the
+          // Gateway host that later creates the follow-up session.
+          cwd: suggestionCwd,
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
