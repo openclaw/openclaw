@@ -199,13 +199,13 @@ describe("buildSystemPromptReport", () => {
       source: "run",
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
+      systemPrompt: `## Skills\n${skillsPrompt.trim()}`,
       injectedWorkspaceFiles: [],
       skillsPrompt,
       tools: [],
     });
 
-    expect(report.skills.promptChars).toBe(skillsPrompt.length);
+    expect(report.skills.promptChars).toBe(skillsPrompt.trim().length);
     expect(report.skills.entries).toEqual(entries);
   });
 
