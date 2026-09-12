@@ -302,12 +302,10 @@ function resolveBrowserToolModelHint(kind: BrowserFetchFailureKind): string | un
   return kind === "persistent" ? BROWSER_TOOL_PERSISTENT_MODEL_HINT : undefined;
 }
 
-async function discardResponseBody(res: Response): Promise<void> {
-  try {
-    await res.body?.cancel();
-  } catch {
-    // Best effort only; we're already returning a stable error message.
-  }
+function discardResponseBody(res: Response): void {
+  // Do not await cancel: teed/debug streams can leave cancel pending forever
+  // (same invariant as Google Chat fetchOk / CDP probe release).
+  void res.body?.cancel().catch(() => undefined);
 }
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
@@ -388,7 +386,7 @@ async function fetchHttpJson<T>(
     if (!res.ok) {
       if (isRateLimitStatus(res.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        await discardResponseBody(res);
+        discardResponseBody(res);
         throw new BrowserServiceError(
           `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_PERSISTENT_MODEL_HINT}`,
         );
