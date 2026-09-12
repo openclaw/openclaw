@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadataCore } from "../config/channel-config-metadata.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as openClawRoot from "../infra/openclaw-root.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -3529,3 +3530,69 @@ describe("loadPluginManifestRegistry", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("stale foreign bundled install records", () => {
+  function seedBundledInstall(pluginId: string): { root: string; pluginDir: string } {
+    const root = makeTempDir();
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw" }),
+      "utf-8",
+    );
+    const pluginDir = path.join(root, "dist", "extensions", pluginId);
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: `@openclaw/${pluginId}` }),
+      "utf-8",
+    );
+    writeManifest(pluginDir, { id: pluginId, configSchema: { type: "object" } });
+    return { root, pluginDir };
+  }
+
+  it("keeps the running installation's bundled plugin ahead of a relocated install record", () => {
+    const current = seedBundledInstall("codex");
+    const previous = seedBundledInstall("codex");
+    const spy = vi
+      .spyOn(openClawRoot, "resolveOpenClawPackageRootSync")
+      .mockReturnValue(current.root);
+    try {
+      const registry = withPluginCache(createPluginCache(), () =>
+        loadPluginManifestRegistryCore({
+          installRecords: {
+            codex: { source: "path", spec: "codex", installPath: previous.pluginDir },
+          },
+          candidates: [
+            createPluginCandidate({
+              idHint: "codex",
+              rootDir: previous.pluginDir,
+              packageName: "@openclaw/codex",
+              origin: "global",
+              installOwner: "codex",
+            }),
+            createPluginCandidate({
+              idHint: "codex",
+              rootDir: current.pluginDir,
+              packageName: "@openclaw/codex",
+              origin: "bundled",
+            }),
+          ],
+        }),
+      );
+      const codex = registry.plugins.find((plugin) => plugin.id === "codex");
+      // The record points into the previous installation's dist/extensions tree, so it
+      // must not shadow this installation's bundled copy and downgrade it to origin-path.
+      expect(codex?.rootDir).toBe(current.pluginDir);
+      expect(codex?.origin).toBe("bundled");
+      expect(countDuplicateWarnings(registry)).toBe(0);
+      const staleWarning = registry.diagnostics.find((diagnostic) =>
+        diagnostic.message.includes("stale plugin install record"),
+      );
+      expect(staleWarning?.level).toBe("warn");
+      expect(staleWarning?.message).toContain(previous.pluginDir);
+      expect(staleWarning?.message).toContain("openclaw plugins uninstall codex");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
