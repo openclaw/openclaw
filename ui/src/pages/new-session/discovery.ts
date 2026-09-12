@@ -230,6 +230,15 @@ export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): Draf
   return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
 }
 
+/** Providers that omit a marked default still present their first catalog choice as the default. */
+export function defaultCloudMachine(
+  profile: DraftCloudProfile,
+  os = defaultCloudOs(profile),
+): DraftMachineOption | undefined {
+  const machines = cloudMachinesForOs(profile, os);
+  return machines.find((machine) => machine.default) ?? machines[0];
+}
+
 const ENVIRONMENT_STATUSES = new Set<EnvironmentStatus>([
   "available",
   "unavailable",

@@ -95,6 +95,18 @@ function renderPicker(
 }
 
 describe("Where chip", () => {
+  it("shows device and cloud skeletons while the catalog loads", () => {
+    const container = renderPicker(
+      true,
+      undefined,
+      { environments: null, cloudProfiles: [] },
+      { catalogLoading: true },
+    );
+    expect(container.querySelectorAll(".new-session-page__environment-skeletons")).toHaveLength(2);
+    expect(container.querySelector('[data-section="devices"]')).not.toBeNull();
+    expect(container.querySelector('[data-section="cloud"]')).not.toBeNull();
+  });
+
   it.each([
     { label: "Work MacBook Pro", platform: "darwin", icon: deviceIcons.laptop, form: "laptop" },
     {
