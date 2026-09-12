@@ -521,6 +521,67 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     },
   );
 
+  it("treats a server-already-terminated DELETE 404 as successful cleanup", async () => {
+    let deleteCount = 0;
+    const server = createServer((request, response) => {
+      if (request.method === "POST") {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => (body += chunk));
+        request.on("end", () => {
+          const message = JSON.parse(body) as { id?: number };
+          response.writeHead(200, {
+            "content-type": "application/json",
+            "mcp-session-id": "already-terminated",
+          });
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: {},
+                serverInfo: { name: "fixture", version: "1" },
+              },
+            }),
+          );
+        });
+        return;
+      }
+      if (request.method === "DELETE") {
+        deleteCount += 1;
+        response.writeHead(404, { "content-type": "text/plain" });
+        response.end("session already gone");
+        return;
+      }
+      response.writeHead(405).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback TCP address");
+      }
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${address.port}/mcp`),
+      );
+      const client = new Client({ name: "test", version: "1" });
+      await client.connect(transport);
+
+      await expect(transport.terminateSession()).resolves.toBeUndefined();
+      await transport.terminateSession();
+      expect(deleteCount).toBe(1);
+      await expect(
+        disposeMcpClient({ client, transport, transportType: "streamable-http" }),
+      ).resolves.toBe("closed");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+    }
+  });
+
   it("accepts unsupported session DELETE without sending it again", async () => {
     const onDelete = vi.fn(() => new Response(null, { status: 405 }));
     const fetchMock = initializedFetch({
