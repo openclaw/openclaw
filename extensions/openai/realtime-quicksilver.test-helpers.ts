@@ -1,12 +1,18 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { vi, type Mock } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
+
+type MockLogger = {
+  debug: Mock<NonNullable<PluginLogger["debug"]>>;
+  warn: Mock<PluginLogger["warn"]>;
+};
 
 export class FakeSocket extends EventEmitter {
   readyState: 0 | 1 | 2 | 3 = 0;
@@ -123,7 +129,10 @@ export function createBroker(params?: {
 }) {
   const sockets: FakeSocket[] = [];
   const socketRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
-  const logger = { debug: vi.fn() as Mock, warn: vi.fn() as Mock };
+  const logger: MockLogger = {
+    debug: vi.fn<NonNullable<PluginLogger["debug"]>>(),
+    warn: vi.fn<PluginLogger["warn"]>(),
+  };
   const realtime = createOpenAIQuicksilverBrowserSessionBroker(
     {
       getConfig: () => ({
@@ -162,6 +171,15 @@ export type ConsultRunner = ((params: {
   steer?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
 };
 
+type DelegationHarness = {
+  controller: OpenAIQuicksilverDelegationController;
+  logger: MockLogger;
+  onFatalError: Mock<NonNullable<RealtimeVoiceGatewayControl["onError"]>>;
+  runAgentConsult: ConsultRunner;
+  sessionController: AbortController;
+  socket: FakeSocket;
+};
+
 export function createDelegationHarness(params?: {
   model?: string;
   claimAppend?: (() => boolean) | null;
@@ -173,11 +191,14 @@ export function createDelegationHarness(params?: {
   getSocket?: () => FakeSocket;
   onWireEventType?: (eventType: string) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
-}) {
+}): DelegationHarness {
   const socket = new FakeSocket("manual");
   socket.readyState = 1;
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const onFatalError = vi.fn();
+  const logger: MockLogger = {
+    debug: vi.fn<NonNullable<PluginLogger["debug"]>>(),
+    warn: vi.fn<PluginLogger["warn"]>(),
+  };
+  const onFatalError = vi.fn<NonNullable<RealtimeVoiceGatewayControl["onError"]>>();
   const sessionController = new AbortController();
   const claimAppend =
     params?.claimAppend === null ? undefined : (params?.claimAppend ?? (() => true));
