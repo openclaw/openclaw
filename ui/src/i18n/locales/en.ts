@@ -16,6 +16,14 @@ export const en: TranslationMap & {
   updates: TranslationMap;
   login: TranslationMap;
 } = {
+  fileActions: {
+    copyFullPath: "Copy full path",
+    copyRelativePath: "Copy relative path",
+    copyFilename: "Copy filename",
+    revealInFileManager: "Show in file manager",
+    openWorkspaceRoot: "Open workspace root",
+    failed: "Action failed. Please try again.",
+  },
   pluginUi: {
     customize: "Customize UI",
     selectionScope: "Choose views for this browser window. Built-in views are always available.",
@@ -216,6 +224,11 @@ export const en: TranslationMap & {
     emptyTitle: "No files match",
     emptySubtitle: "Try another file name or content search.",
     copyFile: "Copy file",
+    showFullContent: "Show full content",
+    fullContentHint:
+      "Fast preview shows only nearby lines. Show full content for browser Find, full-text selection, and assistive reading.",
+    fullContentActive:
+      "Full content is shown for browser Find, full-text selection, and assistive reading. Turn off Show full content to return to fast preview.",
     fileCount: "{count} files",
     filteredFileCount: "{count}/{total} files",
     noMatches: "No files match.",

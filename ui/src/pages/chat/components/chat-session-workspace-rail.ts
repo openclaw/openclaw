@@ -5,6 +5,8 @@ import { icons } from "../../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { openFileContextMenu } from "../../../lib/file-context-menu.ts";
+import type { FileAction, FileReference } from "../../../lib/file-reference.ts";
 import { formatByteSize } from "../../../lib/format.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -61,6 +63,12 @@ function renderRailHeaderAction({
     : nothing;
 }
 
+function handleFileMenuKeydown(event: KeyboardEvent, onContextMenu?: (event: Event) => void) {
+  if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+    onContextMenu?.(event);
+  }
+}
+
 function renderRailRow({
   icon,
   name,
@@ -69,6 +77,7 @@ function renderRailRow({
   badge = nothing,
   actions = nothing,
   onOpen,
+  onContextMenu,
   active = false,
   directory = false,
 }: {
@@ -79,6 +88,7 @@ function renderRailRow({
   badge?: TemplateResult | typeof nothing;
   actions?: TemplateResult | typeof nothing;
   onOpen: () => void;
+  onContextMenu?: (event: Event) => void;
   active?: boolean;
   directory?: boolean;
 }) {
@@ -88,7 +98,13 @@ function renderRailRow({
       ${active ? "chat-workspace-rail__file--active" : ""}"
       role="listitem"
     >
-      <button class="chat-workspace-rail__file-open" type="button" @click=${onOpen}>
+      <button
+        class="chat-workspace-rail__file-open"
+        type="button"
+        @click=${onOpen}
+        @contextmenu=${onContextMenu}
+        @keydown=${(event: KeyboardEvent) => handleFileMenuKeydown(event, onContextMenu)}
+      >
         <span class="chat-workspace-rail__file-icon">${icon}</span>
         <span class="chat-workspace-rail__file-main">
           <openclaw-tooltip .content=${tooltip}>
@@ -159,7 +175,33 @@ export function renderSessionWorkspaceRail(
   )
     ? sessionWorkspace.filter
     : "all";
-  const renderActions = (onOpen: () => void, path?: string) => html`
+  const createFileMenu = (reference: FileReference, onOpen: () => void) => (event: Event) => {
+    const actions: readonly FileAction[] =
+      reference.origin === "artifact"
+        ? ["preview", "copyFilename", "refresh"]
+        : ["preview", "copyRelativePath", "copyFilename", "refresh"];
+    openFileContextMenu({
+      event,
+      reference,
+      actions,
+      onAction: async (action) => {
+        if (action === "preview") {
+          onOpen();
+        } else if (action === "copyRelativePath" && reference.relativePath !== undefined) {
+          await navigator.clipboard.writeText(reference.relativePath);
+        } else if (action === "copyFilename") {
+          await navigator.clipboard.writeText(reference.name);
+        } else if (action === "refresh") {
+          sessionWorkspace.onRefresh();
+        }
+      },
+    });
+  };
+  const renderActions = (
+    onOpen: () => void,
+    path?: string,
+    onContextMenu?: (event: Event) => void,
+  ) => html`
     <span
       class="chat-workspace-rail__row-actions"
       role="group"
@@ -174,6 +216,8 @@ export function renderSessionWorkspaceRail(
             event.stopPropagation();
             onOpen();
           }}
+          @contextmenu=${onContextMenu}
+          @keydown=${(event: KeyboardEvent) => handleFileMenuKeydown(event, onContextMenu)}
         >
           ${icons.eye}
         </button>
@@ -194,6 +238,15 @@ export function renderSessionWorkspaceRail(
           <div class="chat-workspace-rail__list" role="list">
             ${rows.map((file) => {
               const onOpen = () => sessionWorkspace.onOpenFile(file.path, "session");
+              const onContextMenu = createFileMenu(
+                {
+                  origin: "session",
+                  sessionKey: sessionWorkspace.sessionKey,
+                  relativePath: file.path,
+                  name: file.name || file.path.split(/[\\/]/).pop() || file.path,
+                },
+                onOpen,
+              );
               return renderRailRow({
                 icon: icons.fileText,
                 name: file.path || file.name,
@@ -205,7 +258,8 @@ export function renderSessionWorkspaceRail(
                       >${t("chat.workspaceFiles.missing")}</span
                     >`
                   : nothing,
-                actions: renderActions(onOpen, file.path),
+                onContextMenu,
+                actions: renderActions(onOpen, file.path, onContextMenu),
               });
             })}
           </div>
@@ -238,6 +292,17 @@ export function renderSessionWorkspaceRail(
           directory
             ? sessionWorkspace.onBrowsePath(entry.path)
             : sessionWorkspace.onOpenFile(entry.path, "workspace");
+        const onContextMenu = directory
+          ? undefined
+          : createFileMenu(
+              {
+                origin: "workspace",
+                sessionKey: sessionWorkspace.sessionKey,
+                relativePath: entry.path,
+                name: entry.name || entry.path.split(/[\\/]/).pop() || entry.path,
+              },
+              onOpen,
+            );
         const kind = entry.sessionKind;
         return renderRailRow({
           icon: directory ? icons.folder : icons.fileText,
@@ -255,7 +320,8 @@ export function renderSessionWorkspaceRail(
                 >${t(SESSION_KIND_LABELS[kind])}</span
               >`
             : nothing,
-          actions: directory ? nothing : renderActions(onOpen, entry.path),
+          onContextMenu,
+          actions: directory ? nothing : renderActions(onOpen, entry.path, onContextMenu),
         });
       })}
     </div>
@@ -268,6 +334,14 @@ export function renderSessionWorkspaceRail(
           <div class="chat-workspace-rail__list" role="list">
             ${matchingArtifacts.map((artifact) => {
               const onOpen = () => sessionWorkspace.onOpenArtifact(artifact.id);
+              const onContextMenu = createFileMenu(
+                {
+                  origin: "artifact",
+                  artifactId: artifact.id,
+                  name: artifact.title,
+                },
+                onOpen,
+              );
               return renderRailRow({
                 icon: artifact.mimeType?.startsWith("image/") ? icons.image : icons.paperclip,
                 name: artifact.title,
@@ -276,7 +350,8 @@ export function renderSessionWorkspaceRail(
                   .join(" / "),
                 onOpen,
                 active: `artifact:${artifact.id}` === sessionWorkspace.activeId,
-                actions: renderActions(onOpen),
+                onContextMenu,
+                actions: renderActions(onOpen, undefined, onContextMenu),
               });
             })}
           </div>

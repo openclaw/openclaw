@@ -1,5 +1,6 @@
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 import "./file-preview-modal-registration.ts";
@@ -45,13 +46,13 @@ async function resolveRenderedDialog(modal: OpenClawModalDialog) {
   return dialog!;
 }
 
-async function mountPreview(width: number, activePath = initialFilePath) {
+async function mountPreview(width: number, activePath = initialFilePath, previewFiles = files) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 844);
 
   const preview = document.createElement("openclaw-file-preview-modal") as OpenClawFilePreviewModal;
   preview.style.setProperty("--wa-transition-normal", "150ms");
-  preview.files = files;
+  preview.files = previewFiles;
   preview.activePath = activePath;
   document.body.append(preview);
   await preview.updateComplete;
@@ -236,4 +237,177 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(style.animationName).toBe("openclaw-drawer-in");
     expect(style.animationDuration).toBe("0.2s");
   });
+});
+
+describe.runIf(browserMode)("large file preview interactions", () => {
+  const contents = Array.from({ length: 5000 }, (_, index) => `line ${index + 1}`).join("\n");
+  const largeFiles = [
+    { path: "large-a.txt", size: "50 KB", contents },
+    { path: "large-b.txt", size: "50 KB", contents },
+  ];
+
+  it("offers keyboard access to searchable and selectable full contents", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    const { preview } = await mountPreview(1280, "large-a.txt", largeFiles);
+    const root = preview.shadowRoot!;
+    expect(root.querySelectorAll(".code-line").length).toBeLessThan(200);
+    const toggle = page.getByRole("button", { name: "Show full content", exact: true });
+    await expect.element(toggle).toBeVisible();
+    toggle.element().focus();
+    await userEvent.keyboard("{Enter}");
+    const full = root.querySelector<HTMLElement>(".code-full")!;
+    expect(full).not.toBeNull();
+    expect(full.textContent).toBe(contents);
+    expect(toggle.element().getAttribute("aria-pressed")).toBe("true");
+    expect(root.querySelector(".code-vscroll")).toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(full);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    expect(selection.toString()).toBe(contents);
+    selection.removeAllRanges();
+    const nativeFind = (window as Window & { find: (text: string) => boolean }).find;
+    expect(nativeFind.call(window, "line 4999")).toBe(true);
+    selection.removeAllRanges();
+    preview.query = "large-a";
+    await preview.updateComplete;
+    expect(root.querySelector(".code-full")?.textContent).toBe(contents);
+    await page.getByRole("button", { name: "Show full content", exact: true }).click();
+    await expect.poll(() => root.querySelectorAll(".code-line").length).toBeGreaterThan(0);
+    expect(root.querySelectorAll(".code-line").length).toBeLessThan(200);
+    expect(root.querySelector<HTMLElement>(".detail-body")!.scrollTop).toBe(0);
+    await page.getByRole("button", { name: "Show full content", exact: true }).click();
+    preview.query = "";
+    preview.activePath = "large-b.txt";
+    await preview.updateComplete;
+    expect(root.querySelector(".code-full")).toBeNull();
+    expect(root.querySelectorAll(".code-line").length).toBeGreaterThan(0);
+    await toggle.click();
+    expect(root.querySelector(".code-full")).not.toBeNull();
+    preview.remove();
+    document.body.append(preview);
+    await preview.updateComplete;
+    const owner = root.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
+    await resolveRenderedDialog(owner);
+    expect(root.querySelector(".code-full")).toBeNull();
+    expect(toggle.element().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it.each([320, 390])("keeps large-file controls and scrolling usable at %dpx", async (width) => {
+    const { page } = await import("vitest/browser");
+    const { preview, dialog } = await mountPreview(width, "large-a.txt", largeFiles);
+    const root = preview.shadowRoot!;
+    const toggle = page.getByRole("button", { name: "Show full content", exact: true });
+    const copy = root.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
+    const body = root.querySelector<HTMLElement>(".detail-body")!;
+    for (const control of [toggle.element(), copy]) {
+      const bounds = control.getBoundingClientRect();
+      expect(bounds.left).toBeGreaterThanOrEqual(dialog.getBoundingClientRect().left);
+      expect(bounds.right).toBeLessThanOrEqual(dialog.getBoundingClientRect().right);
+    }
+    expect(body.clientHeight).toBeGreaterThan(0);
+    await toggle.click();
+    expect(body.clientHeight).toBeGreaterThan(0);
+    body.scrollTop = body.scrollHeight;
+    expect(body.scrollTop).toBeGreaterThan(0);
+  });
+
+  it("tabs into the named scrollport and reaches later lines with the keyboard", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    const { preview } = await mountPreview(1280, "large-a.txt", largeFiles);
+    const body = preview.shadowRoot!.querySelector<HTMLElement>(".detail-body")!;
+    preview.shadowRoot!.querySelector<HTMLButtonElement>(".chat-copy-btn")!.focus();
+    await userEvent.keyboard("{Tab}");
+    expect(preview.shadowRoot!.activeElement).toBe(body);
+    await expect
+      .element(page.getByRole("region", { name: "large-a.txt", exact: true }))
+      .toBeVisible();
+    const selected = vi.fn();
+    preview.addEventListener("file-preview-select", selected);
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.poll(() => body.scrollTop).toBeGreaterThan(0);
+    expect(selected).not.toHaveBeenCalled();
+    await userEvent.keyboard("{PageDown}");
+    await expect.poll(() => body.scrollTop).toBeGreaterThan(0);
+    await userEvent.keyboard("{Control>}{End}{/Control}");
+    await expect
+      .poll(
+        () =>
+          [...preview.shadowRoot!.querySelectorAll<HTMLElement>(".code-line")].at(-1)?.dataset.line,
+      )
+      .toBe("5000");
+    await userEvent.keyboard("{Control>}{Home}{/Control}");
+    await expect.poll(() => body.scrollTop).toBe(0);
+  });
+
+  it.each(["filter", "same-content file", "reconnect"])(
+    "resets the rendered window after %s changes",
+    async (change) => {
+      const { preview } = await mountPreview(1280, "large-a.txt", largeFiles);
+      const body = preview.shadowRoot!.querySelector<HTMLElement>(".detail-body")!;
+      const rows = () => [...preview.shadowRoot!.querySelectorAll<HTMLElement>(".code-line")];
+      await expect.poll(() => rows()[0]?.dataset.line, { timeout: 2000 }).toBe("1");
+      expect(rows().length).toBeLessThan(200);
+      body.scrollTop = 44000;
+      await expect.poll(() => Number(rows()[0]?.dataset.line)).toBeGreaterThan(1900);
+      expect(rows().length).toBeLessThan(200);
+      const visible = rows().find(
+        (row) => row.getBoundingClientRect().top >= body.getBoundingClientRect().top,
+      );
+      expect(visible?.textContent?.trim()).toMatch(/^line 200\d$/);
+      expect(rows()[0]?.getBoundingClientRect().height).toBe(22);
+      if (change === "filter") {
+        preview.query = "large-a";
+      } else if (change === "reconnect") {
+        preview.remove();
+        document.body.append(preview);
+        const owner =
+          preview.shadowRoot!.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
+        await resolveRenderedDialog(owner);
+      } else {
+        preview.activePath = "large-b.txt";
+      }
+      await preview.updateComplete;
+      await expect.poll(() => body.scrollTop).toBe(0);
+      await expect.poll(() => rows()[0]?.dataset.line, { timeout: 2000 }).toBe("1");
+      expect(rows()[0]?.textContent?.trim()).toBe("line 1");
+      expect(rows()[0]?.getBoundingClientRect().top).toBeLessThan(
+        body.getBoundingClientRect().bottom,
+      );
+      body.scrollTop = body.scrollHeight;
+      await expect.poll(() => rows().at(-1)?.dataset.line).toBe("5000");
+      expect(rows().length).toBeLessThan(200);
+    },
+  );
+
+  it("opens an actionable keyboard menu inside the native preview dialog", async () => {
+    const { preview } = await mountPreview(1280);
+    const { page, userEvent } = await import("vitest/browser");
+    const action = vi.fn();
+    preview.onFileAction = action;
+    const item = preview.shadowRoot!.querySelector<HTMLElement>(".item.is-active")!;
+    item.focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    const menu = page.getByRole("menu", { name: "Workspace file actions" });
+    const first = menu.getByRole("menuitem", { name: "Copy filename", exact: true });
+    await expect.element(first).toBeVisible();
+    expect(preview.shadowRoot!.activeElement?.textContent).toBe("Copy filename");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(preview.shadowRoot!.activeElement?.textContent).toBe("Copy file contents");
+    await userEvent.keyboard("{Escape}");
+    await expect.element(menu).not.toBeInTheDocument();
+    expect(preview.shadowRoot!.activeElement).toBe(item);
+    await userEvent.click(item, { button: "right" });
+    await first.click();
+    expect(action).toHaveBeenCalledWith("copyFilename", files[0]);
+  });
+});
+
+const originalLocale = i18n.getLocale();
+beforeEach(async () => {
+  await i18n.setLocale("en");
+});
+afterEach(async () => {
+  await i18n.setLocale(originalLocale);
 });

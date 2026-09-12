@@ -43,6 +43,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     "shows Review before file completion and honors the %s intent",
     async (intent) => {
       const context = await browser.newContext({
+        locale: "en-US",
         recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
         viewport: { height: 900, width: 1280 },
       });
@@ -207,6 +208,7 @@ describeControlUiE2e("Control UI chat file links", () => {
 
   it("reveals the selected file from chat in the workspace root after filtering", async () => {
     const context = await browser.newContext({
+      locale: "en-US",
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       viewport: { height: 900, width: 1280 },
     });
@@ -374,6 +376,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
     } satisfies Record<string, Record<string, unknown>>;
     const context = await browser.newContext({
+      locale: "en-US",
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       viewport: { height: 900, width: 1280 },
     });

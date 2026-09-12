@@ -2,6 +2,9 @@ import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
+import { openFileActionMenu, openFileContextMenu } from "../../../lib/file-context-menu.ts";
+import type { FileAction, FileReference } from "../../../lib/file-reference.ts";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import {
   renderAttachmentFileIcon,
   resolveAttachmentFileIcon,
@@ -26,6 +29,8 @@ export type AttachmentCardHeaderOptions = {
   onExpand?: () => void;
   visualMode?: AttachmentFileVisualMode;
   voiceNote?: boolean;
+  reference?: FileReference;
+  onFileAction?: (action: FileAction) => void | Promise<void>;
 };
 
 export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions): TemplateResult {
@@ -33,8 +38,27 @@ export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions
     class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
     ?data-openable=${Boolean(options.onExpand)}
     @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
+    @contextmenu=${(event: MouseEvent) => openAttachmentContextMenu(event, options)}
+    @keydown=${(event: KeyboardEvent) => {
+      if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+        openAttachmentContextMenu(event, options);
+      }
+    }}
   >
-    ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
+    ${renderAttachmentCardHeader(
+      { ...options, visualMode: "large-placeholder" },
+      html`
+        <button
+          type="button"
+          class="chat-assistant-attachment-card__action chat-assistant-attachment-card__menu"
+          aria-label=${t("chat.workspaceFiles.actions")}
+          aria-haspopup="menu"
+          @click=${(event: MouseEvent) => openAttachmentContextMenu(event, options)}
+        >
+          ${icons.moreHorizontal}
+        </button>
+      `,
+    )}
   </div>`;
 }
 
@@ -48,6 +72,53 @@ export function renderAttachmentPreviewSkeleton() {
     <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></div>
     <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></div>
   </div>`;
+}
+
+function openAttachmentContextMenu(event: Event, options: AttachmentCardHeaderOptions) {
+  const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  const trigger =
+    event instanceof KeyboardEvent && event.target instanceof HTMLElement
+      ? event.target
+      : target?.matches("button")
+        ? target
+        : (target?.querySelector<HTMLElement>(".chat-assistant-attachment-card__menu") ??
+          undefined);
+
+  const downloadUrl = options.downloadHref
+    ? resolveSafeExternalUrl(options.downloadHref, window.location.href)
+    : null;
+  const actions: FileAction[] = [];
+  if (options.onExpand || options.onFileAction) {
+    actions.push("preview");
+  }
+  actions.push("copyFilename");
+  if (!options.downloadPending && (downloadUrl || options.onFileAction)) {
+    actions.push("download");
+  }
+  if (options.onFileAction) {
+    actions.push("refresh");
+  }
+  const menuOptions = {
+    event,
+    trigger,
+    actions,
+    onAction: async (action: FileAction) => {
+      if (options.onFileAction) {
+        await options.onFileAction(action);
+      } else if (action === "preview") {
+        options.onExpand?.();
+      } else if (action === "copyFilename") {
+        await navigator.clipboard.writeText(options.reference?.name ?? options.label);
+      } else if (action === "download" && downloadUrl) {
+        openExternalUrlSafe(downloadUrl);
+      }
+    },
+  };
+  // Media cards already own safe URLs and preview callbacks, but do not always
+  // have a workspace/session file identity. Never fabricate a relative path.
+  return options.reference
+    ? openFileContextMenu({ ...menuOptions, reference: options.reference })
+    : openFileActionMenu(menuOptions);
 }
 
 const attachmentCardInteractiveSelector =
@@ -64,7 +135,7 @@ export function openAttachmentCardFromClick(
   const card = event.currentTarget;
   if (target instanceof Element && card instanceof Element) {
     const interactive = target.closest(attachmentCardInteractiveSelector);
-    if (interactive && card.contains(interactive)) {
+    if (interactive && interactive !== card && card.contains(interactive)) {
       return;
     }
   }
@@ -104,7 +175,10 @@ export function renderAttachmentCardIcon(options: {
   });
 }
 
-export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
+export function renderAttachmentCardHeader(
+  options: AttachmentCardHeaderOptions,
+  trailingAction?: TemplateResult,
+): TemplateResult {
   const skeleton = options.loading ? "skeleton" : "";
   const compactPreview = options.visualMode === "preview-with-favicon";
   const formattedSize =
@@ -197,6 +271,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
               </button>`
             : null
         }
+        ${trailingAction ?? nothing}
       </span>
     </div>
   `;
