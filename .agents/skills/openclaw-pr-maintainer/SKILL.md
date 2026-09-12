@@ -92,8 +92,11 @@ Reopen review for substantive changes or unresolved concerns, not a patch-identi
 rebase or a mechanical head change. Address real human/bot findings and explain
 rejected ones; bot scores and Rank-up lists do not create separate obligations.
 
-Use the current PR template. Keep problem, solution, user impact, useful evidence,
-known gaps, and contributor credit current. Explain material tradeoffs when they
+Use the current PR template. Lead with the plain-language problem and concrete
+user impact; keep the explanation short and leave implementation inventories in
+the diff or optional details. Keep important risks, migrations, required actions,
+useful evidence, known gaps, and contributor credit visible and current. Do not
+invent a user benefit for internal-only work. Explain material tradeoffs when they
 matter; do not require universal LOC tables, provenance fields, or alternate-fix
 essays. `CHANGELOG.md` is release-owned; user-facing release-note context stays
 in the PR/commit. Omit agent transcripts unless explicitly requested.
