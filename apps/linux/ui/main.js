@@ -650,14 +650,20 @@ await listen("updater://ready", ({ payload }) => {
   });
 });
 await listen("updater://available-manual", ({ payload }) => {
+  const openDownloadPage = () =>
+    invoke("open_release_page").catch((error) => {
+      if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
+        return;
+      }
+      renderUpdate({
+        action: openDownloadPage,
+        actionLabel: "Open download page",
+        message: friendlyError(error),
+        title: "Could not open release page",
+      });
+    });
   renderUpdate({
-    action: () =>
-      invoke("open_release_page").catch((error) => {
-        renderUpdate({
-          message: friendlyError(error),
-          title: "Could not open release page",
-        });
-      }),
+    action: openDownloadPage,
     actionLabel: "Open download page",
     message: payload.notes || "Install the latest system package from the release page.",
     title: `Update available v${payload.version}`,
