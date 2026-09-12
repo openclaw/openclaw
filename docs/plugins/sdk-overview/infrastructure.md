@@ -76,6 +76,30 @@ synchronous executor and the connection's bounded statement cache when enabled.
 Keep the prepared function with its database owner and discard it when closing
 the connection; transaction callbacks must remain synchronous.
 
+### Worker task admission
+
+`WorkerTaskPool` and `serveWorkerTasks` from
+`openclaw/plugin-sdk/process-runtime` support reusable computation workers.
+Each pool defaults to 128 outstanding tasks and 256 MiB of reported input bytes,
+including queued, preparing, and running tasks. Set `maxPendingTasks` and
+`maxPendingBytes` when constructing a pool to choose different positive limits.
+Report known retained input with `run(input, { inputBytes })`, including buffers
+captured by an input factory. Omitted `inputBytes` counts as zero; this accounting
+does not measure serialized payload size, decoded data, results, or worker heaps.
+
+Capacity exhaustion rejects `run()` with `WorkerTaskError.code = "overloaded"`
+before preparing or executing that input. Accepted work remains ordered within
+a single-worker pool. Report the rejected operation as unsuccessful; do not
+substitute an empty result or bypass the limit with synchronous execution.
+After accepted work settles, the same pool accepts new work again. A caller may
+retry a rejected operation after pressure drains and its original authority and
+deadline are revalidated; the pool does not retry it automatically.
+
+For stateless computation, `sharedCompute: true` also shares an aggregate
+128-task/256-MiB admission budget and CPU execution capacity with participating
+pools in the same isolate. Dedicated ordered pools retain their own execution
+capacity and still enforce their individual admission limits.
+
 ### SQLite worker stores
 
 Use `openSqliteWorkerStore<Operations>` from
