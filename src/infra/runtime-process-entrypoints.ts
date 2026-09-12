@@ -9,6 +9,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "sqlite-store.worker",
     distWorkerPath: "infra/sqlite-store.worker.js",
   },
+  agentSchemaInspection: {
+    currentModuleUrl,
+    sourceWorkerName: "../state/openclaw-agent-schema-inspection.worker",
+    distWorkerPath: "state/openclaw-agent-schema-inspection.worker.js",
+  },
   stateMigrationSnapshot: {
     currentModuleUrl,
     sourceWorkerName: "state-migrations.snapshot.worker",
