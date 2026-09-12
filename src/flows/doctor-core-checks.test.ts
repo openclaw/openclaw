@@ -1001,6 +1001,8 @@ describe("CORE_HEALTH_CHECKS", () => {
                 "google/gemini-2.5-flash",
                 "google/gemini-3.8-flash",
                 "google-gemini-cli/gemini-2.5-pro",
+                "openrouter/auto",
+                "openrouter/deepseek/deepseek-v4-pro",
               ],
             },
             imageModel: { primary: "no-such-provider/no-such-model" },
@@ -1052,5 +1054,9 @@ describe("CORE_HEALTH_CHECKS", () => {
     expect(findings).not.toContainEqual(
       expect.objectContaining({ target: "google/gemini-2.5-flash" }),
     );
+    // OpenRouter plans no catalog rows, so an unlisted id there is not a finding.
+    for (const target of ["openrouter/openrouter/auto", "openrouter/deepseek/deepseek-v4-pro"]) {
+      expect(findings).not.toContainEqual(expect.objectContaining({ target }));
+    }
   });
 });

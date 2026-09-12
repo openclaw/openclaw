@@ -163,9 +163,24 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("ollama/site-local-model", runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('Model "ollama/site-local-model" is not in the local model catalog'),
+      expect.stringContaining('Provider "ollama" has no local model catalog'),
     );
     expect(getWrittenConfig().agents?.defaults?.models).toHaveProperty("ollama/site-local-model");
+  });
+
+  it("does not ask to verify a model id when the provider plans no catalog rows", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("openrouter/auto", runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Provider "openrouter" has no local model catalog, so "openrouter/openrouter/auto" could not be checked offline.',
+      ),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("verify the model ID"));
+    expect(getWrittenConfig().agents?.defaults?.models).toHaveProperty("openrouter/auto");
   });
 
   it("does not make an unlisted model override invalid on a fresh config", async () => {
