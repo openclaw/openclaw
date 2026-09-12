@@ -46,6 +46,16 @@ export function createBackupVolatileStatCache(
   return new BackupVolatileStatCache(isVolatilePath);
 }
 
-export function createBackupLinkCache(): Map<BackupLinkCacheKey, string> {
-  return new BackupLinkCache();
+export function createBackupTarLinkOptions(): {
+  jobs: 1;
+  linkCache: Map<BackupLinkCacheKey, string>;
+} {
+  return {
+    // Backup archives deliberately dereference hardlinks. With concurrent
+    // node-tar jobs, several paths for one unseen inode can enter its
+    // pending-link queue and never regain an owner. Serial entry creation
+    // preserves independently restorable files and guarantees progress.
+    jobs: 1,
+    linkCache: new BackupLinkCache(),
+  };
 }

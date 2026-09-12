@@ -41,7 +41,7 @@ import {
 } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import {
-  createBackupLinkCache,
+  createBackupTarLinkOptions,
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
 import { isErrno } from "./errors.js";
@@ -651,7 +651,7 @@ export async function createBackupArchive(
                 gzip: true,
                 portable: true,
                 preservePaths: true,
-                linkCache: createBackupLinkCache(),
+                ...createBackupTarLinkOptions(),
                 statCache: createBackupVolatileStatCache(
                   (sourcePath) =>
                     plan.inventory.isVolatile(sourcePath) ||

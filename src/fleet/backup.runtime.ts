@@ -12,7 +12,7 @@ import {
   ArchiveSecurityError,
   extractArchive,
 } from "../infra/archive.js";
-import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
+import { createBackupTarLinkOptions } from "../infra/backup-volatile-stat-cache.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileNoClobber,
@@ -302,7 +302,7 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          linkCache: createBackupLinkCache(),
+          ...createBackupTarLinkOptions(),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);
