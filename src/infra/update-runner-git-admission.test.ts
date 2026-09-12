@@ -15,7 +15,7 @@ import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.j
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture(relativeRemote = false) {
+function fixture(relativeRemote = false, partialClone = false) {
   const root = temporary.make("openclaw-git-admission-test-");
   const source = path.join(root, "remote with spaces");
   const install = path.join(root, "installed");
@@ -56,10 +56,19 @@ function fixture(relativeRemote = false) {
     return git(source, "rev-parse", "HEAD");
   };
   commit("2026.7.1", 13);
-  git(root, "clone", source, install);
+  if (partialClone) {
+    git(source, "config", "uploadpack.allowFilter", "true");
+    git(root, "clone", "--filter=blob:none", pathToFileURL(source).href, install);
+  } else {
+    git(root, "clone", source, install);
+  }
   git(install, "remote", "rename", "origin", "upstream.with.dots");
   if (relativeRemote) {
     git(install, "remote", "set-url", "upstream.with.dots", path.relative(install, source));
+  }
+  if (partialClone) {
+    // A successful checkout only hydrates current files, not this history blob.
+    commit("2026.7.2-beta.1", 14);
   }
   const target = commit("2026.7.2", 14);
   const calls: string[][] = [];
@@ -82,6 +91,7 @@ function fixture(relativeRemote = false) {
       cwd: options.cwd,
       env: { ...env, ...options.env },
       encoding: "utf8",
+      input: options.input,
       timeout: 15_000,
     });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -116,6 +126,136 @@ function snapshotTree(root: string): string[] {
 }
 
 describe("Git database admission", () => {
+  it.each([
+    { channel: "stable", publish: false, downgrade: false },
+    { channel: "dev", publish: false, downgrade: false },
+    { channel: "stable", publish: true, downgrade: false },
+    { channel: "dev", publish: false, downgrade: true },
+  ] as const)(
+    "activates a partial clone without upstream access after admission ($channel, publish=$publish, downgrade=$downgrade)",
+    async ({ channel, publish, downgrade }) => {
+      const state = fixture(false, true);
+      const published = path.join(state.root, "published");
+      const target = downgrade
+        ? state.git(state.source, "rev-parse", "v2026.7.2-beta.1")
+        : state.target;
+      if (downgrade) {
+        state.git(state.install, "fetch", "upstream.with.dots");
+        state.git(state.install, "checkout", "--detach", state.target);
+      }
+      const admission = vi.fn(async () => {
+        // Activation must consume staged objects, even if upstream goes offline.
+        fs.renameSync(state.source, `${state.source}.offline`);
+      });
+      const result = await state.run({
+        channel,
+        ...(downgrade ? { devTarget: { mode: "detached" as const, ref: target } } : {}),
+        beforeGitMutation: admission,
+        ...(publish
+          ? {
+              publishGitCheckout: async () => {
+                fs.renameSync(state.install, published);
+                return published;
+              },
+            }
+          : {}),
+      });
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(admission).toHaveBeenCalledOnce();
+      const installed = publish ? published : state.install;
+      expect(state.git(installed, "rev-parse", "HEAD")).toBe(target);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(installed, "package.json"), "utf8")),
+      ).toMatchObject({
+        version: downgrade ? "2026.7.2-beta.1" : "2026.7.2",
+      });
+    },
+  );
+
+  it("stages divergent history blobs and delta bases before taking upstream offline", async () => {
+    const state = fixture(false, true);
+    const historical = Array.from({ length: 2000 }, (_, index) =>
+      createHash("sha256").update(`history-${index}`).digest("hex"),
+    ).join("\n");
+    fs.writeFileSync(path.join(state.source, "changed.txt"), historical);
+    fs.writeFileSync(path.join(state.source, "unchanged.txt"), historical);
+    const base = state.commit("2026.7.3", 14);
+    fs.writeFileSync(path.join(state.source, "changed.txt"), "installed replacement\n");
+    fs.writeFileSync(path.join(state.source, "unchanged.txt"), "installed replacement\n");
+    const installed = state.commit("2026.7.4", 14);
+    state.git(state.install, "fetch", "upstream.with.dots");
+    state.git(state.install, "checkout", "--detach", installed);
+    state.git(state.source, "checkout", "-b", "fixture-target", base);
+    fs.writeFileSync(path.join(state.source, "changed.txt"), `${historical}\ncandidate edit\n`);
+    const target = state.commit("2026.7.5", 14);
+    const admission = vi.fn(async () => {
+      // The installed partial clone has neither this historical blob nor its delta base.
+      fs.renameSync(state.source, `${state.source}.offline`);
+    });
+    const result = await state.run({
+      channel: "dev",
+      devTarget: { mode: "detached", ref: target },
+      beforeGitMutation: admission,
+    });
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(admission).toHaveBeenCalledOnce();
+    expect(state.git(state.install, "rev-parse", "HEAD")).toBe(target);
+    expect(fs.readFileSync(path.join(state.install, "changed.txt"), "utf8")).toBe(
+      `${historical}\ncandidate edit\n`,
+    );
+    expect(fs.readFileSync(path.join(state.install, "unchanged.txt"), "utf8")).toBe(historical);
+  });
+
+  it.each(
+    (["staging", "import"] as const).flatMap((phase) =>
+      [false, true].map((validRuntime) => ({ phase, validRuntime })),
+    ),
+  )(
+    "preserves the retained runtime on $phase failure (validRuntime=$validRuntime)",
+    async ({ phase, validRuntime }) => {
+      const state = fixture();
+      const beforeSha = state.git(state.install, "rev-parse", "HEAD");
+      const dist = path.join(state.install, "dist");
+      fs.mkdirSync(path.join(dist, "control-ui"), { recursive: true });
+      fs.writeFileSync(path.join(dist, "entry.js"), "export const retained = true;\n");
+      fs.writeFileSync(path.join(dist, "control-ui", "index.html"), "retained UI\n");
+      fs.writeFileSync(
+        path.join(dist, "build-info.json"),
+        JSON.stringify({ commit: beforeSha, buildId: "retained-build" }),
+      );
+      for (const name of [".buildstamp", ".runtime-postbuildstamp"]) {
+        fs.writeFileSync(path.join(dist, name), JSON.stringify({ head: beforeSha }));
+      }
+      if (!validRuntime) {
+        fs.rmSync(path.join(dist, ".runtime-postbuildstamp"));
+      }
+      const beforeRuntime = snapshotTree(dist);
+      const admission = vi.fn(async () => undefined);
+      const command: CommandRunner = async (argv, options) => {
+        const fail =
+          phase === "staging"
+            ? argv.includes("pack-objects")
+            : argv[2] === state.install && argv[3] === "index-pack";
+        if (argv[0] === "git" && fail) {
+          expect(admission).toHaveBeenCalledTimes(phase === "staging" ? 0 : 1);
+          return { code: 128, stdout: "", stderr: "synthetic target transport failure" };
+        }
+        return state.runCommand(argv, options);
+      };
+      const result = await state.run({ beforeGitMutation: admission }, command);
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "fetch-failed",
+        recovery: validRuntime
+          ? { serviceRestartSafe: true, version: "2026.7.1", buildId: "retained-build" }
+          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      });
+      expect(admission).toHaveBeenCalledTimes(phase === "staging" ? 0 : 1);
+      expect(state.git(state.install, "rev-parse", "HEAD")).toBe(beforeSha);
+      expect(snapshotTree(dist)).toEqual(beforeRuntime);
+    },
+  );
+
   it("finishes with a recorded warning when inspection clone cleanup fails", async () => {
     const state = fixture();
     const remove = fsPromises.rm.bind(fsPromises);
@@ -199,7 +339,7 @@ describe("Git database admission", () => {
       let admissionFresh = false;
       const remoteFetches: boolean[] = [];
       const command: CommandRunner = async (argv, options) => {
-        if (argv[2] === state.install && argv[3] === "fetch") {
+        if (argv[2] === state.install && ["fetch", "index-pack"].includes(argv[3])) {
           remoteFetches.push(admissionFinished);
           admissionFresh = false;
         }
