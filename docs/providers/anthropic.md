@@ -822,7 +822,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title='No API key found for provider "anthropic"'>
-    Anthropic auth is **per agent**; new agents do not inherit the main agent's keys. Re-run onboarding for that agent (or configure an API key on the gateway host), then verify with `openclaw models status`.
+    Agents read shared auth profiles at runtime, with agent-local profiles overriding shared profiles with the same ID. A new agent does not need a separate API key when a usable shared Anthropic profile exists.
+
+    Check the affected agent with `openclaw models status --agent <agentId>`. If no usable credential is available, configure an Anthropic API key on the Gateway host or set up auth for that agent.
+
+    Read-through is separate from copying: non-portable profiles can still be used from the shared store. Explicit copy flows follow the [agent copy portability policy](/auth-credential-semantics#agent-copy-portability).
+
+    Native Claude CLI logins remain owned by Claude Code, not the shared OpenClaw auth store. For that route, use the [Claude CLI setup](/providers/anthropic#getting-started); do not copy native OAuth tokens into OpenClaw.
+
   </Accordion>
 
   <Accordion title='No credentials found for profile "anthropic:default"'>

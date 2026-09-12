@@ -8,6 +8,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
@@ -120,6 +121,30 @@ export function resolveSessionCatalogProfiles(
     ...context,
     ...(profileSource === "user" ? { pinnedProfileId: profileId } : {}),
   };
+}
+
+export function sessionProjectionKey(
+  agentId: string,
+  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
+): string {
+  return [
+    normalizeAgentId(agentId),
+    profiles.preferredProfileId ?? "",
+    profiles.pinnedProfileId ?? "",
+    profiles.profileProvider ?? "",
+    profiles.runtimeOverride ?? "",
+  ].join("\0");
+}
+
+export function hasSessionCatalogContext(
+  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
+) {
+  return (
+    profiles.preferredProfileId !== undefined ||
+    profiles.pinnedProfileId !== undefined ||
+    profiles.profileProvider !== undefined ||
+    profiles.runtimeOverride !== undefined
+  );
 }
 
 // Read native ownership after profile projection; never cache this session overlay.

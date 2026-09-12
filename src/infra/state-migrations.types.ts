@@ -213,6 +213,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   changes: string[];
   warnings: string[];
   notices?: string[];
+  refusedAgentDatabasePaths?: readonly string[];
   refusal?: { code: string; message: string };
 };
 

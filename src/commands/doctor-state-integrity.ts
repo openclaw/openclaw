@@ -54,6 +54,7 @@ import {
 } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
@@ -1451,6 +1452,9 @@ export async function noteStateIntegrity(
   // Scan that file once under the compatibility owner so full-store work is not repeated.
   const inspectedLegacyStores = new Set<string>();
   for (const target of sessionTargets) {
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      continue;
+    }
     const legacyStorePath = path.resolve(target.storePath);
     const inspectLegacyStore =
       !legacyStorePath.endsWith(".sqlite") && !inspectedLegacyStores.has(legacyStorePath);

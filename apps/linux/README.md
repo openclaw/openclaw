@@ -14,6 +14,13 @@ Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
 they cannot run the published AppImage. Extraction does not bypass this
 requirement.
 
+## Omarchy
+
+The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
+With the matching desktop app running, it uses the app’s selected Gateway and
+keeps a single visible OpenClaw icon. See [Omarchy support](https://docs.openclaw.ai/platforms/omarchy)
+for installation, app handoff, shortcuts, and troubleshooting.
+
 ## Linux prerequisites
 
 Debian and Ubuntu development packages:

@@ -24,6 +24,12 @@ import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
 } from "../../sessions/agent-harness-session-key.js";
+import {
+  assertAgentDatabaseAdmitted,
+  evaluateAgentDatabaseAdmissions,
+  hasAgentDatabaseAdmissions,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -177,6 +183,14 @@ export async function prepareAgentCommandExecution(
       );
     }
   }
+  if (agentIdOverride || explicitSessionKey) {
+    if (!hasAgentDatabaseAdmissions()) {
+      recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
+    }
+    assertAgentDatabaseAdmitted(
+      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg }),
+    );
+  }
   const agentCfg = cfg.agents?.defaults;
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
@@ -260,6 +274,7 @@ export async function prepareAgentCommandExecution(
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });
+  assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId: sessionAgentId,

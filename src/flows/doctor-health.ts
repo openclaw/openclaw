@@ -52,6 +52,7 @@ async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
       cfg,
       { env: process.env },
     ),
+    agentAdmissionConfig: cfg,
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
       agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -148,6 +149,12 @@ async function runDoctorHealthFlowWithResult(
       }
     }
     const schemas = await assertDoctorDatabaseSchemasCompatible();
+    const { evaluateAgentDatabaseAdmissions, recordAgentDatabaseAdmissions } =
+      await import("../state/agent-database-admission.js");
+    // Repair owns fresh file decisions until its migration graph finishes.
+    if (options.repair !== true && options.yes !== true) {
+      recordAgentDatabaseAdmissions(schemas.agentRefusals ?? []);
+    }
     const { guardUpdateDoctorSchemaUpgrade } =
       await import("../commands/doctor-update-schema-guard.js");
     await guardUpdateDoctorSchemaUpgrade({
@@ -174,6 +181,8 @@ async function runDoctorHealthFlowWithResult(
       runtime: effectiveRuntime,
       prompter,
     });
+    // Explicit Doctor recovery may have moved a byte-identical misplaced copy aside.
+    recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(configResult.cfg));
     const { CONFIG_PATH } = await loadConfigModule();
     const ctx: DoctorHealthFlowContext = {
       runtime: effectiveRuntime,
@@ -215,6 +224,7 @@ async function runDoctorHealthFlowWithResult(
         await import("../config/sessions/targets.js");
       await assertOpenClawDatabasesReady({
         env: process.env,
+        config: ctx.cfg,
         operation: "doctor",
         onDeferredSchemaPublication: (publication) => effectiveRuntime.log(publication.message),
         configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {

@@ -1,4 +1,6 @@
 mod cli;
+#[cfg(target_os = "linux")]
+mod desktop_bridge;
 mod discovery;
 mod gateway;
 mod gateway_device_identity;
@@ -1403,6 +1405,8 @@ fn main() {
         app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
         state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
+        #[cfg(target_os = "linux")]
+        desktop_bridge::start(app.handle().clone());
         Ok(())
     });
     let builder = builder.invoke_handler(tauri::generate_handler![

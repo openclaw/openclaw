@@ -4,7 +4,7 @@ import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import { isChatControlCommand } from "../../../lib/chat/commands.ts";
+import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
@@ -580,7 +580,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         `
       : nothing;
   const sendDisabledReason =
-    props.canSend && isChatControlCommand(props.draft) ? null : props.submitDisabledReason;
+    props.canSend && canSubmitBeforeChatHistory(props.draft) ? null : props.submitDisabledReason;
   const sendBusy = props.sending || Boolean(sendDisabledReason && props.submitPending);
   const sendStatus =
     sendDisabledReason ??
@@ -608,7 +608,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     </openclaw-tooltip>
   `;
   const dictationSendAction =
-    props.dictation && !props.submitDisabledReason
+    props.dictation && (!props.submitDisabledReason || canSubmitBeforeChatHistory(props.draft))
       ? renderComposerDictationSendAction(
           props.dictation,
           () => props.onSend(),
