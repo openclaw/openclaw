@@ -8,7 +8,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+  type SessionSqliteTargetResolutionCache,
+} from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
@@ -83,6 +87,7 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
   })[],
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const results: Array<Result<ExactSessionEntry[], unknown>> = scopes.map(() => ok([]));
+  const targetCache: SessionSqliteTargetResolutionCache = new Map();
   const groups = new Map<
     string,
     {
@@ -98,7 +103,7 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
       continue;
     }
     try {
-      const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
+      const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }, targetCache));
       const groupKey = [
         options.agentId,
         resolveOpenClawAgentSqlitePath(options),
