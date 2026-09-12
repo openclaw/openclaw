@@ -37,12 +37,14 @@ const children = new Map<number, FakeChild>();
 let candidateConfig: Record<string, unknown>;
 let childEnv: NodeJS.ProcessEnv;
 let pluginErrors = false;
+let pluginInventory: unknown;
 let runtimeError = false;
 let runtimeContract: unknown;
 
 beforeEach(async () => {
   vi.clearAllMocks();
   pluginErrors = false;
+  pluginInventory = undefined;
   runtimeError = false;
   runtimeContract = { state: 2, agent: 3 };
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "canary-unit-")));
@@ -70,12 +72,14 @@ beforeEach(async () => {
         queueMicrotask(() => {
           if (args.includes("plugins")) {
             child.stdout.write(
-              JSON.stringify({
-                plugins: [],
-                diagnostics: pluginErrors
-                  ? [{ level: "error", message: "incompatible plugin" }]
-                  : [],
-              }),
+              JSON.stringify(
+                pluginInventory ?? {
+                  plugins: [],
+                  diagnostics: pluginErrors
+                    ? [{ level: "error", message: "incompatible plugin" }]
+                    : [],
+                },
+              ),
             );
           }
           if (args.includes("--check")) {
@@ -102,6 +106,60 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it("keeps snapshot and validation source selection inside the candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const servingRoot = path.join(root, "installed");
+    const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env,
+      timeoutMs: 3000,
+    });
+    expect(result.status).toBe("ok");
+    expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mocks.spawn.mock.calls) {
+      expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+    }
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
+  });
+
+  it("classifies a deadline before teardown when SIGTERM closes the child with zero", async () => {
+    let now = 2_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
+      const child = new FakeChild(nextPid++);
+      children.set(child.pid, child);
+      childEnv = options.env;
+      now += 899;
+      return child;
+    });
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 1_000,
+      });
+      expect(result).toMatchObject({ status: "error", phase: "doctor" });
+      expect(result.logTail.join("\n")).toContain("deadline exceeded");
+      expect(result.steps.at(-1)).toMatchObject({ exitCode: 1 });
+      expect(result.steps.at(-1)?.stderrTail).toContain("deadline exceeded");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
     const now = Date.now.bind(Date);
     let snapshotElapsed = 0;
@@ -137,6 +195,58 @@ describe("update candidate canary", () => {
       });
     } finally {
       clock.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      label: "plugin load failure",
+      inventory: { plugins: [{ id: "fixture", status: "error" }] },
+      proceeds: true,
+    },
+    {
+      label: "attributed registry failure",
+      inventory: {
+        plugins: [],
+        registry: {
+          diagnostics: [{ pluginId: "fixture", level: "error", message: "Plugin unavailable" }],
+        },
+      },
+      proceeds: true,
+    },
+    {
+      label: "malformed plugin inventory",
+      inventory: { plugins: [{ status: "error" }] },
+      proceeds: false,
+    },
+  ])("handles $label before proving core readiness", async ({ inventory, proceeds }) => {
+    pluginInventory = inventory;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3000,
+    });
+
+    expect(result.status).toBe(proceeds ? "ok" : "error");
+    expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("gateway"))).toBe(proceeds);
+    if (proceeds) {
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "candidate plugin resolution",
+          exitCode: 0,
+          stdoutTail: 'Plugin "fixture" could not be loaded during the update preview.',
+        }),
+      );
+      expect(result.phase).toBe("readiness");
+    } else {
+      expect(result.phase).toBe("plugins");
     }
   });
 
@@ -267,6 +377,7 @@ describe("update candidate canary", () => {
     );
     const original = {
       gateway: { port: 18789 },
+      mcp: { apps: { enabled: true, sandboxPort: 18790 } },
       cron: { enabled: true },
       agents: {
         entries: { main: { workspace: "/original/workspace", agentDir: "/original/agent" } },
@@ -333,7 +444,14 @@ describe("update candidate canary", () => {
     expect(candidateConfig).toMatchObject({
       cron: { enabled: false },
       gateway: { bind: "loopback" },
+      mcp: { apps: { enabled: false } },
     });
+    expect(result.listenerIsolation).toEqual({
+      gateway: { host: "127.0.0.1", port: expect.any(Number) },
+      mcpAppSandbox: "disabled",
+    });
+    expect(candidateConfig.gateway).toMatchObject({ port: result.listenerIsolation?.gateway.port });
+    expect(original.mcp.apps).toEqual({ enabled: true, sandboxPort: 18790 });
     expect(original.cron.enabled).toBe(true);
     const gatewayPid = [...children.keys()].at(-1)!;
     expect(

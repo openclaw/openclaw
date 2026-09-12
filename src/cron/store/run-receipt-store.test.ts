@@ -7,6 +7,7 @@ import {
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
+  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -40,6 +41,10 @@ import {
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
 } from "./run-receipt-store.js";
+import {
+  isCronRunTriggerStateRetiredInDatabase,
+  retireCronRunTriggerStateInDatabase,
+} from "./run-receipt-trigger-state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
 
@@ -213,6 +218,116 @@ describe("cron run receipt store", () => {
           )
           .get(),
       ).toEqual({ name: "cron_run_receipts" });
+    },
+  );
+
+  it.each(["present", "absent"] as const)(
+    "keeps trigger-state retirement atomic with %s storage",
+    async (storage) => {
+      const { storePath } = await makeStorePath();
+      const startedAtMs = Date.now();
+      const editedJob = makeJob(`retirement-${storage}`);
+      const untouchedJob = makeJob(`untouched-${storage}`);
+      for (const job of [editedJob, untouchedJob]) {
+        job.trigger = { script: "return true", once: true };
+        job.state.runningAtMs = startedAtMs;
+      }
+      await saveCronStore(storePath, { version: 1, jobs: [editedJob, untouchedJob] });
+      let editedReceipt = claim(storePath, editedJob, startedAtMs);
+      const untouchedReceipt = claim(storePath, untouchedJob, startedAtMs);
+      let database = openOpenClawStateDatabase();
+      const schemaVersion = database.db.prepare("PRAGMA user_version").get();
+      const readTable = () =>
+        database.db
+          .prepare(
+            `SELECT name FROM sqlite_schema
+              WHERE type = 'table' AND name = 'cron_run_trigger_state_retirements'`,
+          )
+          .get();
+      const readRetirements = () =>
+        runOpenClawStateWriteTransaction(({ db }) => ({
+          edited: isCronRunTriggerStateRetiredInDatabase({ database: db, handle: editedReceipt }),
+          untouched: isCronRunTriggerStateRetiredInDatabase({
+            database: db,
+            handle: untouchedReceipt,
+          }),
+        }));
+
+      try {
+        if (storage === "present") {
+          runOpenClawStateWriteTransaction(({ db }) => {
+            retireCronRunTriggerStateInDatabase({ database: db, handle: editedReceipt });
+          });
+          finishCronRunReceipt({
+            handle: editedReceipt,
+            status: "ok",
+            finishedAtMs: startedAtMs + 1,
+          });
+          // An earlier retirement must not transfer to a same-timestamp successor.
+          editedReceipt = claim(storePath, editedJob, startedAtMs);
+        } else {
+          // Preserve the receipt rows while restoring the pre-feature database shape.
+          database.db.exec("DROP TABLE IF EXISTS cron_run_trigger_state_retirements");
+        }
+        closeOpenClawStateDatabaseByPath(database.path);
+        database = openOpenClawStateDatabase();
+        const previousTable =
+          storage === "present" ? { name: "cron_run_trigger_state_retirements" } : undefined;
+        expect(readTable()).toEqual(previousTable);
+        expect(readRetirements()).toEqual({ edited: false, untouched: false });
+        expect(readTable()).toEqual(previousTable);
+
+        expect(() =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            retireCronRunTriggerStateInDatabase({
+              database: db,
+              handle: editedReceipt,
+            });
+            expect(
+              isCronRunTriggerStateRetiredInDatabase({ database: db, handle: editedReceipt }),
+            ).toBe(true);
+            expect(readTable()).toEqual({ name: "cron_run_trigger_state_retirements" });
+            throw new Error("cron edit did not commit");
+          }),
+        ).toThrow("cron edit did not commit");
+
+        expect(readTable()).toEqual(previousTable);
+        expect(readRetirements()).toEqual({ edited: false, untouched: false });
+        runOpenClawStateWriteTransaction(({ db }) => {
+          retireCronRunTriggerStateInDatabase({
+            database: db,
+            handle: editedReceipt,
+          });
+        });
+        expect(readTable()).toEqual({ name: "cron_run_trigger_state_retirements" });
+        expect(database.db.prepare("PRAGMA user_version").get()).toEqual(schemaVersion);
+        expect(
+          database.db
+            .prepare(
+              "SELECT receipt_id FROM cron_run_trigger_state_retirements WHERE receipt_id = ?",
+            )
+            .get(untouchedReceipt.receiptId),
+        ).toBeUndefined();
+
+        closeOpenClawStateDatabaseByPath(database.path);
+        database = openOpenClawStateDatabase();
+        expect(readRetirements()).toEqual({ edited: true, untouched: false });
+        expect(
+          receipts(storePath, editedJob.id).filter((receipt) => receipt.status === "running"),
+        ).toEqual([
+          {
+            receiptId: editedReceipt.receiptId,
+            status: "running",
+            agentId: editedJob.agentId,
+            startedAtMs,
+            error: null,
+          },
+        ]);
+      } finally {
+        for (const handle of [editedReceipt, untouchedReceipt]) {
+          finishCronRunReceipt({ handle, status: "ok", finishedAtMs: startedAtMs + 1 });
+        }
+      }
     },
   );
 
@@ -415,21 +530,37 @@ describe("cron run receipt store", () => {
         executionId: "execution-retention",
       }),
     };
+    const retireTriggerState = async (handle: CronRunReceiptHandle) => {
+      job.state.runningAtMs = handle.startedAtMs;
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      runOpenClawStateWriteTransaction(({ db }) => {
+        retireCronRunTriggerStateInDatabase({ database: db, handle });
+      });
+    };
     const finishedReceiptIds: string[] = [];
     for (let index = 0; index < 70; index += 1) {
       const handle = claim(storePath, job, 1_000 + index * 2);
       finishedReceiptIds.push(handle.receiptId);
       if (index === 0 || index === 69) {
         expect(bindCronRunReceiptExecution({ admitted, handle })).toBe("bound");
+        await retireTriggerState(handle);
       }
       finishCronRunReceipt({
         handle,
         status: "ok",
         finishedAtMs: 1_001 + index * 2,
       });
+      if (index === 0 || index === 69) {
+        expect(
+          runOpenClawStateWriteTransaction(({ db }) =>
+            isCronRunTriggerStateRetiredInDatabase({ database: db, handle }),
+          ),
+        ).toBe(true);
+      }
     }
     const active = claim(storePath, job, 2_000);
     expect(bindCronRunReceiptExecution({ admitted, handle: active })).toBe("bound");
+    await retireTriggerState(active);
 
     const retained = receipts(storePath, job.id);
     const retainedIds = new Set(retained.map((receipt) => receipt.receiptId));
@@ -462,7 +593,29 @@ describe("cron run receipt store", () => {
         .map((owner_id) => ({ owner_id })),
     );
 
+    const readRetiredReceipts = () =>
+      openOpenClawStateDatabase()
+        .db.prepare(
+          `SELECT receipt_id FROM cron_run_trigger_state_retirements
+            WHERE receipt_id IN (?, ?, ?) ORDER BY receipt_id`,
+        )
+        .all(finishedReceiptIds[0]!, finishedReceiptIds.at(-1)!, active.receiptId);
+    const retainedStateWriters = [active.receiptId, finishedReceiptIds.at(-1)!]
+      .toSorted()
+      .map((receipt_id) => ({ receipt_id }));
+    // Read the companion directly so an orphan left by pruning cannot hide behind a join.
+    expect(readRetiredReceipts()).toEqual(retainedStateWriters);
+
+    await saveCronStore(storePath, { version: 1, jobs: [] });
+    expect(receipts(storePath, job.id)).toHaveLength(65);
+    expect(readRetiredReceipts()).toEqual(retainedStateWriters);
     finishCronRunReceipt({ handle: active, status: "skipped", finishedAtMs: 2_001 });
+    expect(readRetiredReceipts()).toEqual(retainedStateWriters);
+    expect(
+      runOpenClawStateWriteTransaction(({ db }) =>
+        isCronRunTriggerStateRetiredInDatabase({ database: db, handle: active }),
+      ),
+    ).toBe(true);
   });
 
   it("rejects a live run after its durable owner revision changes", async () => {

@@ -120,6 +120,8 @@ class Tooltip extends OpenClawLitElement {
 
   @property() content = "";
 
+  @property() placement: WaTooltip["placement"] = "top";
+
   @property({ type: Number }) closeDelay = RICH_CONTENT_CLOSE_DELAY;
 
   @property({ type: Number }) delay?: number;
@@ -451,6 +453,9 @@ class Tooltip extends OpenClawLitElement {
     Tooltip.activeByDocument.set(this.ownerDocument, this);
     this.#tooltipProvider?.openTooltip();
     this.syncDescription();
+    // Side cards cannot fit beside a menu on narrow viewports; let WA flip
+    // vertically and shift within the viewport instead.
+    tooltip.placement = this.resolvedPlacement();
     tooltip.open = true;
     // Light-DOM owners can retain a revealed trigger without another popup lifecycle.
     this.setAttribute("open", "");
@@ -644,10 +649,22 @@ class Tooltip extends OpenClawLitElement {
     }
   };
 
+  private resolvedPlacement(): WaTooltip["placement"] {
+    return (this.placement === "right-start" || this.placement === "right") &&
+      this.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
+      ? "bottom-start"
+      : this.placement;
+  }
+
   override render() {
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.#tooltipId} trigger="manual" @wa-hide=${() => this.close()}>
+      <wa-tooltip
+        id=${this.#tooltipId}
+        placement=${this.resolvedPlacement()}
+        trigger="manual"
+        @wa-hide=${() => this.close()}
+      >
         <span class="tooltip-content">${this.content}</span>
         <span
           class="tooltip-rich-content"

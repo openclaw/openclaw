@@ -1386,7 +1386,7 @@ export function createAgentEventHandler({
       return runVerbose ?? "off";
     }
     try {
-      const { cfg, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
+      const { cfg, entry } = loadGatewaySessionEntryReadOnly(sessionKey, { clone: false });
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
@@ -1495,17 +1495,6 @@ export function createAgentEventHandler({
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     const suppressHeartbeatToolEvents =
       isToolEvent && shouldSuppressHeartbeatToolEvents(clientRunId, evt.runId);
-    // Channel/node subscribers respect verbose; authenticated Control UI
-    // recipients need tool result payloads to render live tool cards.
-    const channelToolPayload =
-      isToolEvent && toolVerbose !== "full"
-        ? (() => {
-            const data = evt.data ? { ...evt.data } : {};
-            delete data.result;
-            delete data.partialResult;
-            return { ...agentPayload, data };
-          })()
-        : agentPayload;
     if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
       broadcast(
@@ -1772,6 +1761,15 @@ export function createAgentEventHandler({
         !suppressHeartbeatToolEvents &&
         toolVerbose !== "off"
       ) {
+        // Channel/node subscribers respect verbose; authenticated Control UI
+        // recipients need tool result payloads to render live tool cards.
+        let channelToolPayload = agentPayload;
+        if (toolVerbose !== "full") {
+          const data = evt.data ? { ...evt.data } : {};
+          delete data.result;
+          delete data.partialResult;
+          channelToolPayload = { ...agentPayload, data };
+        }
         sendNodeSessionPayloadForAgent(
           sessionKey,
           "agent",

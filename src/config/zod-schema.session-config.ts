@@ -76,6 +76,13 @@ export const SessionSchema = z
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
+        coldStorage: z
+          .object({
+            enabled: z.boolean().optional(),
+            afterDays: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         pruneAfter: PositiveDurationSchema.optional(),
         archiveDashboardAfter: z
           .union([PositiveDurationSchema, z.literal(false), z.literal(0)])

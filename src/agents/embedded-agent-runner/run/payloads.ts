@@ -263,103 +263,103 @@ export function buildEmbeddedRunPayloads(params: {
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
-  const fallbackAnswerText = assistantForPayload
-    ? extractAssistantVisibleText(assistantForPayload)
-    : "";
-  const fallbackRawAnswerText = resolveRawAssistantAnswerText(assistantForPayload);
-  const rawAnswerDirectiveState = fallbackRawAnswerText
-    ? parseReplyDirectives(fallbackRawAnswerText)
-    : null;
-  const rawAnswerHasMedia =
-    (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 || rawAnswerDirectiveState?.audioAsVoice;
-  const normalizedAssistantTexts =
-    rawAnswerHasMedia &&
-    nonEmptyAssistantTexts.length > 0 &&
-    !params.assistantTexts.some((text) => {
-      const parsed = parseReplyDirectives(text);
-      return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
-    })
-      ? normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"))
-      : "";
-  const shouldPreferRawAnswerText =
-    rawAnswerHasMedia &&
-    (!nonEmptyAssistantTexts.length ||
-      (normalizedAssistantTexts.length > 0 &&
-        normalizedAssistantTexts ===
-          normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "")));
-  // When streamed text lost media directives but the canonical assistant answer
-  // still contains them, keep the raw answer so attachments are not dropped.
-  const fallbackAnswerSourceText =
-    shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
-  const fallbackAnswerDirectiveState =
-    fallbackAnswerSourceText === fallbackRawAnswerText
-      ? rawAnswerDirectiveState
-      : fallbackAnswerSourceText
-        ? parseReplyDirectives(fallbackAnswerSourceText)
-        : null;
-  const normalizedFallbackAnswerSourceText = fallbackAnswerDirectiveState
-    ? normalizeTextForComparison(fallbackAnswerDirectiveState.text)
-    : "";
-  const shouldUseCanonicalFinalAnswer =
-    !lastAssistantNeedsErrorSurface &&
-    fallbackAnswerSourceText.length > 0 &&
-    normalizedFallbackAnswerSourceText.length > 0;
-  const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
-  const answerTexts =
-    suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
-      ? []
-      : shouldUseCanonicalFinalAnswer
-        ? [fallbackAnswerSourceText]
-        : shouldPreferRawAnswerText && fallbackRawAnswerText
-          ? [fallbackRawAnswerText]
-          : hasAssistantTextPayload
-            ? nonEmptyAssistantTexts
-            : fallbackAnswerText
-              ? [fallbackAnswerText]
-              : [];
-  const preparedAnswerDirectives =
-    shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
-      ? fallbackAnswerDirectiveState
-      : null;
   let hasUserFacingReply =
     Boolean(errorText) ||
     completedSourceReplyViaMessageTool ||
     params.heartbeatToolResponse?.notify === true;
-  for (const text of answerTexts) {
-    const {
-      text: cleanedText,
-      mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    } = preparedAnswerDirectives ?? parseReplyDirectives(text);
-    const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
-    const delivery = shouldUseCanonicalFinalAnswer
-      ? {
-          audioAsVoice: storedDelivery?.audioAsVoice,
-          replyToCurrent: storedDelivery?.replyToCurrent,
-          replyToId: storedDelivery?.replyToId,
-          replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
-        }
-      : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
-    if (
-      !cleanedText &&
-      (!mediaUrls || mediaUrls.length === 0) &&
-      !delivery.audioAsVoice &&
-      !ttsFacts
-    ) {
-      continue;
+  if (!suppressAssistantArtifacts && !runAborted && !lastAssistantNeedsErrorSurface) {
+    const fallbackAnswerText = assistantForPayload
+      ? extractAssistantVisibleText(assistantForPayload)
+      : "";
+    const fallbackRawAnswerText = resolveRawAssistantAnswerText(assistantForPayload);
+    const rawAnswerDirectiveState = fallbackRawAnswerText
+      ? parseReplyDirectives(fallbackRawAnswerText)
+      : null;
+    const rawAnswerHasMedia =
+      (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 ||
+      rawAnswerDirectiveState?.audioAsVoice;
+    const normalizedAssistantTexts =
+      rawAnswerHasMedia &&
+      nonEmptyAssistantTexts.length > 0 &&
+      !params.assistantTexts.some((text) => {
+        const parsed = parseReplyDirectives(text);
+        return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
+      })
+        ? normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"))
+        : "";
+    const shouldPreferRawAnswerText =
+      rawAnswerHasMedia &&
+      (!nonEmptyAssistantTexts.length ||
+        (normalizedAssistantTexts.length > 0 &&
+          normalizedAssistantTexts ===
+            normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "")));
+    // When streamed text lost media directives but the canonical assistant answer
+    // still contains them, keep the raw answer so attachments are not dropped.
+    const fallbackAnswerSourceText =
+      shouldPreferRawAnswerText && fallbackRawAnswerText
+        ? fallbackRawAnswerText
+        : fallbackAnswerText;
+    const fallbackAnswerDirectiveState =
+      fallbackAnswerSourceText === fallbackRawAnswerText
+        ? rawAnswerDirectiveState
+        : fallbackAnswerSourceText
+          ? parseReplyDirectives(fallbackAnswerSourceText)
+          : null;
+    const normalizedFallbackAnswerSourceText = fallbackAnswerDirectiveState
+      ? normalizeTextForComparison(fallbackAnswerDirectiveState.text)
+      : "";
+    const shouldUseCanonicalFinalAnswer =
+      fallbackAnswerSourceText.length > 0 && normalizedFallbackAnswerSourceText.length > 0;
+    const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
+    const answerTexts = shouldUseCanonicalFinalAnswer
+      ? [fallbackAnswerSourceText]
+      : shouldPreferRawAnswerText && fallbackRawAnswerText
+        ? [fallbackRawAnswerText]
+        : hasAssistantTextPayload
+          ? nonEmptyAssistantTexts
+          : fallbackAnswerText
+            ? [fallbackAnswerText]
+            : [];
+    const preparedAnswerDirectives =
+      shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
+        ? fallbackAnswerDirectiveState
+        : null;
+    for (const text of answerTexts) {
+      const {
+        text: cleanedText,
+        mediaUrls,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      } = preparedAnswerDirectives ?? parseReplyDirectives(text);
+      const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
+      const delivery = shouldUseCanonicalFinalAnswer
+        ? {
+            audioAsVoice: storedDelivery?.audioAsVoice,
+            replyToCurrent: storedDelivery?.replyToCurrent,
+            replyToId: storedDelivery?.replyToId,
+            replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
+          }
+        : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+      if (
+        !cleanedText &&
+        (!mediaUrls || mediaUrls.length === 0) &&
+        !delivery.audioAsVoice &&
+        !ttsFacts
+      ) {
+        continue;
+      }
+      const replyPayload = {
+        text: cleanedText,
+        media: mediaUrls,
+        ...delivery,
+      };
+      replyItems.push(
+        ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
+      );
+      hasUserFacingReply = true;
     }
-    const replyPayload = {
-      text: cleanedText,
-      media: mediaUrls,
-      ...delivery,
-    };
-    replyItems.push(
-      ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
-    );
-    hasUserFacingReply = true;
   }
   if (params.lastToolError) {
     // A restart intentionally aborts the active tool while the Gateway takes over.

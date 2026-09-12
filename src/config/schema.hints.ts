@@ -98,6 +98,8 @@ const SECTION_DOCS_URLS = {
 } as const satisfies Record<string, string>;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "gateway.cliAgents.enabled": "Default (enabled)",
+  "tools.loopDetection.enabled": "Default (post-compaction protection only)",
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",

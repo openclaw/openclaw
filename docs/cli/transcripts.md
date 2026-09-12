@@ -41,7 +41,14 @@ In the [Control UI](/web/control-ui/settings#meetings-page), open the sidebar's 
 at `/meetings`. You can pin Meetings to the sidebar; it is not pinned by default.
 Meeting notes are separate from agent chat history in **Sessions**.
 
-Search titles and session/source IDs; meeting URLs are not searched. Filter by
+Meetings appear in a newest-first timeline grouped by their start date, with a
+saved summary preview for each meeting. Opening the library shows the timeline
+at full width; selecting a meeting opens its reader. The library and reader
+show loading indicators while fetching data, and stored notes render as Markdown
+even when a long meeting exceeds chat-message rendering limits.
+
+Search titles, session/source IDs, saved summary notes, and transcript text;
+meeting URLs are not searched. Filter by
 exact provider, account, or agent ID, or by the session start date. Date filters
 use UTC: **Started on or after** includes the selected day, and **Started before**
 excludes it. Results load in deterministic pages. Changing a filter or selecting
@@ -218,14 +225,16 @@ locators contain only `providerId`, `accountId`, `guildId`, `channelId`, `thread
 `fileId`, `kind`, and sanitized `meetingUrl` when present, never arbitrary capture
 metadata. See [Gateway protocol](/gateway/protocol).
 
-List search matches titles and session/source IDs, excluding meeting URLs.
+List search matches titles, session/source IDs, saved summary Markdown and
+overviews, and stored utterance text, excluding source meeting URLs and private metadata.
 Date bounds use session start times: `startedAfter` is inclusive and
 `startedBefore` is exclusive. Dates are compared by instant using JavaScript
 date-string semantics, including stored UTC offsets. Original timestamps and
 selectors remain unchanged. Unparseable stored dates sort last and are excluded
 from date ranges. Equal instants sort by session ID, then original timestamp.
-Chronological page selection scans candidate captures before reading only the
-selected page's notes and participants, so read time grows with archive size.
+Chronological page selection scans candidate captures and, when searching,
+their saved notes and utterances before projecting only the selected page's
+notes and participants. Search time grows with the saved text being searched.
 Cursors belong to their current query and filters;
 changing either requires a fresh first page. A null `nextCursor` ends pagination.
 

@@ -22,6 +22,7 @@ import {
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
 import {
   getDiscordModelPickerRuntimeChoices,
+  MODEL_PICKER_CHANGED_MESSAGE,
   supportsDiscordModelPickerRuntimeChoices,
 } from "./model-picker.runtime.js";
 import {
@@ -435,7 +436,7 @@ async function handleDiscordModelPickerInteraction(params: {
       requireModelToken,
     });
     if ((parsed.modelIndex || parsed.modelToken) && !pendingModel) {
-      await showNotice("That selection expired. Please choose a model again.");
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;
     }
     const pendingModelIndex = pendingModel
@@ -466,7 +467,7 @@ async function handleDiscordModelPickerInteraction(params: {
   if (parsed.action === "provider") {
     const selectedProvider = resolveModelPickerSelectionValue(interaction) ?? parsed.provider;
     if (!selectedProvider || !pickerData.byProvider.has(selectedProvider)) {
-      await showNotice("Sorry, that provider isn't available anymore.");
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;
     }
     await updateModelsView(selectedProvider, {
@@ -480,7 +481,7 @@ async function handleDiscordModelPickerInteraction(params: {
     const selectedModel = resolveModelPickerSelectionValue(interaction);
     const provider = parsedProvider;
     if (!provider || !selectedModel) {
-      await showNotice("Sorry, I couldn't read that model selection.");
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;
     }
     const modelIndex = resolveDiscordModelPickerModelIndex({
@@ -489,7 +490,7 @@ async function handleDiscordModelPickerInteraction(params: {
       model: selectedModel,
     });
     if (!modelIndex) {
-      await showNotice("Sorry, that model isn't available anymore.");
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;
     }
     const modelRef = `${provider}/${selectedModel}`;
@@ -510,7 +511,7 @@ async function handleDiscordModelPickerInteraction(params: {
     const selectedRuntime = resolveModelPickerSelectionValue(interaction) ?? parsed.runtime;
     const provider = parsedProvider;
     if (!provider || !pickerData.byProvider.has(provider)) {
-      await showNotice("Sorry, that provider isn't available anymore.");
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;
     }
     const selectedModel = resolveDiscordModelPickerModelSelection({
@@ -521,7 +522,7 @@ async function handleDiscordModelPickerInteraction(params: {
       requireModelToken,
     });
     if ((parsed.modelIndex || parsed.modelToken) && !selectedModel) {
-      await showNotice("That selection expired. Please choose a model again.");
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;
     }
     const currentModel = splitDiscordModelRef(currentModelRef ?? "");
@@ -570,7 +571,7 @@ async function handleDiscordModelPickerInteraction(params: {
       !parsedModelRef ||
       !pickerData.byProvider.get(parsedModelRef.provider)?.has(parsedModelRef.model)
     ) {
-      await showNotice("That selection expired. Please choose a model again.");
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;
     }
 

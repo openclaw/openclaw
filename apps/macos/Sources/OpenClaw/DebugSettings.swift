@@ -516,7 +516,7 @@ struct DebugSettings: View {
                             .foregroundStyle(.secondary)
                     } else {
                         Button {
-                            LaunchdManager.startOpenClaw()
+                            LaunchAgentManager.shared.restart()
                         } label: {
                             Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
                         }

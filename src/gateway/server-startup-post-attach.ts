@@ -1276,11 +1276,13 @@ export async function startGatewayPostAttachRuntime(
           const startupLog = startStartupLog();
           if (candidateCanary) {
             await startupLog;
-            const failures = pluginRegistry.plugins.filter((plugin) => plugin.status === "error");
-            if (failures.length) {
-              throw new Error(
-                `Candidate plugin activation failed: ${failures.map((plugin) => plugin.id).join(", ")}`,
-              );
+            // Retain attributed plugin failures in the published registry for health reporting.
+            if (
+              pluginRegistry.diagnostics.some(
+                (diagnostic) => diagnostic.level === "error" && !diagnostic.pluginId,
+              )
+            ) {
+              throw new Error("Candidate plugin registry reported an unattributed error");
             }
             params.unlockStartupMethods();
             params.onSidecarsReady?.();

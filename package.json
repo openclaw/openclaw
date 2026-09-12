@@ -4,7 +4,7 @@
   "openclaw": {
     "schemaVersions": {
       "state": 17,
-      "agent": 19
+      "agent": 20
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -334,6 +334,7 @@
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",
     "!dist/extensions/raft/**",
+    "!dist/extensions/radius/**",
     "!dist/extensions/pixverse/**",
     "!dist/extensions/qa-channel/**",
     "!dist/extensions/qa-lab/**",
@@ -2215,7 +2216,7 @@
     "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.11.0",
-    "typebox": "1.3.25",
+    "typebox": "1.3.26",
     "typescript": "6.0.3",
     "undici": "8.10.2",
     "web-push": "3.6.7",

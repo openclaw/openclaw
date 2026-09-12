@@ -126,14 +126,6 @@ export function createMattermostModelPickerInteractionHandler(
     if (pickerState.ownerUserId !== params.payload.user_id) {
       return { ephemeral_text: "Only the person who opened this picker can use it." };
     }
-    const updatePickerPost = (message: string, buttons?: Array<unknown>) =>
-      updateModelPickerPost({
-        channelId: params.payload.channel_id,
-        postId: params.payload.post_id,
-        message,
-        buttons,
-      });
-
     const channelInfo = await resolveChannelInfo(params.payload.channel_id);
     const pickerCommandText =
       pickerState.action === "select"
@@ -212,6 +204,13 @@ export function createMattermostModelPickerInteractionHandler(
     const data = await buildPreparedModelsProviderData(cfg, eventPlan.route.agentId, {
       sessionEntry,
     });
+    const updatePickerPost = (message: string, buttons?: Array<unknown>) =>
+      updateModelPickerPost({
+        channelId: params.payload.channel_id,
+        postId: params.payload.post_id,
+        message: [data.refreshWarning, message].filter(Boolean).join("\n\n"),
+        buttons,
+      });
     if (data.providers.length === 0) {
       return await updatePickerPost("No models available.");
     }

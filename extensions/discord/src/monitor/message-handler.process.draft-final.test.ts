@@ -470,7 +470,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
   });
 
   it.each([false, true])(
-    "shows failed item progress with toolProgress=%s",
+    "respects toolProgress=%s for failed item progress",
     async (toolProgress) => {
       const draftStream = createMockDraftStreamForTest();
       let callbackResult: boolean | void = undefined;
@@ -496,15 +496,19 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
       await runProcessDiscordMessage(ctx);
 
-      expect(callbackResult).toBe(true);
-      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("failed"), {
-        complete: true,
-      });
+      expect(callbackResult).toBe(toolProgress);
+      if (toolProgress) {
+        expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("failed"), {
+          complete: true,
+        });
+      } else {
+        expect(draftStream.update).not.toHaveBeenCalled();
+      }
     },
   );
 
   it.each([false, true])(
-    "shows failed command output with toolProgress=%s",
+    "respects toolProgress=%s for failed command output",
     async (toolProgress) => {
       const draftStream = createMockDraftStreamForTest();
       let callbackResult: boolean | void = undefined;
@@ -529,10 +533,14 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
       await runProcessDiscordMessage(ctx);
 
-      expect(callbackResult).toBe(true);
-      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("exit 1"), {
-        complete: true,
-      });
+      expect(callbackResult).toBe(toolProgress);
+      if (toolProgress) {
+        expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("exit 1"), {
+          complete: true,
+        });
+      } else {
+        expect(draftStream.update).not.toHaveBeenCalled();
+      }
     },
   );
 

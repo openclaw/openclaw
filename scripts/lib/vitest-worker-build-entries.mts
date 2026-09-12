@@ -10,6 +10,7 @@ import {
   gatewayDirectStopEntrypoints,
   stateDirGatewayFixtureEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
+import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
 import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
@@ -46,6 +47,7 @@ export const vitestWorkerBuildEntries = {
       ...publishedSdkBridgeEntrypoints,
       mcpProviderCatalogEntrypoint,
       ...Object.values(cliRecoveryEntrypoints),
+      ...Object.values(updateExecutorNativeEntrypoints),
       ...Object.values(gatewayDirectStopEntrypoints),
       stateDirGatewayFixtureEntrypoint,
       ...Object.values(doctorConfigRuntimeEntrypoints),

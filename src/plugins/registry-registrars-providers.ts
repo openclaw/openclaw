@@ -16,6 +16,7 @@ import { validateWorkerProviderContract } from "./worker-provider-registry.js";
 export function createProviderRegistrars(state: PluginRegistryState) {
   const {
     registry,
+    createIdentityRegistration,
     createRegistration,
     pushDiagnostic,
     reportRegistrationError,
@@ -217,7 +218,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
         ownedIds.push(id);
       }
       params.registrations.push(
-        createRegistration(record, {
+        createIdentityRegistration(record, {
           provider,
         }),
       );

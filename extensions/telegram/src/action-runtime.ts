@@ -1048,7 +1048,7 @@ export async function handleTelegramAction(
       readPositiveIntegerParam(params, "limit", {
         message: "limit must be a positive integer.",
       }) ?? 5;
-    const results = telegramActionRuntime.searchStickers(query, limit);
+    const results = await telegramActionRuntime.searchStickers(query, limit);
     return jsonResult({
       ok: true,
       count: results.length,
@@ -1062,7 +1062,7 @@ export async function handleTelegramAction(
   }
 
   if (action === "stickerCacheStats") {
-    const stats = telegramActionRuntime.getCacheStats();
+    const stats = await telegramActionRuntime.getCacheStats();
     return jsonResult({ ok: true, ...stats });
   }
 

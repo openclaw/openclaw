@@ -82,7 +82,7 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
 
 let singleton: NativeGatewaysCapability | null | undefined;
 
-// Chat-chunk-owned so this capability never enters the QA-smoke startup bundle.
+// Loaded by native chat features and sidebar menus, outside the startup bundle.
 export function nativeGatewaysCapability(): NativeGatewaysCapability | null {
   if (singleton === undefined) {
     singleton = createNativeGatewaysCapability();

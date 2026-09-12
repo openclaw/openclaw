@@ -738,7 +738,7 @@ describe("plugin npm package manifest staging", () => {
     { name: "missing specifier", partial: { exportName: "hasState" } },
     { name: "blank specifier", partial: { specifier: " \t", exportName: "hasState" } },
   ])(
-    "packs and loads both channel-state probes from one package artifact ($name)",
+    "packs the plugin icon and loads both channel-state probes from one artifact ($name)",
     ({ partial }) => {
       const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-state-runtime-");
       const packageDir = writePublishablePluginPackage(repoDir);
@@ -774,6 +774,8 @@ describe("plugin npm package manifest staging", () => {
       );
       writeFileText(join(packageDir, "dist", "index.cjs"), "module.exports = {};\n");
       writeFileText(join(packageDir, "dist", "setup-entry.cjs"), "module.exports = {};\n");
+      writeFileText(join(packageDir, "assets", "icon.png"), "portable-package-icon");
+      writeFileText(join(packageDir, "assets", "design-source.svg"), "unpublished-design");
       writeFileText(
         join(packageDir, "dist", "configured-state.cjs"),
         "exports.hasConfiguredChannelState = () => true;\n",
@@ -831,6 +833,8 @@ describe("plugin npm package manifest staging", () => {
         const packedFiles = packedPackage.files.map((file) => file.path);
         expect(packedFiles).toContain("dist/configured-state.cjs");
         expect(packedFiles).toContain("dist/auth-presence.cjs");
+        expect(packedFiles).toContain("assets/icon.png");
+        expect(packedFiles).not.toContain("assets/design-source.svg");
         expect(packedFiles).not.toContain("configured-state.ts");
         expect(packedFiles).not.toContain("auth-presence.ts");
 
@@ -845,6 +849,9 @@ describe("plugin npm package manifest staging", () => {
         expect(extract.status, extract.stderr).toBe(0);
 
         const packageRoot = join(consumerDir, "package");
+        expect(readFileSync(join(packageRoot, "assets", "icon.png"), "utf8")).toBe(
+          "portable-package-icon",
+        );
         if (partial) {
           const channel = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
             .openclaw.channel;

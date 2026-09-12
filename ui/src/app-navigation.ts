@@ -207,7 +207,6 @@ const SETTINGS_NAVIGATION_GROUPS = [
     labelKey: "nav.settingsGroupAgents",
     routes: [
       "agents",
-      "labs",
       "model-providers",
       "plugin-settings",
       "skill-settings",
@@ -222,7 +221,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
+    routes: ["infrastructure", "labs", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 

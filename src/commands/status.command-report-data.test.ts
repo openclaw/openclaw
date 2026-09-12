@@ -2,6 +2,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as backupRunRecords from "../state/backup-run-records.js";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { createStatusCommandReportDataParams } from "./status.test-support.ts";
 
@@ -52,6 +54,25 @@ describe("buildStatusCommandReportData", () => {
       expect(stripAnsi(row.Value)).toBe(expected);
     },
   );
+
+  it("awaits backup freshness before assembling the overview", async () => {
+    const freshness = createDeferred<backupRunRecords.BackupRunFreshness>();
+    vi.spyOn(backupRunRecords, "readBackupRunFreshness").mockReturnValueOnce(freshness.promise);
+    const pending = buildStatusCommandReportData(createStatusCommandReportDataParams());
+    freshness.resolve({
+      latest: {
+        id: "failed-backup",
+        createdAt: Date.now(),
+        archivePath: "/backups/archive.tar.gz",
+        status: "failed",
+        kind: "archive",
+      },
+    });
+    const report = await pending;
+    expect(report.overviewRows.find(({ Item }) => Item === "Backups")?.Value).toBe(
+      "last attempt failed just now (archive)",
+    );
+  });
 
   it("builds report inputs from shared status surfaces", async () => {
     const baseParams = createStatusCommandReportDataParams();

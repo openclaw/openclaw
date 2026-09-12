@@ -250,13 +250,17 @@ export async function resolveAgentRunSessionTarget(params: {
     targetStorePath ??
     legacyMarker?.storePath ??
     resolveSessionStorePathCore(config.session?.store, { agentId: effectiveAgentId });
-  return await resolveSessionTranscriptRuntimeTarget({
+  const target = await resolveSessionTranscriptRuntimeTarget({
     ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
     sessionId,
     sessionKey,
     storePath,
     ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
   });
+  const { restoreSessionColdTranscript } =
+    await import("../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(target);
+  return target;
 }
 
 /** Applies identity fields from the explicit target before legacy backfills run. */

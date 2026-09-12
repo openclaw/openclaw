@@ -646,8 +646,10 @@ export function createManagedHandoffLeaseStore(
           .select(["install_root", "owner", "payload_json", "updated_at"]),
       ).rows.flatMap((entry) =>
         // A retired record decodes exactly, so unlike unreadable data it proves
-        // the row predates native custody and cannot borrow any source. Every
-        // other undecodable row still refuses.
+        // the row predates native custody and cannot borrow any source. A record
+        // this build cannot decode may still name a source it holds, so it is
+        // never discarded here: releasing that source is the hazard this refusal
+        // exists for. Store-level damage recovers in the database owner instead.
         isRetiredManagedHandoffLeasePayload(entry.payload_json)
           ? []
           : [handle(entry.install_root, entry)],

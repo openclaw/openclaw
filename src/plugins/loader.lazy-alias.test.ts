@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
-import Module, { createRequire } from "node:module";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { Command } from "commander";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubCliByNameCore } from "../cli/program/register.subclis-core.js";
@@ -87,24 +89,38 @@ describe("native plugin alias preparation", () => {
         "external/index.ts",
         'export { value } from "openclaw/plugin-sdk/used";',
       );
-      const rootDir = path.dirname(source);
-      const record = createPluginRecord({ id: "external", rootDir, source, origin: "global" });
-      const registry = createEmptyPluginRegistry();
-      registry.plugins.push(record);
-      const hooks = Object.getOwnPropertyDescriptor(Module, "registerHooks");
-      Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });
-      vi.stubEnv("NODE_ENV", environment);
-      try {
-        const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution });
-        expect(load(source, { record, rootDir, registry })).toMatchObject({ value: expected });
-      } finally {
-        if (hooks) {
-          Object.defineProperty(Module, "registerHooks", hooks);
-        } else {
-          Reflect.deleteProperty(Module, "registerHooks");
-        }
-        await getPluginInstance(record)?.dispose();
-      }
+      // Native resolver hooks live for the process. A no-hook runtime must not
+      // mark this worker's resolver installed before the native-alias cases run.
+      const probe = writeFile(
+        f.root,
+        "no-native-hooks.mts",
+        [
+          'import Module from "node:module";',
+          'import path from "node:path";',
+          'Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });',
+          `const { createPluginModuleLoader } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/loader-module-runtime.ts")).href)});`,
+          `const { getPluginInstance } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/plugin-instance-scope.ts")).href)});`,
+          `const { createPluginRecord } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/status.test-helpers.ts")).href)});`,
+          `const { createEmptyPluginRegistry } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/registry-empty.ts")).href)});`,
+          `const source = ${JSON.stringify(source)};`,
+          "const rootDir = path.dirname(source);",
+          'const record = createPluginRecord({ id: "external", rootDir, source, origin: "global" });',
+          "const registry = createEmptyPluginRegistry();",
+          "registry.plugins.push(record);",
+          "try {",
+          `  const load = createPluginModuleLoader({ devSourceRoot: ${JSON.stringify(f.root)}, pluginSdkResolution: ${JSON.stringify(pluginSdkResolution)} });`,
+          "  console.log(JSON.stringify(load(source, { record, rootDir, registry })));",
+          "} finally {",
+          "  await getPluginInstance(record)?.dispose();",
+          "}",
+        ].join("\n"),
+      );
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        ["--import", pathToFileURL(path.resolve("scripts/tsx.mjs")).href, probe],
+        { env: { ...process.env, NODE_ENV: environment } },
+      );
+      expect(JSON.parse(stdout)).toMatchObject({ value: expected });
     },
   );
 

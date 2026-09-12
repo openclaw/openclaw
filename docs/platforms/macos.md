@@ -181,6 +181,13 @@ personal sign-in route continue to use the shared owner profile.
 Open windows for saved Gateway profiles follow sign-in route changes after a
 reconnect. An unchanged route keeps the current dashboard and its navigation.
 
+The account card at the bottom-left of the dashboard shows your name and the
+current Gateway, including its health and primary status. While disconnected,
+it shows **Reconnecting…**. Open the card's **Gateway** section to switch Gateways,
+Command-click or Control-click a Gateway to open it in another window, or choose
+**Gateway settings…**. **Set as primary…** appears when the current Gateway can
+be promoted. These controls are available even with only one saved Gateway.
+
 Opening the embedded dashboard at its default Chat landing restores the last
 page you visited, such as **Usage**, for that Gateway origin. Explicit session
 links and navigation requests take precedence over the remembered page, and
@@ -191,6 +198,8 @@ In the macOS app's embedded dashboard, clicking an external web link opens it as
 Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
+
+Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. A tab's page temporarily hides only when the menu overlaps its Browser pane, or while a modal dialog or the command palette is open, and returns when the obstruction clears.
 
 Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 

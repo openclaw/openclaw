@@ -354,7 +354,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       try {
         ({ attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
           messageContent,
-          undefined,
           account.mediaMaxBytes,
         ));
         if (attachments.length > 0) {
