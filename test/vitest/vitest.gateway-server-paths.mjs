@@ -22,11 +22,12 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];
 
-// Gateway server tests that replace a module the Gateway reaches only through
-// re-exports. These need both a fresh graph and the plain Vitest runner.
+// Gateway server tests that need a private module graph and the plain Vitest runner.
 export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-chat.retired-projection.test.ts",
   "src/gateway/server-plugin-subagent-runtime.overrides.test.ts",
+  // Loads the real plugin runtime that neighboring server tests replace with mocks.
+  "src/gateway/server.chat-cli-auth.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
 ];
 
