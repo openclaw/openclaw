@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -27,7 +29,10 @@ vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
 }));
 
-function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfiguredRoute {
+function embeddedRoute(
+  agentHarnessRuntimeOverride: string,
+  timeoutSeconds?: number,
+): SystemAgentConfiguredRoute {
   return {
     runner: "embedded",
     provider: "openai",
@@ -42,9 +47,22 @@ function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfigur
           workspace: "/tmp/openclaw-workspace",
         },
       },
+      models: {
+        providers: {
+          openai: {
+            ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
+          },
+        },
+      },
     },
   };
 }
+
+const registeredHarnesses = listRegisteredAgentHarnesses();
+
+afterEach(() => {
+  restoreRegisteredAgentHarnesses(registeredHarnesses);
+});
 
 describe("revalidateSetupInferenceOwner", () => {
   it("loads newly installed package facts after the install lease cached their absence", async () => {
@@ -166,6 +184,42 @@ describe("revalidateSetupInferenceOwner", () => {
       });
     },
   );
+
+  it("passes a declared OpenClaw fallback into owner revalidation", async () => {
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn() as never,
+    });
+    const binding = {} as SystemAgentVerifiedInferenceBinding;
+    const createSystemAgentVerifiedInferenceBinding = vi.fn(async () => binding);
+
+    await expect(
+      revalidateSetupInferenceOwner({
+        route: embeddedRoute("codex", 600),
+        auth: {
+          agentHarnessId: "openclaw",
+          authFingerprint: "verified-owner",
+          modelId: "gpt-5.6-sol",
+          modelApi: "openai-responses",
+        },
+        deps: {
+          createSystemAgentVerifiedInferenceBinding,
+        },
+      }),
+    ).resolves.toBe(binding);
+
+    expect(createSystemAgentVerifiedInferenceBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuredRoute: expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+        executionRoute: expect.objectContaining({ agentHarnessRuntimeOverride: "openclaw" }),
+      }),
+    );
+  });
 
   it("does not reload the built-in OpenClaw harness", async () => {
     const binding = {} as SystemAgentVerifiedInferenceBinding;

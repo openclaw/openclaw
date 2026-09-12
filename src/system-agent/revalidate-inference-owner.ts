@@ -12,7 +12,10 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import {
+  resolveSystemAgentExecutionRoute,
+  type SystemAgentConfiguredRoute,
+} from "./inference-route.js";
 import { parseRef } from "./setup-inference-plan-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -88,24 +91,26 @@ export async function revalidateSetupInferenceOwner(params: {
     params.route.runner === "embedded"
       ? params.route.agentHarnessRuntimeOverride?.trim()
       : undefined;
-  const successfulHarnessId =
-    params.auth.agentHarnessId?.trim() ||
-    (configuredHarnessId && configuredHarnessId !== "auto" ? configuredHarnessId : undefined);
+  const executionRoute = resolveSystemAgentExecutionRoute(params.route);
+  const executionHarnessId =
+    executionRoute.runner === "embedded"
+      ? executionRoute.agentHarnessRuntimeOverride?.trim()
+      : undefined;
   const createBinding = () =>
     (
       params.deps.createSystemAgentVerifiedInferenceBinding ??
       createSystemAgentVerifiedInferenceBinding
     )({
       configuredRoute: params.route,
-      executionRoute: params.route,
+      executionRoute,
       auth: params.auth,
       deps: params.deps,
     });
   if (
     params.ownerPluginIds?.length ||
-    (params.route.runner === "embedded" &&
-      successfulHarnessId &&
-      successfulHarnessId !== "openclaw")
+    (executionRoute.runner === "embedded" &&
+      executionHarnessId &&
+      executionHarnessId !== "openclaw")
   ) {
     const workspaceDir = resolveAgentWorkspaceDir(
       params.route.runConfig,
@@ -119,9 +124,9 @@ export async function revalidateSetupInferenceOwner(params: {
         provider: parseRef(params.route.modelLabel).provider,
         modelId: params.route.model,
         ...(params.route.runner === "cli"
-          ? { runtime: params.route.provider }
-          : successfulHarnessId
-            ? { runtime: successfulHarnessId }
+          ? { runtime: executionRoute.provider }
+          : executionHarnessId
+            ? { runtime: executionHarnessId }
             : {}),
         agentId: params.route.agentId,
       },

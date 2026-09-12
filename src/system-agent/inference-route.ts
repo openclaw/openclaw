@@ -10,6 +10,7 @@ import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
 } from "../agents/cli-execution-auth.js";
+import { resolveAvailableAgentHarnessPolicy } from "../agents/harness/availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -171,6 +172,34 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
     ...(policy.runtimeSource === "implicit" ? {} : { agentHarnessRuntimeOverride: policy.runtime }),
     ...base,
   };
+}
+
+/**
+ * Resolves the exact embedded runtime a verified system-agent turn should use
+ * without erasing the authored route identity that selected it.
+ */
+export function resolveSystemAgentExecutionRoute(
+  route: SystemAgentConfiguredRoute,
+): SystemAgentConfiguredRoute {
+  if (route.runner === "cli") {
+    return route;
+  }
+  const policy = resolveAvailableAgentHarnessPolicy({
+    config: route.runConfig,
+    agentId: route.agentId,
+    provider: normalizeProviderId(route.modelLabel.split("/", 1)[0] ?? route.provider),
+    modelId: route.model,
+    mode: "execution",
+    ...(route.agentHarnessRuntimeOverride
+      ? { agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride }
+      : {}),
+  });
+  return policy.runtime === "auto"
+    ? route
+    : {
+        ...route,
+        agentHarnessRuntimeOverride: policy.runtime,
+      };
 }
 
 function projectRelevantModelMap(params: {

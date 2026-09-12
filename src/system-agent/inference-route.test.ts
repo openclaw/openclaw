@@ -8,10 +8,11 @@ import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
   projectDefaultInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentExecutionRoute,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
 
-function devConfig(agentRuntime?: string): OpenClawConfig {
+function devConfig(agentRuntime?: string, timeoutSeconds?: number): OpenClawConfig {
   return {
     agents: {
       defaults: { model: "openai/gpt-5.5" },
@@ -24,6 +25,7 @@ function devConfig(agentRuntime?: string): OpenClawConfig {
         openai: {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
+          ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
           ...(agentRuntime ? { agentRuntime: { id: agentRuntime } } : {}),
           models: [
             {
@@ -150,5 +152,33 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
             : undefined,
       }),
     ).toThrow("authored request transport overrides");
+  });
+
+  it("preserves the configured route while resolving a declared fallback execution runtime", async () => {
+    const supports = vi.fn((ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
+      ctx.modelProvider?.requestTransportOverrides === "present"
+        ? { supported: false as const, fallbackRuntime: "openclaw" as const }
+        : { supported: true as const, priority: 100 },
+    );
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: supports as never,
+      runAttempt: vi.fn() as never,
+    });
+
+    const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+      devConfig("codex", 600),
+    );
+    expect(configuredRoute).toMatchObject({
+      runner: "embedded",
+      agentHarnessRuntimeOverride: "codex",
+    });
+
+    expect(resolveSystemAgentExecutionRoute(configuredRoute!)).toMatchObject({
+      runner: "embedded",
+      agentHarnessRuntimeOverride: "openclaw",
+      modelLabel: "openai/gpt-5.5",
+    });
   });
 });

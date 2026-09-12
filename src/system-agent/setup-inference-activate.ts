@@ -27,6 +27,7 @@ import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentExecutionRoute,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
 import { loadSetupInferencePluginGeneration } from "./revalidate-inference-owner.js";
@@ -466,11 +467,14 @@ async function activateSetupInferenceUnredacted(
       verifiedSourceConfig,
     );
     const stagedRoute = verifiedRoute.route;
-    const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    const stagedConfiguredExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
       testPlan.config,
       requestedAgentId,
       routeDeps,
     );
+    const stagedExecutionRoute = stagedConfiguredExecutionRoute
+      ? resolveSystemAgentExecutionRoute(stagedConfiguredExecutionRoute)
+      : null;
     if (
       !stagedRoute ||
       !stagedExecutionRoute ||
@@ -503,10 +507,8 @@ async function activateSetupInferenceUnredacted(
       ...testPlan,
       executionConfig: stagedExecutionRoute.runConfig,
       agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
-      ...(testPlan.runner === "embedded" &&
-      stagedRoute.runner === "embedded" &&
-      stagedRoute.agentHarnessRuntimeOverride
-        ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
+      ...(testPlan.runner === "embedded" && stagedExecutionRoute.runner === "embedded"
+        ? { agentHarnessRuntimeOverride: stagedExecutionRoute.agentHarnessRuntimeOverride }
         : {}),
     };
 
@@ -592,7 +594,10 @@ async function activateSetupInferenceUnredacted(
       pendingCodexInstall !== undefined;
     const ownerEvidenceFailure = validateSetupInferenceOwnerEvidence({
       runner: testPlan.runner,
-      configuredHarnessId: testPlan.agentHarnessRuntimeOverride,
+      expectedHarnessId:
+        stagedExecutionRoute.runner === "embedded"
+          ? stagedExecutionRoute.agentHarnessRuntimeOverride
+          : undefined,
       auth: test.auth,
     });
     if (ownerEvidenceFailure) {

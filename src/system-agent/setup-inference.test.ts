@@ -14,6 +14,12 @@ import {
   fingerprintResolvedProviderAuth,
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
+import {
+  clearAgentHarnesses,
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+} from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { ensureSelectedAgentHarnessPlugin } from "../agents/harness/runtime-plugin.js";
 import { prepareOwnedPluginLoadContext } from "../agents/prepared-model-runtime.plugin-context.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
@@ -84,6 +90,7 @@ import {
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
+  captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
@@ -6379,6 +6386,140 @@ describe("verifySetupInference", () => {
       authProfileId: "openai:p2",
       authProfileIdSource: "user",
     });
+  });
+
+  it("binds a declared Codex fallback through the effective OpenClaw runtime", async () => {
+    const savedHarnesses = listRegisteredAgentHarnesses();
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn() as never,
+    });
+    try {
+      const profileId = "openai:verified";
+      const credential = {
+        type: "api_key" as const,
+        provider: "openai",
+        key: "verified-key",
+      };
+      const config = {
+        agents: {
+          defaults: {
+            model: `openai/gpt-5.5@${profileId}`,
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        auth: { profiles: { [profileId]: { provider: "openai", mode: "api_key" } } },
+        models: {
+          providers: {
+            openai: {
+              timeoutSeconds: 600,
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const resolvedAuth = {
+        apiKey: credential.key,
+        profileId,
+        source: `profile:${profileId}`,
+        mode: "api-key" as const,
+      };
+      const authFingerprint = fingerprintResolvedProviderAuth(resolvedAuth);
+      if (!authFingerprint) {
+        throw new Error("missing test auth fingerprint");
+      }
+      const runEmbeddedAgent = vi.fn(
+        async (params: {
+          agentHarnessRuntimeOverride?: string;
+          authProfileId?: string;
+          onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+        }) => {
+          params.onSuccessfulAuthBinding?.({
+            authProfileId: profileId,
+            agentHarnessId: "openclaw",
+            authFingerprint,
+            modelId: "gpt-5.5",
+            modelApi: "openai-responses",
+          });
+          return successfulRun("openai", "gpt-5.5");
+        },
+      );
+      const captureOwnerPluginArtifacts = vi.fn(
+        (params: Parameters<typeof captureSystemAgentOwnerPluginArtifacts>[0]) =>
+          captureSystemAgentOwnerPluginArtifacts(params),
+      );
+
+      const result = await verifySetupInference({
+        bindSession: true,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            config,
+          })) as never,
+          loadAuthProfileStoreForRuntime: vi.fn(() => ({
+            version: 1,
+            profiles: { [profileId]: credential },
+          })) as never,
+          ensureAuthProfileStore: vi.fn(() => ({
+            version: 1,
+            profiles: { [profileId]: credential },
+          })) as never,
+          resolveApiKeyForProvider: vi.fn(async () => resolvedAuth),
+          captureSystemAgentOwnerPluginArtifacts: captureOwnerPluginArtifacts,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        binding: {
+          configuredRoute: {
+            runner: "embedded",
+            provider: "openai",
+            model: "gpt-5.5",
+            agentHarnessRuntimeOverride: "codex",
+          },
+          execution: {
+            runner: "embedded",
+            provider: "openai",
+            model: "gpt-5.5",
+            agentHarnessRuntimeOverride: "openclaw",
+          },
+          auth: { authProfileId: profileId, authFingerprint },
+        },
+      });
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentHarnessRuntimeOverride: "openclaw",
+          authProfileId: profileId,
+          authProfileIdSource: "user",
+        }),
+      );
+      expect(captureOwnerPluginArtifacts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionRoute: expect.objectContaining({ agentHarnessRuntimeOverride: "openclaw" }),
+        }),
+      );
+    } finally {
+      restoreRegisteredAgentHarnesses(savedHarnesses);
+    }
   });
 
   it("binds Claude native login when a retired profile remains in the store", async () => {

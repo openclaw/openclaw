@@ -15,7 +15,7 @@ import type {
 
 export function validateSetupInferenceOwnerEvidence(params: {
   runner: "cli" | "embedded";
-  configuredHarnessId?: string;
+  expectedHarnessId?: string;
   auth: AgentExecutionAuthBinding;
 }): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
   if (
@@ -44,12 +44,12 @@ export function validateSetupInferenceOwnerEvidence(params: {
   }
   if (params.runner === "embedded") {
     const successfulHarnessId = params.auth.agentHarnessId?.trim();
-    const configuredHarnessId = params.configuredHarnessId?.trim();
+    const expectedHarnessId = params.expectedHarnessId?.trim();
     if (
       !successfulHarnessId ||
-      (configuredHarnessId !== undefined &&
-        configuredHarnessId !== "auto" &&
-        successfulHarnessId !== configuredHarnessId)
+      (expectedHarnessId !== undefined &&
+        expectedHarnessId !== "auto" &&
+        successfulHarnessId !== expectedHarnessId)
     ) {
       return {
         ok: false,
