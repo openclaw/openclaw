@@ -73,115 +73,131 @@ export async function commitBackgroundResultToSession(params: {
   );
   const identities = [sessionKey, expectedSessionId];
 
-  return await runExclusiveSessionLifecycleMutation({
-    scope: storePath,
-    identities,
-    signal: params.signal,
-    prepare: async () => {
-      const released = getSessionWorkAdmissionRelease({ scope: storePath, identities });
-      if (released) {
-        await racePromiseWithAbortSignal(released, params.signal);
-      }
-    },
-    run: async () => {
-      const current = loadSessionEntryReadOnly({
-        agentId: params.agentId,
-        sessionKey,
-        storePath,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== expectedSessionId ||
-        normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
-      ) {
-        return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
-      }
-      const unavailable = resolveSessionWorkStartError(sessionKey, current, {
-        expectedSessionId,
-      });
-      if (unavailable) {
-        return { ok: false, reason: unavailable };
-      }
-      const scope = {
-        agentId: params.agentId,
-        sessionKey,
-        sessionId: expectedSessionId,
-        storePath,
-      };
-      // A retry owns the original committed payload, including its managed-media IDs.
-      // Restaging media would conflict with the transcript's exact replay contract.
-      const prior = await findTranscriptEvent(
-        scope,
-        (event) => readTranscriptEventMessage(event)?.idempotencyKey === idempotencyKey,
-      );
-      const priorMessage = prior && readTranscriptEventMessage(prior.event);
-      const priorId = prior && readTranscriptEventId(prior.event);
-      if (prior && (!priorMessage || !priorId)) {
-        return { ok: false, reason: "background result transcript identity is unavailable" };
-      }
-      const displayContent = priorMessage
-        ? undefined
-        : (await params.prepareDisplayContent?.())?.map((block) => Object.assign({}, block));
-      const message = {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
-        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
-        provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-        model: AUTOMATION_RESULT_MODEL,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: {
+  while (true) {
+    const attempt = await runExclusiveSessionLifecycleMutation<
+      BackgroundSessionResultCommit | { waitingFor: Promise<void> }
+    >({
+      scope: storePath,
+      identities,
+      signal: params.signal,
+      run: async () => {
+        params.signal?.throwIfAborted();
+        const waitingFor = getSessionWorkAdmissionRelease({ scope: storePath, identities });
+        if (waitingFor) {
+          // An admitted reply may need another admission before it can release.
+          // Drop the mutation fence before waiting so that work can finish.
+          return { waitingFor };
+        }
+        const current = loadSessionEntryReadOnly({
+          agentId: params.agentId,
+          sessionKey,
+          storePath,
+          readConsistency: "latest",
+        });
+        if (
+          current?.sessionId !== expectedSessionId ||
+          normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
+        ) {
+          return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
+        }
+        const unavailable = resolveSessionWorkStartError(sessionKey, current, {
+          expectedSessionId,
+        });
+        if (unavailable) {
+          return { ok: false, reason: unavailable };
+        }
+        const scope = {
+          agentId: params.agentId,
+          sessionKey,
+          sessionId: expectedSessionId,
+          storePath,
+        };
+        // A retry owns the original committed payload, including its managed-media IDs.
+        // Restaging media would conflict with the transcript's exact replay contract.
+        const prior = await findTranscriptEvent(
+          scope,
+          (event) => readTranscriptEventMessage(event)?.idempotencyKey === idempotencyKey,
+        );
+        const priorMessage = prior && readTranscriptEventMessage(prior.event);
+        const priorId = prior && readTranscriptEventId(prior.event);
+        if (prior && (!priorMessage || !priorId)) {
+          return { ok: false, reason: "background result transcript identity is unavailable" };
+        }
+        const displayContent = priorMessage
+          ? undefined
+          : (await params.prepareDisplayContent?.())?.map((block) => Object.assign({}, block));
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
+          api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+          provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+          model: AUTOMATION_RESULT_MODEL,
+          usage: {
             input: 0,
             output: 0,
             cacheRead: 0,
             cacheWrite: 0,
-            total: 0,
-          },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-        idempotencyKey,
-        openclawAutomation: params.provenance,
-      } satisfies SessionTranscriptAssistantMessage & {
-        idempotencyKey: string;
-        openclawAutomation: BackgroundSessionResultProvenance;
-      };
-      const committed = await persistSessionTranscriptTurn(scope, {
-        cwd: current.spawnedCwd,
-        expectedSessionId,
-        expectedLifecycleRevision: expectedLifecycleRevision ?? null,
-        messages: [
-          {
-            message: priorMessage
-              ? { ...priorMessage, content: message.content, openclawAutomation: params.provenance }
-              : message,
-            idempotencyLookup: "scan",
-            ...(priorId ? { eventId: priorId } : {}),
-            shouldAppendInTransaction: () => {
-              params.signal?.throwIfAborted();
-              if (priorId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: priorId })) {
-                throw new Error("background result no longer owns the active transcript");
-              }
-              return true;
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
             },
           },
-        ],
-        touchSessionEntry: true,
-        updateMode: "inline",
-        // A retry can finish media ownership after a committed append failed to publish.
-        publishWhen: params.prepareDisplayContent ? "always" : undefined,
-        config: params.config,
-        onMessageCommitted: params.onMessageCommitted,
-      });
-      const appended = committed.messages[0];
-      return appended
-        ? { ok: true, messageId: appended.messageId }
-        : { ok: false, reason: committed.rejectedReason ?? "background result was not committed" };
-    },
-  });
+          stopReason: "stop",
+          timestamp: Date.now(),
+          idempotencyKey,
+          openclawAutomation: params.provenance,
+        } satisfies SessionTranscriptAssistantMessage & {
+          idempotencyKey: string;
+          openclawAutomation: BackgroundSessionResultProvenance;
+        };
+        const committed = await persistSessionTranscriptTurn(scope, {
+          cwd: current.spawnedCwd,
+          expectedSessionId,
+          expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+          messages: [
+            {
+              message: priorMessage
+                ? {
+                    ...priorMessage,
+                    content: message.content,
+                    openclawAutomation: params.provenance,
+                  }
+                : message,
+              idempotencyLookup: "scan",
+              ...(priorId ? { eventId: priorId } : {}),
+              shouldAppendInTransaction: () => {
+                params.signal?.throwIfAborted();
+                if (priorId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: priorId })) {
+                  throw new Error("background result no longer owns the active transcript");
+                }
+                return true;
+              },
+            },
+          ],
+          touchSessionEntry: true,
+          updateMode: "inline",
+          // A retry can finish media ownership after a committed append failed to publish.
+          publishWhen: params.prepareDisplayContent ? "always" : undefined,
+          config: params.config,
+          onMessageCommitted: params.onMessageCommitted,
+        });
+        const appended = committed.messages[0];
+        return appended
+          ? { ok: true, messageId: appended.messageId }
+          : {
+              ok: false,
+              reason: committed.rejectedReason ?? "background result was not committed",
+            };
+      },
+    });
+    if (!("waitingFor" in attempt)) {
+      return attempt;
+    }
+    await racePromiseWithAbortSignal(attempt.waitingFor, params.signal);
+  }
 }
