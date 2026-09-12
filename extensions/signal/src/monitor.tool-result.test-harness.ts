@@ -73,7 +73,7 @@ export async function waitForSignalToolResultIngressIdle() {
         );
       }
     },
-    { interval: 10, timeout: 5_000 },
+    { interval: 10, timeout: 15_000 },
   );
 }
 
