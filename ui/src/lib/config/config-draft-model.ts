@@ -401,9 +401,7 @@ export function assertConfigDraftCurrent(state: RuntimeConfigState): void {
   }
   const original = state.configFormOriginal ?? state.configRawOriginalParsed;
   if (!original) {
-    throw new Error(
-      "Cannot verify the raw draft against the saved configuration; reload and retry.",
-    );
+    throw new Error(t("configView.rawDraftUnverified"));
   }
   if (!configContentConflicts(original, original, canonical)) {
     return;

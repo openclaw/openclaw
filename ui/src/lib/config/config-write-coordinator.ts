@@ -768,10 +768,9 @@ export function createConfigWriteCoordinator({
       // the isDisposed() guard exits its loop.
       connectionWake?.();
       // SPA teardown right after an edit must not silently drop it: fire one
-      // last save before timers die. Fire-and-forget — the request leaves
-      // synchronously (or chains once behind an in-flight save) and the
-      // stale-epoch guards skip all state mutation once the connection is
-      // invalidated below.
+      // last save before timers die, or chain once behind an in-flight save.
+      // Invalidation retires live callbacks; the retained receipt below still
+      // updates the draft, while dispatch keeps its captured admission checks.
       const client = state.client;
       const canFlush =
         state.connected && client !== null && !writesSuspended && canCallConfigMethod("config.set");

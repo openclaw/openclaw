@@ -214,27 +214,17 @@ export async function executeConfigExternalMutation<T>(
     refresh: { ok: false, error },
   });
   try {
-    if (options.configWriteAck) {
-      const receipt = options.configWriteAck(value);
-      // A hashless no-op has no source revision. Its runtime projection cannot
-      // serve as a persisted document; read the authoritative source pair.
-      const snapshot =
-        receipt.noop === true ? await client.request<ConfigSnapshot>("config.get", {}) : null;
-      const config = snapshot ? resolveEditableSnapshotConfig(snapshot) : receipt.config;
-      const hash = receipt.noop === true ? snapshot?.hash : receipt.hash;
-      if (!config || !hash) {
-        throw new Error("Config hash missing; refresh and retry.");
-      }
-      const ack = { config, hash };
-      onSubmitted?.({ ...submitted, ack });
+    const receipt = options.configWriteAck?.(value);
+    if (receipt && receipt.noop !== true) {
+      onSubmitted?.({ ...submitted, ack: receipt });
       if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-        adoptConfigWriteAck(state, submitted, ack, { raw: snapshot?.raw });
+        adoptConfigWriteAck(state, submitted, receipt);
       }
     }
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return refreshFailure("Connection changed before the configuration update was refreshed.");
     }
-    if (options.shouldRefresh && !options.shouldRefresh(value)) {
+    if (receipt?.noop !== true && options.shouldRefresh && !options.shouldRefresh(value)) {
       return { ok: true, value, refresh: { ok: true } };
     }
     const refreshed = await refresh();
@@ -243,6 +233,21 @@ export async function executeConfigExternalMutation<T>(
     }
     if (!refreshed.ok) {
       return refreshFailure(refreshed.error);
+    }
+    if (receipt?.noop === true) {
+      // A no-op has no write revision. Reconcile only the source admitted by
+      // the read owner, without invalidating its successors as a new write.
+      const snapshot = state.configSnapshot;
+      const config = resolveEditableSnapshotConfig(snapshot);
+      if (!config || !snapshot?.hash) {
+        throw new Error("Config hash missing; refresh and retry.");
+      }
+      adoptConfigWriteAck(
+        state,
+        { raw: state.configRawOriginal, form: state.configFormOriginal },
+        { config, hash: snapshot.hash },
+        { raw: snapshot.raw },
+      );
     }
     return { ok: true, value, refresh: { ok: true } };
   } catch (error) {
