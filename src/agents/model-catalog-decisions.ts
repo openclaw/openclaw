@@ -120,7 +120,9 @@ function createModelsListEntryEvaluator(params: {
     }
     const next = evaluationTail.then(async (): Promise<ModelAuthAvailabilityEvaluation> => {
       if (performance.now() - batchStartedAt >= 8) {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         batchStartedAt = performance.now();
       }
       const defaultProfileId = params.preferredProfilesByProvider?.get(
