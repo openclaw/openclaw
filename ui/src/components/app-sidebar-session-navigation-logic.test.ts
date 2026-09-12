@@ -6,7 +6,7 @@ import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-chil
 import {
   buildSidebarSessionNavigationState,
   collectSidebarSessionRowsByKey,
-  compareSidebarSessionRowsByMode,
+  createSidebarSessionRowsComparator,
   resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
@@ -103,8 +103,8 @@ function sortSidebarRows(
   createdOrder: ReadonlyMap<string, number>,
   owners?: SessionsListResult["owners"],
 ) {
-  return rows.toSorted((a, b) =>
-    compareSidebarSessionRowsByMode({ a, b, sortMode, createdOrder, owners }),
+  return rows.toSorted(
+    createSidebarSessionRowsComparator(() => ({ sortMode, createdOrder, owners })),
   );
 }
 
@@ -186,6 +186,23 @@ describe("sidebar session sort modes", () => {
       "updated-new",
       "created-new",
     ]);
+  });
+
+  it("keeps first-facet precedence and row label fallbacks across People projections", () => {
+    const alex = row("alex", 100, 1, " alex ");
+    const sam = row("sam", 100, 1, "sam");
+    alex.owner!.actor.label = "Alex";
+    sam.owner!.actor.label = "Sam";
+    const rows = [sam, alex];
+    const observed = new Map(rows.map((entry, index) => [entry.key, index]));
+    const owners: NonNullable<SessionsListResult["owners"]> = [
+      { type: "human", id: "alex", label: " " },
+      { type: "human", id: "alex", label: "Zed" },
+      { type: "human", id: "sam", label: "Sam" },
+    ];
+    expect(sortSidebarRows(rows, "people", observed, owners)).toEqual([alex, sam]);
+    owners[0] = { type: "human", id: "alex", label: "Zed" };
+    expect(sortSidebarRows(rows, "people", observed, owners)).toEqual([sam, alex]);
   });
 });
 
