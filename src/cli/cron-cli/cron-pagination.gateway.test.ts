@@ -333,12 +333,35 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
       transformListPage(page) {
         const response = page as Record<string, unknown>;
+        const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
+        const firstJob = responseJobs[0];
         // A canonical terminal page advertises total=2 but returns only one job
         // from offset 0; scripts must not treat a partial page as complete.
         return {
           ...response,
-          jobs: [response.jobs[0]],
+          jobs: [firstJob],
           total: 2,
+          hasMore: false,
+          nextOffset: null,
+        };
+      },
+    });
+
+    await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
+  });
+
+  it("rejects a canonical terminal single page whose rows exceed the advertised total", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
+      transformListPage(page) {
+        const response = page as Record<string, unknown>;
+        const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
+        // A malformed page claims offset === total (3) but still returns a job
+        // beyond the inventory; offset + jobs.length (4) must not equal total.
+        return {
+          ...response,
+          jobs: responseJobs.slice(0, 1),
+          offset: 3,
+          total: 3,
           hasMore: false,
           nextOffset: null,
         };

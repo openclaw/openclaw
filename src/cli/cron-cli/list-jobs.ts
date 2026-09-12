@@ -154,11 +154,15 @@ export async function listCronJobsFromGateway(
           throw new Error("cron.list returned an inconsistent terminal inventory page");
         } else if (page.total !== undefined) {
           // A canonical terminal page must cover the advertised inventory from
-          // its offset: the returned rows must reach total. The one exception is
-          // the Gateway-clamped empty terminal page (offset === total, no rows),
-          // which represents a requested offset beyond the inventory end.
-          const reachedTotal = page.offset !== undefined && page.offset === page.total;
-          if (!reachedTotal && page.offset + page.jobs.length !== page.total) {
+          // its offset: offset + jobs.length must equal total. The Gateway
+          // clamps a requested offset beyond the end down to total and returns
+          // an empty terminal page, so a valid clamped page has offset === total
+          // and jobs.length === 0 — it satisfies the equality without a special
+          // case, and a page with rows beyond the advertised total is rejected.
+          if (
+            page.offset === undefined ||
+            page.offset + page.jobs.length !== page.total
+          ) {
             throw new Error("cron.list returned an inconsistent terminal inventory page");
           }
         }
