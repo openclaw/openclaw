@@ -50,7 +50,7 @@ import {
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import {
-  reportPreMutationUpdateFailure,
+  reportPreMutationUpdateResult,
   reportUnreportedUpdateAdmissionOutcome,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
@@ -432,7 +432,7 @@ async function updateCommandInternal(
   } = target;
   let { packageUpdateNodeRunner } = target;
   const refuseUpdate = (reason: string, message?: string) =>
-    reportPreMutationUpdateFailure({
+    reportPreMutationUpdateResult({
       root,
       installKind: updateInstallKind,
       reason,

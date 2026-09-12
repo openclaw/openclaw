@@ -102,6 +102,60 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it("keeps snapshot and validation source selection inside the candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const servingRoot = path.join(root, "installed");
+    const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env,
+      timeoutMs: 3000,
+    });
+    expect(result.status).toBe("ok");
+    expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mocks.spawn.mock.calls) {
+      expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+    }
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
+  });
+
+  it("classifies a deadline before teardown when SIGTERM closes the child with zero", async () => {
+    let now = 2_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
+      const child = new FakeChild(nextPid++);
+      children.set(child.pid, child);
+      childEnv = options.env;
+      now += 899;
+      return child;
+    });
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 1_000,
+      });
+      expect(result).toMatchObject({ status: "error", phase: "doctor" });
+      expect(result.logTail.join("\n")).toContain("deadline exceeded");
+      expect(result.steps.at(-1)).toMatchObject({ exitCode: 1 });
+      expect(result.steps.at(-1)?.stderrTail).toContain("deadline exceeded");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
     const now = Date.now.bind(Date);
     let snapshotElapsed = 0;

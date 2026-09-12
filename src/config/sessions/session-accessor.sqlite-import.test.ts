@@ -19,6 +19,7 @@ import {
   hasSessionTranscriptMessage,
   loadTranscriptEventsSync,
 } from "./session-accessor.sqlite-read.js";
+import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 
 function target(state: OpenClawTestState, id: string) {
   return {
@@ -137,6 +138,50 @@ it("revalidates an earlier source after later batch readers finish", async () =>
     ).rejects.toThrow("Legacy transcript changed during import");
     expect(loadExactSessionEntry(first)).toBeUndefined();
     expect(stages().every((dir) => !fs.existsSync(dir))).toBe(true);
+  });
+});
+
+it("refuses imports into archived history without replacing its owner or saved bytes", async () => {
+  await withOpenClawTestState({ label: "import-cold-history" }, async (state) => {
+    const params = target(state, "old");
+    await importSqliteSessionRows({
+      ...params,
+      readTranscriptEvents: (append) => append({ ...message, timestamp: 1 }),
+    });
+    await importSqliteSessionRows({ ...params, entry: { sessionId: "current", updatedAt: 100 } });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    database.db
+      .prepare(
+        "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      )
+      .run(params.entry.sessionId);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: {
+            store: database.path,
+            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ archivedTranscripts: 1 });
+    const owners = database.db.prepare("SELECT * FROM session_nodes").all();
+    const archives = database.db.prepare("SELECT * FROM session_transcript_cold_archives").all();
+    await expect(
+      importSqliteSessionRows({
+        ...params,
+        readExactTranscriptRows: (append) =>
+          append({ createdAt: 200, eventJson: '{"replacement":true}' }),
+      }),
+    ).rejects.toMatchObject({ code: "TRANSCRIPT_COLD" });
+    expect(database.db.prepare("SELECT * FROM session_nodes").all()).toEqual(owners);
+    expect(database.db.prepare("SELECT * FROM session_transcript_cold_archives").all()).toEqual(
+      archives,
+    );
+    expect(
+      database.db.prepare("SELECT * FROM transcript_events WHERE session_id = 'old'").all(),
+    ).toEqual([]);
   });
 });
 

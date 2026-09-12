@@ -53,7 +53,7 @@ import {
 } from "./update-command-plugins.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
-import { reportPreMutationUpdateFailure } from "./update-command-terminal.js";
+import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
@@ -148,7 +148,7 @@ async function prepareUpdateFinalization(
   if (requestedChannel === "extended-stable") {
     const installKind = await resolveUpdateInstallKind(root);
     if (installKind === "git") {
-      await reportPreMutationUpdateFailure({
+      await reportPreMutationUpdateResult({
         root,
         installKind,
         reason: "unsupported_git_channel",

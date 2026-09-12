@@ -231,6 +231,7 @@ export async function runWriteConfigHealth(
   }
   if (
     (!ctx.prompter.shouldRepair &&
+      !ctx.configResult.openAICodexAuthProfileIdMap?.size &&
       ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
@@ -242,10 +243,14 @@ export async function runWriteConfigHealth(
     await import("../commands/doctor/cron/legacy-repair.js");
   const result = await repairCronCodexModelRefsAfterConfigWrite({
     cfg: ctx.cfg,
+    migrateCodexModelRefs:
+      ctx.prompter.shouldRepair ||
+      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite === true,
     ...(ctx.configResult.retiredModelRefConfig
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     repairRetiredModelRefs: ctx.prompter.shouldRepair,
+    authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),

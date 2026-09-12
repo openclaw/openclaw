@@ -127,7 +127,7 @@ export type SqliteSessionReclamationWorkerData = {
   type: "sqlite-transcript-archive-v2";
 };
 
-export type SqliteSessionReclamationWorkerResult = {
+type SqliteSessionReclamationWorkerResult = {
   cleanupIncomplete?: true;
   cleanupWarnings?: string[];
   result: SqliteSessionReclamationResult;

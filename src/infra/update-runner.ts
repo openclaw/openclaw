@@ -1,7 +1,6 @@
 // Runs Git checkout updates; package replacement belongs to the update CLI.
 import { withForegroundGitMaintenance } from "./git-exec.js";
 import { readPackageVersion } from "./package-json.js";
-import { verifyPackageUpdateRecovery } from "./update-global.js";
 import {
   resolveGitRoot,
   resolveUpdateInstallRoot,
@@ -15,6 +14,7 @@ import {
   findPackageRoot,
   looksLikeGitCheckout,
   normalizeDir,
+  resolveUnmanagedUpdateInstallReason,
   resolveUpdateInstallSurface,
 } from "./update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -83,12 +83,20 @@ async function runGatewayUpdateInternal(opts: UpdateRunnerOptions): Promise<Upda
   }
 
   const beforeVersion = await readPackageVersion(pkgRoot);
+  const surface = await resolveUpdateInstallSurface({
+    root: pkgRoot,
+    installKind: "package",
+    runCommand,
+    timeoutMs,
+  });
   return {
     status: "skipped",
     mode: "unknown",
     root: pkgRoot,
-    reason: "not-git-install",
-    recovery: await verifyPackageUpdateRecovery(pkgRoot),
+    reason:
+      surface.kind === "global"
+        ? "package-update-requires-cli"
+        : resolveUnmanagedUpdateInstallReason(),
     before: { version: beforeVersion },
     steps: [],
     durationMs: Date.now() - startedAt,
