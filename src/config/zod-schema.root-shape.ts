@@ -29,11 +29,11 @@ import {
   NodeHostSchema,
   PluginEntrySchema,
   SecuritySchema,
-  SkillEntrySchema,
   TalkSchema,
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+import { SkillsConfigSchema } from "./zod-schema.skills.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
 // OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
@@ -453,49 +453,7 @@ export const OpenClawSchemaShape = {
   desktop: DesktopConfigSchema,
   memory: MemorySchema,
   mcp: McpConfigSchema,
-  skills: z
-    .strictObject({
-      allowBundled: z.array(z.string()).optional(),
-      load: z
-        .strictObject({
-          extraDirs: z.array(z.string()).optional(),
-          allowSymlinkTargets: z.array(z.string()).optional(),
-          watch: z.boolean().optional(),
-        })
-        .optional(),
-      install: z
-        .strictObject({
-          preferBrew: z.boolean().optional(),
-          nodeManager: z
-            .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
-            .optional(),
-          allowUploadedArchives: z.boolean().optional(),
-        })
-        .optional(),
-      limits: z
-        .strictObject({
-          maxCandidatesPerRoot: z.number().int().min(1).optional(),
-          maxSkillsLoadedPerSource: z.number().int().min(1).optional(),
-          maxSkillsInPrompt: z.number().int().min(0).optional(),
-          maxSkillsPromptChars: z.number().int().min(0).optional(),
-          maxSkillFileBytes: z.number().int().min(0).optional(),
-        })
-        .optional(),
-      workshop: z
-        .strictObject({
-          autonomous: z
-            .strictObject({
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
-            })
-            .optional(),
-          approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
-          maxPending: z.number().int().min(1).optional(),
-          maxSkillBytes: z.number().int().min(1).optional(),
-        })
-        .optional(),
-      entries: z.record(z.string(), SkillEntrySchema).optional(),
-    })
-    .optional(),
+  skills: SkillsConfigSchema.optional(),
   plugins: z
     .strictObject({
       enabled: z.boolean().optional(),
