@@ -1,8 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
-import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { createSessionListEntryFilter } from "../session-sharing.js";
+import { createSessionReadVisibilityFilter } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { buildSessionListRowMetadataContext } from "../session-utils-projection.js";
 import { createGatewaySessionEntryReader } from "../session-utils-store-lookup.js";
@@ -12,15 +11,6 @@ import { readSessionPlacementFields } from "./session-placement-read-projection.
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function createRoleVisibilityFilter(
-  client: Parameters<typeof hasOperatorBoundary>[0],
-  cfg: Parameters<typeof hasOperatorBoundary>[1],
-) {
-  return hasOperatorBoundary(client, cfg)
-    ? createSessionListEntryFilter({ client, cfg })
-    : undefined;
-}
 
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
   "sessions.describe": async ({ params, respond, context, client }) => {
@@ -56,7 +46,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       includeStoreChildEntries: true,
       ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
     });
-    const boundaryFilter = createRoleVisibilityFilter(client, cfg);
+    const boundaryFilter = createSessionReadVisibilityFilter(client, cfg);
     if (!entry || boundaryFilter?.(target.canonicalKey, entry) === false) {
       respond(true, { session: null }, undefined);
       return;
@@ -119,7 +109,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       cfg,
       agentId: requestedAgent.agentId,
     });
-    const boundaryFilter = createRoleVisibilityFilter(client, cfg);
+    const boundaryFilter = createSessionReadVisibilityFilter(client, cfg);
     if (!entry?.sessionId || boundaryFilter?.(target.canonicalKey, entry) === false) {
       respond(true, { messages: [] }, undefined);
       return;
@@ -152,7 +142,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
           agentId: currentRequestedAgent.agentId,
         })
       : null;
-    const currentBoundaryFilter = createRoleVisibilityFilter(client, currentCfg);
+    const currentBoundaryFilter = createSessionReadVisibilityFilter(client, currentCfg);
     if (
       !current ||
       current.target.agentId !== target.agentId ||

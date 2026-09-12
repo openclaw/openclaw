@@ -12,6 +12,11 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  authorizeIncognitoSessionTarget,
+  hiddenSessionNotFound,
+} from "../session-sharing-policy.js";
+import { createSessionReadVisibilityFilter } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
@@ -95,7 +100,7 @@ export async function loadSessionDiff(
 }
 
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
-  "sessions.diff": async ({ params, respond, context }) => {
+  "sessions.diff": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsDiffParams, "sessions.diff", respond)) {
       return;
     }
@@ -118,6 +123,23 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
     );
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const target = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+    });
+    const incognitoError = authorizeIncognitoSessionTarget({
+      client,
+      sessionKey: params.sessionKey,
+      target: target.entry ? { canonicalKey: target.canonicalKey, entry: target.entry } : null,
+    });
+    if (incognitoError) {
+      respond(false, undefined, incognitoError);
+      return;
+    }
+    const entryFilter = createSessionReadVisibilityFilter(client, context.getRuntimeConfig());
+    if (target.entry && entryFilter && !entryFilter(target.canonicalKey, target.entry)) {
+      respond(false, undefined, hiddenSessionNotFound(params.sessionKey));
       return;
     }
     respond(

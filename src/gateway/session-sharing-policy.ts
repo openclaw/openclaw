@@ -238,7 +238,7 @@ export function isResolvedIncognitoSession(params: {
 export function authorizeIncognitoSessionTarget(params: {
   client: GatewayClient | null;
   sessionKey: string;
-  target: SessionSharingTarget | null;
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry"> | null;
 }): ErrorShape | null {
   if (!isIncognitoSessionTarget(params)) {
     return null;
