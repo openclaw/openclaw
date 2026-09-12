@@ -474,4 +474,60 @@ describe("database verifier bounded diagnostics", () => {
       }
     }
   });
+
+  // A failed snapshot cleanup must not be swallowed: it leaves a private
+  // read-only copy on disk with no signal. The failure surfaces as a
+  // non-terminal verification error (the database itself was not proven
+  // corrupt), but an existing read/close failure is preserved because it
+  // carries the more important diagnostic.
+  it.each([
+    { name: "cleanup failure after a healthy scan", errcode: undefined, expected: null },
+    { name: "cleanup failure preserves an I/O scan failure", errcode: 10, expected: null },
+    { name: "cleanup failure preserves a corruption scan failure", errcode: 779, expected: null },
+    {
+      name: "cleanup failure preserves a close failure",
+      errcode: undefined,
+      expected: "Error: close failed (code=EIO, errcode=10)",
+    },
+  ])("$name", async ({ errcode, expected }) => {
+    const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
+    const cleanup = vi.fn(() => false);
+    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockResolvedValueOnce({
+      location: ":memory:",
+      cleanup,
+    });
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
+    if (errcode !== undefined) {
+      vi.spyOn(database, "prepare").mockImplementationOnce(() => {
+        throw Object.assign(new Error("scan failed"), { code: "ERR_SQLITE_ERROR", errcode });
+      });
+    }
+    const close = database.close.bind(database);
+    if (expected === "Error: close failed (code=EIO, errcode=10)") {
+      vi.spyOn(database, "close").mockImplementationOnce(() => {
+        close();
+        throw Object.assign(new Error("close failed"), { code: "EIO", errcode: 10 });
+      });
+    }
+    try {
+      await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
+        {
+          path: target.path,
+          ok: false,
+          terminal: errcode === 779,
+          error:
+            expected ??
+            (errcode === undefined
+              ? `Database verification snapshot cleanup failed: :memory:. Check directory permissions and available storage before retrying.`
+              : `SqliteIntegrityError: SQLite integrity_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`),
+        },
+      ]);
+      expect(database.isOpen).toBe(false);
+      expect(cleanup).toHaveBeenCalledOnce();
+    } finally {
+      if (database.isOpen) {
+        close();
+      }
+    }
+  });
 });

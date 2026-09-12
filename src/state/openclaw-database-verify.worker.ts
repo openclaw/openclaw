@@ -42,11 +42,13 @@ async function verifyOpenClawDatabase(
     import("../infra/sqlite-readonly-location.js"),
   ]);
   let cleanup: (() => boolean) | undefined;
+  let snapshotLocation: string | undefined;
   let database: import("node:sqlite").DatabaseSync | undefined;
   let result = await (async (): Promise<OpenClawDatabaseVerifyResult> => {
     try {
       const prepared = await location.prepareSqliteReadOnlyLocationInProcess(target.path);
       cleanup = prepared.cleanup;
+      snapshotLocation = prepared.location;
       database = sqlite.openNodeSqliteDatabase(prepared.location, {
         readOnly: true,
       });
@@ -75,7 +77,19 @@ async function verifyOpenClawDatabase(
       };
     }
   } finally {
-    cleanup?.();
+    // A failed cleanup leaves the private read-only snapshot on disk with no
+    // signal. Surface it as a non-terminal verification failure (the database
+    // itself was not proven corrupt) so the operator sees the storage problem
+    // instead of a silently healthy result. Preserves an existing read/close
+    // failure, which carries the more important diagnostic.
+    if (cleanup && !cleanup() && result.ok) {
+      result = {
+        path: target.path,
+        ok: false,
+        error: `Database verification snapshot cleanup failed: ${snapshotLocation}. Check directory permissions and available storage before retrying.`,
+        terminal: false,
+      };
+    }
   }
   return result;
 }
