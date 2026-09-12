@@ -15,7 +15,11 @@ import {
 
 const heldCoordinators = new Map<
   string,
-  { coordinator: { release: () => void }; references: number }
+  {
+    coordinator: { release: (options?: { keepAlive?: false }) => void };
+    references: number;
+    keepAlive: boolean;
+  }
 >();
 
 type SourceReadScope = {
@@ -36,6 +40,7 @@ type CoordinatorOptions = {
   runtimeDirectory?: string;
   uid?: number;
   busyTimeoutMs?: number;
+  keepAlive?: boolean;
 };
 
 export class StateDatabaseCoordinatorContentionError extends SqliteCoordinatorError {
@@ -115,6 +120,7 @@ function acquireLifecycleCoordinator(
   const held = heldCoordinators.get(coordinatorPath);
   if (held) {
     held.references += 1;
+    held.keepAlive &&= keepAlive;
   } else {
     ensurePrivateSqliteCoordinatorDirectory(path.dirname(coordinatorPath), `${family} coordinator`);
     const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
@@ -124,7 +130,7 @@ function acquireLifecycleCoordinator(
     if (!coordinator) {
       throw new StateDatabaseCoordinatorContentionError(family);
     }
-    heldCoordinators.set(coordinatorPath, { coordinator, references: 1 });
+    heldCoordinators.set(coordinatorPath, { coordinator, references: 1, keepAlive });
   }
 
   let released = false;
@@ -145,7 +151,7 @@ function acquireLifecycleCoordinator(
       }
       heldCoordinators.delete(coordinatorPath);
       try {
-        current.coordinator.release();
+        current.coordinator.release(current.keepAlive ? undefined : { keepAlive: false });
       } catch (error) {
         throw new SqliteCoordinatorError(`failed to release ${family} coordinator`, error);
       }
@@ -173,7 +179,10 @@ export function retainHeldStateDatabaseCoordinator(databasePath: string) {
 export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
   // Caller-owned locations must remain removable immediately after release,
   // including on Windows where an idle SQLite handle blocks unlink.
-  const keepAlive = params.coordinatorPath === undefined && params.runtimeDirectory === undefined;
+  const keepAlive =
+    params.keepAlive !== false &&
+    params.coordinatorPath === undefined &&
+    params.runtimeDirectory === undefined;
   // Lifecycle ownership is reentrant for nested transactions. File publication
   // is not: even this process must refuse before ownership probes touch SQLite.
   const base = resolveLifecycleCoordinatorBase({
@@ -189,11 +198,7 @@ export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
     }
     writeScope.assertCurrent();
     // Authority callbacks can change paths; resolve again after their checks.
-    return acquireLifecycleCoordinator(
-      "state-lifecycle",
-      params,
-      params.coordinatorPath === undefined && params.runtimeDirectory === undefined,
-    );
+    return acquireLifecycleCoordinator("state-lifecycle", params, keepAlive);
   } else if (heldCoordinators.has(handlesPath)) {
     throw new StateDatabaseCoordinatorContentionError("state-handles");
   }

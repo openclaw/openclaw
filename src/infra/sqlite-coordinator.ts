@@ -227,11 +227,15 @@ function tryAcquireSqliteCoordinator(
   location: string,
   mode: "shared" | "exclusive",
   options: { busyTimeoutMs?: number; keepAlive?: boolean },
-): { release: () => void } | null {
+): { release: (options?: { keepAlive?: false }) => void } | null {
   const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
-  const poolLocation =
-    options.keepAlive && location !== "" && location !== ":memory:" && !location.startsWith("file:")
+  const reusableLocation =
+    location !== "" && location !== ":memory:" && !location.startsWith("file:")
       ? path.resolve(location)
+      : undefined;
+  const poolLocation =
+    reusableLocation && (options.keepAlive || idleCoordinators.has(reusableLocation))
+      ? reusableLocation
       : undefined;
   const before = poolLocation ? readCoordinatorIdentity(poolLocation) : undefined;
   const idle = poolLocation ? takeIdleCoordinator(poolLocation) : undefined;
@@ -273,7 +277,7 @@ function tryAcquireSqliteCoordinator(
   }
   let released = false;
   return {
-    release: () => {
+    release: (releaseOptions) => {
       if (released) {
         return;
       }
@@ -288,7 +292,13 @@ function tryAcquireSqliteCoordinator(
         errors.push(error);
       }
       let retained = false;
-      if (errors.length === 0 && poolLocation && identity) {
+      if (
+        errors.length === 0 &&
+        options.keepAlive &&
+        releaseOptions?.keepAlive !== false &&
+        poolLocation &&
+        identity
+      ) {
         try {
           retained = retainIdleCoordinator(poolLocation, database, identity);
         } catch (error) {
@@ -320,7 +330,7 @@ function tryAcquireSqliteCoordinator(
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
   options: { busyTimeoutMs?: number; keepAlive?: boolean } = {},
-): { release: () => void } | null {
+): { release: (options?: { keepAlive?: false }) => void } | null {
   return tryAcquireSqliteCoordinator(location, "exclusive", options);
 }
 
