@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 it.each([false, true])(
   "retains below-threshold warnings only for an update parent (%s)",
@@ -27,7 +28,7 @@ it.each([false, true])(
       });
       const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       try {
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         expect(
           await runDoctorLintCli(runtime, {
             json: true,

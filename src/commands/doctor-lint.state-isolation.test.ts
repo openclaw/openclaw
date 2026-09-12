@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +34,9 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
+import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
 import { createAppliedLegacyProposal } from "./doctor-skill-workshop-sqlite.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveDoctorContributionHealthChecks: vi.fn(),
@@ -67,11 +68,7 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
   };
 });
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 const originalEnv = {
   HOME: process.env.HOME,
@@ -122,7 +119,7 @@ describe("doctor lint state isolation", () => {
         }
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         closeOpenClawStateDatabaseByPath(databasePath);
-        const before = snapshotSqliteFamily(databasePath);
+        const before = snapshotDoctorLintSqliteFamily(databasePath);
         const filesBefore = fs
           .readdirSync(state.stateDir, { recursive: true, encoding: "utf8" })
           .toSorted((left, right) => left.localeCompare(right));
@@ -151,7 +148,7 @@ describe("doctor lint state isolation", () => {
           }
           expect(mocks.sqliteOpen).toHaveBeenCalled();
           expect(mocks.sqliteOpen.mock.calls.every(([file]) => file !== databasePath)).toBe(true);
-          expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+          expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
           expect(
             fs
               .readdirSync(state.stateDir, { recursive: true, encoding: "utf8" })
@@ -236,7 +233,7 @@ describe("doctor lint state isolation", () => {
           );
           const databasePath = resolveOpenClawStateSqlitePath(state.env);
           closeOpenClawStateDatabaseByPath(databasePath);
-          const before = snapshotSqliteFamily(databasePath);
+          const before = snapshotDoctorLintSqliteFamily(databasePath);
           const backupBefore = fs.readFileSync(backup, "utf8");
           await selectWorkshopCheckWithUnavailableSource(databasePath);
           mocks.sqliteOpen.mockClear();
@@ -264,7 +261,7 @@ describe("doctor lint state isolation", () => {
             );
             expect(mocks.sqliteOpen).toHaveBeenCalled();
             expect(mocks.sqliteOpen.mock.calls.every(([file]) => file !== databasePath)).toBe(true);
-            expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+            expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
             expect(fs.readFileSync(backup, "utf8")).toBe(backupBefore);
             expect(fs.readFileSync(record.target.skillFile, "utf8")).toBe("# Saved procedure\n");
           } finally {
@@ -303,7 +300,7 @@ describe("doctor lint state isolation", () => {
         const sourcePath = await state.writeText("identity/device-auth.json", "legacy-file-marker");
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         closeOpenClawStateDatabaseByPath(databasePath);
-        const before = snapshotSqliteFamily(databasePath);
+        const before = snapshotDoctorLintSqliteFamily(databasePath);
         const actual = await vi.importActual<
           typeof import("../flows/doctor-health-contributions.js")
         >("../flows/doctor-health-contributions.js");
@@ -371,7 +368,7 @@ describe("doctor lint state isolation", () => {
             }
           }
           expect(fs.readFileSync(sourcePath, "utf8")).toBe("legacy-file-marker");
-          const after = snapshotSqliteFamily(databasePath);
+          const after = snapshotDoctorLintSqliteFamily(databasePath);
           if (entry.isolated) {
             expect(after).toEqual(before);
           } else {
@@ -741,7 +738,7 @@ describe("doctor lint state isolation", () => {
         writer.exec(
           "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
         );
-        const before = snapshotSqliteFamily(databasePath);
+        const before = snapshotDoctorLintSqliteFamily(databasePath);
         let observed: unknown;
         mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
           {
@@ -765,7 +762,7 @@ describe("doctor lint state isolation", () => {
             await collectDoctorFindings(runtime);
           }
           expect(observed).toEqual([{ value: "committed" }]);
-          expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+          expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
         } finally {
           stdout.mockRestore();
           writer.close();
@@ -794,7 +791,7 @@ describe("doctor lint state isolation", () => {
     closeOpenClawStateDatabaseByPath(databasePath);
     const lock = new DatabaseSync(databasePath);
     lock.exec("BEGIN IMMEDIATE");
-    const before = snapshotSqliteFamily(databasePath);
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
     mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
       {
         id: "core/doctor/runtime-tool-schemas",
@@ -825,7 +822,7 @@ describe("doctor lint state isolation", () => {
         checksRun: 1,
         findings: [],
       });
-      expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
       lock.exec("ROLLBACK");
@@ -862,16 +859,6 @@ async function selectWorkshopCheckWithUnavailableSource(databasePath: string) {
     },
   ]);
   return check;
-}
-
-function snapshotSqliteFamily(databasePath: string): Array<{ path: string; sha256: string }> {
-  return ["", "-journal", "-shm", "-wal"]
-    .map((suffix) => `${databasePath}${suffix}`)
-    .filter((candidate) => fs.existsSync(candidate))
-    .map((candidate) => ({
-      path: candidate,
-      sha256: createHash("sha256").update(fs.readFileSync(candidate)).digest("hex"),
-    }));
 }
 
 function restoreEnv(values: typeof originalEnv): void {
