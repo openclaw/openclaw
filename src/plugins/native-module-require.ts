@@ -79,7 +79,7 @@ type CapturedModuleBinding = {
   resolve: CapturedModuleResolver;
   prepare: (request: string, parent: string) => string | undefined;
 };
-type BunPluginRuntime = {
+export type BunPluginRuntime = {
   plugin(options: {
     name: string;
     setup(builder: {
