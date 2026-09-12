@@ -599,7 +599,10 @@ suite.define(() => {
               (panel) => (panel as HTMLElement & { available?: boolean }).available,
             ),
           ).toBe(true);
-          await browserPanel.getByText("Example", { exact: true }).first().waitFor();
+          await page
+            .locator('[data-region-header="side"] .tabstrip-tab__label')
+            .getByText("Example", { exact: true })
+            .waitFor();
           await expect
             .poll(() =>
               browserPanel

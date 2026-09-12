@@ -13398,12 +13398,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           return;
         }
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-          // A Gateway created by the suite's server factory supplies its own UI;
+          // A Gateway or Vite proxy acquired by the suite owns its UI server;
           // a separate backend in a test can still use the shared UI bundle.
           if (
             inSuiteServer &&
             (node.expression.text === "createOpenClawTestInstance" ||
-              node.expression.text === "startProductionControlUiE2eServer")
+              node.expression.text === "startProductionControlUiE2eServer" ||
+              node.expression.text === "createServer")
           ) {
             ownsPrivateServer = true;
             return;
@@ -13467,6 +13468,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+      "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
       "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
       "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
@@ -14075,6 +14077,44 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const realGatewayBuildIndex = uiE2eRealGateway.steps.indexOf(realGatewayBuild);
     expect(realGatewayBuildIndex).toBeGreaterThan(uiE2eRealGateway.steps.indexOf(realGatewaySetup));
     expect(realGatewayBuildIndex).toBeLessThan(realGatewayIndex);
+    const desktopProof = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Prove desktop resize over node and SSH",
+      ),
+      "real desktop fixture proof",
+    );
+    expect(desktopProof).toEqual({
+      name: "Prove desktop resize over node and SSH",
+      env: {
+        FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
+        DESKTOP_PROOF_CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
+        DESKTOP_PROOF_PR_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+        DESKTOP_PROOF_PR_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+        DESKTOP_PROOF_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+      },
+      run: expect.stringContaining('node --import tsx "$bootstrap"'),
+    });
+    expect(uiE2eRealGateway.steps.indexOf(desktopProof)).toBeGreaterThan(realGatewayBuildIndex);
+    expect(uiE2eRealGateway.steps.indexOf(desktopProof)).toBeLessThan(realGatewayIndex);
+    expect(realGatewayStep.run).not.toContain("desktop-resize.real-gateway.e2e.test.ts");
+    const desktopUpload = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Upload sanitized desktop resize proof",
+      ),
+      "sanitized desktop upload",
+    );
+    expect(desktopUpload).toEqual({
+      name: "Upload sanitized desktop resize proof",
+      if: "always()",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        name: "desktop-resize-proof-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: ".artifacts/control-ui-e2e/real-gateway/desktop-resize",
+        "if-no-files-found": "warn",
+        "retention-days": 14,
+      },
+    });
+    expect(uiE2eRealGateway.steps.indexOf(desktopUpload)).toBeGreaterThan(realGatewayIndex);
     expect(realGatewayStep.env).toEqual({
       FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
       OPENCLAW_CAPTURE_UI_PROOF:
@@ -14185,13 +14225,71 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "--configLoader",
         "runner",
       ]);
-      expect(args.slice(6).toSorted()).toEqual(uiE2eRealGatewayTestFiles.toSorted());
+      expect(args.slice(6).toSorted()).toEqual(
+        uiE2eRealGatewayTestFiles
+          .filter((file) => file !== "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts")
+          .toSorted(),
+      );
       expect(
         resolveRunVitestSpawnEnv(
           { CI: "true", OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000" },
           args.slice(1),
         ).OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
       ).toBe("300000");
+    },
+  );
+
+  it.each([
+    { frozen: false, available: true, exit: 0 },
+    { frozen: true, available: true, exit: 0 },
+    { frozen: false, available: true, exit: 42 },
+    { frozen: true, available: false, exit: 0 },
+    { frozen: false, available: false, exit: 0 },
+  ])(
+    "runs available desktop proof and preserves frozen omissions: %j",
+    ({ frozen, available, exit }) => {
+      const step = expectDefined(
+        readCiWorkflow().jobs["checks-ui-e2e-real-gateway"].steps.find(
+          (candidate: WorkflowStep) => candidate.name === "Prove desktop resize over node and SSH",
+        ),
+        "desktop proof command",
+      );
+      const directory = tempDirs.make("desktop-proof-command-");
+      const bin = path.join(directory, "bin");
+      const calls = path.join(directory, "calls");
+      mkdirSync(bin);
+      mkdirSync(path.join(directory, "scripts"));
+      if (available) {
+        writeFileSync(path.join(directory, "scripts/test-desktop-resize-real.mts"), "");
+      }
+      writeFileSync(
+        path.join(bin, "node"),
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$DESKTOP_CALLS"\nexit "$DESKTOP_EXIT"\n',
+        { mode: 0o755 },
+      );
+      const result = runWorkflowShellScript(expectDefined(step.run, "desktop proof script"), {
+        cwd: directory,
+        env: {
+          ...process.env,
+          FROZEN_TARGET: String(frozen),
+          DESKTOP_CALLS: calls,
+          DESKTOP_EXIT: String(exit),
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(available ? exit : frozen ? 0 : 1);
+      if (available) {
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+          "--import",
+          "tsx",
+          "scripts/test-desktop-resize-real.mts",
+        ]);
+      } else {
+        expect(existsSync(calls)).toBe(false);
+        expect(frozen ? result.stdout : result.stderr).toContain(
+          frozen ? "no desktop resize proof produced" : "Current target is missing",
+        );
+      }
     },
   );
 

@@ -30,6 +30,7 @@ import type { VideoGenerationResolution } from "../../video-generation/types.js"
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { publishOutputFileAtomically, writeOutputAsset } from "../media-output.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import {
@@ -125,6 +126,7 @@ async function runVideoGenerate(params: {
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
     cfg,
@@ -239,10 +241,9 @@ async function runVideoDescribe(params: { file: string; model?: string; agent?: 
     commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(
-    cfg,
-    resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe"),
-  );
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),

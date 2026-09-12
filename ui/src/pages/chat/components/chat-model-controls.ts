@@ -24,6 +24,7 @@ import {
   canonicalModelAuthProviderId,
   listEffectiveModelAuthProviders,
 } from "../../../lib/model-auth.ts";
+import { describeModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import type {
@@ -226,30 +227,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       Object.assign({}, record, { provider: headingKey(record.provider) }),
     ),
   )) {
-    const subscriptions = provider.profiles.filter((p) => p.type === "oauth" || p.type === "token");
     const selectedId =
       props.accountSelection?.kind === "automatic"
         ? undefined
         : props.accountSelection?.authProfileId;
-    const active = provider.profiles.find((p) => p.profileId === selectedId);
-    const missing =
-      ["missing", "expired"].includes(provider.status) &&
-      !provider.apiKey &&
-      !provider.profiles.some((p) => ["ok", "expiring", "static"].includes(p.status));
-    // Only an explicit selection identifies an account; inventory order is not runtime order.
-    const auth: ChatModelProviderAuth | undefined = missing
-      ? { kind: "missing", label: t("modelSetup.candidates.signInNeeded") }
-      : subscriptions.length && active?.type !== "api_key"
-        ? {
-            kind: "subscription",
-            label:
-              (subscriptions.length === 1 ? provider.usage?.plan : undefined) ||
-              t("chat.modelControls.subscription"),
-            detail: subscriptions.length > 1 ? active?.email : undefined,
-          }
-        : provider.apiKey || provider.profiles.some((p) => p.type === "api_key")
-          ? { kind: "api", label: t("chat.modelControls.api") }
-          : undefined;
+    const auth = describeModelProviderAuth(provider, { authProfileId: selectedId });
     if (auth) {
       providerAuth.set(headingKey(provider.provider), auth);
     }

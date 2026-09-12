@@ -41,6 +41,7 @@ type WorkerEnvironmentAccessOptions = {
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   isStopping: () => boolean;
   providerFor: (providerId: string) => WorkerProvider;
+  resolveProvider: WorkerProviderLifecycleInputOptions["resolveProvider"];
   serviceError: (
     code:
       | "desktop_app_not_found"
@@ -319,20 +320,23 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     let startup: ReturnType<WorkerTunnelManager["desktop"]["acquire"]> | undefined;
     let nodeStartup: ReturnType<WorkerNodeDesktopCarrier["observe"]> | undefined;
     let ownerEpoch: number | undefined;
+    let canResize = false;
     await withLock(request.environmentId, async () => {
       const { record, desktop, leaseId } = requireDesktopRecord(request.environmentId);
       ownerEpoch = record.ownerEpoch;
+      // Node observation remains usable without its provisioning plugin. Missing
+      // optional permission disables resizing, not the established transport.
+      canResize = options.resolveProvider(record.providerId)?.allowsDesktopResize === true;
       if (record.sshEndpoint) {
         if (!tunnels) {
           throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
         }
-        const provider = providerFor(record.providerId);
         startup = tunnels.desktop.acquire({
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
           ssh: record.sshEndpoint,
           desktop,
-          resolveIdentity: identityResolverFor(record, provider, leaseId),
+          resolveIdentity: identityResolverFor(record, providerFor(record.providerId), leaseId),
         });
         return;
       }
@@ -350,7 +354,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       throw serviceError("invalid_state", "Worker environment has no desktop transport");
     });
     if (nodeStartup) {
-      return await nodeStartup;
+      return { ...(await nodeStartup), ...(canResize ? { canResize } : {}) };
     }
     if (!startup || ownerEpoch === undefined) {
       throw serviceError("invalid_state", "Worker desktop tunnel failed to start");
@@ -371,6 +375,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       wsPath: `${DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
       expiresAtMs: minted.expiresAtMs,
       control: request.control,
+      ...(canResize ? { canResize } : {}),
       ...(acquired.vncPassword ? { vncPassword: acquired.vncPassword } : {}),
     };
   };

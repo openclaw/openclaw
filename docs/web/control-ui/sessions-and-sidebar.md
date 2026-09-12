@@ -66,7 +66,8 @@ one canonical message, including its attachments.
 ## Sidebar navigation
 
 The **Online** list opens a person's activity card with their reported device,
-platform, and connection type: **Web**, **App**, or **Command line**. Duplicate
+platform, and connection type: **Web**, **App**, **Terminal** for the TUI, or
+**Command line**. Renaming a device does not change its connection type. Duplicate
 device and platform labels are combined. Architecture labels such as **ARM** appear only
 when explicitly reported; a browser's `MacIntel` value does not identify an Intel
 CPU because Apple silicon Macs and desktop-mode iPads also report it.

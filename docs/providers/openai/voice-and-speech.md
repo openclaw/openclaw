@@ -141,7 +141,7 @@ sidebarTitle: "Voice and speech"
     | Silence duration                       | `...openai.silenceDurationMs`                                           | `500`                |
     | Prefix padding                         | `...openai.prefixPaddingMs`                                             | `300`                |
     | Reasoning effort                       | `...openai.reasoningEffort`                                             | (unset)              |
-    | Auth                                   | `openai` auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | Released GPT-Live: OAuth first; ordinary GA browser: Platform first; Platform required for other routes |
+    | Auth                                   | `openai` auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | GPT-Live API: Platform required; Codex GPT-Live: OAuth first; ordinary GA browser: Platform first |
 
     Available built-in Realtime voices for `gpt-realtime-2.1`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
@@ -189,9 +189,82 @@ sidebarTitle: "Voice and speech"
     Gateway-controlled GA relay, iOS client-owned WebRTC, Voice Call, direct
     backend sockets, and Discord realtime voice require Platform auth.
 
+    #### GPT-Live API
+
+    Talk and Gateway relay sessions select GPT-Live when no model is configured.
+    An OpenAI Platform key, API-key profile, or
+    `OPENAI_API_KEY` selects `gpt-live-1` with `marin`; a ChatGPT-only account
+    selects `gpt-live-1-codex` with `cove`. A configured Platform credential
+    takes precedence over ChatGPT sign-in, including when that credential needs repair.
+
+    GPT-Live is audio-only, so the Control UI does not offer camera capture with
+    this default. Choose `gpt-realtime-2.1` explicitly to use the camera.
+    `talk.catalog` describes the configured Talk
+    agent's default for its discovery surface; a session scoped to another agent
+    resolves that agent's accounts when it starts.
+
+    Explicit model choices and voices supported by that model stay in effect;
+    an explicit GPT-Live model is audio-only. Requests requiring video or forced
+    agent-consult replies retain `gpt-realtime-2.1` when no model is pinned.
+    Direct tool bridges, including Discord's wake-name and agent-proxy modes,
+    and Azure deployments retain their existing defaults. Installing an update
+    does not rewrite saved configuration or switch an active session.
+
+    Set `talk.realtime.model` explicitly to `gpt-live-1` for the public
+    [GPT-Live API](https://developers.openai.com/api/docs/guides/live). GPT-Live
+    handles the spoken conversation while delegated tasks run through your
+    configured OpenClaw agent. It can listen while speaking; interrupting speech
+    does not itself cancel agent work.
+
+    This model requires an OpenAI Platform API key with model access, selected
+    from the configured realtime key, an `openai` API-key profile, or
+    `OPENAI_API_KEY`. ChatGPT subscription credentials are not a fallback for
+    `gpt-live-1`.
+
+    ```json5
+    {
+      talk: {
+        realtime: {
+          provider: "openai",
+          model: "gpt-live-1",
+          speakerVoice: "marin",
+          transport: "webrtc",
+        },
+      },
+    }
+    ```
+
+    Browser Talk uses Gateway-brokered WebRTC; the Platform key stays on the
+    Gateway. Set `transport: "gateway-relay"` for the direct server WebSocket
+    path. Discord bidirectional voice and Voice Call also use the Platform-key
+    backend WebSocket.
+
+    iOS uses the same brokered WebRTC path and displays public Live captions.
+    Physical-device voice validation remains pending.
+
+    The default voice is `marin`. Supported built-in voices are `alloy`, `ash`,
+    `ballad`, `beacon`, `bossa`, `cedar`, `cinder`, `coral`, `delta`, `echo`,
+    `gleam`, `marin`, `meridian`, `quartz`, `ripple`, `sage`, `shimmer`, `stone`,
+    `tempo`, `verse`, `vesper`, and `willow`. Unsupported configured voices fall
+    back to `marin`. Choose the voice before starting a session.
+
+    The public API uses `/v1/live/sessions` for WebRTC creation and primary
+    WebSockets. Direct sockets start with `session.start`; browser sessions
+    start during the SDP exchange. A Gateway sideband handles delegated work
+    while browser media stays on WebRTC. Public transcript events are fragments,
+    not completed turns. The Gateway owns persistence of bounded received-text
+    snapshots; clients display captions without saving another copy. Both live
+    captions and saved snapshots can span several exchanges by the same speaker;
+    they do not reconstruct chronological turns or cross-speaker timing.
+    Overlapping fragments do not identify a completed utterance. Saving text
+    does not establish that speech or playback has finished. See OpenAI's
+    [session guide](https://developers.openai.com/api/docs/guides/live-conversations)
+    for the public session and voice contract.
+
     #### Released GPT-Live browser and Gateway relay authentication
 
-    Released GPT-Live browser and Gateway-relay WebRTC try the OpenClaw ChatGPT
+    The separate Codex GPT-Live model, `gpt-live-1-codex`, retains its ChatGPT
+    subscription route. Its browser and Gateway-relay WebRTC try the OpenClaw ChatGPT
     OAuth subscription profile first. When OAuth is unavailable, the Gateway
     falls back to Platform auth in this order: the configured realtime key, an
     `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth profile
@@ -293,7 +366,7 @@ sidebarTitle: "Voice and speech"
     above, then verify the Platform key and configured model against the same
     project.
 
-    The released Gateway-owned WebRTC route uses OAuth first with Platform
+    The Codex GPT-Live Gateway-owned WebRTC route uses OAuth first with Platform
     fallback, routes sideband delegations through the configured OpenClaw
     agent, and keeps credentials away from relay clients. Unlisted or private
     browser WebRTC and the direct backend socket remain Platform-only. The
@@ -303,7 +376,7 @@ sidebarTitle: "Voice and speech"
     path has live proof from an Android device.
 
     The WebRTC path creates a provider call and joins its sideband. The direct
-    backend path opens one bidirectional session, sends a Frameless
+    unlisted/private backend path opens one bidirectional session, sends a Frameless
     `session.update`, then carries PCM audio, transcripts, delegations, and
     delegation results over that socket.
 
@@ -319,26 +392,29 @@ sidebarTitle: "Voice and speech"
 
     <Note>
     GA backend OpenAI realtime bridges use the Realtime WebSocket session
-    shape, which does not accept `session.temperature`; GPT-Live uses the
-    separate Frameless Bidi shape. Azure OpenAI
+    shape, which does not accept `session.temperature`; the public GPT-Live API
+    uses its own Live session shape, while the Codex and unlisted/private routes
+    retain their separate transport contracts. Azure OpenAI
     deployments remain available via `azureEndpoint` and `azureDeployment` and
     keep the deployment-compatible session shape (including `temperature`).
     Supports bidirectional tool calling and G.711 u-law audio.
     </Note>
 
     <Note>
-    Realtime voice is selected when the session is created. OpenAI allows most
-    session fields to change later, but the voice cannot be changed after the
-    model has emitted audio in that session. OpenClaw exposes the
+    Realtime voice is selected when the session is created. GA Realtime allows
+    most session fields to change later, but the voice cannot be changed after
+    the model has emitted audio. GPT-Live fixes its model, voice, audio format,
+    and delegation mode at startup. OpenClaw exposes the
     built-in Realtime voice ids as strings.
     </Note>
 
     <Note>
-    Control UI Talk uses browser WebRTC sessions. The released
+    Control UI Talk uses browser WebRTC sessions. The Codex GPT-Live
     browser/Gateway-owned route tries ChatGPT OAuth first through the Gateway
     offer broker, keeping OAuth server-side. When OAuth is unavailable, it
     falls back to Platform credentials in this order: configured realtime key,
-    API-key profile, then `OPENAI_API_KEY`. Direct backend sockets and unlisted
+    API-key profile, then `OPENAI_API_KEY`. The public `gpt-live-1` API,
+    direct backend sockets, and unlisted
     or private realtime routes require Platform credentials.
     Maintainer live verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;

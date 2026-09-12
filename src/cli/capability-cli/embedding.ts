@@ -9,6 +9,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
@@ -49,6 +50,7 @@ async function runMemoryEmbeddingCreate(params: {
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await createEmbeddingProvider({
     config: cfg,
     agentDir: resolveAgentDir(cfg, agentId),

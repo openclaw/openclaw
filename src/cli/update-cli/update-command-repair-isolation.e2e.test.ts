@@ -9,6 +9,7 @@ import { createManagedUpdateRequesterAuthority } from "../../infra/update-reques
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import {
   repairIsolationConfig,
   repairIsolationProvider,
@@ -50,20 +51,29 @@ describe("staged CLI repair isolation", () => {
       name: "discards config and doctor repairs without changing serving files",
       configChange: true,
       revokeRequester: false,
+      revokeAfterValidation: false,
     },
     {
       name: "keeps candidate-root repairs eligible for activation",
       configChange: false,
       revokeRequester: false,
+      revokeAfterValidation: false,
     },
     {
       name: "honors live requester revocation before a copied-state repair tool runs",
       configChange: false,
       revokeRequester: true,
+      revokeAfterValidation: false,
+    },
+    {
+      name: "rejects a rebound requester after successful rehearsal validation",
+      configChange: true,
+      revokeRequester: false,
+      revokeAfterValidation: true,
     },
   ])(
     "$name",
-    async ({ configChange, revokeRequester }) => {
+    async ({ configChange, revokeRequester, revokeAfterValidation }) => {
       await withOpenClawTestState(
         {
           prefix: "repair-isolation-",
@@ -120,6 +130,17 @@ describe("staged CLI repair isolation", () => {
                 { trigger: "chat", origin: { requester } },
                 { env: ledgerEnv },
               );
+              let requesterCurrent = true;
+              const updateRun: NonNullable<UpdateCommandOptions["run"]> = {
+                runId: run.runId,
+                env: ledgerEnv,
+                requesterAuthority: revokeAfterValidation
+                  ? {
+                      requester,
+                      isCurrent: () => requesterCurrent && requesterAuthority.isCurrent(),
+                    }
+                  : requesterAuthority,
+              };
               const before = await Promise.all(
                 liveFiles.map(async (file) => ({ file, identity: await fileIdentity(file) })),
               );
@@ -134,7 +155,7 @@ describe("staged CLI repair isolation", () => {
                 root: state.path("serving-package"),
                 candidateRoot: candidate,
                 env: state.env,
-                run: { runId: run.runId, env: ledgerEnv, requesterAuthority },
+                run: updateRun,
                 phase: "validating",
                 result: {
                   status: "error",
@@ -171,6 +192,14 @@ describe("staged CLI repair isolation", () => {
                   proof = JSON.parse(raw) as RepairProof;
                   if (configChange) {
                     expect(proof.doctor, JSON.stringify(proof.doctor)).toMatchObject({ status: 0 });
+                    const copiedConfig: unknown = JSON.parse(
+                      await fs.readFile(proof.configPath, "utf8"),
+                    );
+                    expect(copiedConfig).toMatchObject({
+                      meta: { lastTouchedVersion: expect.any(String) },
+                      wizard: { lastRunCommand: "doctor" },
+                      plugins: { enabled: false },
+                    });
                     const copied = openNodeSqliteDatabase(
                       path.join(proof.stateDir, "state", "openclaw.sqlite"),
                     );
@@ -183,6 +212,10 @@ describe("staged CLI repair isolation", () => {
                     } finally {
                       copied.close();
                     }
+                  }
+                  if (revokeAfterValidation) {
+                    requesterCurrent = false;
+                    updateRun.requesterAuthority = { requester, isCurrent: () => true };
                   }
                   return { ok: true, score: 1, summary: "Candidate repair marker verified." };
                 },
@@ -227,11 +260,16 @@ describe("staged CLI repair isolation", () => {
               expect(proof?.stateDir).not.toBe(state.stateDir);
               expect(proof?.configPath).not.toBe(state.configPath);
               expect(result, JSON.stringify(result)).toMatchObject(
-                configChange
+                revokeAfterValidation
                   ? {
-                      status: "unrepaired",
-                      reason: "repair-requires-config-change",
-                      finalValidation: { ok: false, summary: expect.stringContaining("logging") },
+                      status: "aborted",
+                      reason: "requester-revoked",
+                      attempts: [],
+                      finalValidation: {
+                        ok: false,
+                        score: 0,
+                        summary: "Candidate repair marker is absent.",
+                      },
                     }
                   : {
                       status: "repaired",
@@ -250,13 +288,11 @@ describe("staged CLI repair isolation", () => {
               expect(record?.repair).toEqual([
                 expect.objectContaining({
                   attempt: 1,
-                  status: configChange ? "failed" : "succeeded",
+                  status: revokeAfterValidation ? "failed" : "succeeded",
                 }),
               ]);
-              if (configChange) {
-                expect(record?.repair[0]?.reason).toBe("repair-requires-config-change");
-                expect(result.finalValidation.summary).toContain("openclaw doctor --fix");
-                expect(result.finalValidation.summary).not.toContain("debug");
+              if (revokeAfterValidation) {
+                expect(record?.repair[0]?.reason).toBe("requester-revoked");
               }
               await expect(fs.access(oracleTarget.stateDir)).rejects.toMatchObject({
                 code: "ENOENT",

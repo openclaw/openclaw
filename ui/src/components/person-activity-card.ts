@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
 import {
@@ -133,9 +134,11 @@ function connections(user: PresenceViewer): string[] {
               ? t("presence.card.web")
               : entry.mode === "cli"
                 ? t("presence.card.cli")
-                : entry.mode === "ui"
-                  ? t("presence.card.app")
-                  : undefined;
+                : entry.clientId === GATEWAY_CLIENT_IDS.TUI
+                  ? t("presence.card.terminal")
+                  : entry.mode === "ui"
+                    ? t("presence.card.app")
+                    : undefined;
           return [
             ...new Set(
               [

@@ -1,3 +1,5 @@
+import AudioToolbox
+import AVFoundation
 import CoreAudio
 import Foundation
 import OSLog
@@ -100,6 +102,47 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
             selectedUID: selectedUID,
             availableUIDs: self.aliveInputDeviceUIDs(),
             defaultUID: self.defaultInputDeviceUID())
+    }
+
+    static func bindSelectedInputIfNeeded(
+        _ selection: AudioInputDeviceResolution,
+        to input: AVAudioInputNode,
+        logger: Logger,
+        context: String) -> AudioInputDeviceResolution
+    {
+        guard selection.shouldBindSelectedDevice, let selectedUID = selection.resolvedUID else {
+            return selection
+        }
+        guard let audioUnit = input.audioUnit,
+              var deviceID = self.inputDeviceID(forUID: selectedUID)
+        else {
+            logger.warning("\(context, privacy: .public) selected input could not be resolved; using system default")
+            return self.defaultFallback(for: selection)
+        }
+
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioObjectID>.size))
+        guard status == noErr else {
+            logger.warning(
+                "\(context, privacy: .public) selected input binding failed status=\(status); using system default")
+            return self.defaultFallback(for: selection)
+        }
+        logger
+            .info(
+                "\(context, privacy: .public) selected input bound uid=\(selectedUID, privacy: .private(mask: .hash))")
+        return selection
+    }
+
+    private static func defaultFallback(for selection: AudioInputDeviceResolution) -> AudioInputDeviceResolution {
+        AudioInputDeviceResolution(
+            selectedUID: selection.selectedUID,
+            resolvedUID: self.resolveSelection(nil).resolvedUID,
+            fellBackToSystemDefault: selection.selectedUID != nil)
     }
 
     /// Returns true when the system default input device exists and is alive with input channels.

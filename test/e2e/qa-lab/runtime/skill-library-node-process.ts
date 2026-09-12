@@ -21,7 +21,7 @@ type ListedNode = {
 };
 
 export async function startSkillLibraryNodeProcess(
-  gateway: OpenClawTestInstance,
+  gateway: Pick<OpenClawTestInstance, "port" | "gatewayToken">,
   admin: SkillLibraryWireClient,
 ) {
   const node = await createOpenClawTestInstance({
@@ -145,7 +145,9 @@ export async function startSkillLibraryNodeProcess(
     try {
       await stop();
     } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], "Proof node startup and cleanup failed");
+      throw new AggregateError([error, cleanupError], "Proof node startup and cleanup failed", {
+        cause: cleanupError,
+      });
     }
     throw error;
   }

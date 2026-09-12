@@ -406,6 +406,32 @@ openclaw_resolve_frozen_typed_onboarding_contract() {
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH="$mock_config"
 }
 
+openclaw_resolve_frozen_session_cold_storage_contract() {
+  local source_root="${1:?missing selected source root}" authorization_status=0 has_current has_cold has_legacy
+
+  export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="required"
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # Cold storage introduced the split session schema. A current target with a
+  # broken declaration must fail its tests rather than be treated as pre-feature.
+  has_current="$(openclaw_frozen_target_source_flag has "$source_root" src/config/zod-schema.session-config.ts)" || return 2
+  [ "$has_current" = 0 ] || return 0
+  has_cold="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'coldStorage:')" || return 2
+  [ "$has_cold" = 0 ] || return 0
+  has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'export const SessionSchema = z')" || return 2
+  if [ "$has_legacy" = 1 ]; then
+    has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'pruneAfter: PositiveDurationSchema.optional()')" || return 2
+    if [ "$has_legacy" = 1 ]; then
+      export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="unsupported"
+      return 0
+    fi
+  fi
+  echo "unable to resolve frozen session cold-storage contract from selected source" >&2
+  return 2
+}
+
 openclaw_resolve_frozen_runtime_context_contract() {
   local source_root="${1:?missing selected source root}" authorization_status=0
   local has_migrations has_repair has_extract has_model_prompt has_fragments has_filter

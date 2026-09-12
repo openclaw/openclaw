@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
@@ -542,6 +543,8 @@ async function finalizeCommittedConfigWrite(params: {
           io.configPath,
           writeResult.persistedHash,
           hashConfigRaw(baseSnapshot.raw),
+          writeResult.persistedConfig,
+          JSON.stringify(isRecord(baseSnapshot.parsed) ? baseSnapshot.parsed : {}),
         );
         restoreEnvChangesIfUnchanged({
           env: io.env,

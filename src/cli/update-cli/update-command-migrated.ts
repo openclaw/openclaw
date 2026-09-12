@@ -38,10 +38,7 @@ import {
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 
-export type {
-  MigratedUpdateFinalizationInput,
-  MigratedUpdateFinalizationResult,
-} from "./update-command-migrated-types.js";
+export type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(

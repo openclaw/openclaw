@@ -97,6 +97,7 @@ export function createCatalogDiscoveryController(
     try {
       const result = await loadModelCatalog(client, {
         agentId,
+        includeDefaultModels: true,
         ...(refresh ? { refresh: true } : {}),
         signal: request.signal,
       });
@@ -107,6 +108,7 @@ export function createCatalogDiscoveryController(
           options.setData({
             ...data,
             models: result.models,
+            automaticUtilityModel: result.defaultModels?.automaticUtilityModel,
             providerOutcomes: result.providerOutcomes ?? [],
             catalogError: null,
           });

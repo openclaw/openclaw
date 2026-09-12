@@ -1,11 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   loadChatMetadata,
   revalidateChatMetadata,
   peekChatMetadata,
   beginChatMetadataPublication,
   subscribeChatMetadata,
-  type ChatMetadataResult,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";

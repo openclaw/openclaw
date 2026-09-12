@@ -294,7 +294,7 @@ const enSettings = {
   },
   modelProviders: {
     title: "Configured providers",
-    configureModels: "Configure Models",
+    configureModels: "Model setup",
     login: {
       action: "Connect provider",
       title: "Connect a provider",
@@ -430,6 +430,7 @@ const enSettings = {
       utilityHelpAutomatic:
         "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
+      automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback Model",
       noFallback: "No fallback model",

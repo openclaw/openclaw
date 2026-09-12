@@ -51,7 +51,7 @@ describe("realtime voice bridge session runtime", () => {
       } else if (closing === "provider") {
         callbacks?.onClose?.("completed");
       } else {
-        session.close();
+        void session.close();
       }
       acknowledgePlayback();
       expect(acknowledge).toHaveBeenCalledOnce();
@@ -131,7 +131,7 @@ describe("realtime voice bridge session runtime", () => {
     expect(callbacks?.getPlaybackState?.()).toEqual([]);
     open = true;
     getPlaybackState.mockImplementationOnce(() => {
-      session.close();
+      void session.close();
       return playback;
     });
     expect(callbacks?.getPlaybackState?.()).toEqual([]);
@@ -440,15 +440,15 @@ describe("realtime voice bridge session runtime", () => {
       name: "lookup",
       args: {},
     });
-    session.close();
+    const closing = session.close();
     rejectToolCall?.(new Error("late tool callback failure"));
-    await Promise.resolve();
+    await closing;
 
     expect(close).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it("forwards the close disposition to the provider bridge", () => {
+  it("forwards the close disposition to the provider bridge", async () => {
     const close = vi.fn();
     const provider: RealtimeVoiceProviderPlugin = {
       id: "test",
@@ -462,7 +462,7 @@ describe("realtime voice bridge session runtime", () => {
       audioSink: { sendAudio: vi.fn() },
     });
 
-    session.close({ disposition: "detach" });
+    await session.close({ disposition: "detach" });
 
     expect(close).toHaveBeenCalledWith({ disposition: "detach" });
   });
@@ -492,8 +492,8 @@ describe("realtime voice bridge session runtime", () => {
       onTranscript,
     });
 
-    session.close();
-    session.close();
+    void session.close();
+    void session.close();
     session.sendAudio(Buffer.from("late-input"));
     callbacks?.onAudio(Buffer.from("late-output"));
     await expect(session.connect()).rejects.toThrow("Realtime voice session is closed");
@@ -534,8 +534,8 @@ describe("realtime voice bridge session runtime", () => {
     expect(getPlaybackState).not.toHaveBeenCalled();
     session.sendAudio(Buffer.from("late-input"));
     callbacks?.onAudio(Buffer.from("late-output"));
-    session.close();
-    session.close();
+    void session.close();
+    void session.close();
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);

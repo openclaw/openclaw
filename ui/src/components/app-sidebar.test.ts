@@ -29,6 +29,7 @@ import "../test-helpers/app-sidebar-cases/narration.ts";
 import "../test-helpers/app-sidebar-cases/outbox-badges.ts";
 import "../test-helpers/app-sidebar-cases/pull-request-state.ts";
 import "../test-helpers/app-sidebar-cases/presence.ts";
+import "../test-helpers/app-sidebar-cases/presence-card.ts";
 import "../test-helpers/app-sidebar-cases/section-reordering.ts";
 import "../test-helpers/app-sidebar-cases/session-delete-access.ts";
 import "../test-helpers/app-sidebar-cases/session-indicators.ts";

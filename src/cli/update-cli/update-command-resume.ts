@@ -91,7 +91,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
-  let pluginUpdate = await withPluginLifecycleLease({}, async () => {
+  const producedPluginUpdate = await withPluginLifecycleLease({}, async () => {
     // The core migration owner committed before activation. This fresh process
     // reads that generation and only owns plugin convergence.
     const preparedConfig = await preparePostCorePluginConfig({
@@ -127,17 +127,19 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   });
   // Changed plugins already require the published parent's Doctor pass. Complete
   // the otherwise-skipped retirement before the parent consumes this result.
-  if (!pluginUpdate.changed && hasDeferredUpdateModelRetirement()) {
-    const completed = await completePostCorePluginUpdate({
-      root: params.root,
-      pluginUpdate,
-      freshDoctorRequired: false,
-      yes: params.opts.yes === true,
-      json: params.opts.json === true,
-      timeoutMs: params.timeoutMs,
-    });
-    pluginUpdate = completed.pluginUpdate;
-  }
+  const pluginUpdate =
+    !producedPluginUpdate.changed && hasDeferredUpdateModelRetirement()
+      ? (
+          await completePostCorePluginUpdate({
+            root: params.root,
+            pluginUpdate: producedPluginUpdate,
+            freshDoctorRequired: false,
+            yes: params.opts.yes === true,
+            json: params.opts.json === true,
+            timeoutMs: params.timeoutMs,
+          })
+        ).pluginUpdate
+      : producedPluginUpdate;
   // Only the target process may restamp an unchanged downgrade config. Plugin
   // migrations that still invalidate it will write through the target Doctor later.
   await persistValidatedDowngradeConfig(await readConfigFileSnapshot());

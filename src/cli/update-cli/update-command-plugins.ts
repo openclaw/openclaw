@@ -36,10 +36,12 @@ import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-c
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { readPackageVersion } from "./shared.js";
 import {
+  assessPluginUpdate,
   buildInvalidConfigPostCoreUpdateResult,
   createPluginUpdateWarning,
   type PluginUpdateWarning,
   type PostCorePluginUpdateResult,
+  type ProducedPluginUpdateResult,
 } from "./update-command-plugins-internals.js";
 
 export type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -83,6 +85,8 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   beforePersistentEffect?: () => void | Promise<void>;
+  /** Requirements for this installation, supplied by its owner. Missing is not optional. */
+  pluginRequirements?: Readonly<Record<string, "optional" | "required">>;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configWriteOptions: ConfigWriteOptions;
@@ -94,8 +98,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
   acceptCapabilities?: boolean;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
-}): Promise<PostCorePluginUpdateResult> {
+}): Promise<ProducedPluginUpdateResult> {
   const runtime = params.runtime ?? defaultRuntime;
+  const requirements = { ...params.pluginRequirements };
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
     if (!params.json) {
@@ -104,7 +109,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
         runtime.log(theme.muted(`  ${line}`));
       }
     }
-    return invalid.result;
+    return { ...invalid.result, assessment: { kind: "core-critical", reason: "invalid-config" } };
   }
 
   const clawHubTrustNotices = new Set<string>();
@@ -406,6 +411,29 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+  const assessment = assessPluginUpdate({
+    smokeFailures: convergence.smokeFailures,
+    // A failed cohort repair can disable a plugin before active smoke verification.
+    // Keep that unavailable capability visible; prior failures that were re-enabled
+    // by a successful repair remain diagnostic history only.
+    disabledPluginIds: [
+      ...new Set(
+        pluginUpdateOutcomes
+          .filter(
+            (outcome) =>
+              isDisabledAfterFailureOutcome(outcome) &&
+              pluginConfig.plugins?.entries?.[outcome.pluginId]?.enabled === false,
+          )
+          .map((outcome) => outcome.pluginId),
+      ),
+    ],
+    errored: convergence.errored,
+    outcomes: pluginUpdateOutcomes,
+    integrityDrift: integrityDrifts.length > 0,
+    requirements,
+  });
+  // Keep the established caller status contract. Assessment is separate evidence;
+  // consuming it to change restart/finalization requires a qualified caller cutover.
   const finalPluginOutcomes = [
     ...new Map(pluginUpdateOutcomes.map((outcome) => [outcome.pluginId, outcome])).values(),
   ];
@@ -413,8 +441,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
     warnings.length > 0 || finalPluginOutcomes.some((outcome) => outcome.status === "error")
       ? "warning"
       : "ok";
-  const result: PostCorePluginUpdateResult = {
+  const result: ProducedPluginUpdateResult = {
     status,
+    assessment,
     changed: pluginsChanged,
     warnings,
     sync: {

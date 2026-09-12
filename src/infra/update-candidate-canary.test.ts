@@ -3,11 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  writeUpdatePostInstallDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "./update-doctor-result.js";
 import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
@@ -198,6 +204,96 @@ describe("update candidate canary", () => {
     }
   });
 
+  it.each([false, true])(
+    "identifies legacy Doctor writes even if later validation fails (%s)",
+    async (failsValidation) => {
+      runtimeError = failsValidation;
+      mocks.spawn.mockImplementationOnce(
+        (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+          expect(args).toContain("doctor");
+          const child = new FakeChild(nextPid++);
+          children.set(child.pid, child);
+          const configPath = options.env.OPENCLAW_CONFIG_PATH;
+          if (!configPath) {
+            throw new Error("Missing rehearsal config");
+          }
+          void fs
+            .readFile(configPath, "utf8")
+            .then(async (raw) => {
+              const config: unknown = JSON.parse(raw);
+              if (!isRecord(config)) {
+                throw new Error("Invalid rehearsal fixture");
+              }
+              config.meta = { lastTouchedVersion: "2026.9.4" };
+              config.wizard = { lastRunCommand: "doctor" };
+              config.plugins = { entries: { openai: { enabled: true } } };
+              await fs.writeFile(configPath, JSON.stringify(config));
+              child.emit("close", 0);
+            })
+            .catch((error: unknown) => child.emit("error", error));
+          return child;
+        },
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ status: "started", ready: true })),
+      );
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+      });
+      expect(result.status).toBe(failsValidation ? "error" : "ok");
+      expect(result.doctorConfigWrites).not.toBe(true);
+      expect(result.doctorConfigChanges).toEqual(
+        ["meta", "plugins", "wizard"].map((key) => ({ kind: "key", key })),
+      );
+    },
+  );
+  it("accepts a classified Doctor advisory while capturing migration receipts", async () => {
+    mocks.spawn.mockImplementationOnce(
+      (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+        expect(args).toContain("doctor");
+        const child = new FakeChild(nextPid++);
+        children.set(child.pid, child);
+        const resultPath = options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        if (!resultPath) {
+          throw new Error("Missing candidate Doctor receipt");
+        }
+        void writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: createDeferredConfiguredPluginRepairDoctorResult([
+            "Deferred configured plugin repair.",
+          ]),
+        }).then(
+          () => child.emit("close", 86),
+          (error: unknown) => child.emit("error", error),
+        );
+        return child;
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3000,
+    });
+    expect(result.status).toBe("ok");
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "candidate migration rehearsal",
+        exitCode: 86,
+        advisory: expect.any(Object),
+      }),
+    );
+  });
   it.each([
     {
       label: "plugin load failure",
