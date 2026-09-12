@@ -121,49 +121,72 @@ it.each([
   },
 );
 
-it("skips an explicit artifact when its staged build identity matches the installed build", async () => {
-  await withTestDir({ prefix: "update-matching-artifact-" }, async (base) => {
-    const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(
-      base,
-      "1.0.0",
-      "same-build",
-    );
-    const validateCandidate = vi.fn(async () => [
-      { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
-    ]);
-    const beforeActivate = vi.fn(async () => {});
+it.each(["package", "git"] as const)(
+  "preserves matching explicit artifact behavior for an existing %s install",
+  async (installKind) => {
+    await withTestDir({ prefix: "update-matching-artifact-" }, async (base) => {
+      const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(
+        base,
+        "1.0.0",
+        "same-build",
+      );
+      const validateCandidate = vi.fn(async () => [
+        { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
+      ]);
+      const beforeActivate = vi.fn(async () => {});
 
-    const result = await runPackageInstallUpdate({
-      root,
-      installKind: "package",
-      tag: "https://example.invalid/candidate.tgz",
-      timeoutMs: 1000,
-      startedAt: Date.now(),
-      progress: {},
-      jsonMode: true,
-      installEnv: {},
-      installTarget: target,
-      validateCandidate,
-      beforeActivate,
-      onTransaction: vi.fn(),
+      const result = await runPackageInstallUpdate({
+        root,
+        installKind,
+        tag: "https://example.invalid/candidate.tgz",
+        timeoutMs: 1000,
+        startedAt: Date.now(),
+        progress: {},
+        jsonMode: true,
+        installEnv: {},
+        installTarget: target,
+        validateCandidate,
+        beforeActivate,
+        onTransaction: vi.fn(),
+      });
+      if (installKind === "package") {
+        expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+        expect(validateCandidate).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ status: "error", reason: "unexpected-error" });
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({ name: "canary", exitCode: 1 }),
+        );
+        expect(validateCandidate).toHaveBeenCalledOnce();
+      }
+      expect(beforeActivate).not.toHaveBeenCalled();
+      await expectOriginalInstallation();
     });
-    expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
-    expect(validateCandidate).not.toHaveBeenCalled();
-    expect(beforeActivate).not.toHaveBeenCalled();
-    await expectOriginalInstallation();
-  });
-});
+  },
+);
 
-it.each(["run", "close"] as const)(
-  "retains the exact staged runtime without replacing the active installation before %s",
-  async (action) => {
+it.each(
+  [
+    { name: "new version", candidateVersion: "2.0.0", tag: "2.0.0", buildId: undefined },
+    {
+      name: "matching explicit artifact",
+      candidateVersion: "1.0.0",
+      tag: "https://example.invalid/candidate.tgz",
+      buildId: "same-build",
+    },
+  ].flatMap(({ name, candidateVersion, tag, buildId }) =>
+    (["run", "close"] as const).map((action) => ({ name, candidateVersion, tag, buildId, action })),
+  ),
+)(
+  "retains the exact $name staged runtime without replacing the active installation before $action",
+  async ({ action, candidateVersion, tag, buildId }) => {
     await withTestDir({ prefix: "update-retained-stage-" }, async (base) => {
       const { root, target, installedPrefixes, expectOriginalInstallation } =
-        await createPackageInstallFixture(base, "2.0.0");
+        await createPackageInstallFixture(base, candidateVersion, buildId);
       const params = {
         root,
         installKind: "package" as const,
-        tag: "2.0.0",
+        tag,
         timeoutMs: 1000,
         startedAt: Date.now(),
         progress: {},
@@ -176,7 +199,7 @@ it.each(["run", "close"] as const)(
       expect(staged.root).not.toBe(root);
       expect(
         JSON.parse(await fs.readFile(path.join(staged.root, "package.json"), "utf8")).version,
-      ).toBe("2.0.0");
+      ).toBe(candidateVersion);
       await expectOriginalInstallation();
       if (action === "run") {
         const runtimeIdentity = await fs.stat(path.join(staged.root, "dist", "index.js"));

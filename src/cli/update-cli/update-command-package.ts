@@ -15,7 +15,6 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
-  canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -205,6 +204,7 @@ export async function prepareGitPackageExposure(
 
 export type PackageInstallUpdateParams = {
   reapplyLocalOverrides?: boolean;
+  requirePackageReplacement?: boolean;
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
@@ -245,6 +245,7 @@ export async function stagePackageInstallUpdate(
   const completed = runPackageInstallUpdate(
     {
       ...params,
+      requirePackageReplacement: true,
       progress: {
         onStepStart: (step) => (active?.progress ?? params.progress)?.onStepStart?.(step),
         onStepComplete: (step) => (active?.progress ?? params.progress)?.onStepComplete?.(step),
@@ -358,9 +359,9 @@ export async function runPackageInstallUpdate(
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    // Explicit artifacts identify the payload; an equal version is not artifact equality.
+    // Artifact equality cannot skip a method switch or retained-runtime staging.
     requirePackageReplacement:
-      params.installKind === "git" || !canResolveRegistryVersionForPackageTarget(installSpec),
+      params.installKind === "git" || params.requirePackageReplacement === true,
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),

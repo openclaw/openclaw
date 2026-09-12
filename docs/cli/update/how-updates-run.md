@@ -38,6 +38,8 @@ IDs before a same-version no-op. Matching known identity remains nonmutating;
 different or missing identity continues through normal candidate validation and
 installation because a matching version alone does not establish artifact
 equality. Registry requests retain their version-based same-version no-op.
+Installation-method switches and fresh-profile initialization still retain and
+validate the candidate even when its build identity matches.
 
 Updates continue with recorded warnings when disposable validation-copy cleanup,
 retired derived-cache cleanup, or Git upstream tracking setup fails. Resolve the

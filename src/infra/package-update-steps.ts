@@ -453,11 +453,11 @@ function isRegistrySourceInstallSpec(spec: string): boolean {
     return false;
   }
   // File suffixes take precedence over dist-tags in npm's resolve contract.
-  // Semver owns version/range grammar; tags use a conservative registry-safe
-  // subset. Uncertain specs require build identity rather than a version no-op.
+  // npm treats leading dots as paths and accepts tags unchanged by encodeURIComponent.
   return (
+    !selector.startsWith(".") &&
     !archive.test(selector) &&
-    (validRange(selector, true) !== null || /^[a-z0-9_][a-z0-9._-]*$/iu.test(selector))
+    (validRange(selector, true) !== null || encodeURIComponent(selector) === selector)
   );
 }
 
@@ -1141,7 +1141,8 @@ export async function runGlobalPackageUpdateSteps(params: {
         stagedInstall &&
         !params.expectedGitCheckout &&
         requireStaging &&
-        (registryTarget ? !params.requirePackageReplacement : sameArtifact) &&
+        !params.requirePackageReplacement &&
+        (registryTarget || sameArtifact) &&
         candidateVersion &&
         candidateVersion === (await readPackageVersionIfPresent(originalPackageRoot))
       ) {
