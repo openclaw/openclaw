@@ -78,7 +78,9 @@ it.each(
       }
       if (action === "approve") {
         expect(findChatSendPayload(host)).toMatchObject({ sessionKey: host.sessionKey, message });
-        expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+        expect(
+          host.request.mock.calls.filter(([method]) => method === "chat.history"),
+        ).toHaveLength(0);
       } else {
         expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
       }
@@ -204,7 +206,7 @@ it("keeps a restored transcript draft unsent until initial history commits", asy
   expect(host.chatMessage).toBe("Draft while restoring history");
   expect(host.chatQueue).toEqual([]);
   expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
-  expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+  expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
   history.resolve(current);
   await loading;
   expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());

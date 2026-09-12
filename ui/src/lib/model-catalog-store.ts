@@ -1,3 +1,4 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
@@ -51,17 +52,20 @@ export function modelCatalogRefreshError(
 /** The Gateway owns publication and freshness; callers own their request lifetime. */
 export async function loadModelCatalog(
   client: Pick<GatewayBrowserClient, "request">,
-  options: ModelsListParams & { signal?: AbortSignal },
+  options: ModelsListParams & Pick<GatewayProtocolRequestOptions, "signal" | "timeoutMs">,
 ): Promise<ModelCatalogResult> {
-  const { signal, agentId, view = "configured", ...optionsWithoutScope } = options;
+  const { signal, timeoutMs, agentId, view = "configured", ...optionsWithoutScope } = options;
   signal?.throwIfAborted();
   const params = {
     view,
     ...optionsWithoutScope,
     ...(agentId === undefined ? {} : { agentId: agentId.trim() }),
   };
-  return signal
-    ? await client.request<ModelCatalogResult>("models.list", params, { signal })
+  return signal || timeoutMs !== undefined
+    ? await client.request<ModelCatalogResult>("models.list", params, {
+        ...(signal ? { signal } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      })
     : await client.request<ModelCatalogResult>("models.list", params);
 }
 

@@ -1234,13 +1234,8 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
 
 export function mergeChannelProgressDraftLineForStreaming<
   TLine extends string | ChannelProgressDraftLine,
->(lines: TLine[], line: TLine, params: { maxLines: number; toolProgress: boolean }): TLine[] {
-  return mergeProgressDraftLine(
-    lines,
-    line,
-    params.maxLines,
-    params.toolProgress ? isChannelProgressPriorityLine : isChannelProgressAttentionLine,
-  );
+>(lines: TLine[], line: TLine, params: { maxLines: number }): TLine[] {
+  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressPriorityLine);
 }
 
 function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1381,7 +1376,7 @@ type ChannelProgressDraftTextParams = {
   formatLine?: (line: string) => string;
   /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
-  /** Short narration paragraph; when present it replaces the tool lines. */
+  /** Status headline rendered above the plan and activity rows. */
   narration?: string;
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
@@ -1393,14 +1388,9 @@ export function formatChannelProgressDraftText(params: ChannelProgressDraftTextP
 }
 
 export function formatChannelProgressDraftTextForStreaming(
-  params: ChannelProgressDraftTextParams & { toolProgress: boolean },
+  params: ChannelProgressDraftTextParams,
 ): string {
-  return formatProgressDraftText(
-    params,
-    params.toolProgress && params.presentation !== "summary"
-      ? isChannelProgressPriorityLine
-      : isChannelProgressAttentionLine,
-  );
+  return formatProgressDraftText(params, isChannelProgressPriorityLine);
 }
 
 function formatProgressDraftText(

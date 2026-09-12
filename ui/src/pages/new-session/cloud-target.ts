@@ -238,23 +238,6 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
     : row;
 }
 
-export function renderConnectMachineMenuItem(params: { disabled: boolean; onSelect: () => void }) {
-  return html`
-    <div class="session-menu__separator" role="separator"></div>
-    <button
-      type="button"
-      class="session-menu__item new-session-page__connect-machine"
-      data-value="connect-machine"
-      aria-pressed="false"
-      ?disabled=${params.disabled}
-      @click=${params.onSelect}
-    >
-      <span class="session-menu__icon" aria-hidden="true">${icons.link}</span>
-      <span class="session-menu__text">${t("newSession.connectMachine")}</span>
-    </button>
-  `;
-}
-
 export function renderCloudProfileMenuItems(params: {
   profiles: readonly DraftCloudProfile[];
   selectedId: string;
@@ -373,7 +356,7 @@ function machineShapeText(machine: DraftMachineOption): string | undefined {
   return memory ? t("newSession.machineMemory", { memory }) : undefined;
 }
 
-export function renderCloudConfiguration(params: {
+function renderCloudConfiguration(params: {
   profile: DraftCloudProfile;
   suggested?: boolean;
   operatingSystems: readonly DraftOperatingSystem[];

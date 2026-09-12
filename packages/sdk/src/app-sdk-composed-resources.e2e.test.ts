@@ -563,6 +563,7 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       status: "starting",
       worker: {
         providerId: "testbox",
+        profileId: "development",
         leaseId: "lease-sdk-e2e",
         state: "requested",
         ageMs: 9_000,
@@ -585,6 +586,7 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       status: "available",
       worker: {
         providerId: "testbox",
+        profileId: "development",
         leaseId: "lease-sdk-e2e",
         state: "ready",
         ageMs: 9_000,
