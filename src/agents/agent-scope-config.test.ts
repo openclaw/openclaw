@@ -16,6 +16,8 @@ import {
   resolveSoleAgentId,
   tryResolveAmbientOwnerAgentId,
   tryResolveDefaultAgentId,
+  tryResolveDiscoveryDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
   tryResolveSoleAgentId,
 } from "./agent-scope-config.js";
 
@@ -170,6 +172,97 @@ describe("agent roster resolution", () => {
         hint: "Set talk.agentId.",
       }),
     ).toThrow("Set talk.agentId.");
+  });
+
+  it("recovers the persisted legacy default for discovery surfaces through systemAgent", () => {
+    // Doctor persists multi-agent upgrades with explicit ownership while materializing
+    // the retired default agent's surfaces into agents.defaults.systemAgent. After restart
+    // the process-only retained id is gone, so the discovery default must recover the
+    // same principal from the persisted assignment (regression: `openclaw agents list
+    // --json` reported isDefault=false for every agent and legacy integrations got
+    // "default agent not detected").
+    const persistedFleet = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(tryResolveDiscoveryDefaultAgentId(persistedFleet)).toBe("ops");
+  });
+
+  it("keeps strict compatibility resolution ownerless in explicit fleets", () => {
+    // Strict ownership resolution must keep failing closed even when a system agent is
+    // configured; only discovery projections may treat the system agent as the default.
+    const ownerlessFleet = {
+      agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
+    } satisfies OpenClawConfig;
+    expect(tryResolveLegacyCompatibilityAgentId(ownerlessFleet)).toBeUndefined();
+    expect(tryResolveDiscoveryDefaultAgentId(ownerlessFleet)).toBeUndefined();
+
+    const configuredSystemAgent = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    expect(tryResolveLegacyCompatibilityAgentId(configuredSystemAgent)).toBeUndefined();
+
+    const staleSystemAgent = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "retired-agent" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    expect(tryResolveDiscoveryDefaultAgentId(staleSystemAgent)).toBeUndefined();
+
+    const blankSystemAgent = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "  " } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    expect(tryResolveDiscoveryDefaultAgentId(blankSystemAgent)).toBeUndefined();
+  });
+
+  it("keeps a raw legacy default marker ahead of the configured system agent", () => {
+    const config = {
+      agents: {
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: { default: true }, beta: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(tryResolveLegacyCompatibilityAgentId(config)).toBe("alpha");
+    expect(tryResolveDiscoveryDefaultAgentId(config)).toBe("alpha");
+  });
+
+  it("resolves the discovery default across a persisted multi-agent upgrade restart", () => {
+    // Mirror doctor-config-flow's persistence: migrate a legacy list with one default
+    // marker, then drop the process-only migration sidecar (structuredClone) and stamp
+    // explicit ownership exactly as the persisted on-disk config looks after restart.
+    const rawConfig = {
+      agents: {
+        list: [
+          { id: "ops", default: true, workspace: "/srv/ops" },
+          { id: "research", model: "openai/research" },
+        ],
+      },
+    };
+    const migrated = migratePersistedImplicitMainRoster(rawConfig, {
+      materializeWorkspace: true,
+    }).config as OpenClawConfig;
+    expect(migrated.agents?.defaults?.systemAgent?.agentId).toBe("ops");
+
+    const persisted = structuredClone(migrated);
+    persisted.agents = { ...persisted.agents, ownership: "explicit" as const };
+    expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(tryResolveLegacyCompatibilityAgentId(persisted)).toBeUndefined();
+    expect(tryResolveDiscoveryDefaultAgentId(persisted)).toBe("ops");
   });
 
   it("resolves the default agent directory through the ambient owner", () => {

@@ -9,6 +9,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveDiscoveryDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
@@ -59,7 +60,7 @@ export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number
 
 /** Build config-derived summaries for text/JSON agent listing. */
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
-  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const defaultAgentId = tryResolveDiscoveryDefaultAgentId(cfg);
   const configuredAgents = listAgentEntries(cfg);
   const orderedIds =
     configuredAgents.length > 0

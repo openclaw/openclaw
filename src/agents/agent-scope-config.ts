@@ -273,6 +273,27 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
   return value;
 }
 
+/**
+ * Default identity for agent discovery/listing surfaces (CLI list summary, `isDefault`).
+ *
+ * Prefer the legacy compatibility owner. When an explicit fleet has no legacy owner —
+ * typically right after Doctor persisted a multi-agent upgrade and stripped the retired
+ * default marker — use the persisted `agents.defaults.systemAgent` assignment when it names
+ * a roster member: that is the principal the upgrade materialized from the retired default.
+ *
+ * This fallback is intentionally NOT part of {@link tryResolveLegacyCompatibilityAgentId}:
+ * strict ownership resolution must keep failing closed in explicit fleets even when a
+ * system agent is configured, so only discovery projections may use it.
+ */
+export function tryResolveDiscoveryDefaultAgentId(cfg: OpenClawConfig): string | undefined {
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  if (compatibilityAgentId) {
+    return compatibilityAgentId;
+  }
+  const systemAgentId = normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId);
+  return systemAgentId && listAgentIds(cfg).includes(systemAgentId) ? systemAgentId : undefined;
+}
+
 /** Resolves the owner for ambient system work and explicit requests. */
 export function tryResolveAmbientOwnerAgentId(
   cfg: OpenClawConfig,
