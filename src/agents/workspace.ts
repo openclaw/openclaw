@@ -292,6 +292,28 @@ export function isExpectedAbsentBootstrapFile(name: string): boolean {
   return OPTIONAL_BOOTSTRAP_FILENAMES.has(name) || name === DEFAULT_MEMORY_FILENAME;
 }
 
+/**
+ * Windows NTFS can report a permission-shaped error (EPERM/EACCES) instead of
+ * EEXIST when an exclusive create or hard link collides with a target that
+ * already exists (pending delete, antivirus hold, directory junction). Accept
+ * that mapping only after a post-error check confirms the bootstrap target
+ * exists; a genuine access or path failure still propagates.
+ */
+function isWindowsExistingTargetCollision(error: unknown, targetPath: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  if (!hasErrnoCode(error, "EPERM") && !hasErrnoCode(error, "EACCES")) {
+    return false;
+  }
+  try {
+    syncFs.lstatSync(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function publishBootstrapFile(
   filePath: string,
   content: string | Buffer,
@@ -333,7 +355,10 @@ export async function publishBootstrapFile(
       syncFs.unlinkSync(staging.path);
       outcome = { kind: "created" };
     } catch (error) {
-      if (!linked && hasErrnoCode(error, "EEXIST")) {
+      if (
+        !linked &&
+        (hasErrnoCode(error, "EEXIST") || isWindowsExistingTargetCollision(error, targetPath))
+      ) {
         outcome = { kind: "exists" };
       } else if (!linked && isHardlinkFallbackError(error)) {
         outcome = {
