@@ -158,7 +158,10 @@ function plistFor(shortVersion: string, buildVersion: string): string {
   ].join("\n");
 }
 
-function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDirs) {
+function createRepo(
+  options: { plistBuildVersion?: string; version?: string } = {},
+  dirs = tempDirs,
+) {
   const origin = dirs.make("evidence-reuse-origin-");
   git(origin, ["init", "-q", "-b", "main"]);
   git(origin, ["config", "user.email", "test-user@example.invalid"]);
@@ -166,7 +169,7 @@ function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDir
   git(origin, ["config", "uploadpack.allowReachableSHA1InWant", "true"]);
   writeFileSync(
     join(origin, "package.json"),
-    `${JSON.stringify({ name: "x", version: "2026.7.1" }, null, 2)}\n`,
+    `${JSON.stringify({ name: "x", version: options.version ?? "2026.7.1" }, null, 2)}\n`,
   );
   mkdirSync(join(origin, "apps/macos/Sources/OpenClaw/Resources"), { recursive: true });
   writeFileSync(
@@ -1391,42 +1394,45 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 
-  it.each([false, true])(
-    "checks selected split release files in the shell resolver (unrelated=%s)",
-    (unrelated) => {
-      const { origin, priorSha } = createRepo();
-      mkdirSync(join(origin, "CHANGELOG"));
-      const targetSha = commitFile(
-        origin,
-        "CHANGELOG/2026.7.1.md",
-        "## 2026.7.1\n\nReleased.\n",
-        "docs: release entry",
-      );
-      const inputs = { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" };
-      const record = normalizedEvidence({ targetSha: priorSha, validationInputs: inputs });
-      const fixtures = setUpFixtures([{ record, runId: "111" }]);
-      const changedPaths = [
-        "CHANGELOG/2026.7.1.md",
-        ...(unrelated ? ["CHANGELOG/2026.6.8.md"] : []),
-      ];
-      const result = runResolver({
-        ...fixtures,
-        compareBaseSha: priorSha,
-        compareFiles: changedPaths,
-        inputs,
-        repoDir: cloneHead(origin),
-        targetSha,
+  it.each([
+    { version: "2026.7.1", delta: "selected" },
+    { version: "2026.7.1", delta: "unrelated" },
+    { version: "2026.7.1-beta.1", delta: "selected" },
+    { version: "2026.7.1-beta.1", delta: "unrelated" },
+    { version: "2026.7.1-beta.1", delta: "dedicated-beta" },
+  ])("checks $version split release files in the shell resolver ($delta)", ({ version, delta }) => {
+    const { origin, priorSha } = createRepo({ version });
+    const entryVersion = delta === "dedicated-beta" ? version : "2026.7.1";
+    const entryPath = `CHANGELOG/${entryVersion}.md`;
+    const recordPath = `CHANGELOG/records/${entryVersion}.md`;
+    mkdirSync(join(origin, "CHANGELOG/records"), { recursive: true });
+    commitFile(origin, entryPath, `## ${entryVersion}\n\nReleased.\n`, "docs: release entry");
+    const targetSha = commitFile(origin, recordPath, "Contributors.\n", "docs: release record");
+    const inputs = { ...DEFAULT_INPUTS, targetVersion: version };
+    const record = normalizedEvidence({ targetSha: priorSha, validationInputs: inputs });
+    const fixtures = setUpFixtures([{ record, runId: "111" }]);
+    const changedPaths = [
+      entryPath,
+      recordPath,
+      ...(delta === "unrelated" ? ["CHANGELOG/2026.6.8.md"] : []),
+    ];
+    const result = runResolver({
+      ...fixtures,
+      compareBaseSha: priorSha,
+      compareFiles: changedPaths,
+      inputs,
+      repoDir: cloneHead(origin),
+      targetSha,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(parseOutput(result.stdout).reuse).toBe(delta === "selected" ? "true" : "false");
+    if (delta === "selected") {
+      expect(parseOutput(result.stdout)).toMatchObject({
+        changed_paths: JSON.stringify(changedPaths),
+        evidence_policy: "split-changelog-release-v1",
       });
-      expect(result.status, result.stderr).toBe(0);
-      expect(parseOutput(result.stdout).reuse).toBe(unrelated ? "false" : "true");
-      if (!unrelated) {
-        expect(parseOutput(result.stdout)).toMatchObject({
-          changed_paths: JSON.stringify(changedPaths),
-          evidence_policy: "split-changelog-release-v1",
-        });
-      }
-    },
-  );
+    }
+  });
 
   it("rejects a source-file rename to CHANGELOG.md", () => {
     const { origin, priorSha } = createRepo();

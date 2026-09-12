@@ -1,6 +1,7 @@
 /** Builds dry-run cron delivery labels for CLI/UI list surfaces. */
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,
@@ -54,6 +55,19 @@ type CronDeliveryPreviewParams = {
 };
 
 function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
+  const agentId = tryResolveCronJobEffectiveAgentId(
+    params.job,
+    params.defaultAgentId ?? tryResolveAmbientOwnerAgentId(params.cfg),
+  );
+  const refusal = agentId ? readAgentDatabaseAdmissionRefusal(agentId) : undefined;
+  if (refusal) {
+    return {
+      preview: {
+        label: `agent ${agentId} unavailable`,
+        detail: `${refusal.reason}\n${refusal.repairHint}`,
+      },
+    };
+  }
   const plan = resolveCronDeliveryPlan(params.job);
   if (plan.mode === "none" && !hasExplicitCronDeliveryTarget(plan)) {
     return { preview: { label: "not requested", detail: "not requested" } };
@@ -65,10 +79,6 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
   }
 
   const requestedChannel = plan.channel ?? "last";
-  const agentId = tryResolveCronJobEffectiveAgentId(
-    params.job,
-    params.defaultAgentId ?? tryResolveAmbientOwnerAgentId(params.cfg),
-  );
   if (!agentId) {
     return {
       preview: {

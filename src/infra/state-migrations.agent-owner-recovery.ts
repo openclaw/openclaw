@@ -1,7 +1,6 @@
 /** Doctor recovers only proven duplicate files, before either owner's schema changes. */
 import fs from "node:fs";
 import path from "node:path";
-import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { checkpointDoctorSqliteFile } from "../commands/doctor-sqlite-compact.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -17,7 +16,8 @@ import {
 } from "./node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
-import { moveSqliteFilesAside, planSqliteRecoveryMoves } from "./sqlite-recovery-files.js";
+import { moveSqliteFilesAside } from "./sqlite-recovery-files.js";
+import { formatAgentDatabaseOwnershipRepairHint } from "./state-migrations.agent-owner-guidance.js";
 
 type Target = { agentId: string; path: string };
 type Recovery = { recovered: boolean; warning: string };
@@ -111,23 +111,6 @@ function checkpoint(target: Target, maintenance: OpenClawStateLeaseContext): voi
   }
 }
 
-function quarantineCommand(pathname: string): string {
-  const moves = planSqliteRecoveryMoves(
-    resolveSqliteDatabaseFilePaths(pathname).filter((file) =>
-      fs.lstatSync(file, { throwIfNoEntry: false }),
-    ),
-  );
-  // The recovery owner moves journals first and the main database last.
-  moves.sort((a, b) => Number(a.sourcePath === pathname) - Number(b.sourcePath === pathname));
-  return moves
-    .map(({ sourcePath, destinationPath }) =>
-      process.platform === "win32"
-        ? `Move-Item -LiteralPath ${quotePowerShellArg(sourcePath)} -Destination ${quotePowerShellArg(destinationPath)} -ErrorAction Stop`
-        : `mv -n -- ${quoteCliArg(sourcePath)} ${quoteCliArg(destinationPath)}`,
-    )
-    .join(process.platform === "win32" ? "; " : " && ");
-}
-
 export function recoverMisplacedAgentDatabaseCopies(params: {
   targets: readonly Target[];
   maintenance: OpenClawStateLeaseContext;
@@ -182,10 +165,9 @@ export function recoverMisplacedAgentDatabaseCopies(params: {
         warning: `Recovered agent ${target.agentId}: ${target.path} was a byte-identical copy of agent ${ownerId}'s database. Preserved the copy at ${recovery.movedFiles.join(", ")}. Agent ${target.agentId} can start with a fresh database. Run openclaw doctor --fix to verify repairs.`,
       });
     } catch (error) {
-      const action = quarantineCommand(target.path);
       results.set(target.path, {
         recovered: false,
-        warning: `Refused agent ${target.agentId} database ${target.path}: belongs to agent ${ownerId}; duplicate recovery could not be verified (${String(error)}). Preserve and inspect this database before accepting a fresh agent. With all OpenClaw processes stopped, the explicit quarantine move is${process.platform === "win32" ? " (PowerShell)" : ""}:\n${action}\nThen run openclaw doctor --fix.`,
+        warning: `Refused agent ${target.agentId} database ${target.path}: belongs to agent ${ownerId}; duplicate recovery could not be verified (${String(error)}). ${formatAgentDatabaseOwnershipRepairHint(target.path)}`,
       });
     }
   }

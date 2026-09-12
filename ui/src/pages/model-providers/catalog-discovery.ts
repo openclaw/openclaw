@@ -19,6 +19,8 @@ type DiscoveryGateway = {
 };
 
 export type CatalogDiscoveryController = {
+  /** Latest picker request, including one that has already settled. */
+  readonly generation: number;
   /** Whether a discovery request is currently in flight. */
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
@@ -46,8 +48,12 @@ export function createCatalogDiscoveryController(
   let pending: AbortController | null = null;
   let error: string | null = null;
   let requestedDiscovery = false;
+  let generation = 0;
 
   const controller: CatalogDiscoveryController = {
+    get generation() {
+      return generation;
+    },
     get discovering() {
       return pending !== null;
     },
@@ -91,6 +97,7 @@ export function createCatalogDiscoveryController(
       options.getAgentId() === agentId &&
       options.getAgentEpoch() === agentEpoch;
     pending = request;
+    generation += 1;
     error = null;
     requestedDiscovery = true;
     options.requestUpdate();

@@ -84,6 +84,10 @@ under `split-changelog-release-v1` only when the complete delta:
   root `CHANGELOG.md` index.
 - Contains no other paths, other releases, renames or deletions.
 
+Beta package versions select the stable-base entry and matching record. For
+example, `2026.9.5-beta.1` uses `CHANGELOG/2026.9.5.md` and
+`CHANGELOG/records/2026.9.5.md`, as release-note generation does.
+
 Docs-source changes do not qualify for this narrow reuse policy. Historical
 root-only receipts retain `changelog-only-release-v1` and its original exact
 `CHANGELOG.md` delta; they are not relabeled as split-layout evidence. Either

@@ -558,6 +558,8 @@ describe("human mention submission", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+    expect(host.chatMessage).toBe("");
+    host.chatMessage = "@Alex please review";
     host.chatMentions = [{ profileId: "profile-second", start: 0, end: 5 }];
     history.resolve({
       messages: [],

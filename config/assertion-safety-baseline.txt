@@ -1418,7 +1418,7 @@ packages/ai/src/openai-completions-messages.ts	7
 packages/ai/src/provider-transcript-transform.ts	3
 packages/ai/src/provider-types.ts	1
 packages/ai/src/providers/agent-tools-parameter-schema.ts	23
-packages/ai/src/providers/anthropic-model-contract.ts	2
+packages/ai/src/providers/anthropic-model-contract.ts	1
 packages/ai/src/providers/anthropic-refusal.ts	1
 packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-thinking-replay.ts	2

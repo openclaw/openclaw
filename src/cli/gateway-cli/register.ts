@@ -490,6 +490,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .command("call")
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
+      .option(
+        "--expect-url <url>",
+        "Fail if the resolved Gateway URL differs; preserves configured authentication",
+      )
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {
         await runGatewayCommand(
