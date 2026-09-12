@@ -3,6 +3,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
@@ -182,7 +183,7 @@ export function registerCronEditCommand(cron: Command) {
           if (deliveryModeFlagCount > 1) {
             throw new CronCliError("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
-          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+          const triggerScriptPath = readNonBlankString(opts.triggerScript);
           if (typeof opts.triggerScript === "string" && !triggerScriptPath) {
             throw new CronCliError("--trigger-script must not be blank");
           }
