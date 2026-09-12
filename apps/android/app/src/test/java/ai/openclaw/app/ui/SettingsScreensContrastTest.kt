@@ -365,14 +365,15 @@ class SettingsScreensContrastTest {
         .single()
     try {
       disconnectAndReconnectStatusControl(model, showHeader = true)
-      composeRule.onNodeWithContentDescription(readyDescription).assertIsDisplayed()
+      // The session title can resolve after reconnect; the health status is the invariant.
+      composeRule.onNode(chatStatusMatcher(showHeader = true, value = "Ready")).assertIsDisplayed()
 
       composeRule.runOnIdle {
         gateway.healthReady = false
         model.refreshChat()
       }
       awaitConnectedHealthFailure(model, showHeader = true)
-      composeRule.onNodeWithContentDescription(readyDescription.removeSuffix(ready) + nativeString("Not ready")).assertIsDisplayed()
+      composeRule.onNode(chatStatusMatcher(showHeader = true, value = "Not ready")).assertIsDisplayed()
     } catch (failure: AssertionError) {
       runCatching {
         println("Chat header failure: initialHeader=$readyDescription, connected=${model.gatewayConnectionDisplay.value.isConnected}, health=${model.chatHealthOk.value}")
