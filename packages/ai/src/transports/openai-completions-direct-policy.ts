@@ -25,9 +25,7 @@ export function applyDirectCompletionsReasoningAndRouting(
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
   const declaredEfforts = resolveOpenAIModelReasoningEfforts(model);
   const hasReasoningContract =
-    compat.supportsReasoningEffort !== false &&
-    declaredEfforts !== undefined &&
-    declaredEfforts.length > 0;
+    compat.supportsReasoningEffort && declaredEfforts !== undefined && declaredEfforts.length > 0;
   let reasoningEffort: string | undefined;
   if (options?.reasoningEffort === undefined) {
     reasoningEffort = offReasoningEffort ?? undefined;
