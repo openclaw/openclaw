@@ -67,7 +67,7 @@ const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
 
 function escapeInlineControlChars(value: string): string {
   return value.replace(
-    /[\x00-\x1f\x7f-\x9f\u2028\u2029]/g,
+    /[\p{Cc}\u2028\u2029]/gu,
     (char) =>
       INLINE_CONTROL_ESCAPE_MAP[char] || `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
   );
