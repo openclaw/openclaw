@@ -3891,6 +3891,7 @@ td.data-table-key-col {
 }
 
 .agent-select__avatar--icon svg,
+.agent-select__option-check svg,
 .agent-select__footer-icon svg {
   width: 14px;
   height: 14px;
@@ -3936,6 +3937,18 @@ td.data-table-key-col {
   flex: 1;
   min-width: 0;
   gap: 1px;
+}
+
+.agent-select__option-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.agent-select__option-check {
+  display: inline-flex;
+  flex: 0 0 auto;
 }
 
 .agent-select__option-label {
