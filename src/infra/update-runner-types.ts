@@ -11,6 +11,7 @@ import type {
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
+import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateStepAdvisory =
   | PackageUpdateStepAdvisory
@@ -32,6 +33,7 @@ export type UpdateStepResult = {
   warnings?: string[];
   configChanges?: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
+  snapshotCapacity?: UpdateSnapshotCapacity;
 };
 
 export type UpdateRunResult = {

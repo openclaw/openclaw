@@ -30,6 +30,7 @@ import {
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
+import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 
 type CanaryPhase =
   | "snapshot"
@@ -296,6 +297,16 @@ export async function validateUpdateCandidateCanary(params: {
     const snapshotDuration = Date.now() - snapshotStarted;
     deadline += snapshotDuration;
     workDeadline += snapshotDuration;
+    const snapshotStep: UpdateStepResult = {
+      name: "candidate snapshot",
+      command: "candidate snapshot",
+      cwd: params.root,
+      durationMs: snapshotDuration,
+      exitCode: 0,
+      snapshotCapacity: rehearsal.snapshotCapacity,
+    };
+    steps.push(snapshotStep);
+    params.onStep?.(snapshotStep);
     env = { ...rehearsal.env };
     const { port, stateDir: copiedStateDir } = rehearsal;
     const doctorResultOptions = { tmpdir: () => copiedStateDir };
@@ -549,6 +560,9 @@ export async function validateUpdateCandidateCanary(params: {
       steps.push(failed);
     }
     failed.stderrTail = logTail.join("\n");
+    if (error instanceof UpdateSnapshotCapacityError) {
+      failed.snapshotCapacity = error.capacity;
+    }
     params.onStep?.(failed);
     return {
       status: "error",
@@ -564,15 +578,20 @@ export async function validateUpdateCandidateCanary(params: {
     };
   } finally {
     if (!params.rehearsal && rehearsal) {
-      await cleanupUpdateTemporaryDirectory({
-        directory: rehearsal.stateDir,
-        root: params.root,
-        name: "candidate rehearsal cleanup",
-        onWarning: (step) => {
-          steps.push(step);
-          params.onStep?.(step);
-        },
-      });
+      for (const directory of rehearsal.cleanupDirectories) {
+        await cleanupUpdateTemporaryDirectory({
+          directory,
+          root: params.root,
+          name:
+            directory === rehearsal.stateDir
+              ? "candidate rehearsal cleanup"
+              : "candidate inventory cleanup",
+          onWarning: (step) => {
+            steps.push(step);
+            params.onStep?.(step);
+          },
+        });
+      }
     }
   }
 }

@@ -75,6 +75,79 @@ afterEach(() => {
 });
 
 describe("update run ledger", () => {
+  it.each(["selected", "refused", "unavailable"] as const)(
+    "retains and reports snapshot capacity evidence (%s)",
+    (outcome) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const directory = `${options.env.OPENCLAW_STATE_DIR}.update-captures`;
+      const snapshotCapacity = {
+        reason:
+          outcome === "unavailable"
+            ? ("snapshot-location-unavailable" as const)
+            : outcome === "selected"
+              ? ("state-volume" as const)
+              : ("snapshot-capacity-insufficient" as const),
+        sqliteBytes: 1_048_576,
+        pluginBytes: 2_097_152,
+        requiredBytes: 8_388_608,
+        candidates: [
+          {
+            kind: "explicit-tmpdir" as const,
+            directory: "/synthetic/tmp",
+            availableBytes: outcome === "refused" ? 1024 : 16_777_216,
+            ...(outcome !== "refused" ? { allocationError: "not a directory" } : {}),
+          },
+          {
+            kind: "state-volume" as const,
+            directory,
+            availableBytes: outcome === "refused" ? 2048 : 16_777_216,
+            ...(outcome === "unavailable" ? { allocationError: "permission denied" } : {}),
+          },
+        ],
+        selection: outcome === "selected" ? { kind: "state-volume" as const, directory } : null,
+      };
+      const step = {
+        name: "candidate snapshot",
+        exitCode: outcome === "selected" ? 0 : 1,
+        snapshotCapacity,
+      };
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, entry, options);
+      }
+      finishUpdateRun(
+        run.runId,
+        { status: outcome === "selected" ? "succeeded" : "failed" },
+        options,
+      );
+      const retained = getUpdateRun(run.runId, options);
+      expect(retained).toBeDefined();
+      if (!retained) {
+        throw new Error("Missing retained update run");
+      }
+      const redactedDirectory = "$OPENCLAW_STATE_DIR.update-captures";
+      expect(retained.steps.find((entry) => entry.step === step.name)?.snapshotCapacity).toEqual({
+        ...snapshotCapacity,
+        candidates: [
+          snapshotCapacity.candidates[0],
+          { ...snapshotCapacity.candidates[1], directory: redactedDirectory },
+        ],
+        selection:
+          outcome === "selected" ? { kind: "state-volume", directory: redactedDirectory } : null,
+      });
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(redactedDirectory);
+      expect(report).toContain("8 MiB");
+      expect(report).toContain("1 MiB SQLite");
+      expect(report).toContain("2 MiB plugin files");
+      expect(report).not.toContain(options.env.OPENCLAW_STATE_DIR);
+      if (outcome !== "selected") {
+        expect(report).toContain("TMPDIR");
+      }
+      expect(snapshotCapacity.candidates[1]?.directory).toBe(directory);
+    },
+  );
+
   it("bounds Doctor evidence before ledger validation without changing full messages", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);

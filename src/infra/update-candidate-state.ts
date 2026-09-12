@@ -22,6 +22,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
+  UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
   resolveUpdateCandidateStateIdentity,
   resolveUpdateCandidateStatePath,
 } from "./update-candidate-paths.js";
@@ -106,6 +107,11 @@ type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
 export const UpdateCandidateStateInventorySchema = z
   .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
   .transform((entries) => new Map(entries));
+export const UpdateCandidateSnapshotInventorySchema = z.object({
+  databases: UpdateCandidateStateInventorySchema,
+  pluginBytes: z.number().nonnegative(),
+  pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
+});
 
 function queueStateDatabaseSpelling(
   files: Map<string, StateDatabaseDiscovery>,
@@ -248,23 +254,52 @@ function publishStateDatabaseVersions(
   return versions;
 }
 
-/** Read registrations from a private shared copy before budgeting the complete snapshot set. */
+/** Read registrations and plugin ownership from one private shared copy before budgeting. */
 export async function readUpdateCandidateStateInventoryInProcess(
-  input: StateInput,
-): Promise<Map<string, StateDatabaseDiscovery>> {
+  input: StateInput & { targetStateDir: string; candidateRoot: string },
+): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> {
+  await fs.mkdir(input.targetStateDir, { recursive: true, mode: 0o700 });
+  const planPath = path.join(input.targetStateDir, UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME);
+  await fs.writeFile(planPath, "", { mode: 0o600, flag: "wx" });
+  let progressAt = Date.now();
+  const onProgress = async () => {
+    const now = Date.now();
+    if (now - progressAt < 1000) {
+      return;
+    }
+    progressAt = now;
+    await fs.utimes(planPath, new Date(now), new Date(now));
+  };
+  const { prepareUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
   const files = await collectStateDatabasePaths(input);
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
+  const measure = async (
+    sharedStateDatabasePath?: string,
+  ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> => {
+    const plugins = await prepareUpdateCandidatePlugins({
+      ...input,
+      sharedStateDatabasePath,
+      onProgress,
+    });
+    await fs.writeFile(planPath, JSON.stringify(plugins));
+    return {
+      databases: files,
+      pluginBytes: plugins.bytes,
+      pluginPlan: UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
+    };
+  };
   if (await fileExists(shared)) {
-    await withStateDatabaseSnapshot(shared, (location) => {
+    return withStateDatabaseSnapshot(shared, async (location) => {
       const db = openNodeSqliteDatabase(location, { readOnly: true });
       try {
         collectRegisteredPaths(db, shared, files);
       } finally {
         db.close();
       }
+      return measure(location);
     });
   }
-  return files;
+  return measure();
 }
 
 /** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
@@ -352,9 +387,20 @@ export async function readUpdateStateSchemaVersions({
 
 /** Keep snapshot dependencies out of schema inspection; rebind registry paths to private copies. */
 export async function snapshotUpdateCandidateState(
-  input: StateInput & { targetStateDir: string; candidateRoot: string },
+  input: StateInput & {
+    targetStateDir: string;
+    candidateRoot: string;
+    pluginPlanPath: string;
+    databaseInventory: string[];
+  },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
+  const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
+    await import("./update-candidate-plugins.js");
+  const plugins = UpdateCandidatePluginPlanSchema.parse(
+    JSON.parse(await fs.readFile(input.pluginPlanPath, "utf8")),
+  );
+  const admittedDatabases = new Set(input.databaseInventory);
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
   const targetPath = (source: string) =>
@@ -367,6 +413,11 @@ export async function snapshotUpdateCandidateState(
   const files = await collectStateDatabasePaths(input);
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   for (const [identity, discovery] of files) {
+    if (!admittedDatabases.has(identity)) {
+      throw new Error(
+        `State database registration changed after snapshot inventory: ${discovery.spellings[0]}`,
+      );
+    }
     const file = discovery.spellings[0];
     if (!(await fileExists(file))) {
       inspected.set(identity, { userVersion: null });
@@ -441,7 +492,6 @@ export async function snapshotUpdateCandidateState(
     });
   }
   const versions = publishStateDatabaseVersions(files, inspected);
-  const { projectUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
-  const pluginPaths = await projectUpdateCandidatePlugins(input);
+  const pluginPaths = await copyUpdateCandidatePlugins(plugins, input);
   return { versions, pluginPaths };
 }
