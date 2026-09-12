@@ -27,6 +27,7 @@ import {
 } from "./attempt-spawn-workspace.test-support.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
@@ -141,6 +142,54 @@ function createTestContextEngine(params: Partial<AttemptContextEngine>): Attempt
   } as AttemptContextEngine;
 }
 
+function createAnthropicRuntimePlan(): NonNullable<EmbeddedRunAttemptParams["runtimePlan"]> {
+  const policy = {
+    sanitizeMode: "full" as const,
+    sanitizeToolCallIds: true,
+    preserveNativeAnthropicToolUseIds: false,
+    repairToolUseResultPairing: true,
+    preserveSignatures: true,
+    dropThinkingBlocks: false,
+    dropReasoningFromHistory: false,
+    applyGoogleTurnOrdering: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    allowSyntheticToolResults: false,
+  };
+  return {
+    resolvedRef: {
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "anthropic-messages",
+    },
+    prompt: {
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      resolveSystemPromptContribution: () => undefined,
+      transformSystemPrompt: (context) => context.systemPrompt,
+    },
+    transcript: {
+      policy,
+      resolvePolicy: () => policy,
+    },
+    transport: { extraParams: {}, resolveExtraParams: () => ({}) },
+    tools: { normalize: (tools) => tools, logDiagnostics: () => {} },
+    auth: {
+      providerForAuth: "anthropic",
+      authProfileProviderForAuth: "",
+      forwardedAuthProfileId: undefined,
+    },
+    delivery: { isSilentPayload: () => false, resolveFollowupRoute: () => undefined },
+    outcome: { classifyRunResult: () => undefined },
+    observability: {
+      resolvedRef: "anthropic/claude-sonnet-4-6",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "anthropic-messages",
+    },
+  };
+}
+
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
@@ -197,6 +246,103 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
     expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
+  });
+
+  it("rechecks host authorization at the provider stream boundary", async () => {
+    let authorized = true;
+    const revoked = new Error("synthetic host authorization revocation");
+    const providerCall = vi.fn(async () => undefined);
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        assertRunAuthorization: () => {
+          if (!authorized) {
+            throw revoked;
+          }
+        },
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ prompt: providerCall });
+        const prompt = session.agent.prompt;
+        if (!prompt) {
+          throw new Error("Expected the embedded prompt fixture");
+        }
+        session.agent.prompt = async (...args) => {
+          authorized = false;
+          return prompt(...args);
+        };
+        return session;
+      },
+    });
+
+    expect(providerCall).not.toHaveBeenCalled();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(revoked);
+  });
+
+  it("rechecks host authorization before an Anthropic recovery retry", async () => {
+    let authorized = true;
+    const revoked = new Error("synthetic host authorization revocation");
+    const historicalMessages = [
+      { role: "user", content: "historical question", timestamp: 1 } as AgentMessage,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "historical stale thinking",
+            thinkingSignature: "stale-signature",
+          },
+          { type: "text", text: "historical answer" },
+        ],
+        stopReason: "stop",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        timestamp: 2,
+      } as AgentMessage,
+    ];
+    const providerCall = vi.fn(() => {
+      authorized = false;
+      return Promise.reject(
+        new Error(
+          "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
+        ),
+      );
+    });
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: historicalMessages,
+      attemptOverrides: {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        // SAFETY: the attempt fixture reads only this complete synthetic model metadata shape.
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          contextWindow: 200_000,
+          input: ["text"],
+        } as never,
+        runtimePlan: createAnthropicRuntimePlan(),
+        assertRunAuthorization: () => {
+          if (!authorized) {
+            throw revoked;
+          }
+        },
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: historicalMessages });
+        session.agent.streamFn = providerCall;
+        return session;
+      },
+    });
+
+    expect(providerCall).toHaveBeenCalledOnce();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(revoked);
   });
 
   it("carries the resolved context budget into OpenClaw tool construction", async () => {
@@ -574,52 +720,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           contextWindow: 128_000,
           input: ["text"],
         } as never,
-        runtimePlan: {
-          prompt: {
-            resolveSystemPromptContribution: () => undefined,
-          },
-          transcript: {
-            resolvePolicy: () => ({
-              sanitizeMode: "full",
-              sanitizeToolCallIds: true,
-              preserveNativeAnthropicToolUseIds: false,
-              repairToolUseResultPairing: true,
-              preserveSignatures: true,
-              dropThinkingBlocks: false,
-              dropReasoningFromHistory: false,
-              applyGoogleTurnOrdering: false,
-              validateGeminiTurns: false,
-              validateAnthropicTurns: false,
-              allowSyntheticToolResults: false,
-            }),
-          },
-          transport: {
-            extraParams: {},
-            resolveExtraParams: () => ({}),
-          },
-          tools: {
-            normalize: (tools: unknown[]) => tools,
-            logDiagnostics: () => {},
-          },
-          auth: {
-            providerForAuth: "anthropic",
-            authProfileProviderForAuth: "",
-            forwardedAuthProfileId: undefined,
-          },
-          delivery: {
-            isSilentPayload: () => false,
-            resolveFollowupRoute: () => undefined,
-          },
-          outcome: {
-            classifyRunResult: () => undefined,
-          },
-          observability: {
-            resolvedRef: "anthropic/claude-sonnet-4-6",
-            provider: "anthropic",
-            modelId: "claude-sonnet-4-6",
-            modelApi: "anthropic-messages",
-          },
-        } as never,
+        runtimePlan: createAnthropicRuntimePlan(),
       },
       createSession: () => {
         const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });

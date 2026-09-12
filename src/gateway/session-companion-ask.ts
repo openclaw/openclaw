@@ -47,6 +47,7 @@ type SessionCompanionRunParams = {
   workspaceDir: string;
   systemPrompt: string;
   messages: SessionCompanionPromptMessage[];
+  authorize?: () => boolean;
   signal: AbortSignal;
 };
 
@@ -147,6 +148,7 @@ function toRunnerHistoryMessage(
 }
 
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
+  assertReadAuthorized(params.authorize);
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -166,29 +168,37 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   });
   const { prepareInternalSessionEffectsSession, removeInternalSessionEffectsSession } =
     await import("../agents/internal-session-effects.js");
-  const target = await prepareInternalSessionEffectsSession({
-    agentId: params.agentId,
-    cwd: params.workspaceDir,
-    runId,
-    storePath,
-  });
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    params.cfg,
-    runId,
-    params.agentId,
-    "session-companion.ask",
-  );
+  assertReadAuthorized(params.authorize);
+  let target: Awaited<ReturnType<typeof prepareInternalSessionEffectsSession>> | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
+    target = await prepareInternalSessionEffectsSession({
+      agentId: params.agentId,
+      cwd: params.workspaceDir,
+      runId,
+      storePath,
+    });
+    assertReadAuthorized(params.authorize);
+    preparedRunAdmission = prepareSystemAgentRunAdmission(
+      params.cfg,
+      runId,
+      params.agentId,
+      "session-companion.ask",
+    );
     const [{ SessionManager }, { runEmbeddedAgent }] = await Promise.all([
       import("../agents/sessions/index.js"),
       import("../agents/embedded-agent.js"),
     ]);
+    assertReadAuthorized(params.authorize);
     const sessionManager = SessionManager.open(target);
     for (const message of params.messages.slice(0, -1)) {
+      assertReadAuthorized(params.authorize);
       sessionManager.appendMessage(toRunnerHistoryMessage(message, selection));
     }
+    assertReadAuthorized(params.authorize);
     const result = await runEmbeddedAgent({
       preparedRunAdmission,
+      assertRunAuthorization: () => assertReadAuthorized(params.authorize),
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
@@ -222,6 +232,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       oneShotCliRun: true,
       inputProvenance: { kind: "internal_system", sourceTool: "session-companion" },
     });
+    assertReadAuthorized(params.authorize);
     return (
       result.meta.finalAssistantVisibleText ??
       result.payloads
@@ -231,7 +242,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ""
     );
   } finally {
-    preparedRunAdmission.close();
+    preparedRunAdmission?.close();
     await removeInternalSessionEffectsSession(target);
   }
 }
@@ -357,6 +368,12 @@ function contextError(
   return new SessionCompanionAskError(reason, message);
 }
 
+function assertReadAuthorized(authorize?: () => boolean): void {
+  if (authorize?.() === false) {
+    throw contextError("session-missing", "Side chat is unavailable.");
+  }
+}
+
 export function createSessionCompanionAskRuntime(params: SessionCompanionAskRuntimeParams) {
   const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
@@ -379,6 +396,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     sessionKey: string,
     agentId: string,
     signal: AbortSignal,
+    authorize?: () => boolean,
   ): Promise<SessionCompanionThread> => {
     const threadKey = sessionObserverScopeKey(sessionKey, agentId);
     const existing = params.threads.get(threadKey);
@@ -386,6 +404,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
+    assertReadAuthorized(authorize);
     if (existing && currentSessionId(sessionKey, agentId) === existing.context.sessionId) {
       return existing;
     }
@@ -396,6 +415,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (signal.aborted || params.isDisposed()) {
       throw new Error("session companion preparation was cancelled");
     }
+    assertReadAuthorized(authorize);
     if (result.kind === "missing") {
       throw contextError("session-missing", "The selected session is no longer available.");
     }
@@ -428,6 +448,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     sessionKey: string;
     question: string;
     connId: string;
+    authorize?: () => boolean;
     signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
@@ -507,7 +528,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     // Preparation shares the model's cancellation race. Late completions must
     // still pass the ownership checks before dispatching or committing an answer.
     const execute = async () => {
-      const thread = await prepareThread(sessionKey, agentId, controller.signal);
+      const thread = await prepareThread(sessionKey, agentId, controller.signal, request.authorize);
       ownedThread = thread;
       if (controller.signal.aborted) {
         throw new Error("session companion preparation was cancelled");
@@ -546,6 +567,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         referenceContext,
         now: admittedAt,
       });
+      assertReadAuthorized(request.authorize);
       const rawAnswer = await run({
         cfg,
         agentId,
@@ -554,11 +576,13 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         workspaceDir,
         systemPrompt: buildSystemPrompt(sessionKey),
         messages,
+        authorize: request.authorize,
         signal: controller.signal,
       });
       if (activeAsk.cancellation || params.isDisposed()) {
         throw new Error("session companion ask was cancelled");
       }
+      assertReadAuthorized(request.authorize);
       if (
         params.threads.get(threadKey) !== thread ||
         currentSessionId(sessionKey, agentId) !== thread.context.sessionId
@@ -642,4 +666,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       admissions.length = 0;
     },
   };
+}
+
+const testing = { defaultRun };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  // SAFETY: the symbol-keyed slot is installed only for the colocated test-support adapter.
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionCompanionAskTestApi")] =
+    testing;
 }

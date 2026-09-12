@@ -128,9 +128,13 @@ export async function runEmbeddedAttempt(
     runId: params.runId,
     state: executionState,
   });
+  const assertAttemptCurrent = () => {
+    externalAbortController.throwIfFired();
+    params.assertRunAuthorization?.();
+  };
   const prepare = createEmbeddedAttemptPreparation({
     config: params.config,
-    assertCurrent: externalAbortController.throwIfFired,
+    assertCurrent: assertAttemptCurrent,
   });
   try {
     const preparedSkills = await prepare("attempt.skills", () =>

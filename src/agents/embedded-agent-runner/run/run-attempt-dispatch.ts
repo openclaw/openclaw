@@ -661,6 +661,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       sessionPromptState.activePrompt.persisted = false;
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    assertRunAuthorization: params.assertRunAuthorization,
   };
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attemptParams.admittedRunContext,
@@ -677,16 +678,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     turnSourceAccountId: params.agentAccountId,
     turnSourceThreadId: params.currentThreadTs,
   });
-  const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
-    runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime),
-  )
-    .catch((err: unknown): never => {
+  let rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+  try {
+    params.assertRunAuthorization?.();
+    rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
+      runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime),
+    ).catch((err: unknown): never => {
       throw input.getPostCompactionAbortError() ?? err;
-    })
-    .finally(() => {
-      attemptControls.close();
-      input.clearPostCompactionAbortController(attemptAbortController);
     });
+  } finally {
+    attemptControls.close();
+    input.clearPostCompactionAbortController(attemptAbortController);
+  }
 
   const postCompactionAbortError = input.getPostCompactionAbortError();
   if (postCompactionAbortError) {

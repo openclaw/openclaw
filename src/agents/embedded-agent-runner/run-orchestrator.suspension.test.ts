@@ -180,6 +180,33 @@ function failAttempt(stage: "prompt" | "assistant", sessionId: string) {
 }
 
 describe("embedded run detached session metadata", () => {
+  it("rechecks host authorization after prepared-runtime acquisition before provider dispatch", async () => {
+    const { params } = await createRun("main");
+    const acquire = vi.mocked(acquireRuntime).getMockImplementation();
+    if (!acquire) {
+      throw new Error("Expected the prepared-runtime fixture");
+    }
+    let authorized = true;
+    const revoked = new Error("synthetic host authorization revocation");
+    const guardedParams = {
+      ...params,
+      assertRunAuthorization: () => {
+        if (!authorized) {
+          throw revoked;
+        }
+      },
+    };
+    vi.mocked(acquireRuntime).mockImplementationOnce(async (...args) => {
+      const lease = await acquire(...args);
+      authorized = false;
+      return lease;
+    });
+    runAttempt.mockResolvedValue(successfulAttempt(params.sessionId));
+
+    await expect(runEmbeddedAgent(guardedParams)).rejects.toBe(revoked);
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
   it("suspends the canonical agent selected during prepared-runtime acquisition", async () => {
     const { params, scope } = await createRun("main");
     // Global keys have an explicit owner but no agent prefix to contradict a rebind.

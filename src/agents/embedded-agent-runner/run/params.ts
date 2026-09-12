@@ -96,6 +96,8 @@ export type RunEmbeddedAgentParams = {
   admittedRunContext?: AdmittedRunContext;
   /** Host-only post-prepare continuation, removed before plugin invocation. */
   preparedRunAdmission?: PreparedAgentRunAdmission;
+  /** Host-owned synchronous guard rechecked after async preparation and immediately before provider dispatch. */
+  assertRunAuthorization?: () => void;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
