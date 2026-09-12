@@ -340,14 +340,12 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   );
 
   it.for([
-    { script: "prepare-extension-package-boundary-artifacts.mts", failStagingCleanup: false },
-    { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: false },
-    { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: true },
-    { script: "write-unified-entry-dts.ts", failStagingCleanup: false },
-    { script: "write-unified-entry-dts.ts", failStagingCleanup: true },
+    { script: "prepare-extension-package-boundary-artifacts.mts" },
+    { script: "write-plugin-sdk-entry-dts.ts" },
+    { script: "write-unified-entry-dts.ts" },
   ])(
-    "retains nested $script cleanup metadata (staging cleanup failure=$failStagingCleanup)",
-    async ({ script, failStagingCleanup }, { signal }) => {
+    "retains nested $script unjoined work without staging cleanup",
+    async ({ script }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const groups =
           script === "write-plugin-sdk-entry-dts.ts"
@@ -370,13 +368,14 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const scriptUrl = pathToFileURL(path.join(root, "scripts", script)).href;
         const moduleUrl = (name: string) =>
           pathToFileURL(path.join(root, "scripts/lib", name)).href;
+        const cleanupAttempt = path.join(root, "staging-cleanup-attempted");
+        const previousOutput = write(root, "dist/preserved.d.ts", "previous generation");
         const failure = `throw new AggregateError([new Error('child failed', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) })], 'fixture failure');`;
         const replacements = {
           [scriptUrl]: {
             "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
           },
           [moduleUrl("tsdown-declaration-writer.mts")]: {
-            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
             "./declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
           },
         };
@@ -386,13 +385,14 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           `
           import fs from 'node:fs';
           import { registerHooks } from 'node:module';
-          if (${failStagingCleanup}) {
-            const remove = fs.rmSync;
-            fs.rmSync = (file, ...args) => {
-              if (String(file).startsWith(${JSON.stringify(path.join(root, ".artifacts/plugin-sdk-staging-"))})) throw new Error('fixture staging cleanup failure');
-              return remove(file, ...args);
-            };
-          }
+          const remove = fs.rmSync;
+          fs.rmSync = (file, ...args) => {
+            if (String(file).startsWith(${JSON.stringify(path.join(root, ".artifacts/plugin-sdk-staging-"))})) {
+              fs.writeFileSync(${JSON.stringify(cleanupAttempt)}, 'attempted');
+              throw new Error('fixture attempted unsafe staging cleanup');
+            }
+            return remove(file, ...args);
+          };
           const replacements = ${JSON.stringify(replacements)};
           registerHooks({ resolve(specifier, context, next) {
             const sources = replacements[context.parentURL];
@@ -412,6 +412,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManagedCommand({
             bin: process.execPath,
             args: ['--import', ${JSON.stringify(pathToFileURL(hook).href)}, ...distArtifactEntryArgs(${JSON.stringify(path.join(root, "scripts", script))})],
+            // Use the synthetic declaration fixture's existing heap budget with real plans.
+            env: { ...process.env, OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: '1024' },
             requireProcessTreeExit: true,
           }));
         `,
@@ -419,9 +421,9 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const result = await start(root, runner).done;
         expect(result.code, result.output).toBe(1);
         expect(result.output).toContain("fixture failure");
-        if (failStagingCleanup) {
-          expect(result.output).toContain("fixture staging cleanup failure");
-        }
+        expect(result.output).toContain("cleanup unverified");
+        expect(fs.existsSync(cleanupAttempt), result.output).toBe(false);
+        expect(fs.readFileSync(previousOutput, "utf8")).toBe("previous generation");
         expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
           true,
         );
@@ -432,7 +434,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           fs
             .readdirSync(path.join(root, ".artifacts"))
             .filter((name) => name.startsWith("plugin-sdk-staging-")),
-        ).toHaveLength(failStagingCleanup ? (groups?.length ?? 0) + 1 : 0);
+        ).toHaveLength(groups ? groups.length + 1 : 0);
       }, signal);
     },
   );

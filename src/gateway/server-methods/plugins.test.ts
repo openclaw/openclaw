@@ -11,9 +11,9 @@ const managementMocks = vi.hoisted(() => ({
 }));
 const searchMock = vi.hoisted(() => vi.fn());
 const catalogMocks = vi.hoisted(() => ({
-  allOfficial: vi.fn(),
   browse: vi.fn(),
   categories: vi.fn(),
+  overview: vi.fn(),
   detail: vi.fn(),
 }));
 
@@ -28,9 +28,9 @@ vi.mock("../../plugins/catalog-search.js", () => ({
 }));
 
 vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
-  fetchAllOfficialClawHubPlugins: (...args: unknown[]) => catalogMocks.allOfficial(...args),
   fetchClawHubPluginCatalog: (...args: unknown[]) => catalogMocks.browse(...args),
   fetchClawHubPluginCategories: (...args: unknown[]) => catalogMocks.categories(...args),
+  fetchClawHubPluginOverview: (...args: unknown[]) => catalogMocks.overview(...args),
   fetchClawHubPluginDetail: (...args: unknown[]) => catalogMocks.detail(...args),
 }));
 
@@ -88,9 +88,8 @@ describe("plugin management Gateway handlers", () => {
     managementMocks.refreshMetadata.mockReset();
     searchMock.mockReset();
     catalogMocks.browse.mockReset();
-    catalogMocks.allOfficial.mockReset();
-    catalogMocks.allOfficial.mockResolvedValue([]);
     catalogMocks.categories.mockReset();
+    catalogMocks.overview.mockReset();
     catalogMocks.detail.mockReset();
   });
 
@@ -492,8 +491,31 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("does not exhaust the official catalog for the initial All view", async () => {
-    catalogMocks.browse.mockResolvedValue({ items: [] });
+  it("loads the initial All view from one bounded ClawHub overview", async () => {
+    catalogMocks.overview.mockResolvedValue({
+      categories: [
+        {
+          slug: "memory",
+          label: "Memory",
+          description: "Long-term memory.",
+          icon: "database",
+          order: 0,
+        },
+      ],
+      items: [
+        {
+          packageName: "memory-plus",
+          displayName: "Memory Plus",
+          family: "code-plugin",
+          isOfficial: false,
+          categories: ["memory"],
+          featured: true,
+          featuredRank: 1,
+          trending: true,
+          trendingRank: 0,
+        },
+      ],
+    });
     managementMocks.list.mockResolvedValue({
       plugins: [],
       diagnostics: [],
@@ -503,8 +525,21 @@ describe("plugin management Gateway handlers", () => {
     const result = await callHandler("plugins.catalog.browse", { intent: "all" });
 
     expect(result.ok).toBe(true);
-    expect(catalogMocks.allOfficial).not.toHaveBeenCalled();
-    expect(catalogMocks.browse).toHaveBeenCalledOnce();
+    expect(catalogMocks.overview).toHaveBeenCalledOnce();
+    expect(catalogMocks.browse).not.toHaveBeenCalled();
+    expect(result.response).toMatchObject({
+      items: [
+        {
+          catalog: {
+            featured: true,
+            featuredRank: 1,
+            trending: true,
+            trendingRank: 0,
+          },
+        },
+      ],
+      categories: [expect.objectContaining({ slug: "memory" })],
+    });
   });
 
   it("returns canonical ClawHub categories unchanged", async () => {
@@ -609,7 +644,7 @@ describe("plugin management Gateway handlers", () => {
   );
 
   it("does not misclassify local catalog entries when ordinary ClawHub browse fails", async () => {
-    catalogMocks.browse.mockRejectedValue(new Error("service unavailable"));
+    catalogMocks.overview.mockRejectedValue(new Error("service unavailable"));
     managementMocks.list.mockResolvedValue({
       plugins: [workboard],
       diagnostics: [],
@@ -652,43 +687,6 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("keeps ClawHub search results when bundled publication verification fails", async () => {
-    catalogMocks.allOfficial.mockRejectedValue(new Error("official catalog unavailable"));
-    catalogMocks.browse.mockResolvedValue({
-      items: [
-        {
-          packageName: "@alice/memory-plus",
-          displayName: "Memory Plus",
-          family: "code-plugin",
-          isOfficial: false,
-          categories: ["memory"],
-        },
-      ],
-    });
-    managementMocks.list.mockResolvedValue({
-      plugins: [
-        {
-          id: "memory-bundle",
-          name: "Memory Bundle",
-          origin: "bundled",
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-        },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    });
-
-    const result = await callHandler("plugins.catalog.browse", { query: "memory" });
-
-    expect(result.response).toMatchObject({
-      items: [{ catalog: { name: "Memory Plus", publishedToClawHub: true } }],
-      remoteError:
-        "ClawHub is unavailable: official catalog unavailable. Bundled publication status could not be verified.",
-    });
-  });
-
   it("unifies All search with unpublished bundled results before ClawHub matches", async () => {
     const remote = {
       packageName: "@alice/memory-plus",
@@ -698,8 +696,6 @@ describe("plugin management Gateway handlers", () => {
       categories: ["memory"],
       runtimeId: "memory-plus",
     };
-    const published = { ...remote, packageName: "@openclaw/published" };
-    catalogMocks.allOfficial.mockResolvedValue([published]);
     catalogMocks.browse.mockResolvedValue({ items: [remote] });
     managementMocks.list.mockResolvedValue({
       plugins: [
@@ -739,7 +735,6 @@ describe("plugin management Gateway handlers", () => {
   });
 
   it("keeps queried Bundled requests limited to unpublished bundled plugins", async () => {
-    catalogMocks.allOfficial.mockResolvedValue([]);
     managementMocks.list.mockResolvedValue({
       plugins: [
         {

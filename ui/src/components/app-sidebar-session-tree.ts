@@ -63,38 +63,20 @@ export function projectSessionTree(params: {
   const build = (
     row: GatewaySessionRow,
     isChild: boolean,
-    ancestors: ReadonlySet<string>,
+    ancestors: Set<string>,
   ): SidebarRecentSession => {
     const childSessionKeys = row.archived === true ? [] : (childKeysByParent.get(row.key) ?? []);
-    const nextAncestors = new Set(ancestors);
-    nextAncestors.add(row.key);
+    const ownsAncestor = !ancestors.has(row.key);
+    ancestors.add(row.key);
     const children = childSessionKeys.flatMap((key) => {
       const child = rowsByKey.get(key);
-      return child && !nextAncestors.has(key) ? [build(child, true, nextAncestors)] : [];
+      return child && !ancestors.has(key) ? [build(child, true, ancestors)] : [];
     });
+    // Aliased map entries can share row.key with an ancestor; only remove our own entry.
+    if (ownsAncestor) {
+      ancestors.delete(row.key);
+    }
     const projected = toSidebarSession(row, isChild);
-    const projectedRunningChildCount = children.reduce(
-      (count, child) => count + (child.hasActiveRun ? 1 : 0) + child.runningChildCount,
-      0,
-    );
-    const runningChildCount = Math.max(
-      projectedRunningChildCount,
-      row.hasActiveSubagentRun ? 1 : 0,
-    );
-    const failedChildCount = children.reduce(
-      (count, child) =>
-        count +
-        (child.status === "failed" || child.status === "timeout" ? 1 : 0) +
-        child.failedChildCount,
-      0,
-    );
-    // Conflict attention is transitive: a collapsed parent must expose staged
-    // cloud results held by descendants or the recovery signal disappears.
-    const workspaceConflictCount = Math.min(
-      Number.MAX_SAFE_INTEGER,
-      (projected.workspaceConflictCount ?? 0) +
-        children.reduce((count, child) => count + (child.workspaceConflictCount ?? 0), 0),
-    );
     const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
     // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
     // Grandchildren join the normal transitive fold after their branch is materialized.
@@ -109,28 +91,51 @@ export function projectSessionTree(params: {
     // Accepted gap: an unloaded failed child needs expansion before its error attention can surface.
     // Child attention is transitive just like live-run counts: a collapsed
     // ancestor remains actionable even when the blocked descendant is hidden.
-    const attention = children.reduce(
-      (current, child) =>
-        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
-        sidebarSessionAttentionPriority(child.attention) > sidebarSessionAttentionPriority(current)
-          ? child.attention
-          : current,
+    let attention =
       sidebarSessionAttentionPriority(unloadedChildAttention) >
-        sidebarSessionAttentionPriority(projected.attention)
+      sidebarSessionAttentionPriority(projected.attention)
         ? unloadedChildAttention
-        : projected.attention,
+        : projected.attention;
+    let runningChildCount = 0;
+    let failedChildCount = 0;
+    let childWorkspaceConflictCount = 0;
+    let containsActiveDescendant = false;
+    for (const child of children) {
+      runningChildCount =
+        runningChildCount + (child.hasActiveRun ? 1 : 0) + child.runningChildCount;
+      failedChildCount =
+        failedChildCount +
+        (child.status === "failed" || child.status === "timeout" ? 1 : 0) +
+        child.failedChildCount;
+      childWorkspaceConflictCount += child.workspaceConflictCount ?? 0;
+      if (
+        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
+        sidebarSessionAttentionPriority(child.attention) >
+          sidebarSessionAttentionPriority(attention)
+      ) {
+        attention = child.attention;
+      }
+      containsActiveDescendant ||=
+        child.active || child.visuallyActive || child.containsActiveDescendant;
+    }
+    // Sum descendants before adding the parent's conflicts, then clamp once.
+    const workspaceConflictCount = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      (projected.workspaceConflictCount ?? 0) + childWorkspaceConflictCount,
     );
+    // The Gateway flag includes the row's own live or queued subagent run.
+    // Only an idle row proves unloaded descendant work from that flag alone.
+    const hasUnloadedDescendantRun =
+      row.archived !== true && !projected.hasActiveRun && row.hasActiveSubagentRun;
     return {
       ...projected,
       attention,
       childSessionKeys,
       children,
       loadingChildren: loadingChildKeys.has(row.key),
-      containsActiveDescendant: children.some(
-        (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
-      ),
+      containsActiveDescendant,
       workspaceConflictCount: workspaceConflictCount || undefined,
-      runningChildCount,
+      runningChildCount: Math.max(runningChildCount, hasUnloadedDescendantRun ? 1 : 0),
       failedChildCount,
     };
   };

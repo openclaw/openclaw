@@ -6,27 +6,40 @@ import {
   registerTelegramInboundHandlers,
 } from "./bot-handlers.inbound-pipeline.js";
 import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
-import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import type {
+  RegisterTelegramHandlerParams,
+  TelegramNativeCommandCallbackDispatcher,
+} from "./bot-handlers.types.js";
 
-export const registerTelegramHandlers = (params: RegisterTelegramHandlerParams) => {
+export const createTelegramHandlers = (
+  params: Omit<RegisterTelegramHandlerParams, "nativeCommandCallbackDispatcher">,
+) => {
   const message = createTelegramMessagePipeline(params);
   const authorization = createTelegramHandlerAuthorization(params);
   const inboundPipeline = createTelegramInboundPipeline({ params, message, authorization });
-  const callbackRouter = createTelegramCallbackRouter({ params, message, authorization });
-  const eventBindings = createTelegramEventBindings({
-    params,
-    message,
-    authorization,
-    registerMessages: () =>
-      registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline }),
-  });
-
-  eventBindings.registerChatMembership();
-  eventBindings.registerReaction();
-  eventBindings.registerPolls();
-  params.bot.on("callback_query", async (ctx) => {
-    await callbackRouter.route(ctx);
-  });
-  eventBindings.registerMigration();
-  eventBindings.registerMessages();
+  return {
+    cancelPending: inboundPipeline.cancelPending,
+    register(nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher) {
+      const callbackRouter = createTelegramCallbackRouter({
+        params: { ...params, nativeCommandCallbackDispatcher },
+        message,
+        authorization,
+      });
+      const eventBindings = createTelegramEventBindings({
+        params,
+        message,
+        authorization,
+        registerMessages: () =>
+          registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline }),
+      });
+      eventBindings.registerChatMembership();
+      eventBindings.registerReaction();
+      eventBindings.registerPolls();
+      params.bot.on("callback_query", async (ctx) => {
+        await callbackRouter.route(ctx);
+      });
+      eventBindings.registerMigration();
+      eventBindings.registerMessages();
+    },
+  };
 };

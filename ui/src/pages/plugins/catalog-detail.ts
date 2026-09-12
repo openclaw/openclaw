@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../components/icons.ts";
+import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
@@ -249,11 +250,9 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
         : undefined,
     identity: html`<div class="plugin-catalog-detail__publisher">
       <span class="plugin-catalog-detail__publisher-icon" aria-hidden="true">
-        ${
-          publisherIcon || packageIcon
-            ? html`<img src=${publisherIcon ?? packageIcon} alt="" />`
-            : icons.box
-        }
+        ${imageWithFallback(publisherIcon ?? packageIcon, (url, onError) =>
+          url ? html`<img src=${url} alt="" @error=${onError} />` : icons.box,
+        )}
       </span>
       <div>
         <div class="plugin-catalog-detail__publisher-name">

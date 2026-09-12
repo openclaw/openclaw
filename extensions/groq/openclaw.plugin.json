@@ -1,6 +1,6 @@
 {
   "id": "groq",
-  "categories": ["models", "media"],
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

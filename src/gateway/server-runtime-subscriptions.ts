@@ -362,8 +362,12 @@ export function startGatewayEventSubscriptions(params: {
         .map((candidateRunId) => params.chatAbortControllers.get(candidateRunId))
         .find((entry) => entry !== undefined);
       const runContext = getAgentRunContext(evt.runId);
-      const sessionAgentId = trackedEntry?.agentId ?? evt.agentId ?? runContext?.agentId;
+      // Match the chat projection owner before preparing the shared terminal write.
+      // A bound ACP runtime emits its target key, but the chat link owns the source run.
+      const sessionAgentId =
+        chatLink?.agentId ?? evt.agentId ?? trackedEntry?.agentId ?? runContext?.agentId;
       const knownSessionKey =
+        chatLink?.sessionKey ??
         evt.deliverySessionKey ??
         evt.sessionKey ??
         trackedEntry?.sessionKey ??

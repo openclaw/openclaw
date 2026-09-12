@@ -43,7 +43,6 @@ import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   collectChannelOperationFailures,
   disposeMcpRuntimesWithTimeout,
-  resetPreparedModelRuntimeStateForHotReload,
   revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
@@ -105,10 +104,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const candidateEnv = publication?.runtimeEnv ?? process.env;
     const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
-
-    // Revalidate auth on demand, as startup does. A broad sweep prepares plugin
-    // auth in this thread before its worker starts and can starve config RPCs.
-    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
@@ -500,7 +495,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
           // Only a successfully published replacement can authoritatively retire channel owners.
           params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
-          resetPreparedModelRuntimeStateForHotReload();
         } else {
           pluginReloadAborted = true;
         }

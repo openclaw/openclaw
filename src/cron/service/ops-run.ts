@@ -7,6 +7,7 @@ import {
   finishCronRunReceipt,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -231,13 +232,17 @@ async function finishPreparedManualRun(
                 : {}),
             },
           }),
-          mutate: ({ jobs }) => {
+          mutate: ({ database, jobs }) => {
             const current = jobs.get(jobId);
             if (!current) {
               return { value: undefined };
             }
             const removed = applyOutcomeToAuthoritativeJob(state, current, outcome, {
               ...outcomeOptions,
+              triggerStateRetired: isCronRunTriggerStateRetiredInDatabase({
+                database,
+                handle: prepared.runReceipt,
+              }),
               deferredNotifications: postPersistNotifications,
             });
             return {
@@ -442,7 +447,7 @@ export async function enqueueRun(
             ...(opts?.commitGuard ? { commitGuard: opts.commitGuard } : {}),
           });
           if (result.ok && "ran" in result && !result.ran) {
-            if (result.reason !== "invalid-spec") {
+            if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
               const finishedAt = state.deps.nowMs();
               const job = state.store?.jobs.find((entry) => entry.id === id);
               emitCronRunFinished(

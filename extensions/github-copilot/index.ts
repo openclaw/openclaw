@@ -1,6 +1,5 @@
 // Github Copilot plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -41,19 +40,9 @@ import {
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
-const COPILOT_ENV_VARS: [string, string, string] = [
-  "COPILOT_GITHUB_TOKEN",
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-];
+const COPILOT_ENV_VAR = "COPILOT_GITHUB_TOKEN";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 const COPILOT_SECRET_STORE_NAME_PREFIX = "GITHUB_COPILOT_TOKEN";
-
-type GithubCopilotPluginConfig = {
-  discovery?: {
-    enabled?: boolean;
-  };
-};
 
 async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
@@ -235,67 +224,23 @@ async function resolveCopilotNonInteractiveToken(
   ctx: ProviderAuthMethodNonInteractiveContext,
   flagValue: string | undefined,
 ) {
-  const resolveFromEnvChain = async () => {
-    for (const envVar of COPILOT_ENV_VARS) {
-      const resolved = await ctx.resolveApiKey({
-        provider: PROVIDER_ID,
-        flagName: "--github-copilot-token",
-        envVar,
-        envVarName: envVar,
-        allowProfile: false,
-        required: false,
-      });
-      if (resolved) {
-        return resolved;
-      }
-    }
-    return null;
-  };
-
-  if (ctx.opts.secretInputMode === "ref") {
-    const resolved = await resolveFromEnvChain();
-    if (resolved) {
-      return resolved;
-    }
-    if (flagValue) {
-      ctx.runtime.error(
-        [
-          "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN is set in env.",
-          "Set one of those env vars and omit --github-copilot-token, or use --secret-input-mode plaintext.",
-        ].join("\n"),
-      );
-      ctx.runtime.exit(1);
-    }
-    return null;
-  }
-
-  const primary = await ctx.resolveApiKey({
+  const referenceMode = ctx.opts.secretInputMode === "ref";
+  const resolved = await ctx.resolveApiKey({
     provider: PROVIDER_ID,
-    flagValue,
+    ...(referenceMode ? {} : { flagValue }),
     flagName: "--github-copilot-token",
-    envVar: COPILOT_ENV_VARS[0],
-    envVarName: COPILOT_ENV_VARS[0],
+    envVar: COPILOT_ENV_VAR,
+    envVarName: COPILOT_ENV_VAR,
     allowProfile: false,
     required: false,
   });
-  if (primary || flagValue) {
-    return primary;
+  if (!resolved && referenceMode && flagValue) {
+    ctx.runtime.error(
+      "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN is set in env. Set COPILOT_GITHUB_TOKEN and omit --github-copilot-token, or use --secret-input-mode plaintext.",
+    );
+    ctx.runtime.exit(1);
   }
-
-  for (const envVar of COPILOT_ENV_VARS.slice(1)) {
-    const resolved = await ctx.resolveApiKey({
-      provider: PROVIDER_ID,
-      flagName: "--github-copilot-token",
-      envVar,
-      envVarName: envVar,
-      allowProfile: false,
-      required: false,
-    });
-    if (resolved) {
-      return resolved;
-    }
-  }
-  return null;
+  return resolved;
 }
 
 async function runGitHubCopilotNonInteractiveAuth(
@@ -326,7 +271,7 @@ async function runGitHubCopilotNonInteractiveAuth(
     const existingProfileId = resolveExistingCopilotTokenProfileId(ctx.agentDir);
     if (!existingProfileId) {
       ctx.runtime.error(
-        "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env var) for --auth-choice github-copilot.",
+        "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN env var) for --auth-choice github-copilot.",
       );
       ctx.runtime.exit(1);
       return null;
@@ -409,17 +354,7 @@ export default definePluginEntry({
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
-    const startupPluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
-    function resolveCurrentPluginConfig(config?: OpenClawConfig): GithubCopilotPluginConfig {
-      const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");
-      if (runtimePluginConfig) {
-        return runtimePluginConfig as GithubCopilotPluginConfig;
-      }
-      return config ? {} : startupPluginConfig;
-    }
-    const dynamicModels = createGithubCopilotDynamicModelHooks({
-      discoveryEnabled: (config) => resolveCurrentPluginConfig(config).discovery?.enabled !== false,
-    });
+    const dynamicModels = createGithubCopilotDynamicModelHooks();
 
     async function promptForEnterpriseDomain(ctx: ProviderAuthContext): Promise<string | null> {
       // COPILOT_GITHUB_DOMAIN is authoritative for every runtime routing path
@@ -488,6 +423,28 @@ export default definePluginEntry({
         : previousDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN
           ? clearGithubCopilotDomainConfigPatch()
           : undefined;
+
+      const suppliedToken =
+        ctx.opts?.tokenProvider === PROVIDER_ID
+          ? normalizeOptionalSecretInput(ctx.opts.token)
+          : undefined;
+      if (suppliedToken) {
+        return {
+          profiles: [
+            {
+              profileId: DEFAULT_COPILOT_PROFILE_ID,
+              credential: { type: "token", provider: PROVIDER_ID, token: suppliedToken },
+              ...(ctx.secretInputMode === "plaintext"
+                ? {}
+                : {
+                    secretStorage: { kind: "store", namePrefix: COPILOT_SECRET_STORE_NAME_PREFIX },
+                  }),
+            },
+          ],
+          defaultModel: DEFAULT_COPILOT_MODEL,
+          ...(configPatch ? { configPatch } : {}),
+        };
+      }
 
       const existing = resolveExistingCopilotAuthResult(ctx.agentDir);
       // Only offer to reuse the stored token when it was minted for the same
@@ -643,7 +600,7 @@ export default definePluginEntry({
       id: PROVIDER_ID,
       label: "GitHub Copilot",
       docsPath: "/providers/models",
-      envVars: COPILOT_ENV_VARS,
+      envVars: [COPILOT_ENV_VAR],
       auth: [
         {
           id: "device",

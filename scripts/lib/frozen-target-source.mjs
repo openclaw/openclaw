@@ -63,10 +63,16 @@ export function createFrozenTargetSource(root, sha) {
     }
     return content;
   };
+  // Trees belong to this pinned reader; retain only entries verified within its read budget.
+  const trees = new Map();
   const readTree = (oid) => {
+    const cached = trees.get(oid);
+    if (cached && Date.now() < deadline && remainingBytes > 0) {
+      return cached;
+    }
     readObject(oid, "tree");
     const names = new Set();
-    return textDecoder
+    const entries = textDecoder
       .decode(git("ls-tree", "-z", oid))
       .split("\0")
       .filter(Boolean)
@@ -78,6 +84,8 @@ export function createFrozenTargetSource(root, sha) {
         names.add(match[4]);
         return { mode: match[1], type: match[2], oid: match[3], name: match[4] };
       });
+    trees.set(oid, entries);
+    return entries;
   };
   const commit = readObject(sha, "commit");
   const rootTree = /^tree ([0-9a-f]{40})\n/.exec(textDecoder.decode(commit))?.[1];

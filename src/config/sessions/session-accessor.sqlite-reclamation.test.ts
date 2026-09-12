@@ -186,6 +186,7 @@ test.each(
       }),
     });
     const appends: unknown[] = [];
+    const boardAppends: Promise<void>[] = [];
     const appendErrors: unknown[] = [];
     let commitChecks = 0;
     let commitRequested = false;
@@ -206,12 +207,21 @@ test.each(
             }
             if (operation === "board") {
               // First use enters the board's schema transaction before its canonical writer.
-              appends.push(
-                board.putWidget({
-                  sessionKey: scope.sessionKey,
-                  name: "writer-proof",
-                  content: { kind: "html", html: "<p>committed</p>" },
-                }).revision,
+              boardAppends.push(
+                board
+                  .putWidget({
+                    sessionKey: scope.sessionKey,
+                    name: "writer-proof",
+                    content: { kind: "html", html: "<p>committed</p>" },
+                  })
+                  .then(
+                    (snapshot) => {
+                      appends.push(snapshot.revision);
+                    },
+                    (error: unknown) => {
+                      appendErrors.push(error);
+                    },
+                  ),
               );
               continue;
             }
@@ -253,6 +263,7 @@ test.each(
     } finally {
       process.off("worker", observeWorker);
     }
+    await Promise.all(boardAppends);
     expect(workers).toHaveLength(1);
     expect(workers[0]?.id).toBeGreaterThan(0);
     expect(diagnostics).toEqual({ kind: "history-eviction", workerThreadId: workers[0]?.id });
@@ -277,7 +288,7 @@ test.each(
         continue;
       }
       if (operation === "board") {
-        expect(board.getSnapshot({ sessionKey: scope.sessionKey }).widgets).toMatchObject([
+        expect((await board.getSnapshot({ sessionKey: scope.sessionKey })).widgets).toMatchObject([
           { name: "writer-proof", revision: 1 },
         ]);
         continue;

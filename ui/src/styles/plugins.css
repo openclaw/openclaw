@@ -25,6 +25,7 @@
 .content-header.plugins-hub-header .hub-page-header__tabs {
   grid-area: tabs;
   justify-self: start;
+  padding-block: var(--space-2);
 }
 
 .plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
@@ -578,6 +579,11 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
   display: grid;
   gap: var(--space-6);
   min-width: 0;
+}
+
+.plugin-catalog-load-more {
+  display: flex;
+  justify-content: center;
 }
 
 .plugin-catalog-section {

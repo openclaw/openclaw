@@ -464,9 +464,10 @@ function runQaGitCase(profile: QaGitCase, fetchResults: FetchResult[]) {
       step: profile.step,
     },
     fetchResults,
-    // Preserve real 120-second/no-deadline calls and real cleanup; readiness,
-    // not a sleep, ensures every successful Git leader leaves two live writers.
+    // Keep real command deadlines and ready descendant cleanup; these boundary
+    // checks do not need the TERM grace covered by the owner lifecycle tests.
     realClock: true,
+    realDrain: false,
     poisonPython: true,
     env: {
       EXPECTED_SHA: candidate,

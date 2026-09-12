@@ -99,7 +99,10 @@ export async function startOneShotDiagnosticsExporters(params: {
     if (!shutdown) {
       const stopping = work.track(async () => {
         try {
-          await servicesHandle?.stop();
+          const result = await servicesHandle?.stop();
+          for (const failure of result?.errors ?? []) {
+            reportShutdownFailure(failure);
+          }
         } catch (error) {
           reportShutdownFailure(error);
         }

@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -35,6 +36,41 @@ afterEach(() => {
 });
 
 describe("Control UI refresh nudge", () => {
+  it.each([{ version: "1.0.0", buildId: "gateway-build" }, { version: "2.0.0" }])(
+    "does not ask the configured dev proxy to reload for a mismatched build (%#)",
+    (server) => {
+      const gatewayClient = client(async () => []);
+      const harness = createGatewayHarness(null, false);
+      vi.stubGlobal("location", new URL("http://localhost:5173/"));
+      vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+        gatewayUrl: harness.gateway.connection.gatewayUrl,
+        proxyPath: "/__openclaw_dev_gateway__/fixture",
+      });
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        expect(hasSameOriginGatewayTransport(harness.gateway.connection.gatewayUrl)).toBe(true);
+        const hello = { server } as ApplicationGatewaySnapshot["hello"];
+        harness.update({ client: gatewayClient, phase: "connected", hello });
+        expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+        harness.update({ phase: "stopped", hello: null });
+        expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+        harness.update({ phase: "connected", hello });
+        expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+        harness.update({ client: null, phase: "stopped", hello: null });
+        harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
+        harness.update({ client: gatewayClient, phase: "connected", hello });
+        harness.update({ phase: "stopped", hello: null });
+        harness.update({ phase: "connected", hello });
+        expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+      } finally {
+        overlays.dispose();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("runs automatic connection refreshes through the bootstrap coordinator", async () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method === "exec.approval.list" ? [] : {}),

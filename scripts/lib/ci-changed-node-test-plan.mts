@@ -22,9 +22,11 @@ import {
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
   createNodeTestShards,
+  createToolingNodeTestShardBundles,
   isPolicyTestOwnedPath,
   packNodeTestGroups,
   resolvePolicyTestTargets,
+  TOOLING_CONFIG,
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import {
@@ -371,11 +373,13 @@ function resolvePreciseChangedTargets(
   ) {
     return null;
   }
-  // Preserve special shard setup (for example Go and TUI PTY coverage) by using
-  // the compact plan until targeted jobs can carry per-config prerequisites.
+  // Tooling targets retain canonical compact descriptors below. Other special
+  // owners still require the complete plan rather than generic target jobs.
   if (
     targetPlans.some(({ plans }) =>
-      plans.some(({ config }) => configsRequiringFullSuiteMetadata.has(config)),
+      plans.some(
+        ({ config }) => configsRequiringFullSuiteMetadata.has(config) && config !== TOOLING_CONFIG,
+      ),
     )
   ) {
     return null;
@@ -606,8 +610,10 @@ function packChangedExtensionConfigShards(
 export function createChangedNodeTestShards(
   changedPaths: string[],
   options: CwdOptions & {
+    runnerBackend?: string;
     dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
     dedicatedUiE2e?: boolean;
+    dedicatedMaxLinesRatchet?: boolean;
   } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
@@ -644,6 +650,10 @@ export function createChangedNodeTestShards(
   const regularLivePaths = livePaths.filter(
     (changedPath) =>
       (!changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath)) &&
+      // The emitted ratchet checks this data against the exact tested merge tree.
+      !(
+        options.dedicatedMaxLinesRatchet === true && changedPath === "config/max-lines-baseline.txt"
+      ) &&
       !isPolicyTestOwnedPath(changedPath),
   );
 
@@ -670,9 +680,23 @@ export function createChangedNodeTestShards(
   if (targetPlans === null) {
     return null;
   }
+  const toolingTargets = targetPlans
+    .filter(({ plans }) => plans.some(({ config }) => config === TOOLING_CONFIG))
+    .map(({ target }) => target);
+  // Canonical shard inventories describe this checkout, never a caller's
+  // synthetic or alternate source root with coincidentally matching paths.
+  const toolingShards = toolingTargets.length
+    ? path.resolve(cwd) === process.cwd()
+      ? createToolingNodeTestShardBundles(toolingTargets, { runnerBackend: options.runnerBackend })
+      : null
+    : [];
+  if (toolingShards === null) {
+    return null;
+  }
   // CI supplies the suite owners it emits. Validate every changed path first,
   // then subtract covered plans; local runs and unselected owners keep their targets.
   const targets = targetPlans
+    .filter(({ target }) => !toolingTargets.includes(target))
     .filter(
       ({ plans }) =>
         !options.dedicatedUiE2e || !plans.every(({ config }) => config === UI_E2E_VITEST_CONFIG),
@@ -702,6 +726,7 @@ export function createChangedNodeTestShards(
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
+    ...toolingShards.map((shard) => ({ ...shard, configs: [] })),
     ...packChangedExtensionConfigShards(createChangedExtensionConfigShardsForPaths(livePaths, cwd)),
     // Native browser files run in checks-ui, including precise changed-file plans.
     ...createChangedTargetShards(
@@ -711,7 +736,10 @@ export function createChangedNodeTestShards(
         shardName: "changed",
       },
     ),
-    ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
+    ...(hasBuildArtifactAffectingChange(changedPaths) ||
+    toolingShards.some((shard) => shard.requiresDist)
+      ? []
+      : [createBoundaryShard()]),
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
   return shards.length > 0 || targets.length < targetPlans.length ? shards : null;

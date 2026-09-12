@@ -8,6 +8,7 @@ import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-con
 import {
   createEmptyPluginRegistry,
   createPluginRecord,
+  disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -172,9 +173,9 @@ describe("OpenShell plugin registration lifecycle", () => {
       setActivePluginRegistry(createEmptyPluginRegistry());
       await expect.poll(readBackend).toEqual(originalBackend);
     } finally {
-      for (const { lifecycle } of registry.registry.runtimeLifecycles.toReversed()) {
-        await lifecycle.cleanup?.({ reason: "disable" });
-      }
+      await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
+        failures: [],
+      });
       if (originalRegistry) {
         setActivePluginRegistry(originalRegistry);
       } else {

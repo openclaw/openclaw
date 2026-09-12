@@ -62,6 +62,10 @@ function managedIdentity(cacheScope: string, assertSelected: () => void = vi.fn(
     cacheScope,
     assertSelected,
     revalidate: vi.fn(async () => assertSelected()),
+    start: async <T>(start: () => T): Promise<Awaited<T>> => {
+      assertSelected();
+      return await start();
+    },
   };
 }
 

@@ -15,22 +15,40 @@ import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import {
   isVerifiedUpdateRollback,
+  reportUpdateCommandPendingRecovery,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 
+type UpdateFailureTriageOptions = Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & {
+  invocationCwd?: string;
+};
+
 export async function withUpdateFailureTriage(
-  opts: Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & { invocationCwd?: string },
+  opts: UpdateFailureTriageOptions,
   target: UpdateTriageTarget,
   run: () => Promise<void>,
 ): Promise<void> {
+  const handleFailure = await prepareUpdateCommandFailureTriage(opts, target);
+  try {
+    await run();
+  } catch (error) {
+    await handleFailure(error);
+  }
+}
+
+/** Capture repair code and operator context before replacing the installation. */
+export async function prepareUpdateCommandFailureTriage(
+  opts: UpdateFailureTriageOptions,
+  target: UpdateTriageTarget,
+): Promise<(error: unknown) => Promise<void>> {
   // CLI and Gateway reports for an admitted run share its identity and state scope.
   // Standalone calls without an admitted run still own a fresh attempt.
   const updateAttemptId = opts.run?.runId ?? randomUUID();
@@ -48,21 +66,12 @@ export async function withUpdateFailureTriage(
     },
     invocationCwd: opts.invocationCwd,
   });
-  try {
-    await run();
-  } catch (error) {
+  return async (error) => {
     if (error instanceof UpdateCommandFinalizedRecoveryFailure) {
       return exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      // Do not use printResult: resolving its run would reopen canonical state.
-      if (opts.json) {
-        defaultRuntime.writeJson(error.result);
-      }
-      defaultRuntime.error(
-        `Update recovery remains pending (${error.result.reason ?? "update-failed"}). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.`,
-      );
-      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+      return reportUpdateCommandPendingRecovery(error, opts);
     }
     const reportedFailure = error instanceof UpdateCommandFailure;
     const rollbackCompleted = reportedFailure && isVerifiedUpdateRollback(error.result);
@@ -152,5 +161,5 @@ export async function withUpdateFailureTriage(
       exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     throw error;
-  }
+  };
 }

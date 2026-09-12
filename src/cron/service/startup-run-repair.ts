@@ -132,9 +132,11 @@ export function restoreFinalizedStartupRun(params: {
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
+  triggerStateRetired?: boolean;
   deferredNotifications?: DeferredCronNotifications;
 }): { shouldDelete: boolean; replacementAtMs?: number } | undefined {
   const { state, job, runningAtMs, entry } = params;
+  const triggerOwnership = params.triggerStateRetired ? "stale" : "current";
   const startedAt = asDateTimestampMs(entry.runAtMs ?? runningAtMs);
   const endedAt = asDateTimestampMs(entry.ts);
   if (startedAt === undefined || startedAt < 0 || endedAt === undefined || endedAt < 0) {
@@ -153,6 +155,13 @@ export function restoreFinalizedStartupRun(params: {
     (!job.enabled || (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt))
       ? "stale"
       : "current";
+  // A once result can record no next run before a later edit retires its
+  // state writer. That old absence cannot unschedule the replacement.
+  const retiredTriggerStoppedSchedule =
+    params.triggerStateRetired &&
+    params.triggerEval?.fired === true &&
+    entry.status === "ok" &&
+    entry.nextRunAtMs === undefined;
   job.state.startupCatchupAtMs = undefined;
   if (params.triggerEval?.fired === false) {
     applyTriggerNoFireResult(
@@ -161,6 +170,7 @@ export function restoreFinalizedStartupRun(params: {
       { startedAt, endedAt, triggerEval: params.triggerEval },
       {
         scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
+        triggerOwnership,
         deferredNotifications: params.deferredNotifications,
       },
     );
@@ -195,7 +205,7 @@ export function restoreFinalizedStartupRun(params: {
     {
       replay: true,
       scheduleOwnership,
-      ...(scheduleOwnership === "current"
+      ...(scheduleOwnership === "current" && !retiredTriggerStoppedSchedule
         ? { replaySchedule: { nextRunAtMs: entry.nextRunAtMs } }
         : {}),
       deferredNotifications: params.deferredNotifications,
@@ -226,13 +236,17 @@ export function restoreFinalizedStartupRun(params: {
         endedAt,
         triggerEval: params.triggerEval,
       },
-      { scheduleOwnership },
+      { scheduleOwnership, triggerOwnership },
     );
   }
   if (params.scriptResult) {
     // The payload script is the final writer when a trigger and payload both
     // update their shared state during the same successful run.
-    applyScriptRunResult(job, { status: entry.status, ...params.scriptResult });
+    applyScriptRunResult(
+      job,
+      { status: entry.status, ...params.scriptResult },
+      { triggerOwnership },
+    );
   }
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },

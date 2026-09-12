@@ -730,7 +730,7 @@ describe("worker placement dispatch reclaim", () => {
         workerPlacementDispatchService: harness.service,
         workerEnvironmentService: harness.environments,
       },
-    })();
+    }).stop();
     const rejected = expect(stop).rejects.toThrow("cloud worker placement identity changed");
     await entered.promise;
     try {
@@ -776,7 +776,7 @@ describe("worker placement dispatch reclaim", () => {
         workerPlacementDispatchService: harness.service,
         workerEnvironmentService: harness.environments,
       },
-    })();
+    }).stop();
     const coalesced = harness.service.reclaim(request);
 
     await expect(Promise.all([first, coalesced])).resolves.toMatchObject([

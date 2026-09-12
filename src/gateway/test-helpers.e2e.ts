@@ -32,7 +32,7 @@ import {
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { startGatewayServer } from "./server.js";
+import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
@@ -277,6 +277,7 @@ export async function startGatewayWithClient(params: {
   clientDisplayName?: string;
   scopes?: string[];
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+  hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
 }) {
   const gatewayStartupEnv = captureEnv([
     ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
@@ -295,6 +296,7 @@ export async function startGatewayWithClient(params: {
       bind: "loopback",
       auth: { mode: "token", token: params.token },
       controlUiEnabled: false,
+      hotReloadRecovery: params.hotReloadRecovery,
     });
     server = startedServer;
     const client = await connectGatewayClient({

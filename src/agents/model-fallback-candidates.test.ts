@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   resolveImageFallbackCandidates,
   resolveModelCandidateChain,
 } from "./model-fallback-candidates.js";
+import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const customProvider: ModelProviderConfig = {
@@ -73,9 +76,31 @@ describe("resolveModelCandidateChain", () => {
     },
   );
 
-  it.each(["raw", "resolved", "configured-fallback", "configured-primary"] as const)(
-    "does not reapply manifest aliases after resolving the %s route",
-    (origin) => {
+  it.each([
+    { source: "raw", model: "latest", inputResolution: "raw", origin: "requested" },
+    { source: "resolved", model: "release", inputResolution: "resolved", origin: "requested" },
+    {
+      source: "provider prefix",
+      model: "candidate/latest",
+      inputResolution: "raw",
+      origin: "requested",
+    },
+    { source: "config alias", model: "shortcut", inputResolution: "raw", origin: "requested" },
+    {
+      source: "configured-fallback",
+      model: "unrelated",
+      inputResolution: "resolved",
+      origin: "configured-fallback",
+    },
+    {
+      source: "configured-primary",
+      model: "unrelated",
+      inputResolution: "resolved",
+      origin: "configured-primary",
+    },
+  ] as const)(
+    "preserves the resolved $source output when reused as input",
+    ({ source, model, inputResolution, origin }) => {
       const primary = origin === "configured-primary" ? "latest" : "unrelated";
       const cfg: OpenClawConfig = {
         agents: {
@@ -84,35 +109,142 @@ describe("resolveModelCandidateChain", () => {
               primary: `candidate/${primary}`,
               fallbacks: origin === "configured-fallback" ? ["candidate/latest"] : [],
             },
+            ...(source === "config alias"
+              ? { models: { "candidate/latest": { alias: "shortcut" } } }
+              : {}),
           },
         },
       };
+      const manifestPlugins = [
+        {
+          modelIdNormalization: {
+            providers: { candidate: { aliases: { latest: "release", release: "stable" } } },
+          },
+        },
+      ];
       const candidates = resolveModelCandidateChain({
         cfg,
         provider: "candidate",
-        model: origin === "raw" ? "latest" : origin === "resolved" ? "release" : "unrelated",
-        requestedRouteResolution: origin === "raw" ? "raw" : "resolved",
-        manifestPlugins: [
-          {
-            modelIdNormalization: {
-              providers: { candidate: { aliases: { latest: "release", release: "stable" } } },
-            },
-          },
-        ],
+        model,
+        requestedRouteResolution: inputResolution,
+        manifestPlugins,
       });
-
-      expect(candidates).toContainEqual({
+      const selected = candidates.find((candidate) => candidate.routeOrigin === origin);
+      expect(selected).toMatchObject({
         provider: "candidate",
         model: "release",
-        routeOrigin: origin === "raw" || origin === "resolved" ? "requested" : origin,
-        routeResolution: origin === "raw" ? "raw" : "resolved",
+        routeOrigin: origin,
       });
-      expect(candidates.some(({ model }) => model === "stable")).toBe(false);
+      expect(candidates.some(({ model: candidateModel }) => candidateModel === "stable")).toBe(
+        false,
+      );
+      if (!selected) {
+        throw new Error("Expected selected candidate");
+      }
+      expect(
+        resolveModelCandidateChain({
+          cfg,
+          provider: selected.provider,
+          model: selected.model,
+          requestedRouteResolution: selected.routeResolution,
+          fallbacksOverride: [],
+          manifestPlugins,
+        }),
+      ).toEqual([
+        {
+          provider: "candidate",
+          model: "release",
+          routeOrigin: "requested",
+          routeResolution: "resolved",
+        },
+      ]);
     },
   );
 });
 
 describe("resolveImageFallbackCandidates", () => {
+  it.each(
+    (["override", "fallback"] as const).flatMap((kind) =>
+      ([undefined, "openai-completions"] as const).map((api) => ({ kind, api })),
+    ),
+  )("uses one captured view for a bare $kind with provider API $api", async ({ kind, api }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "pick", fallbacks: ["backup"] },
+          models: {
+            "custom/first": { alias: "pick" },
+            "custom/second": { alias: "other" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            models: [],
+            ...(api ? { api } : {}),
+          },
+        },
+      },
+    };
+    const foreignMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "custom",
+          modelIdNormalization: {
+            providers: { custom: { aliases: { first: "shared", second: "shared" } } },
+          },
+        },
+      ],
+    });
+    const run = vi.fn(async (provider: string, model: string) => {
+      if (kind === "fallback" && model === "first") {
+        throw new Error("primary unavailable");
+      }
+      return `${provider}/${model}`;
+    });
+    const result = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: foreignMetadata },
+      () =>
+        runWithImageModelFallback({
+          cfg,
+          manifestPlugins: [],
+          ...(kind === "override" ? { modelOverride: "backup" } : {}),
+          run,
+        }),
+    );
+    expect(result.result).toBe("custom/backup");
+    expect(run.mock.calls.map(([provider, model]) => [provider, model])).toEqual(
+      kind === "override"
+        ? [["custom", "backup"]]
+        : [
+            ["custom", "first"],
+            ["custom", "backup"],
+          ],
+    );
+  });
+
+  it("retains provider-qualified aliases from bare configured model keys", async () => {
+    const result = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+      () =>
+        runWithImageModelFallback({
+          cfg: {
+            agents: {
+              defaults: {
+                imageModel: { primary: "custom/pick" },
+                models: { underlying: { alias: "pick" } },
+              },
+            },
+          },
+          manifestPlugins: [],
+          run: async (provider, model) => `${provider}/${model}`,
+        }),
+    );
+    expect(result.result).toBe("custom/underlying");
+  });
+
   it("keeps distinct literal model namespaces while removing duplicate routes", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -129,9 +261,7 @@ describe("resolveImageFallbackCandidates", () => {
         },
       },
     };
-    expect(
-      resolveImageFallbackCandidates({ cfg, defaultProvider: "custom", manifestPlugins: [] }),
-    ).toEqual([
+    expect(resolveImageFallbackCandidates({ cfg, manifestPlugins: [] })).toEqual([
       {
         provider: "custom",
         model: "model",
@@ -164,7 +294,6 @@ describe("resolveImageFallbackCandidates", () => {
       expect(
         resolveImageFallbackCandidates({
           cfg,
-          defaultProvider: "openai",
         }),
       ).toEqual([
         {
@@ -206,7 +335,6 @@ describe("resolveImageFallbackCandidates", () => {
       expect(
         resolveImageFallbackCandidates({
           cfg,
-          defaultProvider: "openai",
         }),
       ).toHaveLength(2);
       expect(await warnLogs.findText("Unresolved image model")).toBeUndefined();

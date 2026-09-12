@@ -1,15 +1,25 @@
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { readPackageVersion } from "../../infra/package-json.js";
+import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
+import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   recordUpdateResultNextAction,
+  UnreportedUpdateAdmissionOutcome,
+  type UpdateAdmissionReportParams,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
+  writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 
@@ -36,18 +46,28 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
-  run: Run,
-  operation: () => Promise<T>,
+  operation: (registerRun: (run: Run) => void) => Promise<T>,
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
-  terminalOwners.set(run, owner);
+  let run: Run | undefined;
+  let registrationOpen = true;
+  const registerRun = (admitted: Run) => {
+    if (!registrationOpen || run || terminalOwners.has(admitted)) {
+      throw new Error("Update terminal publication already has an owner or has settled.");
+    }
+    run = admitted;
+    terminalOwners.set(admitted, owner);
+  };
   let outcome: { value: T } | { error: unknown };
   try {
-    outcome = { value: await operation() };
+    outcome = { value: await operation(registerRun) };
   } catch (error) {
     outcome = { error };
   } finally {
-    terminalOwners.delete(run);
+    registrationOpen = false;
+    if (run) {
+      terminalOwners.delete(run);
+    }
   }
   if (owner.publish) {
     const result = await owner.publish("error" in outcome ? outcome.error : undefined);
@@ -172,6 +192,105 @@ export async function recordVerifiedUpdatePackageCleanup(
   return undefined;
 }
 
+export async function reportUnreportedUpdateAdmissionOutcome(error: unknown): Promise<never> {
+  const candidates = collectNestedErrorCandidates(error);
+  const outcome = candidates.find(
+    (candidate): candidate is UnreportedUpdateAdmissionOutcome =>
+      candidate instanceof UnreportedUpdateAdmissionOutcome,
+  );
+  if (!outcome) {
+    throw error;
+  }
+  const cleanupFailed = error !== outcome;
+  const params = cleanupFailed
+    ? {
+        ...outcome.report,
+        reason: "update-admission-cleanup-failed",
+        message: candidates
+          .filter((candidate): candidate is Error => candidate instanceof Error)
+          .slice(0, 8)
+          .map((candidate) => formatErrorMessage(candidate).slice(0, 2_000))
+          .join("\n"),
+      }
+    : outcome.report;
+  const result = await publishPreMutationUpdateOutcome(params, async () => ({
+    status: !cleanupFailed && outcome.skipped ? "skipped" : "error",
+    ...(cleanupFailed
+      ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
+      : {}),
+  }));
+  if (!cleanupFailed && outcome.skipped) {
+    return exitCliAfterOutput(defaultRuntime, outcome.skipped.exitCode);
+  }
+  return exitCliAfterOutput(
+    defaultRuntime,
+    cleanupFailed ? 1 : resolveManagedServiceUpdateFailureExitCode(result),
+  );
+}
+
+export async function reportPreMutationUpdateResult(
+  params: UpdateAdmissionReportParams & { status?: "error" | "skipped" },
+): Promise<never> {
+  const result = await publishPreMutationUpdateOutcome(params, async () => ({
+    status: params.status ?? "error",
+    ...(params.opts.dryRun !== true && params.status !== "skipped"
+      ? {
+          recovery: await (params.installKind === "git"
+            ? readCurrentGitUpdateRecovery(params.root)
+            : verifyPackageUpdateRecovery(params.root)),
+        }
+      : {}),
+  }));
+  throw new UpdateCommandFailure(
+    result,
+    params.status === "skipped" ? 0 : resolveManagedServiceUpdateFailureExitCode(result),
+    params.message,
+  );
+}
+
+async function publishPreMutationUpdateOutcome(
+  params: UpdateAdmissionReportParams,
+  prepareOutcome: () => Promise<Pick<UpdateRunResult, "status" | "recovery">>,
+): Promise<UpdateRunResult> {
+  const run = params.opts.run;
+  const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+  if (run && active && params.message) {
+    recordUpdateRunPhase(
+      run.runId,
+      active.phase,
+      { origin: { nextAction: params.message } },
+      { env: run.env },
+    );
+  }
+  const outcome = await prepareOutcome();
+  const result = completeUpdateCommandRun(
+    {
+      ...outcome,
+      mode: params.installKind === "git" ? "git" : "unknown",
+      root: params.root,
+      reason: params.reason,
+      steps: [],
+      ...(outcome.status === "skipped"
+        ? { before: { version: await readPackageVersion(params.root) } }
+        : {}),
+      durationMs: 0,
+    },
+    params.opts.run,
+  );
+  if (params.opts.dryRun !== true) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
+  if (params.opts.json && params.message) {
+    defaultRuntime.error(params.message);
+  }
+  printResult(result, params.opts, { nextAction: params.message });
+  return result;
+}
+
 /** Write the terminal ledger and its visible result together after settlement. */
 export function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
@@ -179,16 +298,7 @@ export function publishUpdateCommandTerminalResult(
   outcome: { rolledBack: boolean; downtimeMs?: number },
 ): UpdateRunResult {
   const nextAction = recordUpdateResultNextAction(params, input);
-  const run = params.opts.run;
-  const { downtimeMs } = outcome;
-  if (run && outcome.rolledBack) {
-    finishUpdateRun(
-      run.runId,
-      { status: "rolled-back", reason: input.reason, after: input.after, downtimeMs },
-      { env: run.env },
-    );
-  }
-  const result = completeUpdateCommandRun(input, run, downtimeMs);
+  const result = completeUpdateCommandRun(input, params.opts.run, outcome);
   printResult(result, params.opts, { nextAction });
   return result;
 }

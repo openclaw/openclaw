@@ -1,23 +1,16 @@
+import type { z } from "zod";
 import type { ControlUiEnvironment } from "../gateway/control-ui-bootstrap-contract.js";
 // Defines gateway runtime and networking configuration types.
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
+import type { GatewayConfigSchema } from "./zod-schema.gateway.js";
+
+type GatewayConfigInput = NonNullable<z.input<typeof GatewayConfigSchema>>;
 
 /** Gateway bind-address policy for local server startup. */
-export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
+export type GatewayBindMode = NonNullable<GatewayConfigInput["bind"]>;
 
-export type GatewayTlsConfig = {
-  /** Enable TLS for the gateway server. */
-  enabled?: boolean;
-  /** Auto-generate a self-signed cert if cert/key are missing (default: true). */
-  autoGenerate?: boolean;
-  /** PEM certificate path for the gateway server. */
-  certPath?: string;
-  /** PEM private key path for the gateway server. */
-  keyPath?: string;
-  /** Optional PEM CA bundle for TLS clients (mTLS or custom roots). */
-  caPath?: string;
-};
+export type GatewayTlsConfig = NonNullable<GatewayConfigInput["tls"]>;
 
 export type WideAreaDiscoveryConfig = {
   /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
@@ -273,28 +266,7 @@ export type GatewayTailscaleConfig = {
   preserveFunnel?: boolean;
 };
 
-export type GatewayRemoteConfig = {
-  /** Remote Gateway WebSocket URL (ws:// or wss://). */
-  url?: string;
-  /** Desktop companion transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
-  transport?: "ssh" | "direct";
-  /** Desktop companion remote SSH port (default 18789); core validates/preserves but does not read it. */
-  remotePort?: number;
-  /** Token for remote auth (when the gateway requires token auth). */
-  token?: SecretInput;
-  /** Password for remote auth (when the gateway requires password auth). */
-  password?: SecretInput;
-  /** Headers presented to an identity-aware proxy in front of the Gateway (values are secrets). */
-  edgeAuth?: Record<string, SecretInput>;
-  /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
-  tlsFingerprint?: string;
-  /** SSH target for tunneling remote Gateway (user@host). */
-  sshTarget?: string;
-  /** SSH identity file path for tunneling remote Gateway. */
-  sshIdentity?: string;
-  /** macOS app-only; core validates/preserves but does not read it. Defaults to strict; see docs/platforms/mac/remote.md. */
-  sshHostKeyPolicy?: "strict" | "openssh";
-};
+export type GatewayRemoteConfig = NonNullable<GatewayConfigInput["remote"]>;
 
 /**
  * Operator terminal surface served to Control UI and mobile clients.
@@ -336,140 +308,35 @@ export type GatewayReloadConfig = {
   mode?: GatewayReloadMode;
 };
 
-export type GatewayHttpChatCompletionsConfig = {
-  /**
-   * If false, the Gateway will not serve `POST /v1/chat/completions`.
-   * Default: false when absent.
-   */
-  enabled?: boolean;
-  /** Image input controls for `image_url` parts. */
-  images?: GatewayHttpChatCompletionsImagesConfig;
-};
+type GatewayHttpConfigInput = NonNullable<GatewayConfigInput["http"]>;
+type GatewayHttpEndpointsConfigInput = NonNullable<GatewayHttpConfigInput["endpoints"]>;
 
-export type GatewayHttpChatCompletionsImagesConfig = {
-  /** Allow URL fetches for `image_url` parts. Default: false. */
-  allowUrl?: boolean;
-  /**
-   * Optional hostname allowlist for URL fetches.
-   * Supports exact hosts and `*.example.com` wildcards.
-   */
-  urlAllowlist?: string[];
-  /** Allowed MIME types (case-insensitive). */
-  allowedMimes?: string[];
-  /** Max bytes per image. Default: 10MB. */
-  maxBytes?: number;
-  /** Max redirects when fetching a URL. Default: 3. */
-  maxRedirects?: number;
-  /** Fetch timeout in ms. Default: 10s. */
-  timeoutMs?: number;
-};
+export type GatewayHttpChatCompletionsConfig = NonNullable<
+  GatewayHttpEndpointsConfigInput["chatCompletions"]
+>;
+export type GatewayHttpChatCompletionsImagesConfig = NonNullable<
+  GatewayHttpChatCompletionsConfig["images"]
+>;
 
-export type GatewayHttpResponsesConfig = {
-  /**
-   * If false, the Gateway will not serve `POST /v1/responses` (OpenResponses API).
-   * Default: false when absent.
-   */
-  enabled?: boolean;
-  /**
-   * Max number of URL-based `input_file` + `input_image` parts per request.
-   * Default: 8.
-   */
-  maxUrlParts?: number;
-  /** File inputs (input_file). */
-  files?: GatewayHttpResponsesFilesConfig;
-  /** Image inputs (input_image). */
-  images?: GatewayHttpResponsesImagesConfig;
-};
+export type GatewayHttpResponsesConfig = NonNullable<GatewayHttpEndpointsConfigInput["responses"]>;
 
-export type GatewayHttpResponsesFilesConfig = {
-  /** Allow URL fetches for input_file. Default: true. */
-  allowUrl?: boolean;
-  /**
-   * Optional hostname allowlist for URL fetches.
-   * Supports exact hosts and `*.example.com` wildcards.
-   */
-  urlAllowlist?: string[];
-  /** Allowed MIME types (case-insensitive). */
-  allowedMimes?: string[];
-  /** Max bytes per file. Default: 5MB. */
-  maxBytes?: number;
-  /** Max decoded characters per file. Default: 200k. */
-  maxChars?: number;
-  /** Max redirects when fetching a URL. Default: 3. */
-  maxRedirects?: number;
-  /** Fetch timeout in ms. Default: 10s. */
-  timeoutMs?: number;
-  /** PDF handling (application/pdf). */
-  pdf?: GatewayHttpResponsesPdfConfig;
-};
+export type GatewayHttpResponsesFilesConfig = NonNullable<GatewayHttpResponsesConfig["files"]>;
 
-export type GatewayHttpResponsesPdfConfig = {
-  /** Max pages to parse/render. Default: 4. */
-  maxPages?: number;
-  /** Max pixels per rendered page. Default: 4M. */
-  maxPixels?: number;
-  /** Minimum extracted text length to skip rasterization. Default: 200 chars. */
-  minTextChars?: number;
-};
+export type GatewayHttpResponsesPdfConfig = NonNullable<GatewayHttpResponsesFilesConfig["pdf"]>;
 
-export type GatewayHttpResponsesImagesConfig = {
-  /** Allow URL fetches for input_image. Default: true. */
-  allowUrl?: boolean;
-  /**
-   * Optional hostname allowlist for URL fetches.
-   * Supports exact hosts and `*.example.com` wildcards.
-   */
-  urlAllowlist?: string[];
-  /** Allowed MIME types (case-insensitive). */
-  allowedMimes?: string[];
-  /** Max bytes per image. Default: 10MB. */
-  maxBytes?: number;
-  /** Max redirects when fetching a URL. Default: 3. */
-  maxRedirects?: number;
-  /** Fetch timeout in ms. Default: 10s. */
-  timeoutMs?: number;
-};
+export type GatewayHttpResponsesImagesConfig = NonNullable<GatewayHttpResponsesConfig["images"]>;
 
-export type GatewayHttpEndpointsConfig = {
-  /** OpenAI-compatible chat completions endpoint controls. */
-  chatCompletions?: GatewayHttpChatCompletionsConfig;
-  /** OpenResponses-compatible responses endpoint controls. */
-  responses?: GatewayHttpResponsesConfig;
-};
+export type GatewayHttpEndpointsConfig = GatewayHttpEndpointsConfigInput;
 
-export type GatewayHttpSecurityHeadersConfig = {
-  /**
-   * Value for the Strict-Transport-Security response header.
-   * Set to false to disable explicitly.
-   *
-   * Example: "max-age=31536000; includeSubDomains"
-   */
-  strictTransportSecurity?: string | false;
-};
+export type GatewayHttpSecurityHeadersConfig = NonNullable<
+  GatewayHttpConfigInput["securityHeaders"]
+>;
 
-export type GatewayHttpConfig = {
-  /** Per-endpoint HTTP API controls. */
-  endpoints?: GatewayHttpEndpointsConfig;
-  /** HTTP security header overrides. */
-  securityHeaders?: GatewayHttpSecurityHeadersConfig;
-};
+export type GatewayHttpConfig = GatewayHttpConfigInput;
 
-export type GatewayPushApnsRelayConfig = {
-  /** Base HTTPS URL for the external iOS APNs relay service. */
-  baseUrl?: string;
-  /** Timeout in milliseconds for relay send requests (default: 10000). */
-  timeoutMs?: number;
-};
-
-export type GatewayPushApnsConfig = {
-  /** External APNs relay used by iOS/mobile notification flows. */
-  relay?: GatewayPushApnsRelayConfig;
-};
-
-export type GatewayPushConfig = {
-  /** Apple Push Notification Service settings. */
-  apns?: GatewayPushApnsConfig;
-};
+export type GatewayPushConfig = NonNullable<GatewayConfigInput["push"]>;
+export type GatewayPushApnsConfig = NonNullable<GatewayPushConfig["apns"]>;
+export type GatewayPushApnsRelayConfig = NonNullable<GatewayPushApnsConfig["relay"]>;
 
 export type GatewayNodePairingConfig = {
   /**

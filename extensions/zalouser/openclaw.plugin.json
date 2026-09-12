@@ -1,6 +1,6 @@
 {
   "id": "zalouser",
-  "categories": ["channels", "tools"],
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [

@@ -9,10 +9,14 @@ type MessageEvent = webhook.MessageEvent;
 
 const pairingDeliveryMocks = vi.hoisted(() => ({
   invokePairingReply: false,
-  pushMessageLine: vi.fn(async () => {
+  pushMessageLine: vi.fn<
+    (...args: Parameters<typeof import("./send.js").pushMessageLine>) => Promise<void>
+  >(async () => {
     throw new Error("pushMessageLine should not be called from bot-handlers tests");
   }),
-  replyMessageLine: vi.fn(async () => {
+  replyMessageLine: vi.fn<
+    (...args: Parameters<typeof import("./send.js").replyMessageLine>) => Promise<void>
+  >(async () => {
     throw new Error("replyMessageLine should not be called from bot-handlers tests");
   }),
 }));
@@ -178,15 +182,35 @@ vi.mock("./send.js", () => ({
   replyMessageLine: pairingDeliveryMocks.replyMessageLine,
 }));
 
-const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
-  buildLineMessageContextMock: vi.fn(async () => ({
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  })),
+const {
+  buildLineMessageContextMock,
+  buildLinePostbackContextMock,
+  resolveLineQuestionPostbackMock,
+} = vi.hoisted(() => ({
+  buildLineMessageContextMock: vi.fn(
+    async (_params: {
+      allMedia?: { path: string }[];
+      // The event the turn answers as: its reply token is what reaches LINE.
+      event?: { replyToken?: string };
+    }) => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    }),
+  ),
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
+  // Typed from the real resolver so a test can drive every outcome it declares.
+  resolveLineQuestionPostbackMock: vi.fn<
+    typeof import("./question-postback.js").resolveLineQuestionPostback
+  >(async () => ({ status: "answered" as const })),
+}));
+
+vi.mock("./question-postback.js", async (importOriginal) => ({
+  // Parsing stays real so the routing decision is the one production makes.
+  ...(await importOriginal<typeof import("./question-postback.js")>()),
+  resolveLineQuestionPostback: resolveLineQuestionPostbackMock,
 }));
 
 vi.mock("./bot-message-context.js", async (importOriginal) => ({
@@ -264,6 +288,7 @@ function createLineWebhookTestContext(params: {
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
+  turnAdoptionLifecycle?: LineWebhookContext["turnAdoptionLifecycle"];
   implicitMentions?: { quotedBot?: boolean };
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
@@ -298,6 +323,20 @@ function createLineWebhookTestContext(params: {
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
+  };
+}
+
+/** Records how an image-set part's ingress claim was finally settled. */
+function createTurnAdoptionLifecycleSpy() {
+  return {
+    admission: "exclusive" as const,
+    onAdopted: vi.fn(async () => {}),
+    onDeferred: vi.fn(() => {}),
+    onAbandoned: vi.fn(async () => {}),
+    abortSignal: new AbortController().signal,
   };
 }
 
@@ -348,8 +387,12 @@ describe("handleLineWebhookEvents", () => {
 
   beforeEach(() => {
     pairingDeliveryMocks.invokePairingReply = false;
-    pairingDeliveryMocks.pushMessageLine.mockClear();
-    pairingDeliveryMocks.replyMessageLine.mockClear();
+    pairingDeliveryMocks.pushMessageLine.mockReset().mockImplementation(async () => {
+      throw new Error("pushMessageLine should not be called from bot-handlers tests");
+    });
+    pairingDeliveryMocks.replyMessageLine.mockReset().mockImplementation(async () => {
+      throw new Error("replyMessageLine should not be called from bot-handlers tests");
+    });
     buildLineMessageContextMock.mockReset();
     buildLineMessageContextMock.mockImplementation(async () => ({
       ctxPayload: { From: "line:group:group-1" },
@@ -886,6 +929,7 @@ describe("handleLineWebhookEvents", () => {
       groupHistories,
     });
 
+    // One delivery is one turn, so the two sends arrive as two deliveries.
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
@@ -903,6 +947,11 @@ describe("handleLineWebhookEvents", () => {
           source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
           webhookEventId: "evt-hist-1",
         }),
+      ],
+      context,
+    );
+    await handleLineWebhookEvents(
+      [
         createTestMessageEvent({
           message: { id: "m-hist-2", type: "text", text: "second", quoteToken: "q-hist-2" },
           timestamp: 1700000001000,
@@ -945,6 +994,261 @@ describe("handleLineWebhookEvents", () => {
         ],
       }),
     );
+  });
+
+  it("answers a pending question instead of starting a turn when an option is tapped", async () => {
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-question",
+          deliveryContext: { isRedelivery: false },
+          postback: {
+            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+          },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(resolveLineQuestionPostbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callback: { questionId: "ask_3d8dbe55be452a9a39add7c909beb119", optionIndex: 1 },
+        senderId: "user-one",
+      }),
+    );
+    // A tap answers the question the agent is already waiting on; it is not a new turn.
+    expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { groupPolicy: "disabled", userId: "user-denied" },
+    { groupPolicy: "allowlist", userId: "user-denied" },
+    { groupPolicy: "allowlist", userId: undefined },
+  ] as const)(
+    "does not resolve question taps with groupPolicy $groupPolicy and userId $userId",
+    async ({ groupPolicy, userId }) => {
+      resolveLineQuestionPostbackMock.mockClear();
+      const processMessage = vi.fn();
+      await handleLineWebhookEvents(
+        [
+          {
+            type: "postback",
+            replyToken: "reply-token",
+            timestamp: Date.now(),
+            source: { type: "group", groupId: "group-1", ...(userId ? { userId } : {}) },
+            mode: "active",
+            webhookEventId: `evt-question-denied-${groupPolicy}`,
+            deliveryContext: { isRedelivery: false },
+            postback: {
+              data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+            },
+          } as never,
+        ],
+        createLineWebhookTestContext({
+          processMessage,
+          groupPolicy,
+          groupAllowFrom: ["user-allowed"],
+        }),
+      );
+
+      expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
+      expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
+      expect(processMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rechecks paired access without another pairing challenge or answer notice", async () => {
+    const processMessage = vi.fn();
+    const userId = "U0123456789abcdef0123456789abcdef";
+    readAllowFromStoreMock.mockResolvedValue([userId]);
+    let admittedBeforeWrite = true;
+    resolveLineQuestionPostbackMock.mockImplementationOnce(async ({ authorize }) => {
+      // The Gateway can await its question read while this pairing is revoked.
+      readAllowFromStoreMock.mockResolvedValue([]);
+      admittedBeforeWrite = await authorize();
+      return { status: admittedBeforeWrite ? "answered" : "denied" };
+    });
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId },
+          mode: "active",
+          webhookEventId: "evt-question-revoked",
+          deliveryContext: { isRedelivery: false },
+          postback: { data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1" },
+        },
+      ],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "pairing" }),
+    );
+
+    expect(readAllowFromStoreMock).toHaveBeenCalledTimes(2);
+    expect(admittedBeforeWrite).toBe(false);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(pairingDeliveryMocks.replyMessageLine).not.toHaveBeenCalled();
+    expect(pairingDeliveryMocks.pushMessageLine).not.toHaveBeenCalled();
+    expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    (["already-terminal", "failed"] as const).flatMap((status) =>
+      [false, true].flatMap((revoked) =>
+        (["reply", "push"] as const).map((transport) => ({ status, revoked, transport })),
+      ),
+    ),
+  )(
+    "rechecks $status notice admission for revoked=$revoked over $transport",
+    async ({ status, revoked, transport }) => {
+      const userId = "U0123456789abcdef0123456789abcdef";
+      const processMessage = vi.fn();
+      readAllowFromStoreMock.mockResolvedValue([userId]);
+      resolveLineQuestionPostbackMock.mockImplementationOnce(async () => {
+        if (revoked) {
+          readAllowFromStoreMock.mockResolvedValue([]);
+        }
+        return { status };
+      });
+      pairingDeliveryMocks.replyMessageLine.mockResolvedValueOnce(undefined);
+      pairingDeliveryMocks.pushMessageLine.mockResolvedValueOnce(undefined);
+      await handleLineWebhookEvents(
+        [
+          {
+            type: "postback",
+            replyToken: transport === "reply" ? "reply-token" : "",
+            timestamp: Date.now(),
+            source: { type: "user", userId },
+            mode: "active",
+            webhookEventId: `notice-${status}-${revoked}-${transport}`,
+            deliveryContext: { isRedelivery: false },
+            postback: { data: "line.question=ask_0123456789abcdef0123456789abcdef&line.option=1" },
+          },
+        ],
+        createLineWebhookTestContext({ processMessage, dmPolicy: "pairing" }),
+      );
+      expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledTimes(
+        !revoked && transport === "reply" ? 1 : 0,
+      );
+      expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(
+        !revoked && transport === "push" ? 1 : 0,
+      );
+      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      expect(processMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { revoked: false, partial: false, pushed: true },
+    { revoked: true, partial: false, pushed: false },
+    { revoked: false, partial: true, pushed: false },
+  ])(
+    "rechecks notice fallback after reply failure revoked=$revoked partial=$partial",
+    async ({ revoked, partial, pushed }) => {
+      const userId = "U0123456789abcdef0123456789abcdef";
+      const processMessage = vi.fn();
+      readAllowFromStoreMock.mockResolvedValue([userId]);
+      resolveLineQuestionPostbackMock.mockResolvedValueOnce({ status: "already-terminal" });
+      pairingDeliveryMocks.replyMessageLine.mockImplementationOnce(async () => {
+        if (revoked) {
+          readAllowFromStoreMock.mockResolvedValue([]);
+        }
+        throw Object.assign(
+          new Error("reply failed"),
+          partial ? { code: "CHANNEL_PARTIAL_DELIVERY" } : {},
+        );
+      });
+      pairingDeliveryMocks.pushMessageLine.mockResolvedValueOnce(undefined);
+      await handleLineWebhookEvents(
+        [
+          {
+            type: "postback",
+            replyToken: "reply-token",
+            timestamp: Date.now(),
+            source: { type: "user", userId },
+            mode: "active",
+            webhookEventId: `notice-fallback-${revoked}-${partial}`,
+            deliveryContext: { isRedelivery: false },
+            postback: { data: "line.question=ask_0123456789abcdef0123456789abcdef&line.option=1" },
+          },
+        ],
+        createLineWebhookTestContext({ processMessage, dmPolicy: "pairing" }),
+      );
+      expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledOnce();
+      expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(pushed ? 1 : 0);
+      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      expect(processMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["already-terminal" as const, "That question is no longer waiting for an answer."],
+    ["failed" as const, "Could not record that answer. Reply with the option text instead."],
+  ])("tells the tapper what happened when a %s tap did not answer", async (status, notice) => {
+    resolveLineQuestionPostbackMock.mockResolvedValueOnce({ status });
+    pairingDeliveryMocks.replyMessageLine.mockResolvedValueOnce(undefined as never);
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: `evt-question-${status}`,
+          deliveryContext: { isRedelivery: false },
+          postback: {
+            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
+          },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledWith(
+      "reply-token",
+      [{ type: "text", text: notice }],
+      expect.anything(),
+    );
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("still routes an ordinary postback to the agent", async () => {
+    resolveLineQuestionPostbackMock.mockClear();
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-plain-postback",
+          deliveryContext: { isRedelivery: false },
+          postback: { data: "line.action=play&line.device=tv" },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
+    expect(buildLinePostbackContextMock).toHaveBeenCalled();
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
@@ -1629,6 +1933,144 @@ describe("handleLineWebhookEvents", () => {
 
     // Should be skipped because there is a non-bot mention and the bot was not mentioned.
     expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  // The spool hands the whole set to the handler at once; the handler's job is to
+  // make it one turn carrying every image rather than one turn per part.
+  it("answers a multi-image send as one turn instead of one turn per image", async () => {
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const imagePart = (messageId: string, index: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-1", index, total: 3 },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${index}`,
+      });
+
+    // LINE does not deliver the parts in order; the spool preserves what it got.
+    await handleLineWebhookEvents(
+      [imagePart("m2", 2), imagePart("m1", 1), imagePart("m3", 3)],
+      context,
+    );
+
+    expect(downloadLineMediaMock).toHaveBeenCalledTimes(3);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    // Every part's media reaches the one turn that speaks for the set.
+    expect(buildLineMessageContextMock.mock.calls[0]?.[0]?.allMedia).toHaveLength(3);
+  });
+
+  it("answers a set with its freshest part while media keeps the picked order", async () => {
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const base = 1_700_000_000_000;
+    const imagePart = (messageId: string, index: number, arrivedAt: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-fresh", index, total: 3 },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${index}`,
+        replyToken: `reply-${index}`,
+        timestamp: arrivedAt,
+      });
+
+    // Delivered 2, 1, 3: image 3 is the freshest arrival, image 1 the oldest.
+    await handleLineWebhookEvents(
+      [
+        imagePart("m2", 2, base + 200),
+        imagePart("m1", 1, base + 100),
+        imagePart("m3", 3, base + 300),
+      ],
+      context,
+    );
+
+    // The turn speaks as the freshest part: a reply token expires, so answering
+    // with image 1's would risk a token that is already stale.
+    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
+    expect(built?.event?.replyToken).toBe("reply-3");
+    // Media still reads in the order the sender picked them.
+    expect(built?.allMedia?.map((media) => media.path)).toEqual([
+      "/media/m1.png",
+      "/media/m2.png",
+      "/media/m3.png",
+    ]);
+  });
+
+  it("keeps the delivered order for a set whose parts carry no index", async () => {
+    // `imageSet.index` is optional in LINE's contract - a sender on LINE 11.15
+    // or earlier for Android omits it - so the only order those parts have is
+    // the one the spool's buffer resolved before handing them over.
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const base = 1_700_000_000_000;
+    const unindexedPart = (messageId: string, timestamp: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-unindexed" },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${messageId}`,
+        replyToken: `reply-${messageId}`,
+        timestamp,
+      });
+
+    await handleLineWebhookEvents(
+      [
+        unindexedPart("m1", base + 100),
+        unindexedPart("m2", base + 200),
+        unindexedPart("m3", base + 300),
+      ],
+      context,
+    );
+
+    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
+    // The order handed over survives: no index means nothing may re-sort it.
+    expect(built?.allMedia?.map((media) => media.path)).toEqual([
+      "/media/m1.png",
+      "/media/m2.png",
+      "/media/m3.png",
+    ]);
+    // Answering still uses the freshest token, which is a separate fact.
+    expect(built?.event?.replyToken).toBe("reply-m3");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

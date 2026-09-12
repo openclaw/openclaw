@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { writeJson } from "../../src/infra/json-files.ts";
-import { collectPackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
+import {
+  collectPackageDistContentInventory,
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  collectPackageDistInventory,
+} from "../../src/infra/package-dist-inventory.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory-contract.mts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
 
@@ -119,7 +123,13 @@ async function writePackageDistInventoryFile(
   packageRoot: string,
   entries: string[],
 ): Promise<string[]> {
-  const inventory = sortUniqueStrings(entries);
+  const files = entries.filter((entry) => entry !== PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
+  const content = await collectPackageDistContentInventory(packageRoot, files);
+  await writeJson(path.join(packageRoot, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH), content, {
+    mode: 0o644,
+    trailingNewline: true,
+  });
+  const inventory = sortUniqueStrings([...files, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH]);
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await writeJson(inventoryPath, inventory, { mode: 0o644, trailingNewline: true });
   return inventory;

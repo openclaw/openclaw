@@ -277,6 +277,14 @@ it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package
 The standalone build runs the selected package's asset build command and copies
 its declared `openclaw.build.staticAssets` into `dist`, including for new packages
 that are not yet tracked by Git. Missing declared source files fail the build.
+
+Declare private worker source files in `openclaw.build.workerEntries`, using
+package-relative paths such as `./src/store.worker.ts`. The standalone build
+emits them at matching paths under `dist`, such as `dist/src/store.worker.js`
+(`.cjs` for CommonJS packages). These entries are also included when the plugin
+is selected for the root bundled build. Declaring a worker does not register it
+as a plugin entrypoint or add a public package export.
+
 The preparation command does not rebuild either output or execute plugin code.
 It only links the checkout as `node_modules/openclaw` for a real immediate
 source package that declares `openclaw` in `peerDependencies` or `dependencies`.

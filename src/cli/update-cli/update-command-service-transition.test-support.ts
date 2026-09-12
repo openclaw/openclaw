@@ -17,7 +17,7 @@ import {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
-type InstallRootTransitionFixture = {
+export type InstallRootTransitionFixture = {
   root: string;
   run: NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
@@ -232,6 +232,9 @@ export function registerRestartOutcomeTests(
       "child" | "health" | "configSnapshot" | "capability"
     > & {
       restart: Mock<() => Promise<{ outcome: "completed" }>>;
+      terminateStale: Mock<
+        typeof import("../../infra/restart-stale-pids.js").terminateStaleGatewayPids
+      >;
       writeJson: Mock;
     };
   },
@@ -324,6 +327,22 @@ export function registerRestartOutcomeTests(
         }),
       ).toBe(expected);
       expect(mocks.child).toHaveBeenCalledOnce();
+      expect(mocks.child.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          path.join(root, "dist", "index.js"),
+          "gateway",
+          "restart",
+          "--json",
+        ]),
+      );
+      if (scenario === "repair retry health") {
+        expect(mocks.terminateStale).toHaveBeenCalledExactlyOnceWith([4242]);
+        expect(mocks.restart).toHaveBeenCalledOnce();
+        expect(mocks.health.mock.lastCall?.[0]).toMatchObject({
+          requireRunningService: true,
+          requirePluginHealth: false,
+        });
+      }
     },
   );
 
@@ -415,16 +434,9 @@ type PluginMaintenanceFixture = InstallRootTransitionFixture & {
 };
 
 export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenanceFixture) {
-  it.each(
-    (["git", "npm"] as const).flatMap((mode) =>
-      (["stopped", "not-loaded", "unverified", "failed"] as const).map((stopResult) => ({
-        mode,
-        stopResult,
-      })),
-    ),
-  )(
-    "delegates $mode activation and post-handoff plugin maintenance after candidate doctor stamps newer config ($stopResult)",
-    async ({ mode, stopResult }) => {
+  it.each(["git", "npm"] as const)(
+    "delegates %s activation and post-handoff Doctor after newer config is stamped",
+    async (mode) => {
       const { root, run, mocks, writeConfig } = getFixture();
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         updateInstallKind: mode === "git" ? "git" : "package",
@@ -496,56 +508,6 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
       );
 
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
-      mocks.child.mockImplementation(async () => {
-        mocks.events.push("fresh CLI stop");
-        mocks.running = false;
-        return {
-          code: stopResult === "failed" ? 1 : 0,
-          stdout:
-            stopResult === "unverified"
-              ? ""
-              : JSON.stringify({
-                  action: "stop",
-                  ok: stopResult !== "failed",
-                  result: stopResult,
-                }),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      });
-      const maintenance = maybeStopManagedServiceBeforeMutableUpdate({
-        root,
-        updateInstallKind: mode === "git" ? "git" : "package",
-        shouldRestart: true,
-        jsonMode: true,
-        expectedService: {
-          serviceEnv: state.env,
-          serviceUpdateVerdict: verdict,
-          serviceManagerUid: before.serviceManagerUid,
-        },
-        activatedInstall: { packageUpdateNodeRunner: process.execPath },
-        timeoutMs: 1000,
-      });
-      if (stopResult === "unverified" || stopResult === "failed") {
-        await expect(maintenance).rejects.toThrow(
-          stopResult === "unverified"
-            ? "did not confirm the service stopped"
-            : "updated install stop failed",
-        );
-        return;
-      }
-      expect((await maintenance).stopped).toBe(true);
-      expect(mocks.child.mock.lastCall?.[0]).toEqual([
-        process.execPath,
-        path.join(root, "dist", "index.js"),
-        "gateway",
-        "stop",
-        "--force",
-        "--json",
-      ]);
-      expect(mocks.child.mock.lastCall?.[1]).toMatchObject({ cwd: root });
       vi.mocked(runExec).mockResolvedValueOnce({ stdout: "", stderr: "" });
       await runUpdateFinalizationDoctorInFreshProcess({
         root,

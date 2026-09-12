@@ -63,7 +63,6 @@ openclaw-chat-pane {
     .chat-pane__sharing-menu,
     .chat-pane__draft-indicator,
     .chat-pane__branches-menu,
-    .chat-pane__gateway-menu,
     .chat-pane__actions
   ) {
   display: none;
@@ -459,105 +458,6 @@ openclaw-chat-pane {
   line-height: 1.3;
 }
 
-.chat-pane__gateway-menu {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-.chat-pane__gateway-menu::part(menu) {
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
-.chat-pane__gateway-menu-item {
-  min-height: var(--menu-item-height);
-  padding: 0 8px;
-  border-radius: var(--menu-item-radius);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.chat-pane__gateway-chip {
-  display: inline-flex;
-  max-width: 170px;
-  height: 28px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 11px;
-  cursor: var(--cursor-action);
-}
-
-.chat-pane__gateway-chip:hover,
-.chat-pane__gateway-chip:focus-visible {
-  border-color: var(--muted-strong);
-  color: var(--text);
-  outline: none;
-}
-
-.chat-pane__gateway-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-pane__gateway-health {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.chat-pane__gateway-health[data-health="ok"] {
-  background: var(--ok);
-}
-
-.chat-pane__gateway-health[data-health="error"] {
-  background: var(--danger);
-}
-
-.chat-pane__gateway-chevron,
-.chat-pane__gateway-check {
-  display: inline-flex;
-}
-
-.chat-pane__gateway-chevron svg,
-.chat-pane__gateway-check svg {
-  width: 12px;
-  height: 12px;
-}
-
-.chat-pane__gateway-chevron svg {
-  transform: rotate(180deg);
-}
-
-.chat-pane__gateway-details {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chat-pane__gateway-primary {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.chat-pane__gateway-divider {
-  height: 1px;
-  margin: 4px 0;
-  background: var(--border);
-}
-
 .chat-pane__branches-menu {
   flex: 0 0 auto;
 }
@@ -883,7 +783,6 @@ openclaw-chat-pane {
   .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__gateway-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,

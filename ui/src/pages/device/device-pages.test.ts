@@ -94,6 +94,40 @@ afterEach(() => {
 });
 
 describe("native device settings pages", () => {
+  it("shows native desktop state and reconciles unattended hosting with the native owner", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const native = createCapability({
+      ...snapshot,
+      capabilities: { ...snapshot.capabilities, unattendedDesktopEnabled: false },
+      desktopAvailability: { state: "locked" },
+    });
+    const page = await mount("openclaw-device-page", native.capability);
+    const hosting = row(page, "Unattended desktop hosting");
+    expect(hosting.textContent).toContain("between jobs");
+    expect(hosting.textContent).toContain("Manual lock and logout");
+    expect(row(page, "Desktop availability").textContent).toContain("Locked");
+    expect(native.capability.set).not.toHaveBeenCalled();
+    toggle(page, "Unattended desktop hosting", true);
+    expect(native.capability.set).toHaveBeenCalledWith(
+      "capabilities.unattendedDesktopEnabled",
+      true,
+    );
+    native.publish({
+      ...snapshot,
+      capabilities: { ...snapshot.capabilities, unattendedDesktopEnabled: false },
+      desktopAvailability: { state: "unknown" },
+    });
+    await page.updateComplete;
+    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(false);
+    expect(row(page, "Desktop availability").textContent).toContain("Unknown");
+    const capabilities = { ...snapshot.capabilities };
+    delete capabilities.unattendedDesktopEnabled;
+    native.publish({ ...snapshot, capabilities, desktopAvailability: { state: "unlocked" } });
+    await page.updateComplete;
+    expect(row(page, "Desktop availability").textContent).toContain("Unlocked");
+    expect(page.textContent).not.toContain("Unattended desktop hosting");
+  });
+
   it("requests setup only on click and reports Chrome approval separately from installation", async () => {
     const { capability } = createCapability();
     capability.installChromeExtension.mockResolvedValue({

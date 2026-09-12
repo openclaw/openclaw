@@ -278,6 +278,7 @@ describe("stored chat snapshot hydration", () => {
       expect(request).toHaveBeenCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: targetSessionKey }),
+        { signal: expect.any(AbortSignal) },
       );
       await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(cachedMessages));
 

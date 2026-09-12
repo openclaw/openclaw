@@ -572,6 +572,8 @@ describe("Codex app-server terminal settlement", () => {
           expect(result.contextEngineTerminalAnchor).toBeUndefined();
         }
         if (boundary === "final" && release === "after cutoff") {
+          // Successor I/O and relay retirement must outlive the completed deadline simulation.
+          vi.useRealTimers();
           const nextHarness = createStartedThreadHarness(
             async (method) => {
               if (method === "thread/resume") {

@@ -5,7 +5,11 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
+import type {
+  TranscriptEvent,
+  TranscriptEventAppendOptions,
+  TranscriptMessageAppendOptions,
+} from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import {
@@ -127,6 +131,32 @@ export function canRebasePreparedAssistantInTransaction(
     ),
   );
   return newerRoles.every((row) => row.message_role !== "user" || row.event_id === admittedUserId);
+}
+
+export function resolveTranscriptEventAppendParent(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  event: TranscriptEvent,
+  options: TranscriptEventAppendOptions,
+): TranscriptEvent {
+  if (
+    options.appendIntent !== "active-branch" ||
+    !event ||
+    typeof event !== "object" ||
+    Array.isArray(event) ||
+    !("parentId" in event)
+  ) {
+    return event;
+  }
+  const parentId = event.parentId;
+  if (parentId !== null && typeof parentId !== "string") {
+    return event;
+  }
+  const effectiveParentId = resolveTranscriptMessageAppendParent(database, sessionId, {
+    appendIntent: "active-branch",
+    parentId,
+  });
+  return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
 }
 
 export function resolveTranscriptMessageAppendParent<TMessage>(

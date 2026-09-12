@@ -12,6 +12,7 @@ import {
   readSystemdServiceExecStart,
   resolveSystemdUnitPath,
 } from "../../daemon/systemd-service-files.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
@@ -23,7 +24,9 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
+import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
@@ -32,14 +35,24 @@ import {
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
+import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (exitCode) => {
+it.each([
+  { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 0 },
+  { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 86 },
+  { kind: "recoverable-maintenance", name: "global install swap", exitCode: 0 },
+] as const)("persists and surfaces $kind warnings (exit $exitCode)", ({ kind, name, exitCode }) => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("update-warning-ledger-") };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  const message = "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
+  const message =
+    kind === "recoverable-maintenance"
+      ? "baseline package fingerprint incomplete after 30 s; rollback will be verified by the retained package copy"
+      : "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
   const otherWarning =
-    "Skipped legacy cache cleanup: read-only directory. Run openclaw doctor --fix.";
+    kind === "recoverable-maintenance"
+      ? "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version."
+      : "Skipped legacy cache cleanup: read-only directory. Run openclaw doctor --fix.";
   const result = completeUpdateCommandRun(
     {
       status: "ok",
@@ -47,12 +60,12 @@ it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (
       durationMs: 1,
       steps: [
         {
-          name: "openclaw doctor",
-          command: "openclaw doctor --fix",
+          name,
+          command: name,
           cwd: "/tmp/update-fixture",
           durationMs: 1,
           exitCode,
-          advisory: { kind: "package-post-install-doctor", message },
+          advisory: { kind, message },
           warnings: [message, otherWarning],
         },
       ],
@@ -65,12 +78,12 @@ it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (
     status: "succeeded",
     steps: expect.arrayContaining([
       expect.objectContaining({
-        step: "warning:openclaw doctor",
+        step: `warning:${name}`,
         status: "completed",
         detail: message,
       }),
       expect.objectContaining({
-        step: "warning:openclaw doctor:2",
+        step: `warning:${name}:2`,
         status: "completed",
         detail: otherWarning,
       }),
@@ -83,6 +96,60 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+it("persists fingerprint warnings before closing a rolled-back run", () => {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-fingerprint-warning-") };
+  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const warnings = [
+    "baseline package fingerprint incomplete after 30 s; rollback will be verified by the retained package copy",
+    "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
+  ];
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const result = publishUpdateCommandTerminalResult(
+    { opts: { json: true, run }, ownedManagedUpdateEnv: env },
+    {
+      status: "error",
+      mode: "npm",
+      reason: "doctor-failed",
+      before: { version: "1.0.0" },
+      after: { version: "1.0.0" },
+      recovery: {
+        serviceRestartSafe: true,
+        packageRollbackVerified: true,
+        service: "healthy",
+        version: "1.0.0",
+      },
+      durationMs: 50,
+      steps: [
+        {
+          name: "global install rollback",
+          command: "restore",
+          cwd: env.OPENCLAW_STATE_DIR,
+          durationMs: 1,
+          exitCode: 0,
+          advisory: { kind: "recoverable-maintenance", message: warnings.join("\n") },
+          warnings,
+        },
+      ],
+    },
+    { rolledBack: true, downtimeMs: 25 },
+  );
+  expect(result).toMatchObject({ status: "error", reason: "doctor-failed" });
+  const recorded = getUpdateRun(run.runId, { env })!;
+  expect(recorded).toMatchObject({
+    status: "rolled-back",
+    reason: "doctor-failed",
+    downtimeMs: 25,
+  });
+  expect(recorded.steps).toEqual(
+    expect.arrayContaining(
+      warnings.map((detail) => expect.objectContaining({ status: "completed", detail })),
+    ),
+  );
+  for (const warning of warnings) {
+    expect(renderUpdateRunReport(recorded).markdown).toContain(warning);
+  }
 });
 
 it("presents committed steps without reopening the ledger for display", () => {
@@ -167,6 +234,58 @@ it("presents committed steps without reopening the ledger for display", () => {
     }
   }
 });
+it.each(["state", "config", "include", "environment"])(
+  "refuses changed %s ownership after target initialization before writing update history",
+  async (changed) => {
+    const root = dirs.make("update-initialization-admission-");
+    const stateDir = path.join(root, "profile");
+    const configPath = path.join(root, "openclaw.json");
+    const includePath = path.join(root, "gateway.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "workspace"));
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+    vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
+    fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local" } }));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        $include: "./gateway.json",
+        agents: { defaults: { workspace: "${FIXTURE_WORKSPACE_DIR}" } },
+      }),
+    );
+    const env = { ...process.env };
+    const context = await captureTargetDatabaseSchemaContext(env);
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const initialization = {
+      env,
+      runId: randomUUID(),
+      databasePath: resolvePathViaExistingAncestorSync(databasePath),
+      configPath: resolvePathViaExistingAncestorSync(configPath),
+      target: { configSnapshot: context.configSnapshot },
+    };
+    if (changed === "state") {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "replacement-profile"));
+    } else if (changed === "config") {
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "replacement.json"));
+    } else if (changed === "include") {
+      fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local", port: 19222 } }));
+    } else {
+      vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "replacement-workspace"));
+    }
+    const configBefore = fs.readFileSync(configPath);
+    const includeBefore = fs.readFileSync(includePath);
+
+    await expect(
+      admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
+    ).rejects.toThrow(/changed/);
+
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
+    expect(fs.readFileSync(configPath)).toEqual(configBefore);
+    expect(fs.readFileSync(includePath)).toEqual(includeBefore);
+  },
+);
 
 it.each([false, true])(
   "keeps restored-generation completion with its helper across CLI unwind (handoff=%s)",

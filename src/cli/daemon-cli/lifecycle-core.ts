@@ -4,6 +4,7 @@ import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "../../daemon/service-update-authority.js";
 import type {
   GatewayServiceStartRepairIssue,
   GatewayServiceState,
@@ -500,6 +501,7 @@ export async function runServiceRestart(params: {
       return;
     }
     const runtime = await params.service.readRuntime(process.env).catch(() => null);
+    assertGatewayServiceUpdateCurrent();
     wroteRestartIntent = writeGatewayRestartIntentSync({
       targetPid: runtime?.pid,
       reason: "gateway.restart",
@@ -508,6 +510,7 @@ export async function runServiceRestart(params: {
   };
   const clearPreparedRestartIntent = () => {
     if (wroteRestartIntent) {
+      assertGatewayServiceUpdateCurrent();
       clearGatewayRestartIntentSync();
       wroteRestartIntent = false;
     }

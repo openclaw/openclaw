@@ -21,6 +21,7 @@ import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
+import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import type { UpdateFetchFailure } from "./update-run-record.js";
 
@@ -40,6 +41,7 @@ type GitUpdateStatus = {
   ahead: number | null;
   behind: number | null;
   fetchOk: boolean | null;
+  builtSha?: string | null;
   countsCached?: true;
   stale?: UpdateFetchFailure;
   error?: string;
@@ -430,6 +432,7 @@ async function checkGitUpdateStatus(params: {
     ahead: parsed ? Number(parsed[1]) : null,
     behind: parsed ? Number(parsed[2]) : null,
     fetchOk,
+    builtSha: await readBuiltRuntimeCommit(root),
   };
 }
 

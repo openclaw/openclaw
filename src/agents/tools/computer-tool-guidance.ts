@@ -126,8 +126,12 @@ export function buildComputerToolDescription(
     hasImageObservation &&
     capabilities.targets.includes("screen") &&
     hasPixelAction;
-  const hasBackground = capabilities.deliveryModes.includes("background") && hasDeliveryAction;
-  const hasForeground = capabilities.deliveryModes.includes("foreground") && hasDeliveryAction;
+  const hasWindowDelivery =
+    hasWindowState && (capabilities.targets.includes("window") || hasElementTarget);
+  const hasBackground =
+    hasWindowDelivery && capabilities.deliveryModes.includes("background") && hasDeliveryAction;
+  const hasForeground =
+    hasWindowDelivery && capabilities.deliveryModes.includes("foreground") && hasDeliveryAction;
   const targetOrder = [
     ...(hasElementTarget ? ["elementRef from the latest observation"] : []),
     ...(hasWindowPixelTarget ? ["window coordinates from the latest observation"] : []),
@@ -152,9 +156,14 @@ export function buildComputerToolDescription(
       ? "Window inputs follow `details.coordinateSpace`: `image-pixels` uses the delivered image; accessibility bounds retain provider-native units."
       : "",
     hasBackground && hasForeground
-      ? 'Use `deliveryMode:"background"` first. Escalate to foreground only after that attempt reports ineffective or refused.'
+      ? 'For window input, use `deliveryMode:"background"` first. Escalate to foreground only after that attempt reports ineffective or refused.'
       : hasBackground
-        ? 'Use the advertised `deliveryMode:"background"` path.'
+        ? 'For window input, use the advertised `deliveryMode:"background"` path.'
+        : "",
+    advertisesAction(capabilities, "hold_key")
+      ? "Use `hold_key` for a bounded keyboard hold when sustained input is needed."
+      : advertisesAction(capabilities, "key")
+        ? "This node supports key taps only; sustained keyboard input is unavailable."
         : "",
     hasMutation
       ? 'Result precedence is `effect:"confirmed"` > `unverifiable` > `suspected_noop`; action evidence alone does not prove the user\'s goal. Re-observe before another mutation, and never blind-retry a mutation.'

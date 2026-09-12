@@ -1202,25 +1202,7 @@ class ChatComposerLayoutTest {
     val height = mutableStateOf(720.dp)
     val viewModel = showChat(viewportWidth = 720.dp, viewportHeight = { height.value }, fontScale = { 1.5f }, useChatShell = true)
     val owner = viewModel.captureChatShareOwner()
-    val sent = ConcurrentLinkedQueue<JsonObject>()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
-    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "chat.send") {
-        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
-        sent.add(payload)
-        buildJsonObject {
-          put("runId", payload.getValue("idempotencyKey"))
-          put("status", JsonPrimitive("started"))
-        }.toString()
-      } else {
-        originalRequest(gatewayId, method, params)
-      }
-    }
-    try {
-      requestField.set(controller, request)
+    withChatSendRequests { sent ->
       composeRule.runOnIdle {
         viewModel.chatComposerState.addAttachments(
           owner,
@@ -1298,6 +1280,30 @@ class ChatComposerLayoutTest {
       }
       assertEquals(JsonPrimitive(edited), sent.single()["message"])
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+    }
+  }
+
+  private fun withChatSendRequests(assertions: (ConcurrentLinkedQueue<JsonObject>) -> Unit) {
+    val sent = ConcurrentLinkedQueue<JsonObject>()
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      if (method == "chat.send") {
+        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+        sent.add(payload)
+        buildJsonObject {
+          put("runId", payload.getValue("idempotencyKey"))
+          put("status", JsonPrimitive("started"))
+        }.toString()
+      } else {
+        originalRequest(gatewayId, method, params)
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      assertions(sent)
     } finally {
       requestField.set(controller, originalRequest)
     }
@@ -1362,25 +1368,7 @@ class ChatComposerLayoutTest {
     val height = mutableStateOf(720.dp)
     val viewModel = showChat(viewportWidth = 720.dp, viewportHeight = { height.value }, useChatShell = true)
     val owner = viewModel.captureChatShareOwner()
-    val sent = ConcurrentLinkedQueue<JsonObject>()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
-    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "chat.send") {
-        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
-        sent.add(payload)
-        buildJsonObject {
-          put("runId", payload.getValue("idempotencyKey"))
-          put("status", JsonPrimitive("started"))
-        }.toString()
-      } else {
-        originalRequest(gatewayId, method, params)
-      }
-    }
-    try {
-      requestField.set(controller, request)
+    withChatSendRequests { sent ->
       val editor = composeRule.onNode(hasSetTextAction())
       val draft = "Visible draft"
       editor.performClick().performTextReplacement(draft)
@@ -1416,8 +1404,6 @@ class ChatComposerLayoutTest {
       composeRule.waitUntil { composeRule.runOnIdle { sent.isNotEmpty() } }
       assertEquals(listOf(JsonPrimitive(edited)), sent.map { it["message"] })
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
-    } finally {
-      requestField.set(controller, originalRequest)
     }
   }
 
@@ -1737,6 +1723,133 @@ class ChatComposerLayoutTest {
       composeRule.waitUntil { !model.isCurrentChatComposerOwner(owner) }
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun reviewMenuLoadsCurrentConversationSnapshotAndRetiresOnSessionSwitch() {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(stableId = AndroidScreenshotFixture.gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Review fixture"),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    @Suppress("UNCHECKED_CAST")
+    val diffAvailable =
+      NodeRuntime::class.java
+        .getDeclaredField("_sessionDiffAvailable")
+        .apply { isAccessible = true }
+        .get(runtime) as MutableStateFlow<Boolean>
+    diffAvailable.value = true
+    val model = showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    val owner = model.captureChatShareOwner()
+    val sessionKey = controller.sessionKey.value
+    val calls = ConcurrentLinkedQueue<Pair<String, String?>>()
+    val endpointField = NodeRuntime::class.java.getDeclaredField("connectedEndpoint").apply { isAccessible = true }
+    val previousEndpoint = endpointField.get(runtime)
+    val previousRequest = runtime.gatewayDataRequestOverrideForTests
+    val chatRequestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val previousChatRequest = chatRequestField.get(controller) as suspend (String, String, String?) -> String
+    val chatMethods = ConcurrentLinkedQueue<String>()
+    val observeChatRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      chatMethods.add(method)
+      previousChatRequest(gatewayId, method, params)
+    }
+    try {
+      chatRequestField.set(controller, observeChatRequest)
+      endpointField.set(
+        runtime,
+        ai.openclaw.app.gateway.GatewayEndpoint(
+          stableId = AndroidScreenshotFixture.gatewayId,
+          name = "Review fixture",
+          host = "127.0.0.1",
+          port = 18789,
+        ),
+      )
+      runtime.gatewayDataRequestOverrideForTests = { gatewayId, method, params ->
+        assertEquals(owner.gatewayStableId, gatewayId)
+        assertEquals("sessions.diff", method)
+        calls.add(method to params)
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(sessionKey))
+          put("additions", JsonPrimitive(1))
+          put("deletions", JsonPrimitive(0))
+          put(
+            "files",
+            buildJsonArray {
+              add(
+                buildJsonObject {
+                  put("path", JsonPrimitive("review-fixture.txt"))
+                  put("status", JsonPrimitive("added"))
+                  put("additions", JsonPrimitive(1))
+                  put("deletions", JsonPrimitive(0))
+                  put("patch", JsonPrimitive("@@ -0,0 +1 @@\n+Snapshot from the conversation workspace\n"))
+                },
+              )
+            },
+          )
+        }.toString()
+      }
+      composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+      composeRule.onNodeWithText(nativeString("Review changes")).performClick()
+      composeRule.waitUntil {
+        composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
+      }
+      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).assertIsDisplayed()
+      composeRule.onNodeWithContentDescription(nativeString("Refresh changes")).assertIsDisplayed()
+      composeRule.onNode(isDialog()).performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
+      composeRule.onNodeWithContentDescription(nativeString("Close review")).assertIsDisplayed()
+      val request = Json.parseToJsonElement(requireNotNull(calls.single().second)).jsonObject
+      assertEquals(JsonPrimitive(sessionKey), request["sessionKey"])
+      assertEquals(JsonPrimitive(owner.agentId), request["agentId"])
+      assertEquals(JsonPrimitive("uncommitted"), request["scope"])
+      composeRule.waitForIdle()
+      composeRule.runOnIdle { model.chatComposerState.textDrafts[owner] = "Keep my draft" }
+      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).performTouchInput {
+        down(center)
+        moveTo(center, delayMillis = 700)
+        up()
+      }
+      composeRule.onNodeWithText(nativeString("To chat")).performClick()
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      composeRule.runOnIdle {
+        assertEquals("Keep my draft\nreview-fixture.txt:1-1 (After | Uncommitted)\n```txt\nSnapshot from the conversation workspace\n```", model.chatComposerState.textDrafts[owner])
+        assertEquals(
+          "Reference added to chat",
+          org.robolectric.shadows.ShadowToast
+            .getTextOfLatestToast(),
+        )
+        assertFalse("Referencing code must not send the draft", "chat.send" in chatMethods)
+      }
+
+      fun reopenReview() {
+        composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+        composeRule.onNodeWithText(nativeString("Review changes")).performClick()
+        composeRule.waitUntil {
+          composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+      }
+      reopenReview()
+      val reviewDialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+      composeRule.runOnIdle { reviewDialog.onBackPressedDispatcher.onBackPressed() }
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      reopenReview()
+      val other = model.chatSessions.value.first { it.key != sessionKey }
+      composeRule.runOnIdle { model.switchChatSession(other.key, other.ownerAgentId) }
+      composeRule.waitUntil { !model.isCurrentChatComposerOwner(owner) }
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      composeRule.onNodeWithContentDescription(nativeString("Refresh changes")).assertDoesNotExist()
+      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).assertDoesNotExist()
+      assertEquals("Retiring review must not reload it for the next conversation", 3, calls.size)
+    } finally {
+      chatRequestField.set(controller, previousChatRequest)
+      runtime.gatewayDataRequestOverrideForTests = previousRequest
+      endpointField.set(runtime, previousEndpoint)
     }
   }
 
@@ -3343,6 +3456,7 @@ class ChatComposerLayoutTest {
     val editorId = editor.fetchSemanticsNode().id
     val before = prefs.modelFavorites.value
     composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasContentDescription(nativeString("Pin model")))
     val pin = composeRule.onAllNodesWithContentDescription(nativeString("Pin model"))[0].performScrollTo()
     val bounds = pin.getUnclippedBoundsInRoot()
     val x = (bounds.left.value + bounds.right.value) / 2f
@@ -3386,6 +3500,7 @@ class ChatComposerLayoutTest {
     composeRule.waitForIdle()
     val fresh = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
     assertNotSame(old.window, fresh.window)
+    composeRule.onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasContentDescription(nativeString("Pin model")))
     val freshPin = composeRule.onAllNodesWithContentDescription(nativeString("Pin model"))[0].performScrollTo()
     freshPin.performTouchInput {
       down(center)
@@ -3831,7 +3946,7 @@ class ChatComposerLayoutTest {
     var modelLabel = "GPT-5.6 Sol"
     val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
       val response = originalRequest(gatewayId, method, params)
-      if (method == "chat.metadata") {
+      if (method == "models.list") {
         val metadata = Json.parseToJsonElement(response).jsonObject
         val models =
           metadata.getValue("models").jsonArray.map { model ->
@@ -4239,25 +4354,7 @@ class ChatComposerLayoutTest {
     val owner = viewModel.captureChatShareOwner()
     assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
     assertTrue("The composer must have a routable controller owner", controller.isCurrentComposerOwner(owner))
-    val sent = ConcurrentLinkedQueue<JsonObject>()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
-    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "chat.send") {
-        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
-        sent.add(payload)
-        buildJsonObject {
-          put("runId", payload.getValue("idempotencyKey"))
-          put("status", JsonPrimitive("started"))
-        }.toString()
-      } else {
-        originalRequest(gatewayId, method, params)
-      }
-    }
-    try {
-      requestField.set(controller, request)
+    withChatSendRequests { sent ->
       val draft = "Physical follow-up"
       val editor = composeRule.onNode(hasSetTextAction())
       editor.performClick()
@@ -4274,8 +4371,6 @@ class ChatComposerLayoutTest {
       }
       assertEquals(List(expectedSends) { JsonPrimitive(draft) }, sent.map { it["message"] })
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(if (expectedSends == 0) draft else "")))
-    } finally {
-      requestField.set(controller, originalRequest)
     }
   }
 

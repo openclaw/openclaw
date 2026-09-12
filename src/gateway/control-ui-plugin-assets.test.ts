@@ -542,15 +542,15 @@ describe("native Control UI browser assets", () => {
     expect(reportControlUiPluginActivation(browser, pending)).toBe(false);
   });
 
-  it("fences a queued reload after registry replacement and rebuilds a reactivated generation", async () => {
-    const fixture = activateFixture();
+  it("fences a queued reload after registry replacement and builds a fresh generation", async () => {
+    activateFixture();
     const first = await listControlUiPluginCatalog();
     const pending = reloadControlUiPluginCatalog("native-ui");
     setActivePluginRegistry(createEmptyPluginRegistry());
     await expect(pending).rejects.toThrow("no longer active");
     expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
-    fs.writeFileSync(path.join(fixture.directory, "index.js"), "export default {};");
-    setActivePluginRegistry(fixture.registry);
+    const replacement = activateFixture();
+    fs.writeFileSync(path.join(replacement.directory, "index.js"), "export default {};");
     const second = await listControlUiPluginCatalog();
     expect(second.plugins[0]!.revision).not.toBe(first.plugins[0]!.revision);
   });

@@ -41,6 +41,7 @@ import type {
   AuthProfileStore,
   RuntimeAuthProfileStore,
   OAuthCredential,
+  SavedSetupCredential,
 } from "./types.js";
 
 /** Legacy auth.json store shape before auth-profiles.json/SQLite. */
@@ -90,6 +91,30 @@ function normalizeCredentialMetadata(value: unknown): Record<string, string> | u
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
+function normalizeSavedSetupCredential(value: unknown): SavedSetupCredential | undefined {
+  if (!isRecord(value) || typeof value.replacement !== "boolean") {
+    return undefined;
+  }
+  const modelRef = readNonBlankString(value.modelRef);
+  const configJson = readNonBlankString(value.configJson);
+  if (!modelRef || !configJson) {
+    return undefined;
+  }
+  const authChoice = readNonBlankString(value.authChoice);
+  const pluginId = readNonBlankString(value.pluginId);
+  return {
+    replacement: value.replacement,
+    modelRef,
+    configJson,
+    ...(value.apiKeyHeader === true ? { apiKeyHeader: true } : {}),
+    ...(readNonBlankString(value.agentRuntimeId)
+      ? { agentRuntimeId: readNonBlankString(value.agentRuntimeId) }
+      : {}),
+    ...(authChoice ? { authChoice } : {}),
+    ...(pluginId ? { pluginId } : {}),
+  };
+}
+
 // Secret-backed key/token fields may have been stored in the value field by old
 // writers. Move them to the ref field so secret values are not treated as text.
 function normalizeSecretBackedField(params: {
@@ -112,6 +137,10 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
   const normalized: Record<string, unknown> = {
     provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
   };
+  const setup = normalizeSavedSetupCredential(entry.setup);
+  if (setup) {
+    normalized.setup = setup;
+  }
   const copyToAgents = asBoolean(entry.copyToAgents);
   if (copyToAgents !== undefined) {
     normalized.copyToAgents = copyToAgents;
@@ -457,6 +486,7 @@ function findMainStoreOAuthReplacement(params: {
       if (
         profileId === params.legacyProfileId ||
         credential.type !== "oauth" ||
+        credential.setup?.replacement ||
         normalizeProviderId(credential.provider) !== providerKey
       ) {
         return [];

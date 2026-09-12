@@ -302,7 +302,7 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
-/** Lines that need the operator's attention even when routine tool rows are hidden. */
+/** Approvals and failures that can start a draft when their rows are visible. */
 export function isChannelProgressAttentionLine(line: string | ChannelProgressDraftLine): boolean {
   if (typeof line === "string") {
     return false;
@@ -1234,13 +1234,8 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
 
 export function mergeChannelProgressDraftLineForStreaming<
   TLine extends string | ChannelProgressDraftLine,
->(lines: TLine[], line: TLine, params: { maxLines: number; toolProgress: boolean }): TLine[] {
-  return mergeProgressDraftLine(
-    lines,
-    line,
-    params.maxLines,
-    params.toolProgress ? isChannelProgressPriorityLine : isChannelProgressAttentionLine,
-  );
+>(lines: TLine[], line: TLine, params: { maxLines: number }): TLine[] {
+  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressPriorityLine);
 }
 
 function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1260,11 +1255,12 @@ function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>
       resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      const replacement = mergeProgressDraftLineUpdate(
-        expectDefined(lines[existingIndex], "lines entry at existing index"),
-        line,
+      const existing = expectDefined(lines[existingIndex], "lines entry at existing index");
+      const replacement = keepProgressDraftLineId(
+        existing,
+        mergeProgressDraftLineUpdate(existing, line),
       );
-      if (replacement === lines[existingIndex]) {
+      if (replacement === existing) {
         return lines;
       }
       const next = [...lines];
@@ -1328,6 +1324,33 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
   return replacement;
 }
 
+/**
+ * A line keeps the id it was created with. The agent keys one tool call's
+ * item families separately (`tool:<call>`, `command:<call>`) and correlation
+ * merges them into one line; a channel that keys native rows on the line id
+ * (Slack task cards) would otherwise open a new row when a later family
+ * takes the line over. Later events still match through the correlation key.
+ */
+function keepProgressDraftLineId<TLine extends string | ChannelProgressDraftLine>(
+  previous: TLine,
+  replacement: TLine,
+): TLine {
+  if (typeof previous !== "object" || typeof replacement !== "object") {
+    return replacement;
+  }
+  const previousId = previous.id?.trim();
+  if (!previousId || previousId === replacement.id) {
+    return replacement;
+  }
+  const kept = { ...replacement, id: previousId };
+  setProgressDraftLineCorrelationKey(
+    kept,
+    progressDraftLineCorrelationKeys.get(replacement) ??
+      progressDraftLineCorrelationKeys.get(previous),
+  );
+  return kept;
+}
+
 function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLine): string[] {
   if (typeof line !== "object") {
     return [];
@@ -1353,7 +1376,7 @@ type ChannelProgressDraftTextParams = {
   formatLine?: (line: string) => string;
   /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
-  /** Short narration paragraph; when present it replaces the tool lines. */
+  /** Status headline rendered above the plan and activity rows. */
   narration?: string;
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
@@ -1365,14 +1388,9 @@ export function formatChannelProgressDraftText(params: ChannelProgressDraftTextP
 }
 
 export function formatChannelProgressDraftTextForStreaming(
-  params: ChannelProgressDraftTextParams & { toolProgress: boolean },
+  params: ChannelProgressDraftTextParams,
 ): string {
-  return formatProgressDraftText(
-    params,
-    params.toolProgress && params.presentation !== "summary"
-      ? isChannelProgressPriorityLine
-      : isChannelProgressAttentionLine,
-  );
+  return formatProgressDraftText(params, isChannelProgressPriorityLine);
 }
 
 function formatProgressDraftText(

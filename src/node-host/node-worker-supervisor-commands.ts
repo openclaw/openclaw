@@ -1,5 +1,6 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { boundedWorkerErrorWithCode } from "../gateway/worker-environments/worker-error.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -56,6 +57,8 @@ import {
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
+const WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS = 1_024;
+
 type NodeWorkerSupervisorCommandResult =
   | { handled: false }
   | {
@@ -81,6 +84,17 @@ type NodeWorkerSupervisorCommandResult =
         | typeof NODE_WORKSPACE_TRANSFER_ERROR_CODE;
       message: string;
     };
+
+function workspaceTransferDiagnostic(error: NodeWorkerWorkspaceTransferError): string {
+  if (!error.operation || !error.stage) {
+    return error.message;
+  }
+  const prefix = `workspace-transfer-failed: operation=${error.operation} stage=${error.stage}: `;
+  return `${prefix}${boundedWorkerErrorWithCode(
+    error.cause ?? error,
+    WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS - prefix.length,
+  )}`;
+}
 
 function resolveWorkerConnectionEndpoint(params: {
   gatewayUrl?: string;
@@ -328,8 +342,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
             : transferFailure
               ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
               : "UNAVAILABLE",
-      message:
-        invalid || bundleInstallFailure || capacityFailure || transferFailure
+      message: transferFailure
+        ? workspaceTransferDiagnostic(error)
+        : invalid || bundleInstallFailure || capacityFailure
           ? error.message
           : "node worker supervisor command failed",
     };

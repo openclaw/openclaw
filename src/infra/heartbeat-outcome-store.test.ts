@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -18,12 +16,10 @@ import {
   persistHeartbeatOutcome,
 } from "./heartbeat-outcome-store.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 
 async function createEnv(): Promise<NodeJS.ProcessEnv> {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-outcome-"));
-  tempDirs.push(stateDir);
-  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-heartbeat-outcome-") };
   await upsertSessionEntryCore(
     { agentId: "main", env, sessionKey: "agent:main:main" },
     { sessionId: "heartbeat-outcome-test", updatedAt: 1 },
@@ -34,15 +30,49 @@ async function createEnv(): Promise<NodeJS.ProcessEnv> {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("heartbeat outcome store", () => {
+  it("keeps a committed claim but withholds context after its admitted run retires", async () => {
+    const env = await createEnv();
+    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    await persistHeartbeatOutcome({
+      ...target,
+      runSessionKey: "agent:main:main:heartbeat",
+      response: { outcome: "progress", notify: false, summary: "Saved outcome" },
+      occurredAt: 100,
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "retired-run",
+      "main",
+      "heartbeat-outcome-test",
+    );
+    try {
+      const admitted = await admission.admit("embedded");
+      const pending = claimHeartbeatContextForUserRun({
+        ...target,
+        runId: "retired-run",
+        trigger: "user",
+        assertCurrent: resolveAdmittedRunActiveAssertion(admitted),
+      });
+      admission.close();
+      await expect(pending).rejects.toThrow();
+      expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "retired-run" })).toMatchObject({
+        summary: "Saved outcome",
+      });
+      expect(
+        await claimHeartbeatOutcomeForRun({ ...target, runId: "another-run" }),
+      ).toBeUndefined();
+    } finally {
+      admission.close();
+    }
+  });
+
   it("keeps one bounded typed outcome per base session with provenance", async () => {
     const env = await createEnv();
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       agentId: "main",
       sessionKey: "agent:main:main",
       runSessionKey: "agent:main:main:heartbeat",
@@ -61,7 +91,7 @@ describe("heartbeat outcome store", () => {
       env,
     });
 
-    const stored = claimHeartbeatOutcomeForRun({
+    const stored = await claimHeartbeatOutcomeForRun({
       agentId: "main",
       sessionKey: "agent:main:main",
       runId: "user-run-1",
@@ -88,7 +118,7 @@ describe("heartbeat outcome store", () => {
     );
     try {
       const admitted = await admission.admit("embedded");
-      const context = claimHeartbeatContextForUserRun({
+      const context = await claimHeartbeatContextForUserRun({
         agentId: "main",
         sessionKey: "agent:main:main",
         runId: "user-run-1",
@@ -115,28 +145,28 @@ describe("heartbeat outcome store", () => {
       occurredAt: 100,
       env,
     };
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...base,
       response: { outcome: "done", notify: false, summary: "Finished first task" },
     });
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...base,
       occurredAt: 200,
       response: { outcome: "blocked", notify: false, summary: "Waiting for build" },
     });
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...base,
       occurredAt: 300,
       response: { outcome: "needs_attention", notify: true, summary: "Visible alert" },
     });
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...base,
       occurredAt: 400,
       response: { outcome: "no_change", notify: false, summary: "Nothing changed" },
     });
 
     expect(
-      claimHeartbeatOutcomeForRun({
+      await claimHeartbeatOutcomeForRun({
         agentId: "main",
         sessionKey: "agent:main:main",
         runId: "user-run-1",
@@ -166,16 +196,14 @@ describe("heartbeat outcome store", () => {
       db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(runSessionKey),
     ).toEqual({ session_key: runSessionKey });
 
-    expect(() =>
-      persistHeartbeatOutcome({
-        agentId: "main",
-        sessionKey,
-        runSessionKey,
-        response: { outcome: "progress", notify: false, summary: "Transient heartbeat" },
-        occurredAt: 500,
-        env,
-      }),
-    ).not.toThrow();
+    await persistHeartbeatOutcome({
+      agentId: "main",
+      sessionKey,
+      runSessionKey,
+      response: { outcome: "progress", notify: false, summary: "Transient heartbeat" },
+      occurredAt: 500,
+      env,
+    });
 
     expect(db.prepare("SELECT COUNT(*) AS count FROM heartbeat_outcomes").get()).toEqual({
       count: 0,
@@ -192,13 +220,13 @@ describe("heartbeat outcome store", () => {
       occurredAt: 100,
       env,
     };
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...base,
       response: { outcome: "progress", notify: false, summary: "First outcome" },
     });
 
     expect(
-      claimHeartbeatOutcomeForRun({
+      await claimHeartbeatOutcomeForRun({
         agentId: "main",
         sessionKey: "agent:main:main",
         runId: "user-run-1",
@@ -206,7 +234,7 @@ describe("heartbeat outcome store", () => {
       }),
     ).toMatchObject({ summary: "First outcome" });
     expect(
-      claimHeartbeatOutcomeForRun({
+      await claimHeartbeatOutcomeForRun({
         agentId: "main",
         sessionKey: "agent:main:main",
         runId: "user-run-1",
@@ -214,7 +242,7 @@ describe("heartbeat outcome store", () => {
       }),
     ).toMatchObject({ summary: "First outcome" });
     expect(
-      claimHeartbeatOutcomeForRun({
+      await claimHeartbeatOutcomeForRun({
         agentId: "main",
         sessionKey: "agent:main:main",
         runId: "user-run-2",
@@ -222,13 +250,13 @@ describe("heartbeat outcome store", () => {
       }),
     ).toBeUndefined();
 
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...base,
       occurredAt: 200,
       response: { outcome: "done", notify: false, summary: "Second outcome" },
     });
     expect(
-      claimHeartbeatOutcomeForRun({
+      await claimHeartbeatOutcomeForRun({
         agentId: "main",
         sessionKey: "agent:main:main",
         runId: "user-run-2",

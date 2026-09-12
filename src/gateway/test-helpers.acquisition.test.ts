@@ -6,7 +6,10 @@ import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { WebSocketServer } from "../../packages/gateway-client/src/websocket.test-support.js";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -44,6 +47,7 @@ type AcquisitionPeer = {
   unownedErrors: Error[];
   requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
   receivedUpgrade: () => boolean;
+  waitForUpgrade: (signal: AbortSignal) => Promise<unknown>;
   isListening: () => boolean;
   failTransport: () => Promise<Error>;
   close: () => Promise<void>;
@@ -188,6 +192,7 @@ async function withAcquisitionPeer(
       unownedErrors,
       requests,
       receivedUpgrade: () => receivedUpgrade,
+      waitForUpgrade: (signal) => once(server, "upgrade", { signal }),
       isListening: () => server.listening,
       failTransport: () => {
         for (const socket of sockets) {
@@ -238,6 +243,47 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
     getDeterministicFreePortBlock: async () => peer.port,
   }));
   return start;
+}
+
+async function verifyHeldUpgradeFailure(
+  peer: AcquisitionPeer,
+  timeoutMs: number,
+  signal: AbortSignal,
+  acquire: () => Promise<unknown>,
+  verifyFailure: (failure: unknown) => void,
+): Promise<void> {
+  const upgradeAbort = new AbortController();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const upgrade = peer.waitForUpgrade(AbortSignal.any([signal, upgradeAbort.signal]));
+  const failure = acquire().then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  // Observe settlement before the clock driver can process later native cleanup.
+  const checked = failure.then(verifyFailure);
+  void checked.catch(() => {});
+  try {
+    expect(await Promise.race([upgrade.then(() => "upgrade"), failure.then(() => "settled")])).toBe(
+      "upgrade",
+    );
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+    expect(peer.clients[0]?.readyState).toBe(WebSocket.CONNECTING);
+    await vi.advanceTimersByTimeAsync(1);
+    await racePromiseWithAbortSignal(checked, signal);
+  } catch (error) {
+    vi.useRealTimers();
+    return await runQaGatewayFixture(
+      async () => {
+        throw error;
+      },
+      () => Promise.all(peer.clients.map(closeGatewayTestWebSocket)),
+      () => Promise.allSettled([failure, checked]),
+    );
+  } finally {
+    upgradeAbort.abort();
+    vi.useRealTimers();
+    await Promise.allSettled([upgrade]);
+  }
 }
 
 type CompositeAcquisitionCase = {
@@ -357,7 +403,7 @@ export async function verifyCompositeAcquisition({
 describe("raw Gateway helper acquisition ownership", () => {
   const runRetainedAcquisitionFork = createGatewayFixtureFork(afterAll, 2 * 1024 * 1024);
 
-  it.each([
+  it.for([
     { helper: "tracked", behavior: "hold upgrade", error: "timeout waiting for ws open" },
     { helper: "tracked", behavior: "reject upgrade", error: "Unexpected server response: 503" },
     { helper: "tracked", behavior: "upgrade then transport error", error: "invalid opcode 3" },
@@ -378,71 +424,95 @@ describe("raw Gateway helper acquisition ownership", () => {
       error: "timeout waiting for connect challenge",
     },
     { helper: "device request", behavior: "no response", error: "timeout" },
-  ] as const)("$helper owns cleanup after $behavior", async ({ helper, behavior, error }) => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-    await withOpenClawTestState({ label: "raw-acquisition" }, async () => {
-      await withAcquisitionPeer(behavior, async (peer) => {
-        const { openTrackedWs } = await import("./device-authz.test-helpers.js");
-        const { openAuthenticatedGatewayWs } = await import("./shared-auth.test-helpers.js");
-        const { connectDeviceAuthReq } = await import("./test-helpers.e2e.js");
-        const { connectWebchatClient } = await import("./test-helpers.server.js");
-        const { testState } = await import("./test-helpers.runtime-state.js");
-        testState.gatewayAuth = { mode: "token", token: "synthetic-token" };
-        const acquisition =
-          helper === "tracked"
-            ? openTrackedWs(peer.port, { "x-acquisition-test": "tracked" })
-            : helper === "webchat"
-              ? connectWebchatClient({ port: peer.port })
-              : helper === "shared auth"
-                ? openAuthenticatedGatewayWs(
-                    peer.port,
-                    "synthetic-token",
-                    // Webchat retains the default opening deadline; this helper also accepts a budget.
-                    behavior === "hold upgrade" ? 1_000 : undefined,
-                  )
-                : connectDeviceAuthReq({
-                    url: `ws://127.0.0.1:${peer.port}`,
-                    token: "synthetic-token",
-                  });
-        // Observe rejection immediately; none of these rows has an unbounded open wait.
-        const failure: unknown = await acquisition.then(
-          () => undefined,
-          (reason: unknown) => reason,
-        );
-        if (
-          behavior === "upgrade then transport error" ||
-          behavior === "hello then transport error"
-        ) {
-          expect(peer.errors[0], "native error must precede acquisition settlement").toMatchObject({
-            code: "WS_ERR_INVALID_OPCODE",
-          });
-          expect(failure).toBe(peer.errors[0]);
-        }
-        expect(peer.unownedErrors).toEqual([]);
-        expect(failure).toBeInstanceOf(Error);
-        expect(failure).toMatchObject({ message: expect.stringContaining(error) });
-        if (behavior === "hold upgrade") {
-          expect(peer.receivedUpgrade(), "the peer must receive the withheld upgrade").toBe(true);
-        }
-        if (behavior === "no response") {
-          expect(failure).toMatchObject({ message: "timeout" });
-        }
-        expect(peer.isListening(), "a failed socket cannot close its borrowed server").toBe(true);
-        if (behavior === "no response" || behavior === "reject auth") {
-          expect(peer.requests).toHaveLength(1);
-          expect(peer.requests[0]).toMatchObject({
-            method: "connect",
-            params: { auth: { token: "synthetic-token" } },
-          });
-        }
-        expect(peer.clients).toHaveLength(1);
-        const client = peer.clients[0]!;
-        expect(client.readyState).toBe(WebSocket.CLOSED);
-        expect(peer.closed.has(client)).toBe(true);
-        expect(client.listenerCount("open")).toBe(0);
+  ] as const)(
+    "$helper owns cleanup after $behavior",
+    async ({ helper, behavior, error }, context) => {
+      const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+      await withOpenClawTestState({ label: "raw-acquisition" }, async () => {
+        await withAcquisitionPeer(behavior, async (peer) => {
+          const { openTrackedWs } = await import("./device-authz.test-helpers.js");
+          const { openAuthenticatedGatewayWs } = await import("./shared-auth.test-helpers.js");
+          const { connectDeviceAuthReq } = await import("./test-helpers.e2e.js");
+          const { connectWebchatClient } = await import("./test-helpers.server.js");
+          const { testState } = await import("./test-helpers.runtime-state.js");
+          testState.gatewayAuth = { mode: "token", token: "synthetic-token" };
+          const acquire = () =>
+            helper === "tracked"
+              ? openTrackedWs(peer.port, { "x-acquisition-test": "tracked" })
+              : helper === "webchat"
+                ? connectWebchatClient({ port: peer.port })
+                : helper === "shared auth"
+                  ? openAuthenticatedGatewayWs(
+                      peer.port,
+                      "synthetic-token",
+                      // Webchat retains the default opening deadline; this helper also accepts a budget.
+                      behavior === "hold upgrade" ? 1_000 : undefined,
+                    )
+                  : connectDeviceAuthReq({
+                      url: `ws://127.0.0.1:${peer.port}`,
+                      token: "synthetic-token",
+                    });
+          // Observe rejection immediately; none of these rows has an unbounded open wait.
+          const verifyFailure = (failure: unknown) => {
+            if (
+              behavior === "upgrade then transport error" ||
+              behavior === "hello then transport error"
+            ) {
+              expect(
+                peer.errors[0],
+                "native error must precede acquisition settlement",
+              ).toMatchObject({
+                code: "WS_ERR_INVALID_OPCODE",
+              });
+              expect(failure).toBe(peer.errors[0]);
+            }
+            expect(peer.unownedErrors).toEqual([]);
+            expect(failure).toBeInstanceOf(Error);
+            expect(failure).toMatchObject({ message: expect.stringContaining(error) });
+            if (behavior === "hold upgrade") {
+              expect(peer.receivedUpgrade(), "the peer must receive the withheld upgrade").toBe(
+                true,
+              );
+            }
+            if (behavior === "no response") {
+              expect(failure).toMatchObject({ message: "timeout" });
+            }
+            expect(peer.isListening(), "a failed socket cannot close its borrowed server").toBe(
+              true,
+            );
+            if (behavior === "no response" || behavior === "reject auth") {
+              expect(peer.requests).toHaveLength(1);
+              expect(peer.requests[0]).toMatchObject({
+                method: "connect",
+                params: { auth: { token: "synthetic-token" } },
+              });
+            }
+            expect(peer.clients).toHaveLength(1);
+            const client = peer.clients[0]!;
+            expect(client.readyState).toBe(WebSocket.CLOSED);
+            expect(peer.closed.has(client)).toBe(true);
+            expect(client.listenerCount("open")).toBe(0);
+          };
+          if (behavior === "hold upgrade") {
+            await verifyHeldUpgradeFailure(
+              peer,
+              helper === "tracked" ? 5_000 : helper === "webchat" ? 10_000 : 1_000,
+              context.signal,
+              acquire,
+              verifyFailure,
+            );
+          } else {
+            verifyFailure(
+              await acquire().then(
+                () => undefined,
+                (reason: unknown) => reason,
+              ),
+            );
+          }
+        });
       });
-    });
-  });
+    },
+  );
 
   it("retains the native error until awaited webchat preparation finishes", async () => {
     const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");

@@ -1,6 +1,5 @@
 // Sanctioned low-level scope/Kysely entry point for doctor, migrations, and infrastructure.
 // Runtime feature code imports the session accessor barrel instead of this module.
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -27,11 +26,13 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
+import { resolveSessionArtifactDirectory } from "./paths.js";
 import type {
   SessionAccessScope,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   SqliteSessionArtifactPreparationDiagnostics,
+  SqliteSessionArchivePruningDiagnostics,
   SqliteSessionDatabaseAdmissionDiagnostics,
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
@@ -187,6 +188,34 @@ function artifactPreparationLogFields(diagnostics: SqliteSessionArtifactPreparat
   };
 }
 
+function archivePruningLogFields(diagnostics: SqliteSessionArchivePruningDiagnostics) {
+  const milliseconds = (value: number | undefined) =>
+    value === undefined ? undefined : Math.round(value);
+  return {
+    trigger: diagnostics.trigger,
+    admissionMs: milliseconds(diagnostics.admissionMs),
+    cachedAdmissions: diagnostics.cachedAdmissions,
+    asyncAdmissions: diagnostics.asyncAdmissions,
+    checkpointCalls: diagnostics.checkpointCalls,
+    checkpointIncomplete: diagnostics.checkpointIncomplete,
+    checkpointMs: milliseconds(diagnostics.checkpointMs),
+    checkpointMaxMs: milliseconds(diagnostics.checkpointMaxMs),
+    vacuumMs: milliseconds(diagnostics.vacuumMs),
+    vacuumPasses: diagnostics.vacuumPasses,
+    vacuumPagesRequested: diagnostics.vacuumPagesRequested,
+    queryMs: milliseconds(diagnostics.queryMs),
+    rowDeletionMs: milliseconds(diagnostics.rowDeletionMs),
+    fileRemovalMs: milliseconds(diagnostics.fileRemovalMs),
+    removedFiles: diagnostics.removedFiles,
+    missingFiles: diagnostics.missingFiles,
+    failedRemovals: diagnostics.failedRemovals,
+    measurementMs: milliseconds(diagnostics.measurementMs),
+    measurements: diagnostics.measurements,
+    legacyInventoryMs: milliseconds(diagnostics.legacyInventoryMs),
+    completed: diagnostics.completed === true,
+  };
+}
+
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
@@ -214,6 +243,9 @@ export async function runExclusiveSqliteSessionWrite<T>(
       : {}),
     ...(diagnostics?.artifactPreparation
       ? { artifactPreparation: artifactPreparationLogFields(diagnostics.artifactPreparation) }
+      : {}),
+    ...(diagnostics?.archivePruning
+      ? { archivePruning: archivePruningLogFields(diagnostics.archivePruning) }
       : {}),
     elapsedMs: Math.round(completedAt - startedAt),
     ...(timing.startedAt !== undefined && timing.finishedAt !== undefined
@@ -429,11 +461,7 @@ export function resolveSqliteTranscriptArchiveDirectory(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
 ): string {
   const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
-  const databaseDir = path.dirname(databasePath);
-  if (path.basename(databaseDir) !== "agent") {
-    return databaseDir;
-  }
-  return path.join(path.dirname(databaseDir), "sessions");
+  return resolveSessionArtifactDirectory(databasePath);
 }
 
 export function resolveSqliteTranscriptScope(

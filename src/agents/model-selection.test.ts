@@ -6,6 +6,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import {
   getModelRefStatus as getNarrowModelRefStatus,
   resolveAllowedModelRefCore as resolveNarrowAllowedModelRef,
@@ -876,6 +877,37 @@ describe("model-selection", () => {
       expect(model?.provider).toBe(provider);
       expect(model?.id).toBe(expectedId);
       expect(model?.name).toBe("Gemini 3 Pro");
+    });
+
+    it("keeps the first captured route for a configured model with duplicate identities", () => {
+      const cfg = createConfiguredModelRefConfig({
+        providers: { custom: { models: [{ id: "model", name: "Configured" }] } },
+      });
+      const catalog: ModelCatalogEntry[] = [
+        {
+          provider: "custom",
+          id: "model",
+          name: "First",
+          api: "openai-responses",
+          baseUrl: "https://first.example/v1",
+        },
+        {
+          provider: "CUSTOM",
+          id: "model",
+          name: "Later",
+          api: "anthropic-messages",
+          baseUrl: "https://later.example/v1",
+        },
+      ];
+
+      expect(buildConfiguredModelCatalog({ cfg, catalog })).toMatchObject([
+        {
+          provider: "custom",
+          id: "model",
+          api: "openai-responses",
+          baseUrl: "https://first.example/v1",
+        },
+      ]);
     });
 
     it("carries configured model compat into catalog entries for provider policy", () => {
@@ -2042,6 +2074,56 @@ describe("model-selection", () => {
   });
 
   describe("resolveModelRefFromString", () => {
+    it.each<{
+      raw: string;
+      alias?: string;
+      expected: { provider: string; model: string } | null;
+    }>([
+      { raw: "/", expected: null },
+      { raw: "provider/", expected: null },
+      { raw: "//model", expected: null },
+      { raw: "literal", expected: { provider: "provider", model: "literal" } },
+      { raw: "provider/literal", expected: { provider: "provider", model: "literal" } },
+      { raw: "provider//literal", expected: { provider: "provider", model: "/literal" } },
+      {
+        raw: "provider/provider/literal",
+        expected: { provider: "provider", model: "provider/literal" },
+      },
+      { raw: "team/quick", expected: { provider: "provider", model: "literal" } },
+      { raw: "/", alias: "/", expected: { provider: "provider", model: "literal" } },
+      { raw: "openrouter:auto", expected: { provider: "openrouter", model: "openrouter/auto" } },
+    ])(
+      "keeps configured reference syntax and alias priority for $raw",
+      ({ raw, alias, expected }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { models: { "provider/literal": { alias: alias ?? "team/quick" } } },
+          },
+          models: {
+            providers: {
+              provider: {
+                api: "openai-completions",
+                baseUrl: "https://provider.example/v1",
+                models: [],
+              },
+            },
+          },
+        };
+        const resolved = resolveModelRefFromString({
+          cfg,
+          raw,
+          defaultProvider: "provider",
+          aliasIndex: buildModelAliasIndex({
+            cfg,
+            defaultProvider: "provider",
+            manifestPlugins: [],
+          }),
+          manifestPlugins: [],
+        });
+        expect(resolved?.ref ?? null).toEqual(expected);
+      },
+    );
+
     it("should resolve from string with alias", () => {
       const index = {
         byAlias: new Map([

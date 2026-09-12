@@ -558,7 +558,7 @@ export async function detectLegacyStateMigrations(params: {
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
   const restartSentinel = detectLegacyRestartSentinel({ stateDir });
-  const workspace = detectLegacyWorkspaceState({
+  const workspace = await detectLegacyWorkspaceState({
     cfg: params.cfg,
     stateDir,
     env,
@@ -1993,6 +1993,7 @@ function buildLegacyStateMigrationSteps(
         message: "Channel pairing account discovery is deferred to plugin validation.",
       }
     : undefined;
+  let unavailableWorkshopWorkspaces: ReadonlyMap<string, string> | undefined;
   const finalSteps: LegacyStateMigrationStep[] = [
     ownerStep("restart-sentinel", detected.restartSentinel, migrateLegacyRestartSentinel),
     {
@@ -2002,7 +2003,9 @@ function buildLegacyStateMigrationSteps(
         if (isDoctor) {
           await params.beforeWorkspaceStateMigration?.(params.sessionConfig ?? params.config);
         }
-        return migrateLegacyWorkspaceState(options);
+        const result = await migrateLegacyWorkspaceState(options);
+        unavailableWorkshopWorkspaces = result.unavailableWorkshopWorkspaces;
+        return result;
       }),
       runWithoutFileDetection: isDoctor && params.beforeWorkspaceStateMigration !== undefined,
     },
@@ -2014,6 +2017,7 @@ function buildLegacyStateMigrationSteps(
           config: params.sessionConfig ?? params.config,
           env: { ...env, OPENCLAW_STATE_DIR: stateDir },
           retireMissingDrafts: isDoctor,
+          unavailableWorkspaceDirs: unavailableWorkshopWorkspaces,
         }),
       ),
       runWithoutFileDetection: true,
@@ -2800,7 +2804,10 @@ async function runLegacyStateMigrationSteps(
   steps: readonly LegacyStateMigrationStep[],
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void,
   shouldRun?: (step: LegacyStateMigrationStep) => boolean,
-  options?: { onUnexpectedFailure?: (error: unknown) => void },
+  options?: {
+    onUnexpectedFailure?: (error: unknown) => void;
+    refusedAgentDatabasePaths?: Set<string>;
+  },
 ): Promise<{
   sources: MigrationMessages[];
   sharedSources: MigrationMessages[];
@@ -2822,11 +2829,38 @@ async function runLegacyStateMigrationSteps(
   const deferredSteps: LegacyStateMigrationStep[] = [];
   let haltedBy: LegacyStateMigrationStep | undefined;
 
-  // Later owners require the SQLite commit and verified source archive of
-  // every preceding owner; migration planning must never run steps in parallel.
+  // Keep writers serial. Scoped ownership refusals leave independent owners available.
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
     if (!step) {
+      continue;
+    }
+    const refusedDependencies = [...(options?.refusedAgentDatabasePaths ?? [])].filter(
+      (databasePath) =>
+        // Post-session plugins depend on canonical session repair, including its database owners.
+        step.deferredExecution?.kind === "post-session-plugin" ||
+        (step.reversibility !== "not-applicable" &&
+          [...step.source, ...step.target].some(
+            (endpoint) =>
+              endpoint.kind !== "owner" &&
+              (path.resolve(endpoint.path) === databasePath ||
+                (endpoint.kind === "path" && isPathInside(endpoint.path, databasePath))),
+          )),
+    );
+    if (refusedDependencies.length > 0) {
+      const message = `Migration step "${step.id}" was not run because it requires refused agent database(s): ${refusedDependencies.join(", ")}.`;
+      const result = { changes: [], warnings: [message] };
+      const receipt: LegacyStateMigrationStepReceipt = {
+        ...migrationStepPlan(step),
+        outcome: "refused",
+        ...result,
+        refusal: { code: "blocked-by-agent-database-refusal", message },
+      };
+      entries.push({ id: step.id, result });
+      receipts.push(receipt);
+      onStepReceipt?.(receipt);
+      sources.push(result);
+      (step.phase === "shared" ? sharedSources : finalSources).push(result);
       continue;
     }
     if (step.deferredExecution) {
@@ -2878,6 +2912,16 @@ async function runLegacyStateMigrationSteps(
       (step.phase === "shared" ? sharedNoticeSources : finalNoticeSources).push(result);
     }
     if (receipt.outcome === "refused") {
+      if (
+        step.id === "media-persistence" &&
+        result.refusedAgentDatabasePaths?.length &&
+        options?.refusedAgentDatabasePaths
+      ) {
+        for (const databasePath of result.refusedAgentDatabasePaths) {
+          options.refusedAgentDatabasePaths.add(path.resolve(databasePath));
+        }
+        continue;
+      }
       haltedBy = step;
       receipts.push(
         ...blockedStepReceipts({
@@ -3038,7 +3082,10 @@ async function executeLegacyStateMigrations(
   // Doctor detect owner-only work and then silently build an automatic-only plan.
   const mode: LegacyStateMigrationMode =
     params.doctorOnlyStateMigrations === true ? "doctor" : "automatic";
-  const executionOptions = { onUnexpectedFailure };
+  const executionOptions = {
+    onUnexpectedFailure,
+    ...(mode === "doctor" ? { refusedAgentDatabasePaths: new Set<string>() } : {}),
+  };
   const initialStateDir = resolveStateDir(env, homedir);
   const checkKey = `${path.resolve(initialStateDir)}\0${mode}`;
   // An earlier attempt may leave post-session work or a refusal unresolved.

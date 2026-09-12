@@ -254,11 +254,16 @@ export async function readSessionTranscriptRawDelta(
   params: SessionTranscriptRawDeltaParams,
 ): Promise<SessionTranscriptRawDeltaResult> {
   const { cursor, maxBytes, maxEvents, ...target } = params;
-  return readTranscriptRawDelta(bindSessionTranscriptStoreScope(target), {
-    ...(cursor !== undefined ? { cursor } : {}),
-    ...(maxBytes !== undefined ? { maxBytes } : {}),
-    ...(maxEvents !== undefined ? { maxEvents } : {}),
-  });
+  const scope = bindSessionTranscriptStoreScope(target);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  return readRestoredSessionTranscript(scope, () =>
+    readTranscriptRawDelta(scope, {
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(maxBytes !== undefined ? { maxBytes } : {}),
+      ...(maxEvents !== undefined ? { maxEvents } : {}),
+    }),
+  );
 }
 
 /** Reads one bounded active-path page that resumes appends and resets after discontinuities. */
@@ -266,13 +271,18 @@ export async function readSessionTranscriptVisibleMessageDelta(
   params: SessionTranscriptVisibleMessageDeltaParams,
 ): Promise<SessionTranscriptVisibleMessageDeltaResult> {
   const { cursor, maxBytes, maxMessages, ...target } = params;
+  const scope = bindSessionTranscriptStoreScope(target);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
   let result: ReturnType<typeof readVisibleMessageDelta>;
   try {
-    result = readVisibleMessageDelta(bindSessionTranscriptStoreScope(target), {
-      ...(cursor !== undefined ? { cursor } : {}),
-      ...(maxBytes !== undefined ? { maxBytes } : {}),
-      ...(maxMessages !== undefined ? { maxMessages } : {}),
-    });
+    result = await readRestoredSessionTranscript(scope, () =>
+      readVisibleMessageDelta(scope, {
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
+        ...(maxMessages !== undefined ? { maxMessages } : {}),
+      }),
+    );
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return { kind: "unavailable", reason: "projection_rebuilding" };
@@ -315,7 +325,10 @@ export async function readVisibleSessionTranscriptMessageEntries(
 export async function readLatestAssistantTextByIdentity(
   params: SessionTranscriptTargetParams,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  return readLatestTranscriptAssistantText(bindSessionTranscriptStoreScope(params));
+  const scope = bindSessionTranscriptStoreScope(params);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  return readRestoredSessionTranscript(scope, () => readLatestTranscriptAssistantText(scope));
 }
 
 /**

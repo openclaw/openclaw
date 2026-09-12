@@ -1,10 +1,11 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
+type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
 
 /** Own the message anchor across projection capture, measurement, and restoration. */
 export class TranscriptPrependAnchor {
-  messageKeys: ReadonlySet<string> = new Set();
+  messageKeys: TranscriptMessageKeys = new Set();
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
 
@@ -81,7 +82,7 @@ export class TranscriptPrependAnchor {
 function captureTranscriptPrependAnchor(
   scrollElement: HTMLDivElement | null,
   previousFirstMessageKey: string | undefined,
-  next: ReadonlySet<string>,
+  next: TranscriptMessageKeys,
 ): ChatTranscriptPrependAnchor | null {
   const first = previousFirstMessageKey;
   if (!scrollElement || !first || first === next.keys().next().value || !next.has(first)) {

@@ -385,7 +385,9 @@ describe("embedded attempt phase lifecycle state", () => {
             sessionFile: target.sessionKey,
             provider: "test",
             modelId: "model",
-            model: { api: "openai-responses" },
+            model: { api: "openai-responses", contextWindow: 180_000 },
+            modelContextWindow: 200_000,
+            contextTokenBudget: 180_000,
             userTurnTranscriptRecorder: recorder,
             onContextEngineTurnCandidate,
           } as never,
@@ -441,6 +443,12 @@ describe("embedded attempt phase lifecycle state", () => {
             boundary: {
               admission: recorder.getAdmissionReceipt(),
               terminal: expectedTerminalAnchor,
+            },
+            runtimeContext: {
+              provider: "test",
+              modelId: "model",
+              modelContextWindow: 200_000,
+              tokenBudget: 180_000,
             },
           }),
         );

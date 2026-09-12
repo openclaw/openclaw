@@ -74,6 +74,7 @@ resolves. Each entry points at the page that now holds the content.
 
 ## Related pages
 
+- [Memory architecture](/concepts/memory-architecture)
 - [Memory Search](/concepts/memory-search)
 - [Memory configuration reference](/reference/memory-config)
 - [Plugin SDK setup](/plugins/sdk-setup)

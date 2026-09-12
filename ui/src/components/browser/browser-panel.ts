@@ -176,6 +176,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.browserPanelController.resetBrowserState();
     }
     if (clientChanged || sessionChanged) {
+      this.browserPanelController.native.cancelPendingActivation();
+      this.browserPanelController.native.cancelCapture();
       this.consumedPreferredRevision = undefined;
     }
     return clientChanged || sessionChanged;

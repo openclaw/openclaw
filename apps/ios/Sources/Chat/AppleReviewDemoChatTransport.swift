@@ -255,7 +255,8 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 modelID: self.fixture.modelID,
                 name: self.fixture.modelName,
                 provider: self.fixture.modelProvider,
-                contextWindow: 128_000),
+                contextWindow: 128_000,
+                supportsFastMode: true),
         ] + self.fixture.additionalModels
     }
 

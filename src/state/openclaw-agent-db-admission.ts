@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
-import { assertSqliteIntegrity, type SqliteIntegrityOperation } from "../infra/sqlite-integrity.js";
+import {
+  runSqliteIntegrityCheckSync,
+  type SqliteIntegrityCheck,
+  type SqliteIntegrityOperation,
+} from "../infra/sqlite-integrity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -146,7 +150,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     void pending.promise.catch(() => {});
     pending.operations += 1;
     const steps = openSteps(options, pending);
-    let check: { database: DatabaseSync; databaseLabel: string } | undefined;
+    let check: SqliteIntegrityCheck | undefined;
     let failure: { error: unknown } | undefined;
     let suspended = false;
     try {
@@ -182,7 +186,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         failure = undefined;
         try {
           pending.controller.signal.throwIfAborted();
-          assertSqliteIntegrity(check.database, check.databaseLabel);
+          runSqliteIntegrityCheckSync(check);
         } catch (error) {
           failure = { error };
         }

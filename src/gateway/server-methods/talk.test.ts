@@ -3,7 +3,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -11,6 +11,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -26,9 +27,16 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
+import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
+import { forgetLegacyVoiceBinding } from "./talk-client-legacy-voice-bindings.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
@@ -2170,7 +2178,7 @@ describe("talk.session unified handlers", () => {
       language: "de",
       consultAuthority: {
         senderIsOwner: false,
-        replyCaller: {
+        replyCaller: expect.objectContaining({
           ApprovalReviewerDeviceId: undefined,
           ChatType: "direct",
           GatewayClientCaps: [],
@@ -2181,7 +2189,7 @@ describe("talk.session unified handlers", () => {
           SenderId: undefined,
           SenderName: undefined,
           SenderUsername: undefined,
-        },
+        }),
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       },
     });
@@ -2339,7 +2347,7 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
       authority: {
         senderIsOwner: false,
-        replyCaller: {
+        replyCaller: expect.objectContaining({
           ApprovalReviewerDeviceId: undefined,
           ChatType: "direct",
           GatewayClientCaps: [],
@@ -2350,7 +2358,7 @@ describe("talk.session unified handlers", () => {
           SenderId: undefined,
           SenderName: undefined,
           SenderUsername: undefined,
-        },
+        }),
         toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only"),
       },
       sessionKey: "agent:main:main",
@@ -2976,6 +2984,57 @@ describe("talk.client.toolCall handler", () => {
         respond(true, { runId: "run-voice-1" }, undefined);
       },
     );
+  });
+
+  it("retains the original human authority through the Talk chat client copy", async () => {
+    const connId = "conn-command-authority";
+    onTestFinished(() => forgetLegacyVoiceBinding(connId, "main", "voice-test"));
+    const client: GatewayClient = {
+      connId,
+      authenticatedUserId: "ada@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+        scopes: ["operator.write"],
+        caps: ["tool-events", "task-suggestions"],
+      },
+    };
+    let forwardedClient: GatewayClient | null | undefined;
+    mocks.chatSend.mockImplementationOnce(async (request: GatewayRequestHandlerOptions) => {
+      forwardedClient = request.client;
+      request.respond(true, { runId: "run-voice-1" }, undefined);
+    });
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        callId: "call-owned",
+        name: "openclaw_agent_consult",
+        args: { question: "Check status" },
+      },
+      client,
+      respond: vi.fn(),
+      context: { getRuntimeConfig: () => ({}) },
+    });
+    const copiedClient = expectDefined(forwardedClient, "Talk consult must dispatch its client");
+    expect(copiedClient).not.toBe(client);
+    const ctx = resolveChatSendCallerContext(copiedClient);
+    const authorize = () =>
+      resolveCommandAuthorization({
+        ctx,
+        cfg: { commands: { ownerAllowFrom: ["profile-ada"], allowFrom: { "*": ["profile-ada"] } } },
+        commandAuthorized: false,
+      });
+    expect(authorize().senderIsOwner).toBe(true);
+    client.invalidated = true;
+    expect(authorize().senderIsOwner).toBe(false);
+    expect(copiedClient.connect.caps).toEqual(["tool-events"]);
   });
 
   it("implicitly creates a voice session for consults without a binding", async () => {

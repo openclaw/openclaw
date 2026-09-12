@@ -76,6 +76,10 @@ vi.mock("../skills/discovery/status.js", () => ({ buildWorkspaceSkillStatus: () 
 vi.mock("../plugins/status.js", async () => ({
   ...(await import("../plugins/status-compatibility.js")),
   buildPluginCompatibilityNotices: () => [],
+  withPluginDiagnosticsReport: async <T>(
+    _params: unknown,
+    consume: (report: object) => T | Promise<T>,
+  ) => consume({}),
 }));
 vi.mock("./status-all/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./status-all/gateway.js")>()),

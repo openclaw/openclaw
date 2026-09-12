@@ -66,6 +66,7 @@ export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
+  loginOptions?: import("../../plugins/provider-login-options.js").ProviderLoginOption[];
 };
 
 export type ModelAuthStatusResult = {
@@ -85,6 +86,7 @@ export type ModelAuthLogoutResult = {
   provider: string;
   removedProfiles: string[];
   abortedRunIds: string[];
+  warning?: string;
 };
 
 export type ModelAuthOrderSetResult = {

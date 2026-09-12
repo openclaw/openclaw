@@ -13,6 +13,7 @@ import { CONNECTION_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 type SystemSectionProps = {
   systemInfo?: SystemInfoResult | null;
   systemInfoUnavailable?: boolean;
+  systemInfoLoading?: boolean;
 };
 
 type SystemStat = {
@@ -60,7 +61,7 @@ function renderSystemMeter(label: string, fraction: number) {
 function renderSystemStat(stat: SystemStat) {
   const label = stat.path ? `${stat.label} ${stat.path}` : stat.label;
   return html`
-    <div class="config-host__stat" title=${stat.path ?? stat.title ?? ""}>
+    <div class="config-host__stat" title=${stat.title ?? nothing}>
       <div class="config-host__stat-label">
         ${stat.label}${
           stat.path ? html` <span class="config-host__stat-path">${stat.path}</span>` : nothing
@@ -106,7 +107,6 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
           label: t("quickSettings.system.cpu"),
           value: coresLabel,
           detail: info.cpuModel,
-          title: cpuTitle,
         }
       : {
           label: t("quickSettings.system.cpu"),
@@ -174,15 +174,20 @@ export function renderSystemSection(props: SystemSectionProps) {
   // kept as custom markup inside the single group with row-matched paddings.
   const sectionProps: SettingsSectionProps = {
     title: t("quickSettings.system.gatewayHost"),
-    actions: info
-      ? renderSettingsStatus({
-          kind: "ok",
-          label: t("quickSettings.system.up", { duration: formatDurationHuman(info.uptimeMs) }),
-        })
-      : undefined,
+    actions: props.systemInfoLoading
+      ? html`<span class="settings-status" role="status">
+          <span class="btn__spinner" aria-hidden="true"></span>
+          ${t("common.loading")}
+        </span>`
+      : info
+        ? renderSettingsStatus({
+            kind: "ok",
+            label: t("quickSettings.system.up", { duration: formatDurationHuman(info.uptimeMs) }),
+          })
+        : undefined,
   };
   return html`
-    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host}>
+    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host} aria-busy=${Boolean(props.systemInfoLoading)}>
       ${renderSettingsSection(
         sectionProps,
         html`

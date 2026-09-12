@@ -42,7 +42,10 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
-import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLeaseOptions,
+  PreparedModelRuntimePluginGeneration,
+} from "../prepared-model-runtime.types.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -789,7 +792,7 @@ describe("prepared harness source delivery", () => {
       metadataSnapshot: admittedMetadataSnapshot,
     } as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>;
     let publishedMetadataSnapshot = admittedMetadataSnapshot;
-    const release = vi.fn();
+    const release = vi.fn(async () => {});
     let servedMetadataSnapshot: unknown;
     let publishedMetadataAtAcquire: unknown;
     mockedAcquireAgentRunPreparedModelRuntime.mockClear();
@@ -812,7 +815,7 @@ describe("prepared harness source delivery", () => {
         return {
           ...baseLease,
           snapshot: borrowed as typeof baseLease.snapshot,
-          release,
+          [Symbol.asyncDispose]: release,
         };
       },
     );
@@ -871,7 +874,7 @@ describe("prepared harness source delivery", () => {
         policyHash: "isolated",
         workspaceDir,
       };
-      const release = vi.fn();
+      const release = vi.fn(async () => {});
       const acquisitionStarted = createDeferred();
       const resumeAcquisition = createDeferred();
       const queueTimeout = createDeferred<never>();
@@ -879,7 +882,8 @@ describe("prepared harness source delivery", () => {
       let acquisitionSignal: AbortSignal | undefined;
       mockedAcquireAgentRunPreparedModelRuntime.mockClear();
       mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
-        async (_input, signal?: AbortSignal) => {
+        async (_input, options?: PreparedModelRuntimeLeaseOptions) => {
+          const signal = options?.abortSignal;
           acquisitionSignal = signal;
           acquisitionStarted.resolve();
           await resumeAcquisition.promise;
@@ -892,7 +896,7 @@ describe("prepared harness source delivery", () => {
               workspaceDir,
               metadataSnapshot: isolatedMetadataSnapshot,
             },
-            release,
+            [Symbol.asyncDispose]: release,
           };
         },
       );
@@ -936,8 +940,7 @@ describe("prepared harness source delivery", () => {
         expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
         expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
-          acquisitionSignal,
-          "static",
+          { abortSignal: acquisitionSignal, catalogMode: "static" },
         );
 
         if (outcome === "complete") {

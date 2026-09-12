@@ -1,5 +1,10 @@
-import type { ModelAuthOrderSetResult } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
+import type {
+  ModelAuthLogoutResult,
+  ModelAuthOrderSetResult,
+} from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
 
@@ -24,9 +29,10 @@ type ProfileActionsControllerOptions = {
   clearProbe: (cardId: string) => void;
   clearMessage: (cardId: string) => void;
   setError: (cardId: string, error: unknown) => void;
-  setLogoutSuccess: (cardId: string) => void;
+  setLogoutSuccess: (warning?: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
+  getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
 };
 
@@ -76,26 +82,41 @@ export class ModelProviderProfileActionsController {
     this.options.setBusy(key, true);
     this.options.clearMessage(cardId);
     try {
-      let logoutError: unknown;
-      try {
-        await client.request("models.authLogout", { ...target, agentId });
-      } catch (error) {
-        logoutError = error;
-      }
-      // A logout can change credentials before reporting failure. Refresh either
-      // outcome, but never update a different agent or a newer visit to this agent.
+      const result = await this.options.getConfig().runExternalMutation(
+        (activeClient) =>
+          activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
+            ...target,
+            agentId,
+          }),
+        { canDispatch: () => isCurrentScope() && this.options.canMutate() },
+      );
       if (!isCurrentScope()) {
         return;
       }
-      await this.options.refresh();
-      if (!isCurrentScope()) {
+      if (!result.ok) {
+        await this.options.refresh();
+        if (isCurrentScope()) {
+          this.options.setError(cardId, result.error);
+        }
         return;
       }
-      if (logoutError) {
-        this.options.setError(cardId, logoutError);
-        return;
+      const warnings = result.value.warning ? [result.value.warning] : [];
+      if (!result.refresh.ok) {
+        warnings.push(result.refresh.error);
+      } else {
+        try {
+          await this.options.refresh();
+          const warning = this.options.getData()?.error;
+          if (warning) {
+            warnings.push(warning);
+          }
+        } catch (error) {
+          warnings.push(modelProviderErrorMessage(error));
+        }
       }
-      this.options.setLogoutSuccess(cardId);
+      if (isCurrentScope()) {
+        this.options.setLogoutSuccess(warnings.join(" ") || undefined);
+      }
     } catch (error) {
       if (isCurrentScope()) {
         this.options.setError(cardId, error);

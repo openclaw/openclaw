@@ -58,25 +58,28 @@ export async function applySlotSelectionForPlugin(
   if (!plugin.kind && !isBundledManifestOwner(plugin)) {
     // Bundled manifests own slot declarations. Only legacy external plugins need
     // runtime kind inspection; enabling a bundled non-slot plugin must not execute its module.
-    const { buildPluginDiagnosticsReport } = await import("./status.js");
+    const { withPluginDiagnosticsReport } = await import("./status.js");
     // Importing diagnostics yields; recheck the install owner before plugin code executes.
     beforeRuntimeInspection?.();
-    const runtimeReport = buildPluginDiagnosticsReport({
-      config,
-      onlyPluginIds: [plugin.id],
-      metadataSnapshot,
-    });
-    const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);
-    if (runtimePlugin?.kind) {
-      const result = applyExclusiveSlotSelection({
+    return await withPluginDiagnosticsReport(
+      {
         config,
-        selectedId: runtimePlugin.id,
-        selectedKind: runtimePlugin.kind,
-        registry: mergeRuntimeKinds(report, runtimeReport),
-      });
-      return { config: result.config, warnings: result.warnings };
-    }
+        onlyPluginIds: [plugin.id],
+        metadataSnapshot,
+      },
+      (runtimeReport) => {
+        const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);
+        const result = applyExclusiveSlotSelection({
+          config,
+          selectedId: runtimePlugin?.kind ? runtimePlugin.id : plugin.id,
+          selectedKind: runtimePlugin?.kind ?? plugin.kind,
+          registry: runtimePlugin?.kind ? mergeRuntimeKinds(report, runtimeReport) : report,
+        });
+        return { config: result.config, warnings: result.warnings };
+      },
+    );
   }
+
   const result = applyExclusiveSlotSelection({
     config,
     selectedId: plugin.id,

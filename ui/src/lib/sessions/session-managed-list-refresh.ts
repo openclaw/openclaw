@@ -80,14 +80,14 @@ export function createSessionManagedListRefresh(
     if (refresh.append && !entry.snapshot.result) {
       return Promise.resolve();
     }
-    if (!refresh.append) {
-      entry.coordinator.absorb();
-    }
     const isCurrent = () =>
       managedLists.get(entry.key) === entry && host.connection.isCurrent(scope);
     const drain = async () => {
       let next: ManagedSessionListRefresh | null = refresh;
       while (next && isCurrent()) {
+        if (!next.append) {
+          entry.coordinator.absorb();
+        }
         const requestParams = {
           ...entry.query,
           limit: next.append ? entry.query.limit : entry.retainedLimit,

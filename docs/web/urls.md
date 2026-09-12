@@ -23,6 +23,11 @@ the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
 Normal navigation and **Open in** continue using the current UI. Copied links
 contain no connection credentials, and recipients still need Gateway access.
 
+If the Gateway disconnects while a session link is loading, the Control UI retries
+the interrupted load after reconnecting. Navigating elsewhere cancels that recovery;
+it does not reopen an old destination or add a browser-history entry. Already loaded
+conversations stay mounted across reconnects.
+
 The Dashboards gallery adds `?dashboard=expanded` to the owning task's chat
 link, for example `/chat/main/deploy-monitor-6db92d48?dashboard=expanded`.
 This makes Dashboard the main view and focuses it. **Restore split** brings
@@ -295,6 +300,33 @@ Clearing the person filter returns
 to `/activity` while retaining those filters. Normal Gateway authentication
 and session visibility rules apply to every form.
 
+## Terminal URLs
+
+The main terminal page keeps the sidebar and application chrome:
+
+```text
+/terminal
+/terminal/<terminalSessionId>
+/terminal?catalog=<catalogId>&host=<hostId>&thread=<threadId>
+```
+
+`/terminal` opens the terminal's default restore or picker view.
+`/terminal/<terminalSessionId>` attaches the Gateway terminal session returned by
+`sessions.catalog.startTerminal` or `terminal.open`; encode the ID as one path
+segment. The catalog query resumes the native CLI thread identified by the same
+`catalog`, `host`, and `thread` values used by native catalog links. Encode query
+values with `URLSearchParams`. An explicit terminal session ID takes precedence
+over a catalog query.
+
+Starting a native CLI from New session replaces the draft URL with its terminal
+session URL. Catalog **Open in terminal** actions open the catalog query form.
+Leaving the terminal page preserves its Gateway PTY for reattachment, subject to
+the [terminal session lifecycle](/web/control-ui/panels#operator-terminal).
+
+`/terminal` is the normal-route counterpart of `/focus/terminal`, which removes
+the sidebar and application chrome. Both require the terminal capability and
+operator access. All terminal paths accept the configured Control UI base path.
+
 ## Focus presentation routes
 
 A focus route renders one supported content surface without the normal Control
@@ -452,6 +484,9 @@ for a tab with an available slug is replaced once in browser history with
 `/<slug>`, preserving `p.*` parameters and the fragment. Tabs without an available
 slug keep the generic URL. Both forms mount the same plugin page inside the
 Control UI shell; slugs do not create plugin HTTP routes.
+Opening or reloading a slug keeps that destination while the Gateway connects,
+even when the browser remembers a chat session. Unknown slugs fall back to chat
+after the Gateway supplies its plugin tabs.
 
 Automation links open the exact job independently of the current list filters or
 loaded page. Adding `run` opens its run history and highlights the matching loaded

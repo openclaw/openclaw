@@ -154,7 +154,7 @@ async function assertStartupStateMigrationReady(params: {
   });
   assertSessionStoreMigrationComplete({ ...params, targets });
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
-  assertConfiguredWorkspaceStateReady(params);
+  await assertConfiguredWorkspaceStateReady(params);
 }
 
 type MigrationCheckpoint = {
@@ -306,7 +306,7 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
       try {
-        assertConfiguredWorkspaceStateReady({ cfg: params.cfg, operation: "doctor" });
+        await assertConfiguredWorkspaceStateReady({ cfg: params.cfg, operation: "doctor" });
       } catch (workspaceError) {
         params.report({ changes: [], warnings: [String(workspaceError)] });
       }

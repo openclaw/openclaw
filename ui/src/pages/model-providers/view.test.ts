@@ -90,6 +90,9 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onModelPickerOpen: () => undefined,
     onCatalogRetry: () => undefined,
     onOpenModelSetup: () => undefined,
+    onConnect: () => undefined,
+    canConnect: () => false,
+    loginBusy: false,
     ...overrides,
   };
 }
@@ -477,7 +480,7 @@ describe("renderModelProviders", () => {
     expect(
       provider?.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
     ).toBe(true);
-    expect(button(provider!, "Replace key")?.disabled).toBe(true);
+    expect(button(provider!, "Set API key")?.disabled).toBe(true);
     expect(button(provider!, "Remove key")?.disabled).toBe(true);
     expect(
       provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,

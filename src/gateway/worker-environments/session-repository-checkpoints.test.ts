@@ -182,6 +182,44 @@ it("recovers a published artifact after the acceptance transaction fails, withou
   expect((await snapshot.readEntry(snapshot.changedEntries[0]!)).toString()).toBe("recover me\n");
 });
 
+it("retries failed candidate cleanup and keeps completed cleanup independent of later Git locks", async () => {
+  const { remote, store, workspace, stage } = await fixture();
+  await fs.writeFile(path.join(remote, "edit.txt"), "recover after cleanup\n");
+  const prepared = await stage("turn-cleanup-retry");
+  const artifact = store.artifactPath(workspace.workspaceId);
+  const candidate = await requireWorkspaceResultGit(artifact, [
+    "for-each-ref",
+    "--format=%(refname)",
+    "refs/openclaw/worker-result-candidates/",
+  ]);
+  expect(candidate).not.toBe("");
+  const lockPath = path.join(artifact, `${candidate}.lock`);
+  await fs.writeFile(lockPath, "another Git writer\n", { flag: "wx" });
+  const attempts = await Promise.allSettled([prepared.discard(), prepared.discard()]);
+  expect(attempts.map((attempt) => attempt.status)).toEqual(["rejected", "rejected"]);
+  expect(await hasWorkerWorkspaceResultRef({ root: artifact, stagedResultRef: candidate })).toBe(
+    true,
+  );
+  await fs.rm(lockPath);
+  await Promise.all([prepared.discard(), prepared.discard()]);
+  expect(await hasWorkerWorkspaceResultRef({ root: artifact, stagedResultRef: candidate })).toBe(
+    false,
+  );
+
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  await fs.writeFile(lockPath, "another Git writer\n", { flag: "wx" });
+  await Promise.all([prepared.discard(), prepared.discard()]);
+  const accepted = await prepared.publish();
+  expect(accepted.checkpointRef).toBe(prepared.checkpointRef);
+  const snapshot = await readSessionRepositoryCheckpoint({
+    store,
+    workspaceId: workspace.workspaceId,
+  });
+  expect((await snapshot.readEntry(snapshot.changedEntries[0]!)).toString()).toBe(
+    "recover after cleanup\n",
+  );
+});
+
 it.each([false, true])(
   "retains independent raw recovery when the forked publication companion is corrupt: %s",
   async (corrupt) => {
@@ -207,7 +245,26 @@ it.each([false, true])(
       publicationStagingRoot,
       publicationDigest: hash(metadata),
     });
+    const sourceArtifact = store.artifactPath(workspace.workspaceId);
+    const candidates = (
+      await requireWorkspaceResultGit(sourceArtifact, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/worker-result-candidates/",
+      ])
+    ).split("\n");
+    expect(candidates).toHaveLength(2);
     await prepared.publish();
+    for (const candidate of candidates) {
+      await fs.mkdir(path.dirname(path.join(sourceArtifact, candidate)), { recursive: true });
+      await fs.writeFile(path.join(sourceArtifact, `${candidate}.lock`), "another Git writer\n", {
+        flag: "wx",
+      });
+    }
+    await Promise.all([prepared.discard(), prepared.discard()]);
+    for (const candidate of candidates) {
+      await fs.rm(path.join(sourceArtifact, `${candidate}.lock`));
+    }
     const fork = await forkSessionRepositoryWorkspace({
       store,
       sourceWorkspaceId: workspace.workspaceId,

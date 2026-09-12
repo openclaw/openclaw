@@ -1,5 +1,9 @@
 import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  acquireNativeOverlayOcclusion,
+  subscribeNativeOverlayOcclusion,
+} from "../lib/native-overlay-occlusion.ts";
 import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "@awesome.me/webawesome/dist/components/popover/popover.js";
@@ -72,17 +76,137 @@ async function reopen(f: Fixture) {
 }
 
 async function closed(f: Fixture) {
-  await expect.poll(() => f.popup.active).toBe(false);
+  // A canceled opening starts with an inactive popup before its close settles.
+  await expect
+    .poll(() => f.events.filter((event) => event.type === "wa-after-hide"))
+    .toEqual([{ type: "wa-after-hide", open: false, connected: true }]);
+  expect(f.popup.active).toBe(false);
   expect(f.dropdown.open).toBe(false);
   expect(f.menu.getAnimations()).toHaveLength(0);
-  expect(f.events.filter((event) => event.type === "wa-after-hide")).toEqual([
-    { type: "wa-after-hide", open: false, connected: true },
-  ]);
 }
 
-afterEach(() => document.body.replaceChildren());
+function observeNativeOcclusion(native = true) {
+  vi.stubGlobal(
+    "webkit",
+    native ? { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } } : undefined,
+  );
+  const states: boolean[] = [];
+  onTestFinished(subscribeNativeOverlayOcclusion((occluded) => states.push(occluded)));
+  return states;
+}
+
+afterEach(async () => {
+  document.body.replaceChildren();
+  // Let removal observers retire native leases before restoring the host bridge.
+  await Promise.resolve();
+  vi.unstubAllGlobals();
+});
 
 describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
+  it("occludes native browser views from trigger opening through the complete hide animation", async () => {
+    const { page } = await import("vitest/browser");
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    expect(states).toEqual([false, true]);
+    await duringElementAnimation(
+      f.menu,
+      "hide",
+      () => page.elementLocator(f.trigger).click(),
+      () => {
+        expect(count(f, "wa-after-hide")).toBe(0);
+        expect(states).toEqual([false, true]);
+      },
+    );
+    await closed(f);
+    expect(states).toEqual([false, true, false]);
+  });
+
+  it("respects canceled show and hide events without releasing native occlusion on a fast reopen", async () => {
+    const { page } = await import("vitest/browser");
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    // Cancel after the shared document listener has seen the opening event.
+    document.addEventListener("wa-show", (event) => event.preventDefault(), { once: true });
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-show")).toBe(1);
+    await closed(f);
+    expect(states).toEqual([false]);
+    // The canceled opening has its own settled close, separate from the reopen below.
+    f.events.length = 0;
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    expect(states).toEqual([false, true]);
+    document.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => f.dropdown.open).toBe(true);
+    await frame();
+    expect(states).toEqual([false, true]);
+    await duringAnimation(f, "hide", () => {
+      f.dropdown.open = true;
+    });
+    await expect.poll(() => count(f, "wa-after-show")).toBe(2);
+    expect(count(f, "wa-after-hide")).toBe(0);
+    expect(states).toEqual([false, true]);
+    f.dropdown.open = false;
+    await closed(f);
+    expect(states).toEqual([false, true, false]);
+  });
+
+  it("keeps the native browser occluded when another overlay outlives the dropdown", async () => {
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    await open(f);
+    expect(states).toEqual([false, true]);
+    const releaseModal = acquireNativeOverlayOcclusion();
+    onTestFinished(releaseModal);
+    f.dropdown.open = false;
+    await closed(f);
+    expect(states).toEqual([false, true]);
+    releaseModal();
+    expect(states).toEqual([false, true, false]);
+  });
+
+  it("releases and reacquires native occlusion when containing shadow hosts are removed and reconnected", async () => {
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    const outer = document.createElement("div");
+    const root = outer.attachShadow({ mode: "open" });
+    const inner = document.createElement("div");
+    inner.attachShadow({ mode: "open" }).append(f.host);
+    root.append(inner);
+    document.body.append(outer);
+    await open(f);
+    expect(states).toEqual([false, true]);
+    // Removing inside a shadow root is invisible to a document-only observer.
+    inner.remove();
+    await expect.poll(() => states).toEqual([false, true, false]);
+    root.append(inner);
+    await expect.poll(() => count(f, "wa-after-show")).toBe(2);
+    expect(states).toEqual([false, true, false, true]);
+    // Removing the outer host leaves both inner shadow trees intact.
+    outer.remove();
+    await expect.poll(() => states).toEqual([false, true, false, true, false]);
+    document.body.append(outer);
+    await expect.poll(() => count(f, "wa-after-show")).toBe(3);
+    expect(states).toEqual([false, true, false, true, false, true]);
+    f.dropdown.open = false;
+    await closed(f);
+    expect(states).toEqual([false, true, false, true, false, true, false]);
+  });
+
+  it("keeps ordinary web dropdowns functional without a native browser bridge", async () => {
+    const { page } = await import("vitest/browser");
+    const states = observeNativeOcclusion(false);
+    const f = await fixture();
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    await page.elementLocator(f.outside).click();
+    await closed(f);
+    expect(states).toEqual([false]);
+  });
+
   it.each(["Escape", "pointer", "Tab"] as const)(
     "reacquires %s dismissal after an observed hide/reopen",
     async (dismissal) => {

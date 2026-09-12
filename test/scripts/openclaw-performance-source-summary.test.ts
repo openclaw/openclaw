@@ -131,6 +131,31 @@ it("labels CLI RSS semantics and rejects mixed-metric memory trends", () => {
   cli.primary.memoryMetric = "unknown-metric";
   writeJson(cliPath, cli);
   expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Unknown CLI RSS metric");
+
+  delete cli.primary.memoryMetric;
+  for (const [before, after, error] of [
+    [undefined, "native", null],
+    ["native", undefined, null],
+    ["native", "native", null],
+    ["transport", "transport", null],
+    [undefined, "transport", "Incompatible CLI execution modes"],
+    ["transport", "native", "Incompatible CLI execution modes"],
+    ["unknown", "unknown", "Unknown CLI execution mode"],
+    [null, "native", "Unknown CLI execution mode"],
+    ["native", 1, "Unknown CLI execution mode"],
+  ] satisfies Array<[unknown, unknown, string | null]>) {
+    writeJson(path.join(baselineDir, "cli-startup.json"), {
+      primary: { ...cli.primary, executionMode: before },
+    });
+    writeJson(cliPath, { primary: { ...cli.primary, executionMode: after } });
+    if (error) {
+      expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow(error);
+    } else {
+      expect(buildMarkdown(sourceDir, baselineDir)).toContain("RSS metric: legacy-last-marker");
+    }
+  }
+  writeJson(cliPath, { primary: { ...cli.primary, executionMode: null } });
+  expect(() => buildMarkdown(sourceDir, null)).toThrow("Unknown CLI execution mode");
 });
 
 function writeSqliteV2Fixture(

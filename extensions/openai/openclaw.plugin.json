@@ -1,6 +1,6 @@
 {
   "id": "openai",
-  "categories": ["models", "memory", "voice"],
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "sessionRouteStateOwners": [
     {
@@ -255,6 +255,7 @@
       "personalAccount": true,
       "choiceId": "openai",
       "appGuidedAuth": "oauth",
+      "credentialOnly": true,
       "choiceLabel": "ChatGPT Login",
       "choiceHint": "Sign in with your ChatGPT or Codex subscription",
       "assistantPriority": -40,
@@ -269,6 +270,10 @@
       "personalAccount": true,
       "choiceId": "openai-device-code",
       "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {
+        "aliases": ["codex"]
+      },
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,

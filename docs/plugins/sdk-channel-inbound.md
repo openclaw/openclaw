@@ -36,7 +36,8 @@ import {
   from this subpath for channel-specific fields. This public standalone builder
   is non-authoritative and cannot mint participant evidence. Bundled production
   receive paths use the host-injected registered
-  `runtime.channel.inbound.buildContext` and pass the exact resolver result as
+  `runtime.channel.inbound.buildContext` and pass the exact
+  [channel ingress](/plugins/sdk-channel-ingress) resolver result as
   `channelIngress`. Resolve that result with `contextBinding` after final route
   selection. Core accepts it once only when the same active plugin record,
   lifecycle epoch, agent, session, message, event, and admission scope still
@@ -246,6 +247,10 @@ throw createChannelPartialDeliveryError(cause, {
 });
 ```
 
+Errors created by this helper retain the original failure in `cause`. After
+`isChannelPartialDeliveryError(error)`, `error.cause` is `unknown`; structural
+envelopes may omit it.
+
 Core emits a failed terminal observation with that provider-visible content and
 identity, then keeps the delivery failed so callers do not mistake partial
 success for a clean send. Do not report `visibleReplySent: false` after any
@@ -279,3 +284,9 @@ enumerated surface is proven to have no bundled or published reader.
 New plugin code should not introduce `turn`-named channel APIs. Keep model or
 agent turn vocabulary inside agent/provider code; channel plugins use inbound,
 message, delivery, and reply terms.
+
+## Related
+
+- [Channel ingress API](/plugins/sdk-channel-ingress) — the resolver whose result this page consumes as `channelIngress`
+- [Channel outbound API](/plugins/sdk-channel-outbound) — the send side of the same channel plugin
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough

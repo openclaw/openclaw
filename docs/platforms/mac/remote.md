@@ -45,8 +45,12 @@ A signed-in native operator device may still need a one-time approval on the
 Gateway. The Gateway's existing [automatic device approval policy](/gateway/trusted-proxy-auth#automatic-device-approval)
 determines whether verified proxy identities can enroll automatically.
 
-When the browser session expires, choose **Reconnect** for that saved Gateway,
-then **Connect** to sign in again. Renewing the same account keeps its native
+When the browser session expires, opening the saved Gateway shows a sign-in
+page and starts sign-in in your browser. A window restored at launch waits for
+you to choose **Sign in again**. You can also choose **Reconnect** for that saved
+Gateway in **Connection… → Gateways**, then **Connect**. The session lifetime is
+the Cloudflare Access application's session duration configured by the Access
+administrator. Renewing the same account keeps its native
 chat cache and queued messages. Signing in with a different account closes the
 previous account's native chat windows and uses that account's own cache and
 queue. Previously queued messages remain with their original account; sign
@@ -95,9 +99,52 @@ The app disables SSH connection multiplexing and post-authentication backgroundi
 
 SSH host-key verification is strict by default because Gateway credentials travel through this tunnel. To opt into a managed SSH alias's own trust behavior, set `--ssh-host-key-policy openssh` via `openclaw-mac primary set`, or set `gateway.remote.sshHostKeyPolicy` to `"openssh"` directly. Review the alias and any matching `Host *` or system configuration before opting in. Changing the SSH target (in the app or via `openclaw-mac`) resets the policy back to `strict` unless you explicitly opt in again for the new target.
 
-In SSH tunnel mode, discovered LAN/tailnet hostnames save as `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local tunnel endpoint (for example `ws://127.0.0.1:18789`) so CLI, WebChat, and the local node-host service all use the same loopback transport. When discovery returns both raw Tailnet IPs and stable hostnames, the app prefers Tailscale MagicDNS or LAN names so connections survive address changes better. If the local tunnel port differs from the remote Gateway port, set `gateway.remote.remotePort` to the port on the remote host.
+In SSH tunnel mode, discovered LAN/tailnet hostnames save as `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local tunnel endpoint (for example `ws://127.0.0.1:18789`) so CLI, WebChat, and the local node-host service all use the same loopback transport. When discovery returns both raw Tailnet IPs and stable hostnames, the app prefers Tailscale MagicDNS or LAN names so connections survive address changes better. The port in `gateway.remote.url` belongs to the SSH tunnel; `gateway.port` controls only the Gateway running on this Mac. If the local tunnel port differs from the remote Gateway port, set `gateway.remote.remotePort` to the port on the remote host.
 
 The Mac app's node combines native capabilities with system, browser, plugin, skill, and MCP commands from its bundled private worker. Connecting the app to a remote Gateway needs no external CLI or separate node-service installation on this Mac. An already-installed headless node service remains separate: the app preserves its start/stop and managed update/recovery behavior. Optional [cookie sync](/platforms/macos#sync-cookies-to-a-remote-computer) still uses an external CLI and reports a feature-specific error when it is missing.
+
+## Run a local Gateway alongside a remote primary
+
+In **Connection… → Connection**, with **Remote** selected, turn on **Also run a
+Gateway on this Mac**. The app starts and supervises the local Gateway through
+its usual launchd agent. Launch-agent management for the hosted Gateway always runs
+on this Mac, even when the primary uses SSH. **This Mac** appears after the primary in the Gateways
+menu, dashboard Gateway picker, **File → New Gateway Window**, and
+`openclaw-mac gateway list`. Open dashboard and chat windows on either Gateway.
+The hosted local entry cannot become primary from the catalog.
+
+The primary connection, SSH tunnel, menu bar status, this Mac's node capabilities,
+and Talk Mode keep following the remote Gateway. Pausing stops local hosting;
+the toggle is a device-local preference and adds no `openclaw.json` keys.
+`openclaw-mac status --json` reports the local hosting state, port, and process status.
+
+`gateway.port` is the local Gateway's bind port. The loopback port in
+`gateway.remote.url` is the SSH tunnel's local port, and
+`gateway.remote.remotePort` selects the destination port on the remote host.
+Older SSH configurations without explicit remote port settings retain their
+shared-port defaults until hosting is enabled. The hosting repair first records
+the tunnel and destination ports in the remote settings, then separates a
+colliding local bind port and clears a colliding legacy port preference. It uses
+the default local port (18789 or the profile default), or the adjacent port when
+that default is also the tunnel port. The Connection window reports this
+one-time repair; the remote connection keeps its existing ports. A named profile
+that already reserved the old port must restart before hosting can be enabled.
+If the selected local port is occupied by another listener, resolve the displayed
+conflict; the app does not select a random local Gateway port.
+
+The `openclaw` CLI, including commands in shells started by the hosted Gateway,
+continues targeting the remote primary. To reach the local Gateway explicitly,
+use its own credentials and the port shown in Connection:
+
+```bash
+OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789 \
+OPENCLAW_GATEWAY_TOKEN="<local-gateway-token>" \
+openclaw health
+```
+
+Use `wss://` when local Gateway TLS is enabled. The app provisions missing local
+auth through the existing Gateway installer; it does not export that credential
+into agent shell environments.
 
 ## Prereqs on the remote host
 

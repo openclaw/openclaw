@@ -122,11 +122,14 @@ function resolveUpdateTarget(
   );
 }
 
-function resolveRollbackOutcome(
+function resolveRecoveryOutcome(
   result: UpdateRunResult,
   context: UpdateFailureReportContext,
 ): string {
   if (result.recovery?.serviceRestartSafe === true) {
+    if (result.recovery.service === "failed") {
+      return "runtime files verified; Gateway restart failed. Run `openclaw gateway status --deep` before restarting manually.";
+    }
     return "verified safe to restart";
   }
   if (result.recovery?.serviceRestartSafe === false) {
@@ -209,7 +212,7 @@ export async function prepareUpdateFailureReport(
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
   const target = resolveUpdateTarget(input, context);
   const phase = resolveFailedPhase(input.result, context);
-  const rollback = resolveRollbackOutcome(input.result, context);
+  const recovery = resolveRecoveryOutcome(input.result, context);
   const bodyWithoutMarker = [
     "# OpenClaw update failure report",
     "",
@@ -220,7 +223,7 @@ export async function prepareUpdateFailureReport(
     `- Node version: ${sanitizeReportField(process.versions.node ?? "unknown", context)}`,
     `- Update target: ${target}`,
     `- Failed phase: ${phase}`,
-    `- Rollback outcome: ${rollback}`,
+    `- Recovery outcome: ${recovery}`,
     "",
     "## Bounded diagnostics",
     "",

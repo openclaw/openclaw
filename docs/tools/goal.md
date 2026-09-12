@@ -40,6 +40,10 @@ a separate sandbox policy session.
 OpenClaw treats any text after `/goal` that is not a known action word as a
 new objective.
 
+Explicit actions such as `start` and `edit` preserve line breaks, indentation,
+and repeated spaces inside the objective. Leading and trailing whitespace is
+trimmed.
+
 ## What goals are for
 
 Use a goal when a session has a concrete outcome that should stay visible
@@ -104,7 +108,8 @@ with `Goal error: goal already exists` until the current one is cleared.
 - `usage_limited`: reserved for a future usage-limit stop state. `/goal
 resume` restarts pursuit the same way.
 - `complete`: the goal was achieved. Complete goals are terminal. Use `/goal
-clear` before starting another goal.
+clear` before starting another goal. Repeating completion preserves the original
+  completion time, including when you add a status note.
 
 `/new` and `/reset` clear the current session goal, since they intentionally
 start fresh session context.
@@ -117,6 +122,9 @@ session's fresh token count at goal-creation time. If the session only has a
 stale or unknown token snapshot when the goal starts, OpenClaw waits for the
 next fresh snapshot and uses that as the baseline, so tokens spent before the
 goal existed are not charged to it.
+
+The model should omit `token_budget` unless you explicitly request a budget.
+Transports that require every tool argument can pass `null` for no budget.
 
 When usage reaches the budget, the goal moves to `budget_limited`. This does
 not delete the goal or erase the objective. It tells the operator and the
@@ -144,10 +152,14 @@ can report achievement or a genuine blocker without quietly moving the
 target.
 
 `update_goal` should mark a goal `complete` only when the objective is
-actually achieved. It should mark a goal `blocked` only after the same
-blocking condition recurs for at least three consecutive goal turns, not for
-ordinary difficulty or missing polish. Updating goal status does not send a
-chat reply. The agent must still provide the user's requested final response.
+verified against the full objective with no required work remaining. It should
+mark a goal `blocked` only after the same blocking condition recurs for at least
+three consecutive goal turns, not for ordinary difficulty or missing polish.
+Resuming a blocked goal starts a fresh count of three consecutive turns. Earlier
+blocked turns do not count toward it.
+A nearly exhausted budget does not justify marking unfinished work complete.
+Updating goal status does not send a chat reply. The agent must still provide
+the user's requested final response.
 
 ## Goal context on every turn
 

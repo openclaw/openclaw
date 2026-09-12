@@ -7,12 +7,11 @@ import type {
   BeforeToolCallFailureDisposition,
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   NativeHookRelayEvent,
-  NativeHookRelayRegistrationHandle,
   registerNativeHookRelay,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { registerRetainedNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
+import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import type { NativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import {
   addTimerTimeoutGraceMs,
@@ -63,7 +62,7 @@ export type CodexNativePreToolUseFailure = {
   durationMs: number;
 };
 
-export type CodexNativeHookRelay = NativeHookRelayRegistrationHandle & {
+export type CodexNativeHookRelay = ReturnType<typeof registerNativeHookRelayForBundledRuntime> & {
   authorizeRetentionAfterSuccessfulYield: () => void;
   hasClaimedDirectChild: () => boolean;
   claimDirectChild: (threadId: string) => () => void;
@@ -116,7 +115,7 @@ export async function assertCodexNativeHookRelayAllowed(
 
 /** Defers relay unregister so late native hook subprocesses can still resolve. */
 export function scheduleCodexNativeHookRelayUnregister(params: {
-  relay: NativeHookRelayRegistrationHandle;
+  relay: ReturnType<typeof registerNativeHookRelayForBundledRuntime>;
   hookTimeoutSec?: number;
 }): void {
   let pending: { timeout: ReturnType<typeof setTimeout>; unregister: () => void } | undefined;
@@ -130,6 +129,7 @@ export function scheduleCodexNativeHookRelayUnregister(params: {
       return;
     }
     params.relay.unregister();
+    nativeHookRelayUnregisterQueue.track(params.relay.drain());
   };
   const timeout = setTimeout(
     unregister,
@@ -235,7 +235,7 @@ export function createCodexNativeHookRelay(params: {
     }
     pendingDirectChildAdmissions.clear();
   };
-  const relay = registerRetainedNativeHookRelayForBundledRuntime({
+  const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,
@@ -362,6 +362,7 @@ export function createCodexNativeHookRelay(params: {
         directChildClaims.delete(threadId);
         if (foregroundClosed && directChildClaims.size === 0) {
           relay.unregister();
+          nativeHookRelayUnregisterQueue.track(relay.drain());
         }
       };
     },

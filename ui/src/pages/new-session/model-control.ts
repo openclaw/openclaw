@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type {
   ChatAccountSelection,
   UserModelAccount,
@@ -21,6 +22,7 @@ import {
 import { resolveThinkingProfileForSession } from "../../lib/chat/thinking.ts";
 import {
   loadModelCatalog,
+  resolveModelCatalogState,
   subscribeModelCatalogChanges,
   type ModelCatalogReadScope,
 } from "../../lib/model-catalog-store.ts";
@@ -170,9 +172,7 @@ export class NewSessionModelControl {
     this.metadataState = {
       catalog: result.models,
       accountSelection: result.accountSelection,
-      hasSnapshot: true,
-      status: "ready",
-      refreshFailed: result.refreshFailed,
+      ...resolveModelCatalogState(result),
     };
     if (!this.draftAccount && this.pendingSelectionGeneration === this.selectionGeneration) {
       this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
@@ -195,7 +195,11 @@ export class NewSessionModelControl {
           : "ready"
         : "loading",
     });
-    return loadModelCatalog(client, { ...scope, signal: controller.signal }).then(
+    return loadModelCatalog(client, {
+      ...scope,
+      signal: controller.signal,
+      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+    }).then(
       (result) => {
         if (!ownsRequest()) {
           return undefined;
@@ -578,7 +582,7 @@ export class NewSessionModelControl {
       thinkingDefault: defaultThinkingProfile?.thinkingDefault,
     };
     return renderChatModelControls({
-      renderAccountControl: (model) =>
+      renderAccountSection: (model) =>
         renderChatModelAccountControl({
           owner: this,
           client,
@@ -600,7 +604,6 @@ export class NewSessionModelControl {
             : undefined,
           onManage: () => options.context?.navigate("profile"),
           onRequestUpdate: this.notify,
-          hint: t("chat.modelAccounts.draftHint"),
         }),
       activeRunId: null,
       agentDefaultModel,

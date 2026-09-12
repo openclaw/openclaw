@@ -43,11 +43,11 @@ export type ReservedIncognitoKeyRepairReport = {
   repaired: number;
 };
 
-export function repairReservedIncognitoSessionKeys(params: {
+export async function repairReservedIncognitoSessionKeys(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): ReservedIncognitoKeyRepairReport {
+}): Promise<ReservedIncognitoKeyRepairReport> {
   const targets = listExistingAgentDatabaseTargets(params.cfg, params.env).map((target) => ({
     target,
     databaseOptions: resolveTargetSqliteOptions(target, params.env),
@@ -134,7 +134,7 @@ export function repairReservedIncognitoSessionKeys(params: {
       );
       rewriteDoctorSessionEntries({
         scope: { agentId: target.agentId, env: params.env, storePath: target.storePath },
-        sessionKeys: listSessionEntryKeysReadOnly({
+        sessionKeys: await listSessionEntryKeysReadOnly({
           agentId: target.agentId,
           env: params.env,
           storePath: target.storePath,

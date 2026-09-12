@@ -1,7 +1,9 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
+import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -27,13 +29,12 @@ export type PluginCatalogResultsProps = {
   error: string | null;
   remoteError: string | null;
   categories: readonly PluginDiscoveryCategory[];
-  categoriesError: string | null;
   featured: readonly PluginDiscoveryEntry[];
   featuredLoading: boolean;
-  featuredError: string | null;
   trending: readonly PluginDiscoveryEntry[];
   trendingLoading: boolean;
-  trendingError: string | null;
+  loadingMore: boolean;
+  loadMoreError: string | null;
   intent: PluginDiscoveryIntent;
   category: string | null;
   query: string;
@@ -46,26 +47,71 @@ export type PluginCatalogResultsProps = {
   onQueryChange: (query: string) => void;
   onOpenEntry: (id: string) => void;
   onInstall: (id: string) => void;
+  onLoadMore: () => void;
   onRetry: () => void;
-  onRetryGrouped: () => void;
-  onRetryCategories: () => void;
 };
 
 const SECTION_SIZE = 8;
 
+// Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
   activity: icons.activity,
   "book-open": icons.book,
   brain: icons.brain,
-  database: icons.box,
+  bot: icons.bot,
+  database: strokeIcon(svg` <ellipse cx="12" cy="5" rx="9" ry="3" />
+    <path d="M3 5V19A9 3 0 0 0 21 19V5" />
+    <path d="M3 12A9 3 0 0 0 21 12" />`),
   "git-branch": icons.gitPullRequest,
   globe: icons.globe,
   "message-circle": icons.messageSquare,
   "message-square": icons.messageSquare,
   package: icons.box,
-  palette: icons.wandSparkles,
+  palette: icons.palette,
   shield: icons.shield,
   wrench: icons.settings,
+  plug: icons.plug,
+  "code-xml": strokeIcon(svg` <path d="m18 16 4-4-4-4" />
+    <path d="m6 8-4 4 4 4" />
+    <path d="m14.5 4-5 16" />`),
+  server: icons.server,
+  files: strokeIcon(svg` <path d="M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8" />
+    <path d="M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706z" />
+    <path d="M5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1" />`),
+  inbox: icons.inbox,
+  "list-todo": strokeIcon(svg` <path d="M13 5h8" />
+    <path d="M13 12h8" />
+    <path d="M13 19h8" />
+    <path d="m3 17 2 2 4-4" />
+    <rect x="3" y="4" width="6" height="6" rx="1" />`),
+  "calendar-days": strokeIcon(svg` <path d="M8 2v3" />
+    <path d="M16 2v3" />
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M3 9h18" />
+    <path d="M8 13h.01" />
+    <path d="M12 13h.01" />
+    <path d="M16 13h.01" />
+    <path d="M8 17h.01" />
+    <path d="M12 17h.01" />
+    <path d="M16 17h.01" />`),
+  "wallet-cards":
+    strokeIcon(svg` <path d="M3 11h3.75a2 2 0 0 1 1.6.8l.45.6a4 4 0 0 0 6.4 0l.45-.6a2 2 0 0 1 1.6-.8H21" />
+    <path d="M3 7h18" />
+    <rect x="3" y="3" width="18" height="18" rx="2" />`),
+  megaphone:
+    strokeIcon(svg` <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
+    <path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" />
+    <path d="M8 6v8" />`),
+  "chart-no-axes-combined": strokeIcon(svg` <path d="M12 16v5" />
+    <path d="M16 14.639V21" />
+    <path d="M20 10.656V21" />
+    <path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15" />
+    <path d="M4 18.463V21" />
+    <path d="M8 14.656V21" />`),
+  workflow: strokeIcon(svg` <rect width="8" height="8" x="3" y="3" rx="2" />
+    <path d="M7 11v4a2 2 0 0 0 2 2h4" />
+    <rect width="8" height="8" x="13" y="13" rx="2" />`),
+  search: icons.search,
 };
 
 function categoryIcon(icon: string | undefined): TemplateResult {
@@ -79,14 +125,22 @@ function renderCatalogIcon(
   const iconUrl = resolvePluginCatalogIconUrl(
     {
       pluginId: plugin.local.pluginId,
-      packageName: plugin.catalog.packageName,
       imageUrl: plugin.catalog.imageUrl,
     },
     props,
   );
-  return iconUrl
-    ? html`<img class="plugins-icon" src=${iconUrl} alt="" loading="lazy" decoding="async" />`
-    : categoryIcon(plugin.catalog.icon);
+  return html`${imageWithFallback(iconUrl, (url, onError) =>
+    url
+      ? html`<img
+          class="plugins-icon"
+          src=${url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          @error=${onError}
+        />`
+      : categoryIcon(plugin.catalog.icon),
+  )}`;
 }
 
 export function formatCompactCount(value: number): string {
@@ -290,13 +344,30 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
       ${t("pluginsPage.noDiscoveryResults")}
     </p>`;
   }
-  return html`<div class="plugin-catalog-grid plugin-catalog-grid--results">
-    ${repeat(
-      items,
-      (plugin) => plugin.id,
-      (plugin) => renderCatalogCard(plugin, props),
-    )}
-  </div>`;
+  return html`
+    <div class="plugin-catalog-grid plugin-catalog-grid--results">
+      ${repeat(
+        items,
+        (plugin) => plugin.id,
+        (plugin) => renderCatalogCard(plugin, props),
+      )}
+    </div>
+    ${props.loadMoreError ? renderError(props.loadMoreError, props.onLoadMore) : nothing}
+    ${
+      props.result?.nextCursor
+        ? html`<div class="plugin-catalog-load-more">
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              ?disabled=${props.loadingMore}
+              @click=${props.onLoadMore}
+            >
+              ${props.loadingMore ? t("pluginsPage.loadingMore") : t("pluginsPage.loadMore")}
+            </button>
+          </div>`
+        : nothing
+    }
+  `;
 }
 
 function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult {
@@ -313,8 +384,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
     !props.featuredLoading &&
     !props.trendingLoading &&
     !props.error &&
-    !props.featuredError &&
-    !props.trendingError
+    !props.remoteError
   ) {
     return html`<p class="plugin-catalog-results__empty">
       ${t("pluginsPage.noDiscoveryResults")}
@@ -362,12 +432,6 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): TemplateResult {
   const hasQuery = Boolean(props.query.trim());
   const grouped = !hasQuery && props.intent === "all" && props.category === null;
-  const partialErrors = [
-    props.remoteError,
-    ...(grouped ? [props.featuredError, props.trendingError] : []),
-  ].filter(
-    (error, index, errors): error is string => Boolean(error) && errors.indexOf(error) === index,
-  );
   return html`<section class="plugin-catalog-results" aria-label=${t("pluginsPage.exploreTitle")}>
     <label class="plugin-catalog-search">
       <span aria-hidden="true">${icons.search}</span>
@@ -398,28 +462,15 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): Te
         }}
       />
     </label>
+    ${renderCategoryChips(props)}
     ${
-      props.categoriesError
-        ? html`<div class="plugin-catalog-categories__error" role="alert">
-            <span>${formatUiExternalText(props.categoriesError)}</span>
-            <button
-              type="button"
-              class="btn btn--xs oc-action oc-action-ghost"
-              @click=${props.onRetryCategories}
-            >
-              ${t("pluginsPage.tryAgain")}
-            </button>
-          </div>`
-        : renderCategoryChips(props)
-    }
-    ${
-      partialErrors.length > 0
+      props.remoteError
         ? html`<div class="callout warning oc-banner" role="status">
-            <span>${partialErrors.map((error) => formatUiExternalText(error)).join(" ")}</span>
+            <span>${formatUiExternalText(props.remoteError)}</span>
             <button
               type="button"
               class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-              @click=${grouped ? props.onRetryGrouped : props.onRetry}
+              @click=${props.onRetry}
             >
               ${t("pluginsPage.tryAgain")}
             </button>

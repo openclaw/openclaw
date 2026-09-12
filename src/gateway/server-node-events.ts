@@ -6,10 +6,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { Value } from "typebox/value";
 import {
   validateNodeHostStatsPayload,
   validateNodePresenceActivityPayload,
 } from "../../packages/gateway-protocol/src/index.js";
+import { DesktopAvailabilitySchema } from "../../packages/gateway-protocol/src/schema/environments.js";
 import { resolveSessionAgentId as defaultResolveSessionAgentId } from "../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { normalizeChannelId as defaultNormalizeChannelId } from "../channels/plugins/index.js";
@@ -620,6 +622,26 @@ export const handleNodeEvent = async (
     return pairingChangedResult(evt.event);
   }
   switch (evt.event) {
+    case "node.desktop.availability": {
+      const availability = parsePayloadObject(evt.payloadJSON);
+      if (!Value.Check(DesktopAvailabilitySchema, availability)) {
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      const updated = ctx.updateNodeDesktopAvailability?.({
+        nodeId,
+        connId: opts?.connId,
+        availability,
+      });
+      if (updated === null || updated === undefined) {
+        return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+      }
+      return {
+        ok: true,
+        event: evt.event,
+        handled: true,
+        reason: updated ? "updated" : "unchanged",
+      };
+    }
     case "voice.transcript": {
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj) {

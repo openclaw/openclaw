@@ -1924,6 +1924,20 @@ describe("Anthropic provider", () => {
     },
   );
 
+  it.each(["low", "medium", "high", "xhigh", "max"] as const)(
+    "preserves pooled Fable %s effort and its routed model id",
+    async (reasoning) => {
+      const id = "Claude Gateway/claude-fable-5-1";
+      const { payload } = await captureSimpleAnthropicPayload(
+        { id, name: "Pooled Fable", provider: "proxy" },
+        { reasoning },
+      );
+      expect(payload.model).toBe(id);
+      expect(payload.thinking).toMatchObject({ type: "adaptive" });
+      expect(payload.output_config).toEqual({ effort: reasoning });
+    },
+  );
+
   const adaptiveThinkingCases: AnthropicAdaptiveThinkingTestCase[] = [
     {
       name: "uses the Claude Opus 5 adaptive-thinking request contract",

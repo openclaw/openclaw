@@ -1,13 +1,9 @@
 // Discovers local Tailscale tailnet addresses.
 import { isIpInCidr } from "@openclaw/net-policy/ip";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
-
-/** Tailnet addresses discovered on external local interfaces. */
-type TailnetAddresses = {
-  ipv4: string[];
-  ipv6: string[];
-};
+import {
+  pickMatchingExternalInterfaceAddress,
+  readNetworkInterfaces,
+} from "./network-interfaces.js";
 
 const TAILNET_IPV4_CIDR = "100.64.0.0/10";
 const TAILNET_IPV6_CIDR = "fd7a:115c:a1e0::/48";
@@ -25,29 +21,18 @@ function isTailnetIPv6(address: string): boolean {
   return isIpInCidr(address, TAILNET_IPV6_CIDR);
 }
 
-/** Lists unique Tailscale IPv4/IPv6 addresses from local external interfaces. */
-function listTailnetAddresses(): TailnetAddresses {
-  const ipv4: string[] = [];
-  const ipv6: string[] = [];
-
-  for (const { address, family } of listExternalInterfaceAddresses(readNetworkInterfaces())) {
-    if (family === "IPv4" && isTailnetIPv4(address)) {
-      ipv4.push(address);
-    }
-    if (family === "IPv6" && isTailnetIPv6(address)) {
-      ipv6.push(address);
-    }
-  }
-
-  return { ipv4: uniqueStrings(ipv4), ipv6: uniqueStrings(ipv6) };
-}
-
 /** Returns the first discovered Tailscale IPv4 address, if any. */
 export function pickPrimaryTailnetIPv4(): string | undefined {
-  return listTailnetAddresses().ipv4[0];
+  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+    family: "IPv4",
+    matches: isTailnetIPv4,
+  });
 }
 
 /** Returns the first discovered Tailscale IPv6 address, if any. */
 export function pickPrimaryTailnetIPv6(): string | undefined {
-  return listTailnetAddresses().ipv6[0];
+  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+    family: "IPv6",
+    matches: isTailnetIPv6,
+  });
 }

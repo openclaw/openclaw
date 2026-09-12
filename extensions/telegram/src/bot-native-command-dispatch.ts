@@ -362,6 +362,7 @@ async function resolveTelegramCommandAuth(params: {
 
 export async function prepareTelegramCommandDispatch(
   params: TelegramCommandExecutorParams & { requireAuth: boolean },
+  onAuthorized?: (target: TelegramCommandAuthResult) => void,
 ): Promise<TelegramCommandDispatch | null> {
   const telegramDeps = params.telegramDeps ?? defaultTelegramNativeCommandDeps;
   const runtimeCfg = telegramDeps.getRuntimeConfig();
@@ -391,6 +392,7 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
+  onAuthorized?.(auth);
   const { route, bindingMode } = resolveTelegramConversationRoute({
     cfg: runtimeCfg,
     accountId: params.accountId,

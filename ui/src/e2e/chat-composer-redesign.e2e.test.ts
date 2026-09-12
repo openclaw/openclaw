@@ -56,14 +56,21 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("chat.startup");
           const textarea = page.locator(".agent-chat__composer-combobox textarea");
-          await expect.poll(() => textarea.isDisabled()).toBe(blocked);
+          const sendButton = page.getByRole("button", { name: "Send message", exact: true });
+          await expect.poll(() => textarea.isDisabled()).toBe(false);
+          await textarea.fill("Send while availability recovers");
+          await expect.poll(() => sendButton.isDisabled()).toBe(blocked);
+          expect(await textarea.inputValue()).toBe("Send while availability recovers");
           const statusBand = page.locator(".agent-chat__composer-status-band");
+          const setupBanner = page.locator(".agent-chat__disabled-banner");
+          await expect.poll(() => statusBand.count()).toBe(0);
           if (message) {
-            await expect.poll(() => statusBand.textContent()).toContain(message);
+            await expect.poll(() => setupBanner.textContent()).toContain(message);
+            const setupAction = setupBanner.getByRole("button", { name: "Connect an AI provider" });
+            await expect.poll(() => setupAction.isVisible()).toBe(true);
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {
-            await expect.poll(() => statusBand.count()).toBe(0);
-            await textarea.fill("Send while availability recovers");
-            await page.getByRole("button", { name: "Send message" }).click();
+            await sendButton.click();
             const send = await gateway.waitForRequest("chat.send");
             expect(send.params).toMatchObject({ message: "Send while availability recovers" });
             const runId =
@@ -135,7 +142,14 @@ suite.define(() => {
       });
       await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
       await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
-      await expect.poll(() => page.locator(".agent-chat__input textarea").isDisabled()).toBe(true);
+      const textarea = page.locator(".agent-chat__input textarea");
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      await textarea.fill("Try the message again.");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Send message", exact: true }).isDisabled())
+        .toBe(true);
+      expect(await textarea.inputValue()).toBe("Try the message again.");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 

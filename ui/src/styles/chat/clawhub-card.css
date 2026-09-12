@@ -56,6 +56,13 @@ openclaw-chat-clawhub-card {
   gap: var(--space-2);
 }
 
+.chat-clawhub-card .card-sub {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .chat-clawhub-card__actions {
   display: flex;
   flex-shrink: 0;

@@ -14,6 +14,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
+  withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
@@ -41,7 +42,7 @@ afterEach(async () => {
   logger.warn.mockClear();
 });
 
-function createTimedOpen(validationMs: number, indexRepairMs = 0) {
+function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheckMs = 0) {
   const options = {
     agentId: "timing-test",
     env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-agent-open-timing-") },
@@ -61,6 +62,21 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0) {
     const database = open(...args);
     if (args[0] === pathname) {
       advance(50);
+      const prepare = database.prepare.bind(database);
+      vi.spyOn(database, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (sql === "PRAGMA integrity_check;") {
+          const all = statement.all.bind(statement);
+          vi.spyOn(statement, "all").mockImplementation((...parameters) => {
+            try {
+              return all(...parameters);
+            } finally {
+              advance(integrityCheckMs);
+            }
+          });
+        }
+        return statement;
+      });
       const exec = database.exec.bind(database);
       vi.spyOn(database, "exec").mockImplementation((sql) => {
         exec(sql);
@@ -157,6 +173,8 @@ describe("agent database open timings", () => {
       thresholdMs: 1_000,
       integrityGateMs: 0,
       integrityGateOutcome: "healthy",
+      integrityCheckSyncMs: 0,
+      integrityOutsideCheckMs: 0,
       canonicalIndexMs: 0,
       repairedIndexCount: 0,
       phaseDurationsMs: {
@@ -218,6 +236,8 @@ describe("agent database open timings", () => {
           elapsedMs: 1_150,
           integrityGateMs: 0,
           integrityGateOutcome: drift === "physical" ? "failed" : "healthy",
+          integrityCheckSyncMs: 0,
+          integrityOutsideCheckMs: 0,
           canonicalIndexMs: 1_000,
           repairedIndexCount: drift === "physical" ? canonicalIndexCount : 1,
           phaseDurationsMs: {
@@ -231,6 +251,52 @@ describe("agent database open timings", () => {
       );
     },
   );
+
+  it("separates the synchronous check from readmission waiting in the completed owner log", async () => {
+    const { options, pathname, advance } = createTimedOpen(0, 0, 120.75);
+    openOpenClawAgentDatabase(options);
+    closeOpenClawAgentDatabaseByPath(pathname);
+    logger.warn.mockClear();
+    let admissions = 0;
+
+    const isOpen = await withOpenClawAgentDatabaseAdmission(
+      options,
+      async (run) => {
+        admissions += 1;
+        if (admissions === 2) {
+          advance(999.75);
+        }
+        return await run(() => {});
+      },
+      (database) => database.db.isOpen,
+    );
+
+    expect(isOpen).toBe(true);
+    expect(admissions).toBe(2);
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
+      agentId: options.agentId,
+      elapsedMs: 1_270,
+      path: pathname,
+      pid: process.pid,
+      threadId,
+      isMainThread,
+      admissionMode: "async",
+      thresholdMs: 1_000,
+      integrityGateMs: 1_120,
+      integrityGateOutcome: "healthy",
+      integrityCheckSyncMs: 120,
+      integrityOutsideCheckMs: 1_000,
+      canonicalIndexMs: 0,
+      repairedIndexCount: 0,
+      phaseDurationsMs: {
+        open: 60,
+        validation: 1_120,
+        configuration: 80,
+        schema: 0,
+        registration: 10,
+      },
+    });
+  });
 
   it("includes asynchronous admission waiting once for coalesced callers", async () => {
     const { options, pathname, advance } = createTimedOpen(0);
@@ -295,6 +361,8 @@ describe("agent database open timings", () => {
           registration: 80,
         },
       });
+      expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityCheckSyncMs");
+      expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityOutsideCheckMs");
     } finally {
       release.resolve();
       await outcomes;

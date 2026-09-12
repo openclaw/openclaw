@@ -598,9 +598,10 @@ describe("xAI OAuth", () => {
     expect(refreshed.expires).toBe(100);
   });
 
-  it.each(["fresh", "subscription", "api"] as const)(
-    "logs in with device code and refreshes the %s catalog",
+  it.each(["fresh", "subscription", "api", "credential-only"] as const)(
+    "logs in with device code for %s setup",
     async (setup) => {
+      const credentialOnly = setup === "credential-only";
       vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
       const progress = {
         update: vi.fn(),
@@ -650,6 +651,7 @@ describe("xAI OAuth", () => {
       const log = vi.fn();
       const runtime = { ...createRuntimeEnv(), log };
       const ctx: ProviderAuthContext = {
+        credentialOnly,
         config:
           setup === "fresh"
             ? {}
@@ -698,7 +700,7 @@ describe("xAI OAuth", () => {
         },
       };
 
-      if (setup === "api" && ctx.config.models?.providers?.xai) {
+      if ((setup === "api" || credentialOnly) && ctx.config.models?.providers?.xai) {
         Object.assign(ctx.config.models.providers.xai, {
           apiKey: "fixture-api-key",
           headers: { Authorization: "Bearer fixture-key" },
@@ -708,6 +710,13 @@ describe("xAI OAuth", () => {
             allowPrivateNetwork: false,
           },
         });
+        if (credentialOnly) {
+          ctx.config.gateway = { port: 18444 };
+          ctx.config.models.providers.unrelated = {
+            baseUrl: "https://unrelated.example.test/v1",
+            models: [],
+          };
+        }
       }
       const result = await createXaiOAuthAuthMethod().run(ctx);
 
@@ -718,7 +727,8 @@ describe("xAI OAuth", () => {
         title: "xAI OAuth",
         code: "ABCD-1234",
         expiresInMinutes: 15,
-        message: "Enter this one-time code on the xAI sign-in page.",
+        message:
+          "Open https://accounts.x.ai/oauth2/device?user_code=ABCD-1234 and enter this one-time code.",
       });
       expect(openUrl.mock.invocationCallOrder[0]).toBeLessThan(
         deviceCode.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
@@ -755,7 +765,7 @@ describe("xAI OAuth", () => {
       });
       expect(result.defaultModel).toBe("xai/grok-4.6");
       expect(result.configPatch?.agents?.defaults?.model).toEqual(
-        setup === "fresh"
+        setup === "fresh" || credentialOnly
           ? { primary: "xai/grok-4.6" }
           : { primary: "other/selected", fallbacks: ["other/fallback"] },
       );
@@ -764,9 +774,23 @@ describe("xAI OAuth", () => {
         api: "openai-responses",
         auth: "oauth",
       });
-      expect(result.configPatch?.models?.providers?.xai?.models.map((model) => model.id)).toEqual([
-        "grok-4.6",
-      ]);
+      if (!credentialOnly) {
+        expect(result.configPatch?.models?.providers?.xai?.models.map((model) => model.id)).toEqual(
+          ["grok-4.6"],
+        );
+      }
+      expect(
+        fetchImpl.mock.calls
+          .map(([input]) => requestUrl(input))
+          .filter((url) => url.endsWith("/models")),
+      ).toEqual(credentialOnly ? [] : ["https://cli-chat-proxy.grok.com/v1/models"]);
+      if (credentialOnly) {
+        expect(result.configPatch).not.toHaveProperty("gateway");
+        expect(result.configPatch?.models?.providers).not.toHaveProperty("unrelated");
+        expect(result.configPatch?.models?.providers?.xai?.request).not.toHaveProperty(
+          "allowPrivateNetwork",
+        );
+      }
       const savedProvider = result.configPatch?.models?.providers?.xai;
       expect(savedProvider?.models.some((model) => model.id === "auto")).toBe(false);
       expect(savedProvider).toHaveProperty("apiKey", undefined);

@@ -117,7 +117,7 @@ suite.define(() => {
       await page.reload();
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
+      await picker.locator('[data-chat-model-default="true"]').waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await expect
         .poll(() =>
@@ -126,26 +126,16 @@ suite.define(() => {
         .toBe("openai/gpt-5.6-terra");
       await screenshot(page, "07-picker-after-reload.png");
       await page.setViewportSize({ height: 900, width: 400 });
-      const footer = picker.locator(".chat-controls__model-provenance");
+      const defaultRow = picker.locator('[data-chat-model-default="true"]');
       await expect
-        .poll(() =>
-          footer.evaluate((element) => {
-            const bounds = element.getBoundingClientRect();
-            return Array.from(element.children).every((child) => {
-              const childBounds = child.getBoundingClientRect();
-              const range = document.createRange();
-              range.selectNodeContents(child);
-              const lines = new Set(Array.from(range.getClientRects(), (rect) => rect.top));
-              return (
-                lines.size === 1 &&
-                childBounds.left >= bounds.left &&
-                childBounds.right <= bounds.right
-              );
-            });
-          }),
-        )
+        .poll(async () => {
+          const bounds = await defaultRow.boundingBox();
+          return Boolean(
+            bounds && bounds.width > 0 && bounds.x >= 0 && bounds.x + bounds.width <= 401,
+          );
+        })
         .toBe(true);
-      await screenshot(page, "08-compact-footer-mobile.png");
+      await screenshot(page, "08-default-row-mobile.png");
       const configureModels = picker
         .getByRole("button", { name: "Configure models", exact: true })
         .first();
@@ -225,7 +215,7 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').click();
-      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
+      await picker.locator('[data-chat-model-default="true"]').waitFor();
       await screenshot(page, "03-pin-matching-default.png");
       await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patch");
@@ -236,7 +226,6 @@ suite.define(() => {
         )
         .toBe("");
       await picker.locator('[data-chat-model-select="true"]').click();
-      await expect.poll(() => picker.locator("[data-chat-model-reset]").count()).toBe(0);
       await screenshot(page, "04-pin-cleared.png");
     } finally {
       await context.close();

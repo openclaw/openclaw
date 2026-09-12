@@ -3,7 +3,13 @@ import { fetchPluginIconBlobUrl, type PluginIconFetchContext } from "./icon-load
 
 type PluginIconControllerHost = {
   getFetchContext: () => PluginIconFetchContext;
-  isConnected: () => boolean;
+  isConnected: (key: string) => boolean;
+  fetchIcon?: (
+    key: string,
+    context: PluginIconFetchContext,
+    signal: AbortSignal,
+  ) => Promise<string | null>;
+  timeoutError?: () => DOMException;
   onUrlsChange: (urls: Record<string, string>) => void;
   onLoadingChange?: () => void;
 };
@@ -26,6 +32,10 @@ export class PluginIconController {
     const eligiblePluginIds = new Set(
       (result?.plugins ?? []).filter((plugin) => plugin.hasIcon).map((plugin) => plugin.id),
     );
+    this.reconcileKeys(eligiblePluginIds);
+  }
+
+  reconcileKeys(eligiblePluginIds: ReadonlySet<string>) {
     const nextUrls = { ...this.urls };
     let urlsChanged = false;
     for (const [pluginId, url] of Object.entries(nextUrls)) {
@@ -112,19 +122,23 @@ export class PluginIconController {
   private fetch(pluginId: string) {
     const controller = new AbortController();
     const timeout = setTimeout(
-      () => controller.abort(new DOMException("plugin icon fetch timed out", "TimeoutError")),
+      () =>
+        controller.abort(
+          this.host.timeoutError?.() ??
+            new DOMException("plugin icon fetch timed out", "TimeoutError"),
+        ),
       10_000,
     );
     const request = { controller, timeout };
     this.requests.set(pluginId, request);
     this.host.onLoadingChange?.();
-    void fetchPluginIconBlobUrl({
-      pluginId,
-      ...this.host.getFetchContext(),
-      signal: controller.signal,
-    })
+    const context = this.host.getFetchContext();
+    const pending = this.host.fetchIcon
+      ? this.host.fetchIcon(pluginId, context, controller.signal)
+      : fetchPluginIconBlobUrl({ pluginId, ...context, signal: controller.signal });
+    void pending
       .then((url) => {
-        if (this.requests.get(pluginId) !== request || !this.host.isConnected()) {
+        if (this.requests.get(pluginId) !== request || !this.host.isConnected(pluginId)) {
           if (url) {
             URL.revokeObjectURL(url);
           }

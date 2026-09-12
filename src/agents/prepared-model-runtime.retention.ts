@@ -1,3 +1,4 @@
+import { releasePreparedPluginPublication } from "./prepared-model-runtime.plugin-lifetime.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
 
 export function retirePreparedModelRuntimeOwnerIfUnused(
@@ -15,8 +16,7 @@ export function retirePreparedModelRuntimeOwnerIfUnused(
     if (owners.get(key) === owner) {
       owners.delete(key);
     }
-    owner.resourceClaim?.release();
-    owner.resourceClaim = undefined;
+    releasePreparedPluginPublication(owner);
   }
 }
 

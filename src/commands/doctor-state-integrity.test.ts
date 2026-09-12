@@ -459,6 +459,20 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples:");
   });
 
+  it("ignores reserved system agent dirs that can never appear in agents.list", async () => {
+    createAgentDir("openclaw");
+    createAgentDir("crestodian");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
+  });
+
   it("protects the shared legacy main auth-store dir for an ops-only roster", async () => {
     createAgentDir("main");
 

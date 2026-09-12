@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -32,11 +32,26 @@ function committedSourceFixture(files: Record<string, string | null>) {
     writeFileSync(path.join(root, relative), content);
   }
   const git = (...args: string[]) =>
-    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    // Corruption controls own loose objects; automatic packing would move the target first.
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
+        ...args,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ).trim();
   git("init", "-q");
   git("config", "user.email", "test@example.invalid");
   git("config", "user.name", "Test");
@@ -267,6 +282,29 @@ describe("frozen committed source errors", () => {
     return objectPath;
   }
 
+  it("preserves real read-failure injection under inherited automatic Git maintenance", () => {
+    const config = { "gc.auto": "1", "gc.autoDetach": "false", "maintenance.strategy": "gc" };
+    vi.stubEnv("GIT_CONFIG_COUNT", String(Object.keys(config).length));
+    for (const [index, [key, value]] of Object.entries(config).entries()) {
+      vi.stubEnv(`GIT_CONFIG_KEY_${index}`, key);
+      vi.stubEnv(`GIT_CONFIG_VALUE_${index}`, value);
+    }
+    try {
+      const source = committedSourceFixture({
+        [metadata]: "unavailable source bytes",
+        // Git samples directory 17/ for its loose-object auto-GC threshold.
+        "gc-sample-a": "gc sample 376\n",
+        "gc-sample-b": "gc sample 568\n",
+        "gc-sample-c": "gc sample 675\n",
+      });
+      removeObject(source, `${source.sha}:${metadata}`);
+      const reader = createFrozenTargetSource(source.root, source.sha);
+      expect(() => reader.readText(metadata)).toThrow("unable to read selected source");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
     const committedText = "selected committed text\n";
     const source = committedSourceFixture({ [metadata]: committedText });
@@ -276,6 +314,7 @@ describe("frozen committed source errors", () => {
     expect(reader.readText("scripts/absent.ts")).toBeNull();
 
     removeObject(source, `${source.sha}:${metadata}`);
+    expect(() => reader.readText(metadata)).toThrow();
     const freshReader = createFrozenTargetSource(source.root, source.sha);
     expect(() => freshReader.readText(metadata)).toThrow();
   });

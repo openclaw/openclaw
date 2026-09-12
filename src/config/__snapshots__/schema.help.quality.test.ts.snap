@@ -277,6 +277,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "session.groupScope",
   "session.identityLinks.*.*",
   "session.mainKey",
+  "session.maintenance.coldStorage.enabled",
   "session.maintenance.mode",
   "session.reset.mode",
   "session.resetByChannel.*.mode",

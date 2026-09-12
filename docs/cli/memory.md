@@ -282,9 +282,16 @@ review what remains.
 The purge removes matching promotion-marker entries and session-reference
 sections from scanned memory files, selected session-corpus lines, and
 selected-session transcript index chunks. It clears associated full-text and
-vector rows, cached embeddings, matching short-term state, ingestion seen-hash
-scopes, and origin rows. Matching content is scrubbed from dreaming rewrite
-backups, rather than deleting every backup.
+vector rows, matching short-term state, ingestion seen-hash scopes, and origin
+rows. Matching content is scrubbed from dreaming rewrite backups, rather than
+deleting every backup.
+
+For a nonempty session selection, Forget also clears the selected agent's entire
+embedding cache, including results retained from unfinished index rebuilds. Those
+results may not yet be linked to published index chunks. Unrelated published
+index entries remain usable, but later indexing may need to regenerate their
+cached embeddings. The dry-run report includes the whole-cache removal count;
+a dry run or an empty session selection does not clear the cache.
 
 Consolidation preserves origins for replaced promotion markers while retained
 rewrite preimages reference them. Those origins are pruned only after live

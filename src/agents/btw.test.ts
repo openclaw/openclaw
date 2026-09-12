@@ -62,7 +62,7 @@ const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const loadPreparedModelRuntimeSnapshotMock = vi.fn();
-let acquireSnapshotResources: (() => { release: () => void }) | undefined;
+let acquireSnapshotResources: (() => { release: () => Promise<void> }) | undefined;
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const getModelRegistryRuntimeMock = vi.fn();
@@ -190,7 +190,10 @@ vi.mock("./prepared-model-runtime.js", () => {
     loadPreparedModelRuntimeSnapshot: loadSnapshot,
     acquirePublishedPreparedModelRuntime: async (params: Parameters<typeof loadSnapshot>[0]) => {
       const snapshot = await loadSnapshot(params);
-      return { snapshot, release: acquireSnapshotResources?.().release ?? (() => {}) };
+      return {
+        snapshot,
+        [Symbol.asyncDispose]: acquireSnapshotResources?.().release ?? (async () => {}),
+      };
     },
   };
 });
@@ -1026,6 +1029,9 @@ describe("runBtwSideQuestion", () => {
         agentId: "work",
         allowGatewaySubagentBinding: true,
       });
+      expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work" }),
+      );
       if (sideQuestion) {
         expect(sideQuestion).toHaveBeenCalledWith(
           expect.objectContaining({ agentId: "work", sessionKey: "global" }),
@@ -1053,7 +1059,7 @@ describe("runBtwSideQuestion", () => {
       const file = state.path(`btw-${mode.replaceAll(" ", "-")}.sqlite`);
       const database = new DatabaseSync(file);
       database.exec("CREATE TABLE answer (value INTEGER); INSERT INTO answer VALUES (42)");
-      const source = new PluginRegistryInspectionResources();
+      const source = new PluginRegistryInspectionResources(async () => {});
       source.attach(createEmptyPluginRegistry());
       let disposals = 0;
       source.runRegistration("btw-fixture", () =>
@@ -1065,14 +1071,7 @@ describe("runBtwSideQuestion", () => {
           },
         }),
       );
-      acquireSnapshotResources = () => {
-        const claim = source.retain();
-        return {
-          release: () => {
-            void claim.release();
-          },
-        };
-      };
+      acquireSnapshotResources = () => source.retain();
       const entered = createDeferredCore();
       const finish = createDeferredCore();
       const tailEntered = createDeferredCore();

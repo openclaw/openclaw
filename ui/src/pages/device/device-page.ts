@@ -462,6 +462,20 @@ class DevicePage extends OpenClawLightDomElement {
                 ${this.toggle("capabilities.keepAwakeEnabled", capabilities.keepAwakeEnabled, "keepAwake", t("configPage.deviceSettings.keepAwakeHint"))}
                 ${capabilities.healthSummaryAvailable ? this.toggle("capabilities.healthSummaryEnabled", capabilities.healthSummaryEnabled, "healthSummary", t("configPage.deviceSettings.healthSummaryHint")) : nothing}
                 ${this.toggle("capabilities.computerControlEnabled", capabilities.computerControlEnabled, "computerControl", t("configPage.deviceSettings.computerControlHint"))}
+                ${this.toggle("capabilities.unattendedDesktopEnabled", capabilities.unattendedDesktopEnabled, "unattendedDesktop", t("configPage.deviceSettings.unattendedDesktopHint"))}
+                ${
+                  snapshot.desktopAvailability
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.desktopAvailability"),
+                        control: renderSettingsStatus({
+                          kind: snapshot.desktopAvailability.state === "unlocked" ? "ok" : "warn",
+                          label: t(
+                            `configPage.deviceSettings.desktopStates.${snapshot.desktopAvailability.state}`,
+                          ),
+                        }),
+                      })
+                    : nothing
+                }
                 ${
                   capabilities.computerControlEnabled &&
                   capabilities.computerControlProvider !== undefined

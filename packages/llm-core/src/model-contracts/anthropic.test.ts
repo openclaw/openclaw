@@ -4,6 +4,8 @@ import { bindsClaudeThinkingPrefix } from "./anthropic.js";
 describe("bindsClaudeThinkingPrefix", () => {
   it.each([
     [{ id: "claude-fable-5-1" }, true],
+    [{ id: "Claude Gateway/claude-fable-5-1" }, true],
+    [{ id: "Claude Gateway/claude-sonnet-5" }, false],
     [{ id: "claude-mythos-5-1" }, false],
     [{ id: "anthropic/claude-fable-5.1" }, true],
     [{ id: "us.anthropic.claude-fable-5-1-v1:0" }, true],

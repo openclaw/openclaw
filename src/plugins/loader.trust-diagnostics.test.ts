@@ -5,7 +5,7 @@ import { maybeRepairPluginRegistryState } from "../commands/doctor-plugin-regist
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -90,9 +90,10 @@ describe("recorded plugin trust diagnostics", () => {
           installPath: plugin.dir,
           ...override,
         };
-        writePersistedInstalledPluginIndexInstallRecordsSync(
-          missing ? {} : { [pluginId]: install },
-        );
+        refreshPersistedInstalledPluginIndex({
+          reason: "source-changed",
+          installRecords: missing ? {} : { [pluginId]: install },
+        });
         const config = {
           plugins: {
             allow: [plugin.id],
