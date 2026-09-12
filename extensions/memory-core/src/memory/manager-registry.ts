@@ -25,16 +25,19 @@ import {
 
 const log = createSubsystemLogger("memory");
 
-export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
+export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "search" | "maintenance";
 
-export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
-  return purpose !== "default";
+function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
+  return purpose !== "default" && purpose !== "search";
 }
 
 export function normalizeMemoryIndexManagerPurpose(
   purpose: MemoryIndexManagerPurpose | undefined,
 ): MemoryIndexManagerPurpose {
-  return purpose === "status" || purpose === "cli" || purpose === "maintenance"
+  return purpose === "status" ||
+    purpose === "cli" ||
+    purpose === "search" ||
+    purpose === "maintenance"
     ? purpose
     : "default";
 }
@@ -46,7 +49,7 @@ type ClosableMemoryManager = {
 type PreparedMemoryManager<T extends ClosableMemoryManager> = {
   key: string;
   create: () => Promise<T> | T;
-  reuse: (manager: T) => boolean;
+  reuse: (manager: T) => Promise<boolean> | boolean;
 };
 
 type MemoryManagerRegistryCallbacks<T extends ClosableMemoryManager> = {
@@ -100,6 +103,10 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   private closePromise: Promise<void> | null = null;
   private closeFailed = false;
   private readonly managers = new Map<T, ManagerOwnership>();
+  private readonly pendingCleanup = new Map<
+    T,
+    { agentId: string; purpose: MemoryIndexManagerPurpose }
+  >();
   constructor(private readonly lifecycle: MemoryManagerLifecycle = {}) {
     lifecycle.prepare = (reload) => this.prepareManagersForReload(reload);
   }
@@ -270,29 +277,52 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
         return await create();
       }
       const cachedManager = this.cache.get(prepared.key);
-      await this.closeScopeUnlocked({
-        agentId: params.agentId,
-        purpose: params.purpose,
-        ...(cachedManager && prepared.reuse(cachedManager) ? { exceptKey: prepared.key } : {}),
-      });
-      // The scope queue already serializes creation and replacement for this agent.
-      const existing = this.cache.get(prepared.key);
-      if (existing) {
-        // Other sidecars may drain between preparation and memory cleanup.
-        // Recheck after the scope await without discarding the manager needed for rollback.
-        const reload = this.reload;
-        if (
-          reload &&
-          (reload.retireRuntime ||
-            this.getProbeOwners(existing).some((adapter) => reload.adapters.has(adapter)))
-        ) {
-          throw new MemoryManagerReloadError();
-        }
-        return existing;
+      if (cachedManager && (await prepared.reuse(cachedManager))) {
+        await this.closeScopeUnlocked({
+          agentId: params.agentId,
+          purpose: params.purpose,
+          exceptKey: prepared.key,
+        });
+        return cachedManager;
       }
-      const manager = await create();
-      this.cache.set(prepared.key, manager);
-      return manager;
+
+      if (params.purpose !== "search") {
+        await this.closeScopeUnlocked({
+          agentId: params.agentId,
+          purpose: params.purpose,
+        });
+        const existing = this.cache.get(prepared.key);
+        if (existing) {
+          return existing;
+        }
+        const manager = await create();
+        this.cache.set(prepared.key, manager);
+        return manager;
+      }
+
+      // Readers are side-effect free, so keep the published reader available until
+      // its replacement is fully constructed. Writer replacement remains close-first.
+      const candidate = await create();
+      try {
+        await this.closeScopeUnlocked({
+          agentId: params.agentId,
+          purpose: params.purpose,
+        });
+      } catch (err) {
+        try {
+          await candidate.close();
+          this.deleteIfCurrent(prepared.key, candidate);
+        } catch (cleanupError) {
+          this.retainForCleanup(candidate, params);
+          throw new Error(
+            `Memory manager replacement failed: ${String(err)}; candidate cleanup also failed`,
+            { cause: cleanupError },
+          );
+        }
+        throw err;
+      }
+      this.cache.set(prepared.key, candidate);
+      return candidate;
     });
   }
 
@@ -306,7 +336,32 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   }): Promise<void> {
     const scope = { agentId: normalizeAgentId(params.agentId), purpose: params.purpose };
     await this.runScopeOperation(scope, async () => {
-      await this.closeScopeUnlocked(scope);
+      const errors: unknown[] = [];
+      try {
+        await this.closeScopeUnlocked(scope);
+      } catch (err) {
+        errors.push(err);
+      }
+      try {
+        await this.closePendingCleanup(scope);
+      } catch (err) {
+        errors.push(err);
+      }
+      if (errors.length > 0) {
+        throw errors.length === 1
+          ? errors[0]
+          : new AggregateError(errors, "Failed to close scoped memory index managers");
+      }
+    });
+  }
+
+  retainForCleanup(
+    manager: T,
+    params: { agentId: string; purpose: MemoryIndexManagerPurpose },
+  ): void {
+    this.pendingCleanup.set(manager, {
+      agentId: normalizeAgentId(params.agentId),
+      purpose: params.purpose,
     });
   }
 
@@ -373,12 +428,55 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     if (scopedOperations.length > 0) {
       await Promise.allSettled(scopedOperations);
     }
-    // Withdrawn retirement owners still need explicit retry; live transient managers remain caller-owned.
-    await this.closeEntries(
-      [...this.managers]
-        .filter(([manager, owner]) => owner.retiring || this.cache.get(owner.key) === manager)
-        .map(([manager, owner]) => [owner.key, manager]),
-    );
+    const errors: unknown[] = [];
+    try {
+      // Withdrawn retirement owners still need explicit retry; live transient managers remain caller-owned.
+      await this.closeEntries(
+        [...this.managers]
+          .filter(([manager, owner]) => owner.retiring || this.cache.get(owner.key) === manager)
+          .map(([manager, owner]) => [owner.key, manager]),
+      );
+    } catch (err) {
+      errors.push(err);
+    }
+    try {
+      await this.closePendingCleanup();
+    } catch (err) {
+      errors.push(err);
+    }
+    if (errors.length > 0) {
+      throw errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, "Failed to close memory index managers");
+    }
+  }
+
+  private async closePendingCleanup(scope?: {
+    agentId: string;
+    purpose: MemoryIndexManagerPurpose;
+  }): Promise<void> {
+    let firstError: unknown;
+    for (const [manager, retainedScope] of this.pendingCleanup) {
+      if (
+        scope &&
+        (retainedScope.agentId !== scope.agentId || retainedScope.purpose !== scope.purpose)
+      ) {
+        continue;
+      }
+      try {
+        await manager.close();
+        this.pendingCleanup.delete(manager);
+        const owner = this.managers.get(manager);
+        if (owner) {
+          this.deleteIfCurrent(owner.key, manager);
+        }
+      } catch (err) {
+        firstError ??= err;
+      }
+    }
+    if (firstError !== undefined) {
+      throw toErrorObject(firstError, "Failed to close retained memory index manager");
+    }
   }
 
   private async closeScopeUnlocked(params: {

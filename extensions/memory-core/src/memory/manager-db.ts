@@ -10,8 +10,13 @@ import {
   ensureMemoryIndexSchema,
   ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
+  ftsTableMatchesSchema,
+  memoryPathFtsTriggersMatchSchema,
   loadSqliteVecExtension,
+  MEMORY_INDEX_FTS_COLUMNS,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_COLUMNS,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
@@ -432,7 +437,34 @@ export function openMemoryDatabaseReadOnlyAtPath(
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
   }
+  database.db.exec("PRAGMA query_only = ON");
   return { db: database.db, release: database.close };
+}
+
+/** Validate the canonical derived FTS definitions without repairing them. */
+export function assertMemorySearchFtsSchema(params: {
+  db: DatabaseSync;
+  tokenizer: "unicode61" | "trigram";
+}): void {
+  const tokenizeClause =
+    params.tokenizer === "trigram" ? ", tokenize='trigram case_sensitive 0'" : "";
+  for (const [tableName, expectedColumns] of [
+    [MEMORY_INDEX_FTS_TABLE, MEMORY_INDEX_FTS_COLUMNS],
+    [MEMORY_INDEX_PATHS_FTS_TABLE, MEMORY_INDEX_PATHS_FTS_COLUMNS],
+  ] as const) {
+    const status = ftsTableMatchesSchema({
+      db: params.db,
+      tableName,
+      expectedColumns,
+      tokenizeClause,
+    });
+    if (status !== "matching") {
+      throw new Error(`Memory search FTS schema for ${tableName} is ${status}`);
+    }
+  }
+  if (!memoryPathFtsTriggersMatchSchema(params.db)) {
+    throw new Error("Memory search path FTS triggers are mismatched");
+  }
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {

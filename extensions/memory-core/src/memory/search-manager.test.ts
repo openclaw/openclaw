@@ -33,17 +33,20 @@ describe("builtin memory search manager", () => {
     closeMemoryIndexManagersForAgent.mockClear();
   });
 
-  it("returns the builtin manager for every purpose", async () => {
-    const cfg = {} as OpenClawConfig;
+  it.each(["default", "status", "cli", "search"] as const)(
+    "returns the builtin manager for %s purpose",
+    async (purpose) => {
+      const cfg = {} as OpenClawConfig;
 
-    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" });
+      const result = await getMemorySearchManager({ cfg, agentId: "main", purpose });
 
-    expect(result.manager).toBe(builtinManager);
-    expect(result.error).toBeUndefined();
-    expect(result.debug).toMatchObject({ backend: "builtin", purpose: "status" });
-    expect(result.debug?.managerMs).toBeGreaterThanOrEqual(0);
-    expect(memoryIndexGet).toHaveBeenCalledWith({ cfg, agentId: "main", purpose: "status" });
-  });
+      expect(result.manager).toBe(builtinManager);
+      expect(result.error).toBeUndefined();
+      expect(result.debug).toMatchObject({ backend: "builtin", purpose });
+      expect(result.debug?.managerMs).toBeGreaterThanOrEqual(0);
+      expect(memoryIndexGet).toHaveBeenCalledWith({ cfg, agentId: "main", purpose });
+    },
+  );
 
   it("returns the builtin initialization error", async () => {
     memoryIndexGet.mockRejectedValueOnce(new Error("index unavailable"));

@@ -6,10 +6,21 @@ export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 
-type FtsTableSchemaStatus = "missing" | "matching" | "mismatched" | "not-fts";
+export type FtsTableSchemaStatus = "missing" | "matching" | "mismatched" | "not-fts";
+
+export const MEMORY_INDEX_FTS_COLUMNS = [
+  "text",
+  "id",
+  "path",
+  "source",
+  "model",
+  "start_line",
+  "end_line",
+] as const;
+export const MEMORY_INDEX_PATHS_FTS_COLUMNS = ["path", "source"] as const;
 
 /** Check every persisted FTS column declaration and supported table option. */
-function ftsTableMatchesSchema(params: {
+export function ftsTableMatchesSchema(params: {
   db: DatabaseSync;
   tableName: string;
   expectedColumns: readonly string[];
@@ -138,6 +149,29 @@ export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
   },
 ] as const;
 
+function normalizeTriggerDefinition(sql: string): string {
+  return sql
+    .trim()
+    .replace(/^CREATE\s+TRIGGER\s+IF\s+NOT\s+EXISTS\s+(?:main\.)?/iu, "CREATE TRIGGER ")
+    .replace(/;\s*$/u, "")
+    .replace(/\s+/gu, " ")
+    .toLowerCase();
+}
+
+/** Check every canonical source-to-path-FTS trigger definition. */
+export function memoryPathFtsTriggersMatchSchema(db: DatabaseSync): boolean {
+  return MEMORY_PATH_FTS_TRIGGER_DEFINITIONS.every((trigger) => {
+    const row = db
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ? COLLATE NOCASE")
+      // SAFETY: This sqlite_schema projection returns only the nullable SQL definition.
+      .get(trigger.name) as { sql?: unknown } | undefined;
+    return (
+      typeof row?.sql === "string" &&
+      normalizeTriggerDefinition(row.sql) === normalizeTriggerDefinition(trigger.sql)
+    );
+  });
+}
+
 export function rebuildMemoryChunkFts(db: DatabaseSync, ftsTable: string): void {
   db.exec(`
     DELETE FROM ${ftsTable};
@@ -166,7 +200,7 @@ export function ensureMemoryChunkFtsSchema(params: {
     dropMismatchedFtsTable({
       db: params.db,
       tableName: params.ftsTable,
-      expectedColumns: ["text", "id", "path", "source", "model", "start_line", "end_line"],
+      expectedColumns: MEMORY_INDEX_FTS_COLUMNS,
       tokenizeClause: params.tokenizeClause,
     });
     params.db.exec(
@@ -241,7 +275,7 @@ export function ensureMemoryPathFtsSchema(params: {
     dropMismatchedFtsTable({
       db: params.db,
       tableName: MEMORY_INDEX_PATHS_FTS_TABLE,
-      expectedColumns: ["path", "source"],
+      expectedColumns: MEMORY_INDEX_PATHS_FTS_COLUMNS,
       tokenizeClause: params.tokenizeClause,
     });
     params.db.exec(`
@@ -257,6 +291,16 @@ export function ensureMemoryPathFtsSchema(params: {
       FROM ${MEMORY_INDEX_SOURCES_TABLE}
       WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_PATHS_FTS_TABLE} LIMIT 1);
     `);
+    if (!memoryPathFtsTriggersMatchSchema(params.db)) {
+      dropMemoryPathFtsTriggers(params.db);
+      // Writes may have landed while a trigger was missing or drifted. Rebuild
+      // the derived table before restoring maintenance so partial gaps do not persist.
+      params.db.exec(`
+        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE};
+        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+        SELECT id, path, source FROM ${MEMORY_INDEX_SOURCES_TABLE};
+      `);
+    }
     ensureMemoryPathFtsTriggers(params.db);
     params.db.exec("RELEASE ensure_memory_index_paths_fts");
   } catch (err) {

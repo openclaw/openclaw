@@ -19,6 +19,17 @@ describe("memory index", () => {
   const { provider: providerFixture } = fixture;
   const { createConfig: createCfg, getFreshManager, requireManager, trackManager } = fixture;
 
+  it("reuses a pre-upgrade default manager without the new reader validator method", async () => {
+    const cfg = createCfg({});
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    trackManager(first);
+    Reflect.set(first, "revalidateForReuse", undefined);
+
+    const second = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+
+    expect(second).toBe(first);
+  });
+
   it("waits for scoped manager close before initializing a replacement", async () => {
     let releaseProviderClose: () => void = () => {};
     providerFixture.providerCloseGate = new Promise<void>((resolve) => {
