@@ -3,7 +3,8 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { sortAndLimitBy } from "../shared/sort-and-limit.js";
+import { sortAndLimitByWork } from "../shared/sort-and-limit.js";
+import type { SynchronousWork } from "../shared/synchronous-work.js";
 
 export type SessionEntryPair = [string, SessionEntry];
 
@@ -31,10 +32,16 @@ function compareSessionEntryPairs(
   return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
 }
 
-export function sortAndLimitSessionEntries(
+export function* sortAndLimitSessionEntries(
   entries: SessionEntryPair[],
   limit: number | undefined,
   sortBy: SessionsListParams["sortBy"],
-): SessionEntryPair[] {
-  return sortAndLimitBy(entries, limit, (a, b) => compareSessionEntryPairs(a, b, sortBy));
+  shouldYield?: () => boolean,
+): SynchronousWork<SessionEntryPair[]> {
+  return yield* sortAndLimitByWork(
+    entries,
+    limit,
+    (a, b) => compareSessionEntryPairs(a, b, sortBy),
+    shouldYield,
+  );
 }
