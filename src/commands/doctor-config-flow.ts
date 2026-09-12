@@ -242,6 +242,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const explicitSetPaths: string[][] = [];
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
+  let modelRetirementRepairRan = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
@@ -589,6 +590,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pluginMetadataSnapshotState.current = repairSequence.pluginMetadataSnapshot;
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
+    modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
@@ -742,6 +744,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       : {}),
     ...(openAICodexAuthProfileIdMap ? { openAICodexAuthProfileIdMap } : {}),
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
+    ...(modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid)
+      ? { modelRetirementRepairRan: true }
+      : {}),
     ...migrationResult,
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,

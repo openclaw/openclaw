@@ -2,6 +2,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../commands/doctor/shared/update-phase.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
+import { recordUpdateModelRetirement } from "../infra/update-deferred-model-retirement.js";
 import { getChildLogger } from "../logging/logger.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
@@ -215,6 +216,10 @@ export async function runWriteConfigHealth(
       );
     }
   }
+  if (ctx.configResult.modelRetirementRepairRan === true) {
+    recordUpdateModelRetirement("completed", ctx.env ?? process.env);
+    delete ctx.configResult.modelRetirementRepairRan;
+  }
   const billingWarnings = ctx.configResult.modelBillingRouteWarnings;
   if (billingWarnings?.length) {
     const { note } = await import("../../packages/terminal-core/src/note.js");
@@ -282,7 +287,8 @@ export async function runWriteConfigHealth(
 export async function runInitialConfigWriteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.configResult.shouldWriteConfig !== true &&
-    !ctx.configResult.modelBillingRouteWarnings?.length
+    !ctx.configResult.modelBillingRouteWarnings?.length &&
+    ctx.configResult.modelRetirementRepairRan !== true
   ) {
     return;
   }
