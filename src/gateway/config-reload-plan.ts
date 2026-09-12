@@ -168,6 +168,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.push.apns.relay",
       "gateway.terminal",
       "gateway.auth.rateLimit",
+      "gateway.workspacePreviewMaxBytes",
       "diagnostics.enabled",
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",

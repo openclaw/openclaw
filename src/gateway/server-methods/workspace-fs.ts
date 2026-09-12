@@ -3,6 +3,7 @@
 // hardlink rejection) so no caller can access files outside a workspace root.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readFileWindowFully } from "../../infra/file-read.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -15,6 +16,18 @@ type WorkspaceFilePrefixResult = Pick<ReadResult, "buffer" | "stat"> & { canonic
 
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
+
+/**
+ * Resolve the shared preview cap from config, falling back to the 256 KiB
+ * default. Schema validation bounds the configured value; the runtime guard
+ * covers configs loaded without it.
+ */
+export function resolveWorkspacePreviewMaxBytes(
+  cfg: Pick<OpenClawConfig, "gateway"> | undefined,
+): number {
+  const configured = cfg?.gateway?.workspacePreviewMaxBytes;
+  return configured !== undefined && configured > 0 ? configured : WORKSPACE_PREVIEW_MAX_BYTES;
+}
 
 let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
 
@@ -147,6 +160,7 @@ export async function updateWorkspaceFile(
   content: string,
   expectedHash: string,
   assertCurrent?: () => void,
+  opts?: { maxBytes?: number },
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -160,7 +174,7 @@ export async function updateWorkspaceFile(
     try {
       current = await workspaceRoot.read(browserPath, {
         hardlinks: "reject",
-        maxBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+        maxBytes: opts?.maxBytes ?? WORKSPACE_PREVIEW_MAX_BYTES,
         nonBlockingRead: true,
         symlinks: "reject",
       });

@@ -41,7 +41,6 @@ export type LoadedSessionFiles = {
   files: TouchedFile[];
 };
 type FileKind = TouchedFile["kind"];
-const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
@@ -234,7 +233,11 @@ async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
   fileRoot: string | undefined,
-  opts: { includeContent?: boolean; workspaceRoot?: WorkspaceRoot } = {},
+  opts: {
+    includeContent?: boolean;
+    maxPreviewBytes?: number;
+    workspaceRoot?: WorkspaceRoot;
+  } = {},
 ): Promise<SessionFileEntry> {
   const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: touched.path });
   const base = {
@@ -260,8 +263,9 @@ async function toSessionFileEntry(
   if (!opts.includeContent) {
     return entry;
   }
-  if (stat.size <= MAX_PREVIEW_BYTES) {
-    const read = await readWorkspaceFile(root!, browserPath);
+  const maxPreviewBytes = opts.maxPreviewBytes ?? WORKSPACE_PREVIEW_MAX_BYTES;
+  if (stat.size <= maxPreviewBytes) {
+    const read = await readWorkspaceFile(root!, browserPath, { maxBytes: maxPreviewBytes });
     if (!read) {
       return { ...base, missing: true };
     }
@@ -472,7 +476,7 @@ export async function listSessionWorkspaceFiles(
 }
 
 export async function getSessionWorkspaceFile(
-  params: LoadedSessionFiles & { path: string },
+  params: LoadedSessionFiles & { path: string; maxPreviewBytes?: number },
 ): Promise<{ root?: string; file?: SessionFileEntry }> {
   const loaded = params;
   const exactTouched = loaded.files.find((file) => file.path === params.path);
@@ -481,6 +485,7 @@ export async function getSessionWorkspaceFile(
       ...(loaded.root ? { root: loaded.root } : {}),
       file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
         includeContent: true,
+        maxPreviewBytes: params.maxPreviewBytes,
       }),
     };
   }
@@ -488,7 +493,7 @@ export async function getSessionWorkspaceFile(
     return {};
   }
   // Any in-root file is previewable; fs-safe root enforces containment, symlink/hardlink
-  // rejection, and the 256 KB cap.
+  // rejection, and the shared preview cap.
   const candidates = resolveSessionFileCandidates({
     root: loaded.root,
     fileRoot: loaded.fileRoot,
@@ -507,6 +512,7 @@ export async function getSessionWorkspaceFile(
     };
     const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
       includeContent: true,
+      maxPreviewBytes: params.maxPreviewBytes,
     });
     if (!file.missing) {
       return { root: loaded.root, file };
@@ -529,13 +535,14 @@ export async function setSessionWorkspaceFile(params: {
   content: string;
   expectedHash: string;
   assertCurrent?: () => void;
+  maxPreviewBytes?: number;
 }): Promise<SessionWorkspaceWriteResult> {
   // Reject content the preview cannot round-trip, before encoding oversized input.
   if (params.content.includes("\0")) {
     return { status: "unsafe" };
   }
   const size = Buffer.byteLength(params.content, "utf8");
-  if (size > MAX_PREVIEW_BYTES) {
+  if (size > (params.maxPreviewBytes ?? WORKSPACE_PREVIEW_MAX_BYTES)) {
     return { status: "too-large", size };
   }
   if (Buffer.from(params.content, "utf8").toString("utf8") !== params.content) {
@@ -569,6 +576,7 @@ export async function setSessionWorkspaceFile(params: {
       params.content,
       params.expectedHash,
       params.assertCurrent,
+      { maxBytes: params.maxPreviewBytes },
     );
   } catch (error) {
     if (!(error instanceof FsSafeError)) {

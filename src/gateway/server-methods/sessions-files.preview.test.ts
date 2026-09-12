@@ -5,6 +5,7 @@ import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
   createVisibleMessagesMock,
+  expectError,
   expectOkPayload,
   hashContent,
   IMAGE_PREVIEW_FIXTURES,
@@ -120,5 +121,87 @@ describe("sessions.files preview formats", () => {
     expect(payload.file.content).toBeUndefined();
     expect(payload.file.contentEncoding).toBeUndefined();
     expect(payload.file.hash).toBeUndefined();
+  });
+
+  const raisedCapContext = {
+    getRuntimeConfig: () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: { workspacePreviewMaxBytes: 1024 * 1024 },
+    }),
+  };
+
+  it("previews in-root files above the default cap when workspacePreviewMaxBytes is raised", async () => {
+    fs.writeFileSync(path.join(workspaceRoot, "raised.log"), "x".repeat(260 * 1024));
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "raised.log" },
+        raisedCapContext,
+      ),
+    );
+
+    expect(payload.file).toMatchObject({
+      content: "x".repeat(260 * 1024),
+      path: "raised.log",
+      previewKind: "text",
+    });
+  });
+
+  it("reports the configured cap when a file exceeds workspacePreviewMaxBytes", async () => {
+    fs.writeFileSync(path.join(workspaceRoot, "huge.log"), "x".repeat(2 * 1024 * 1024));
+
+    const error = expectError(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "huge.log" },
+        raisedCapContext,
+      ),
+    );
+
+    expect(error.details).toMatchObject({
+      maxPreviewBytes: 1024 * 1024,
+      path: "huge.log",
+      type: "session_file_too_large",
+    });
+  });
+
+  it("round-trips files above the default cap through get, set, and reopen when workspacePreviewMaxBytes is raised", async () => {
+    const original = `${"x".repeat(260 * 1024 - 1)}\n`;
+    const replacement = `${"y".repeat(260 * 1024 - 1)}\n`;
+    fs.writeFileSync(path.join(workspaceRoot, "raised-save.log"), original);
+
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "raised-save.log" },
+        raisedCapContext,
+      ),
+    );
+    expect(preview.file.content).toBe(original);
+    expect(preview.file.hash).toBe(hashContent(original));
+
+    const saved = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.set",
+        {
+          sessionKey: "agent:main:main",
+          path: "raised-save.log",
+          content: replacement,
+          expectedHash: hashContent(original),
+        },
+        raisedCapContext,
+      ),
+    );
+    expect(saved.file.hash).toBe(hashContent(replacement));
+
+    const reopened = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "raised-save.log" },
+        raisedCapContext,
+      ),
+    );
+    expect(reopened.file.content).toBe(replacement);
   });
 });

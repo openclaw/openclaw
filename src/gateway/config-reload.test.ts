@@ -339,6 +339,12 @@ describe("buildGatewayReloadPlan", () => {
     setActivePluginRegistry(emptyRegistry);
     expect(buildGatewayReloadPlan(["diagnostics.otel.endpoint"]).restartGateway).toBe(true);
   });
+  it("hot-applies the workspace preview cap without a Gateway restart", () => {
+    expect(resolveConfigReloadMetadata("gateway.workspacePreviewMaxBytes")).toEqual({
+      kind: "hot",
+    });
+    expect(buildGatewayReloadPlan(["gateway.workspacePreviewMaxBytes"]).restartGateway).toBe(false);
+  });
   it("selects every service sharing a changed policy, including broader owners", () => {
     const registry = createTestRegistry([]);
     for (const [id, prefix] of [

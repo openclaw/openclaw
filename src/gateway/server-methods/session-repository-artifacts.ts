@@ -139,6 +139,7 @@ export async function listRepositoryArtifacts(
 export async function getRepositoryArtifact(
   access: StoredRepository,
   requestedPath: string,
+  maxPreviewBytes: number = WORKSPACE_PREVIEW_MAX_BYTES,
 ): Promise<{ file?: SessionFileEntry }> {
   const selected = artifactPath(requestedPath);
   const snapshot = await readArtifacts(access);
@@ -149,7 +150,7 @@ export async function getRepositoryArtifact(
     );
   }
   const file = fileEntry(entry.path, entry.size);
-  if (entry.size <= WORKSPACE_PREVIEW_MAX_BYTES) {
+  if (entry.size <= maxPreviewBytes) {
     const content = await snapshot.readEntry(entry);
     access.assertCurrent();
     await populateSessionFilePreview(file, content);
