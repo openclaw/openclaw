@@ -137,8 +137,19 @@ while the worker is drained.
 The process-wide host starts lazily and permits at most four workers, 64 opening
 or live store clients (including clients sharing a database), 128 outstanding
 operations, and 64 MiB of queued input. Each input message is limited to 32 MiB
-and capacity exhaustion rejects with `code: "overloaded"`. Results up to 64 MiB
-use an inline reply; larger results transfer their complete serialized value
+and capacity exhaustion rejects with `code: "overloaded"`. Larger execute inputs
+arrive in 8 MiB chunks; the backend runs once after the complete command is
+validated. Factory initialization input remains a single bounded message.
+
+Commands retaining at most 64 MiB of serialized input can queue, with their full
+byte length charged until settlement. A larger command must start immediately
+on an idle worker with a reserved 32 MiB transport window; otherwise it rejects
+with `overloaded` before dispatch.
+The aggregate budget bounds admitted queue bytes and reserved transport windows,
+not the complete value held by an active oversized command or result. Once
+staging starts, the existing post-dispatch cancellation and drainage rules apply.
+
+Results up to 64 MiB use an inline reply; larger results transfer their complete serialized value
 in bounded 8 MiB chunks. Callers still materialize the complete result in memory,
 and the original operation remains owned through transfer validation and cleanup.
 Operations for one database share its connection owner
