@@ -178,6 +178,40 @@ describe("sweepCronRunSessions", () => {
     });
   });
 
+  it("lists entries via the read-only accessor to avoid per-open integrity checks (#142476)", async () => {
+    const now = Date.now();
+    // A store with nothing to prune still gets fully listed every sweep: this is the
+    // fleet-wide hot path from #142476, where the reaper opens every agent database on
+    // a fixed interval. The writable listing (listSessionEntriesCore) runs a synchronous
+    // PRAGMA integrity_check plus foreign-key check on every open and stalls the event
+    // loop; the reaper must use the read-only listing, which skips that gate.
+    await seedSessionEntries(storePath, {
+      "agent:main:cron:job1:run:recent-run": {
+        sessionId: "recent-run",
+        updatedAt: now - 1 * 3_600_000, // not expired — no mutation runs
+      },
+    });
+
+    const readOnlySpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+    const coreSpy = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+    try {
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+      });
+
+      // Nothing to prune, but the store was still listed on this sweep.
+      expect(result).toEqual({ swept: true, pruned: 0 });
+      // Routing: the listing hot path uses the read-only open, not the integrity-gated one.
+      expect(readOnlySpy).toHaveBeenCalled();
+      expect(coreSpy).not.toHaveBeenCalled();
+    } finally {
+      readOnlySpy.mockRestore();
+      coreSpy.mockRestore();
+    }
+  });
+
   it("commits expired rows and warns when transcript archive retention cleanup fails", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:cleanup-failure";
@@ -722,9 +756,11 @@ describe("sweepCronRunSessions", () => {
     const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
       code: "EACCES",
     });
-    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(() => {
-      throw eacces;
-    });
+    const listSpy = vi
+      .spyOn(sessionAccessor, "listSessionEntriesReadOnly")
+      .mockImplementation(() => {
+        throw eacces;
+      });
 
     try {
       const first = await sweepCronRunSessions({
