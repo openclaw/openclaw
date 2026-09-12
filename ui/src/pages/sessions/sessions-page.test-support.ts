@@ -13,7 +13,8 @@ import type {
 } from "../../lib/sessions/index.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
+import { sessionsPageListQuery } from "./list-query.ts";
+import type { SessionsRouteData } from "./route.ts";
 import "./sessions-page.ts";
 
 export type TestSessionsPage = HTMLElement & {

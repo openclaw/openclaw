@@ -6,6 +6,7 @@ import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session link reconnect" });
@@ -18,10 +19,15 @@ const sidebarConfig = { ui: { prefs: { sidebarEntries: ["route:activity"] } } };
 type TestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
-  it.each([false, true])(
+  it.each(["recover", "navigate-before-reconnect", "navigate-during-import"])(
     "recovers an interrupted session-link open while respecting newer navigation (%s)",
-    async (navigateAway) => {
+    async (action) => {
+      const navigateAway = action !== "recover";
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const recoveryModule = await holdModuleResponse(
+          page,
+          /\/(?:src\/app\/session-route-recovery\.ts|assets\/session-route-recovery-[^/]+\.js)(?:\?|$)/,
+        );
         const gateway = await installMockGateway(page, {
           sessionKey: sourceKey,
           sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
@@ -68,6 +74,7 @@ suite.define(() => {
           .locator('openclaw-app-sidebar a[href="/activity"]')
           .waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
+        expect(recoveryModule.requests()).toBe(0);
         const resolutionMatch = { shortId: "12345678", agentId: "main" };
         await gateway.deferNext("sessions.resolve", resolutionMatch);
         await link.click();
@@ -81,7 +88,7 @@ suite.define(() => {
         const previousConnects = (await gateway.getRequests("connect")).length;
         await gateway.closeLatest(4000, "session subscription recovery failed");
         await gateway.waitForRequest("connect", { after: previousConnects });
-        if (navigateAway) {
+        if (action === "navigate-before-reconnect") {
           await page.locator('openclaw-app-sidebar a[href="/activity"]').click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         }
@@ -91,6 +98,15 @@ suite.define(() => {
             document.querySelector<TestApp>("openclaw-app")?.runtime?.context.gateway.snapshot
               .phase === "connected",
         );
+        if (action !== "navigate-before-reconnect") {
+          await recoveryModule.request;
+        }
+        if (action === "navigate-during-import") {
+          await page.locator('openclaw-app-sidebar a[href="/activity"]').click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
+          await page.locator("openclaw-activity-page").waitFor({ state: "visible" });
+        }
+        recoveryModule.release();
         // A response belonging to the retired socket must not restore the abandoned route.
         await gateway.resolveDeferred("sessions.resolve");
 
