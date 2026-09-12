@@ -1539,6 +1539,163 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
+  it.each(["partial", "off"] as const)(
+    "delivers captioned media blocks with block streaming disabled and preview mode %s",
+    async (mode) => {
+      resolveFeishuAccountMock.mockReturnValue({
+        ...createReplyAccount("auto", mode, "feishu"),
+        config: { renderMode: "auto", streaming: { mode, block: { enabled: false } } },
+      });
+      sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_caption" });
+      sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "om_image" });
+      const { result, options } = createDispatcherHarness({
+        sendTarget: "user:ou_sender",
+        replyToMessageId: "om_inbound",
+      });
+      const text = "**Chart ready**\n- The hourly trend is attached.";
+      const delivery = await options.deliver(
+        { text, mediaUrls: ["https://example.com/chart.png"] },
+        { kind: "block" },
+      );
+      await options.onIdle?.();
+
+      expect(result.replyOptions.disableBlockStreaming).toBe(true);
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendMessageFeishuMock, "media caption", {
+        to: "user:ou_sender",
+        replyToMessageId: "om_inbound",
+        text,
+      });
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendMediaFeishuMock, "block attachment", {
+        to: "user:ou_sender",
+        replyToMessageId: "om_inbound",
+        mediaUrl: "https://example.com/chart.png",
+      });
+      expect(delivery).toMatchObject({
+        visibleReplySent: true,
+        content: text,
+        messageIds: ["om_caption", "om_image"],
+      });
+      expect(streamingInstances).toHaveLength(0);
+      await expect(result.ensureNoVisibleReplyFallback("completed")).resolves.toBe(false);
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves text-only block suppression before a normal final", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+    const block = await options.deliver({ text: "intermediate prose" }, { kind: "block" });
+    expect(block).toMatchObject({ visibleReplySent: false });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "final answer", { text: "final answer" });
+  });
+
+  it("completes an existing preview for a captioned media block without duplicating its text", async () => {
+    sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "om_image" });
+    const { result, options } = createDispatcherHarness();
+    result.replyOptions.onPartialReply?.({ text: "Chart ready" });
+    const text = "Chart ready. The hourly trend is attached.";
+
+    const delivery = await options.deliver(
+      { text, mediaUrl: "https://example.com/chart.png" },
+      { kind: "block" },
+    );
+    await options.onIdle?.();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    await expect(delivery?.finalization).resolves.toMatchObject({
+      visibleReplySent: true,
+      content: text,
+      messageIds: ["om_stream", "om_image"],
+    });
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(text, {
+      note: "Agent: agent",
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    await expect(result.ensureNoVisibleReplyFallback("completed")).resolves.toBe(false);
+  });
+
+  it("retains the completed media-block preview when its attachment fails", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("attachment rejected"));
+    const { result, options } = createDispatcherHarness();
+    result.replyOptions.onPartialReply?.({ text: "Chart ready" });
+    const text = "Chart ready. The hourly trend is attached.";
+
+    await expect(
+      options.deliver({ text, mediaUrl: "https://example.com/chart.png" }, { kind: "block" }),
+    ).rejects.toMatchObject({
+      cause: { message: "attachment rejected" },
+      deliveryResult: {
+        visibleReplySent: true,
+        content: text,
+        messageIds: ["om_stream"],
+      },
+    });
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(text, {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a longer media-block preview with the final caption", async () => {
+    const { result, options } = createDispatcherHarness();
+    const text = "Chart ready. The hourly trend is attached.";
+    result.replyOptions.onPartialReply?.({ text: `${text} Extra draft.` });
+
+    const delivery = await options.deliver(
+      { text, mediaUrl: "https://example.com/chart.png" },
+      { kind: "block" },
+    );
+    await options.onIdle?.();
+    await delivery?.finalization;
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(text, {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates a caption rejection before sending a non-streaming media block", async () => {
+    const error = new Error("caption rejected");
+    sendMessageFeishuMock.mockRejectedValueOnce(error);
+    const { result, options } = createDispatcherHarness();
+
+    await expect(
+      options.deliver(
+        { text: "chart caption", mediaUrl: "https://example.com/chart.png" },
+        { kind: "block" },
+      ),
+    ).rejects.toBe(error);
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState().visibleReplySent).toBe(false);
+  });
+
+  it("retains only the accepted caption when a non-streaming media block fails", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_caption" });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("attachment rejected"));
+    const { options } = createDispatcherHarness();
+
+    await expect(
+      options.deliver(
+        { text: "chart caption", mediaUrl: "https://example.com/chart.png" },
+        { kind: "block" },
+      ),
+    ).rejects.toMatchObject({
+      cause: { message: "attachment rejected" },
+      deliveryResult: {
+        visibleReplySent: true,
+        content: "chart caption",
+        messageIds: ["om_caption"],
+      },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
   it("disables block streaming by default to prevent silent reply drops", () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,

@@ -1402,11 +1402,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
         (renderMode === "auto" && shouldUseCard(text));
       const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
+      const reuseMediaBlockPreview =
+        info?.kind === "block" &&
+        hasMedia &&
+        !coreBlockStreamingEnabled &&
+        activeStreamingGeneration !== undefined;
       const useStreamingCard =
         hasText &&
         streamingEnabled &&
         !finalTextExceedsStreamingLimit &&
-        (info?.kind === "final" || cardRenderingRequested);
+        (info?.kind === "final" || cardRenderingRequested || reuseMediaBlockPreview);
       const skipTextForDuplicateFinal =
         !hasIndependentPresentation &&
         info?.kind === "final" &&
@@ -1496,7 +1501,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // Later finals replace stream text. Each presentation fallback owns a
         // separate message; ordinary blocks retain their streaming policy.
         if (hasPresentationFallback || (info?.kind === "block" && !useStreamingCard)) {
-          if (hasPresentationFallback || coreBlockStreamingEnabled) {
+          // Core delivers attachments as blocks even when text block streaming is disabled.
+          // Their caption and media must both be accepted before final-payload deduplication.
+          if (hasPresentationFallback || coreBlockStreamingEnabled || hasMedia) {
             const firstChunkMentions =
               info?.kind === "final" || (info?.kind === "block" && !sentIndependentBlockText)
                 ? mentionTargets
@@ -1539,14 +1546,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           (streaming?.isActive() || matchingInFlightClose !== undefined)
         ) {
           if (activeStreamingGeneration !== undefined) {
-            if (info?.kind === "block") {
+            if (info?.kind === "block" && !reuseMediaBlockPreview) {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
               queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
             }
-            if (info?.kind === "final") {
-              // Final payloads can be cumulative snapshots or independent
-              // notices. Preserve both when the latter arrives after an answer.
+            if (info?.kind === "final" || reuseMediaBlockPreview) {
+              // Final payloads and non-streaming media captions replace their preview.
               streamText = text;
               hasStreamingFinalText = true;
               snapshotBaseText = "";
