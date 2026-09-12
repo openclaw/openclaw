@@ -60,15 +60,38 @@ Examples:
     - Channel-adapter thread session spawns enabled (default: `true`):
       - Discord/Telegram: `session.threadBindings.spawnSessions=true`
 
-    Thread binding support is adapter-specific. If the active channel adapter
-    does not support thread bindings, OpenClaw returns a clear
-    unsupported/unavailable message.
+    Child threads and topics need a channel binding adapter. Channels without
+    one still bind the current conversation. If neither path is available,
+    OpenClaw returns a clear unsupported/unavailable message.
 
   </Accordion>
   <Accordion title="Thread-supporting channels">
-    - Any channel adapter that exposes session/thread binding capability.
-    - Current built-in support: **Discord** threads/channels, **Telegram** topics (forum topics in groups/supergroups and DM topics).
-    - Plugin channels can add support through the same binding interface.
+    Two paths provide `--bind here` and `thread=true` for ACP sessions.
+
+    **Channel binding adapter** - can place a session in a child thread or topic:
+
+    - **Discord** threads/channels
+    - **Telegram** topics (forum topics in groups/supergroups and DM topics)
+    - Other bundled channels register their own adapters too; see each
+      channel's page.
+
+    **Generic current-conversation binding** - no adapter, `current` placement
+    only:
+
+    - **Slack** workspace installations
+    - Any other channel built with `createChatChannelPlugin(...)`, which
+      advertises this by default
+    - Any third-party channel plugin that sets
+      `conversationBindings.supportsCurrentConversationBinding: true`
+
+    The generic binding is keyed by channel, account, and conversation. It has
+    no sender component, so in a group chat every member shares the bound ACP
+    session.
+
+    A third-party channel plugin does not need its own adapter for
+    current-conversation bindings. See
+    [Account-scoped conversation binding support](/plugins/sdk-channel-plugins#account-scoped-conversation-binding-support)
+    for the plugin-side field and the `bindingStore: "adapter"` opt-out.
 
   </Accordion>
 </AccordionGroup>
