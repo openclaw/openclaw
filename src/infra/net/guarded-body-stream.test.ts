@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readResponseWithLimit } from "../http-body.js";
 import { responseWithAbortSignal, wrapGuardedBodyStream } from "./guarded-body-stream.js";
 
 describe("wrapGuardedBodyStream", () => {
@@ -138,7 +139,7 @@ describe("responseWithAbortSignal", () => {
     expect(clone.url).toBe("https://example.test/final");
     expect(clone.redirected).toBe(true);
     expect(clone.type).toBe("cors");
-    expect(await clone.text()).toBe("payload");
+    expect((await readResponseWithLimit(clone, 32)).toString("utf8")).toBe("payload");
     await wrapped.body?.cancel();
   });
 
