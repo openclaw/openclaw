@@ -10,20 +10,42 @@ import type { RunStepOptions, UpdateStepResult } from "./update-runner-types.js"
 // oversized candidate must fail in staging while the installed runtime still serves.
 const MAX_CANDIDATE_PACK_BYTES = 256 * 1024 * 1024;
 
+function recordStagingFailure(
+  step: RunStepOptions,
+  name: string,
+  command: string,
+  message: string,
+  durationMs = 0,
+): undefined {
+  const failure: UpdateStepResult = {
+    name,
+    command,
+    cwd: step.cwd,
+    durationMs,
+    exitCode: 1,
+    stderrTail: message,
+  };
+  step.results?.push(failure);
+  step.progress?.onStepComplete?.({ ...failure, index: step.stepIndex, total: step.totalSteps });
+  return undefined;
+}
+
 /** Prepare a self-contained pack before admission can stop the serving gateway. */
 export async function prepareGitCandidateTransfer(params: {
   candidateSha: string;
   beforeSha: string | null;
+  installedRoot: string;
   upstreamRef?: string;
   step: RunStepOptions;
 }) {
-  const { candidateSha, beforeSha, upstreamRef, step } = params;
-  const runGit = async (name: string, args: string[], input?: string) => {
+  const { candidateSha, beforeSha, installedRoot, upstreamRef, step } = params;
+  const runGit = async (name: string, args: string[], input?: string, root = step.cwd) => {
     let stdout = "";
     const result = await runStep({
       ...step,
       name,
-      argv: ["git", "-C", step.cwd, ...args],
+      cwd: root,
+      argv: ["git", "-C", root, ...args],
       runCommand: async (argv, options) => {
         // Transfer inputs must never be silently truncated by diagnostic capture.
         const commandResult = await step.runCommand(argv, {
@@ -33,7 +55,9 @@ export async function prepareGitCandidateTransfer(params: {
         });
         stdout = commandResult.stdout;
         // Object inventories are transfer input, not operator diagnostics.
-        return args[0] === "rev-list" ? { ...commandResult, stdout: "" } : commandResult;
+        return args.includes("rev-list") || args.includes("cat-file")
+          ? { ...commandResult, stdout: "" }
+          : commandResult;
       },
     });
     // A process may exit zero after handling the output-limit termination signal.
@@ -70,14 +94,83 @@ export async function prepareGitCandidateTransfer(params: {
   if (objects === undefined || tree === undefined) {
     return undefined;
   }
-  const input = [...new Set(`${objects}\n${tree}`.split("\n").filter(Boolean))].join("\n") + "\n";
+  const retained = new Set<string>();
+  // Capability probing is read-only. Older Git safely transfers the full bounded
+  // candidate instead of risking a lazy fetch while checking installed objects.
+  const probe = beforeSha
+    ? await step.runCommand(["git", "--no-lazy-fetch", "version"], {
+        cwd: installedRoot,
+        timeoutMs: step.timeoutMs,
+      })
+    : undefined;
+  if (
+    probe?.code === 0 &&
+    probe.stdout.startsWith("git version ") &&
+    !probe.killed &&
+    !probe.signal &&
+    (!probe.termination || probe.termination === "exit")
+  ) {
+    const beforeTree = await runGit("git retained tree", [
+      "rev-list",
+      "--objects",
+      "--no-object-names",
+      `${beforeSha}^{tree}`,
+    ]);
+    if (beforeTree === undefined) {
+      return undefined;
+    }
+    const local = await runGit(
+      "git retained object availability",
+      ["--no-lazy-fetch", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+      `${beforeTree}\n`,
+      installedRoot,
+    );
+    if (local === undefined) {
+      return undefined;
+    }
+    const pending = new Set(beforeTree.split("\n"));
+    for (const line of local.split("\n")) {
+      const [oid, type, ...extra] = line.split(" ");
+      if (
+        !oid ||
+        !type ||
+        extra.length ||
+        !pending.delete(oid) ||
+        !["blob", "tree", "missing"].includes(type)
+      ) {
+        return recordStagingFailure(
+          { ...step, cwd: installedRoot },
+          "git retained object inventory",
+          "verify retained Git object availability",
+          "Incomplete retained Git object availability inventory",
+        );
+      }
+      if (type !== "missing") {
+        retained.add(oid);
+      }
+    }
+    if (pending.size) {
+      return recordStagingFailure(
+        { ...step, cwd: installedRoot },
+        "git retained object inventory",
+        "verify retained Git object availability",
+        "Incomplete retained Git object availability inventory",
+      );
+    }
+  }
+  // Only physically available retained-HEAD objects are safe to borrow. Objects
+  // left unreferenced by an earlier failed update can disappear during repack.
+  const input = [...new Set(`${objects}\n${tree}`.split("\n").filter(Boolean))]
+    .filter((oid) => !retained.has(oid))
+    .map((oid) => `${oid}\n`)
+    .join("");
   const prefix = path.join(step.cwd, "update-candidate");
   // Explicit objects and file output produce a non-thin pack: no excluded delta
   // base can trigger a lazy network fetch when the installed Git imports it.
-  // The shared mirror borrows installed objects; --local avoids repacking them.
+  // A configured packSizeLimit also needs clearing to guarantee a single pack.
   const hash = await runGit(
     "git pack candidate",
-    ["pack-objects", "--local", "--max-pack-size=0", prefix],
+    ["-c", "pack.packSizeLimit=0", "pack-objects", "--max-pack-size=0", prefix],
     input,
   );
   if (!hash) {
@@ -92,17 +185,13 @@ export async function prepareGitCandidateTransfer(params: {
       maxBytes: MAX_CANDIDATE_PACK_BYTES,
     }));
   } catch (error) {
-    const failure: UpdateStepResult = {
-      name: "git candidate pack read",
-      command: `read candidate pack ${packPath}`,
-      cwd: step.cwd,
-      durationMs: Date.now() - readStarted,
-      exitCode: 1,
-      stderrTail: `Cannot stage candidate Git pack: ${String(error)}`,
-    };
-    step.results?.push(failure);
-    step.progress?.onStepComplete?.({ ...failure, index: step.stepIndex, total: step.totalSteps });
-    return undefined;
+    return recordStagingFailure(
+      step,
+      "git candidate pack read",
+      `read candidate pack ${packPath}`,
+      `Cannot stage candidate Git pack: ${String(error)}`,
+      Date.now() - readStarted,
+    );
   }
   const keepMessage = `openclaw-update-${randomUUID()}`;
   return {

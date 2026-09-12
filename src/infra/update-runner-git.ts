@@ -410,6 +410,7 @@ export async function updateGitCheckout(params: {
         const transfer = await prepareGitCandidateTransfer({
           candidateSha,
           beforeSha,
+          installedRoot: gitRoot,
           upstreamRef,
           step: inspectionStep("git pack candidate", [], inspectionRoot),
         });
