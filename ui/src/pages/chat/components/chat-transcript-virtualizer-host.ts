@@ -81,6 +81,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private appliedHeaderHeight = 0;
   private implicitEndAnchorPending: boolean;
   private endAnchor: number | null = null;
+  private endAnchorFrame: number | null = null;
   private pendingScrollFrame: number | null = null;
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal();
@@ -370,11 +371,22 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       this.offsetState.syncNativeOffset?.();
       this.host.requestUpdate();
     }
-    this.reconcileImplicitEndAnchor();
     applyPendingScrollOffset(this.scrollRestoreHost);
     // Disclosure measurement owns this commit; its sizer lands on the next update.
-    if (!interactionResizePending) {
-      this.reconcileEndAnchor();
+    if (interactionResizePending && this.endAnchorFrame !== null) {
+      cancelAnimationFrame(this.endAnchorFrame);
+      this.endAnchorFrame = null;
+    }
+    if (!interactionResizePending && this.connected && this.endAnchorFrame === null) {
+      // Nested Lit children still change layout after the pane's commit.
+      // Coalesce end-follow after those commits using the current reader's anchor.
+      this.endAnchorFrame = requestAnimationFrame(() => {
+        this.endAnchorFrame = null;
+        if (this.connected && !this.offsetState.pendingInteractionAnchor) {
+          this.reconcileImplicitEndAnchor();
+          this.reconcileEndAnchor();
+        }
+      });
     }
   }
 
@@ -389,6 +401,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.touchScrolling = false;
     this.renderPreviousRows = null;
     this.messageReveal.clear();
+    if (this.endAnchorFrame !== null) {
+      cancelAnimationFrame(this.endAnchorFrame);
+      this.endAnchorFrame = null;
+    }
     if (this.pendingRowMeasureFrame !== null) {
       cancelAnimationFrame(this.pendingRowMeasureFrame);
       this.pendingRowMeasureFrame = null;
