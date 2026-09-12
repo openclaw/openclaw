@@ -3468,7 +3468,7 @@ export const en: TranslationMap & {
       sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
-      controlUi: "Control UI",
+      web: "Web",
       cli: "Command line",
       app: "App",
     },

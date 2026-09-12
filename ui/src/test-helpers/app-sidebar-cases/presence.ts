@@ -298,15 +298,21 @@ describe("AppSidebar viewer presence", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.connected = true;
     gateway.publishEvent("presence", {
-      presence: [1, 2, 3].map((tab) => ({
+      presence: [
+        { deviceFamily: "Mac", platform: "MacIntel", mode: "webchat" },
+        { deviceFamily: "Mac", platform: "MacIntel", mode: "webchat" },
+        { deviceFamily: "iPad", platform: "MacIntel", mode: "webchat" },
+        { deviceFamily: "Mac", platform: "MacARM64", mode: "webchat" },
+        { deviceFamily: "Windows", platform: "win32", mode: "webchat" },
+      ].map(({ deviceFamily, platform, mode }, tab) => ({
+        deviceFamily,
+        platform,
+        mode,
         ts: Date.now() - 500_000,
         lastInputSeconds: 3,
         instanceId: `private-tab-${tab}`,
         ip: "192.0.2.12",
         host: "internal-host",
-        deviceFamily: tab === 3 ? "iPhone" : "Mac",
-        platform: tab === 3 ? "iOS" : "macOS",
-        mode: "webchat",
         timeZone: "Europe/Paris",
         user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
         watchedSessions: [
@@ -329,8 +335,10 @@ describe("AppSidebar viewer presence", () => {
     expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Online");
     const facts = card.querySelectorAll("dd");
     expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual([
-      "Mac · macOS · Control UI",
-      "iPhone · iOS · Control UI",
+      "Mac · ARM · Web",
+      "Mac · Web",
+      "Windows · Web",
+      "iPad · Web",
     ]);
     expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
     expect(facts[1]?.textContent?.trim()).toBe("Not observed yet");
