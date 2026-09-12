@@ -209,10 +209,19 @@ export function resolveExecutablePath(
     resolveEnvironmentValue(options?.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??
     "";
-  return resolveExecutableFromPathEnv(candidate, envPath, options?.env, {
-    cwd: options?.cwd,
-    useCache: options?.useCache,
-  });
+  // This resolves a command that is about to be spawned. Windows cannot CreateProcess an
+  // extensionless file, and a global npm install drops a POSIX shim beside its launcher
+  // (`claude` next to `claude.cmd`), so probe PATHEXT first and keep the bare name as the
+  // fallback for hosts that genuinely ship one. resolveNodeHostExecutable does the same.
+  // Both probes carry the caller's cwd and cache choice, and includeExtensionless is part
+  // of the cache key, so the two phases cannot read each other's entry.
+  const probe = { cwd: options?.cwd, useCache: options?.useCache };
+  return (
+    resolveExecutableFromPathEnv(candidate, envPath, options?.env, {
+      ...probe,
+      includeExtensionless: false,
+    }) ?? resolveExecutableFromPathEnv(candidate, envPath, options?.env, probe)
+  );
 }
 
 /**
