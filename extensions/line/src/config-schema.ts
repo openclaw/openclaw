@@ -51,7 +51,11 @@ const LineCommonConfigSchemaBase = z.object({
   threadBindings: ThreadBindingsSchema.optional(),
 });
 
-const LineGroupConfigSchema = buildGroupEntrySchema().omit({
+const LineGroupConfigSchema = buildGroupEntrySchema({
+  // LINE attaches mention data to text only, so extending `requireMention` to the
+  // other kinds changes what a group already relies on. Opt in per entry.
+  requireMentionOnAllMessageTypes: z.boolean().optional(),
+}).omit({
   tools: true,
   toolsBySender: true,
 });

@@ -7,7 +7,7 @@ import {
   logInboundDrop,
   matchesMentionPatterns,
   implicitMentionKindWhen,
-  type ChannelInboundMediaInput,
+  toHistoryMediaEntries,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveChannelImplicitMentions,
@@ -39,22 +39,21 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import {
-  normalizeOptionalString,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
   buildLinePostbackContext,
+  describeLineMessageForHistory,
   getLineSourceInfo,
   readLineTextMessageBody,
+  withLineDeliveryNotices,
   type LineInboundContext,
   type LineInboundMentionAccess,
 } from "./bot-message-context.js";
-import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import { downloadLineInboundMedia } from "./inbound-media.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { quotesLineBotMessage } from "./outbound-message-log.js";
 import { parseLineQuestionPostbackData, resolveLineQuestionPostback } from "./question-postback.js";
@@ -69,21 +68,6 @@ type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
 type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
-
-type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
-
-const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
-  "image",
-  "video",
-  "audio",
-  "file",
-]);
-
-function isDownloadableLineMessageType(
-  messageType: MessageEvent["message"]["type"],
-): messageType is "image" | "video" | "audio" | "file" {
-  return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
-}
 
 interface LineHandlerContext {
   cfg: OpenClawConfig;
@@ -217,7 +201,14 @@ async function resolveLineEventAdmission(
   const senderId = userId ?? "";
   const groupConfig = resolveLineGroupConfigEntry(account.config.groups, { groupId, roomId });
   const rawText = resolveEventRawText(event);
-  const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
+  const groupRequiresMention = isGroup ? groupConfig?.requireMention !== false : false;
+  // LINE carries mention data on text only, so a group that has always had its
+  // photos and files answered keeps that until it opts in.
+  const requireMention =
+    groupRequiresMention &&
+    (event.type !== "message" ||
+      event.message.type === "text" ||
+      groupConfig?.requireMentionOnAllMessageTypes === true);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
@@ -252,7 +243,11 @@ async function resolveLineEventAdmission(
     const wasMentionedByPattern =
       event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
     return {
-      canDetectMention: event.message.type === "text",
+      // Whether this message addressed the bot is knowable for every kind: a
+      // LINE group always lets a member address the bot, and a kind that carries
+      // no mention object did not. Keying this on the message type instead made
+      // the gate a no-op for attachments and stickers.
+      canDetectMention: true,
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
       explicitlyMentionedBot: wasMentionedByNative,
       hasAnyMention: hasAnyLineMention(event.message),
@@ -423,7 +418,7 @@ async function handleMessageEvent(
   context: LineHandlerContext,
   setParts: readonly MessageEvent[],
 ): Promise<void> {
-  const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
+  const { cfg, account, processMessage } = context;
   const message = event.message;
 
   const decision = await resolveLineEventAdmission(event, context);
@@ -432,8 +427,8 @@ async function handleMessageEvent(
   }
 
   const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
+  const historyLimit = context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   if (isGroup && decision.access.activationAccess.shouldSkip) {
-    const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
     const historyKey = groupId ?? roomId;
     const groupsConfigPath = resolveChannelGroupsConfigPath({
       cfg,
@@ -442,7 +437,7 @@ async function handleMessageEvent(
       groups: account.config.groups,
     });
     logInboundDrop({
-      log: runtime.log,
+      log: context.runtime.log,
       channel: "line",
       reason: "no mention",
       target: historyKey,
@@ -450,7 +445,9 @@ async function handleMessageEvent(
       hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(historyKey)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
     });
     const senderId = userId ?? "unknown";
-    if (historyKey && context.groupHistories) {
+    // A disabled window (documented as `historyLimit: 0`) keeps nothing, so the
+    // download below would spend bandwidth on bytes the recorder then drops.
+    if (historyKey && context.groupHistories && historyLimit > 0) {
       const displayName = userId
         ? await getUserDisplayName(userId, {
             cfg,
@@ -462,14 +459,37 @@ async function handleMessageEvent(
         : senderId;
       // History has one sender string; keep the stable ID when display names collide.
       const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
+      // Only images are fetched. LINE serves bytes for videos, audio messages and
+      // files too, but a later turn can reattach an image from history and nothing
+      // else, so those bytes would be downloaded for a message this group already
+      // declined to answer and then dropped. Resolving before the record keeps the
+      // answered path's failure semantics: a retryable preparation error rejects the
+      // event for one replay, not a second record. A multi-image send reaches here
+      // as one set, so every image the sender picked is kept, not just this part.
+      const download =
+        message.type === "image"
+          ? await downloadLineInboundMedia(orderedLineSetMessages(message, setParts), context)
+          : undefined;
+      const media = download
+        ? toHistoryMediaEntries(download.allMedia, { kind: "image", messageId: message.id })
+        : undefined;
+      await createChannelHistoryWindow({ historyMap: context.groupHistories }).recordWithMedia({
         historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        limit: historyLimit,
         entry: {
           sender,
-          body: rawText || `<${message.type}>`,
+          // An answered turn tells the sender what did not arrive; a kept entry has
+          // no reply to carry that, so the notices ride the entry instead. Without
+          // them an oversized image, or a set LINE delivered short, reads as whole
+          // to the mention that follows.
+          body: withLineDeliveryNotices(describeLineMessageForHistory(message), {
+            missingParts: context.missingParts,
+            mediaUnavailable: download?.mediaUnavailable,
+          }),
           timestamp: event.timestamp,
+          messageId: message.id,
         },
+        media,
       });
     }
     return;
@@ -481,54 +501,16 @@ async function handleMessageEvent(
   const historyReservation = reserveLineGroupHistory(
     context.groupHistories,
     groupHistoryKey,
-    context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    historyLimit,
   );
 
   try {
-    const allMedia: MediaRef[] = [];
-    let mediaUnavailable = false;
-    const abortSignal = context.turnAdoptionLifecycle?.abortSignal;
     // LINE splits one multi-image send into several webhook events. The spool
     // hands the whole set here, so every part's media joins one turn.
-    for (const part of orderedLineSetMessages(message, setParts)) {
-      if (!isDownloadableLineMessageType(part.type)) {
-        continue;
-      }
-      try {
-        const originalFilename =
-          part.type === "file" ? normalizeOptionalString(part.fileName) : undefined;
-        const media = await downloadLineMedia(part.id, account.channelAccessToken, mediaMaxBytes, {
-          originalFilename,
-          ...(abortSignal ? { signal: abortSignal } : {}),
-        });
-        abortSignal?.throwIfAborted();
-        allMedia.push({
-          path: media.path,
-          contentType: media.contentType,
-          // LINE names only file messages; the model needs that name to answer
-          // questions that refer to the attachment by it.
-          ...(originalFilename ? { fileName: originalFilename } : {}),
-        });
-      } catch (err) {
-        if (abortSignal?.aborted) {
-          throw abortSignal.reason;
-        }
-        if (isRetryableLineInboundMediaError(err)) {
-          // Preparation-phase failure before turn adoption: reject so the durable
-          // ingress drain retries the whole event once LINE finishes preparing the
-          // media, instead of degrading it to an unavailable-attachment notice that
-          // permanently loses media with no text fallback.
-          throw err;
-        }
-        mediaUnavailable = true;
-        const errMsg = String(err);
-        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-          logVerbose(`line: media exceeds size limit for message ${part.id}`);
-        } else {
-          runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
-        }
-      }
-    }
+    const { allMedia, mediaUnavailable } = await downloadLineInboundMedia(
+      orderedLineSetMessages(message, setParts),
+      context,
+    );
 
     // Which part the turn answers as is a different fact from what order its
     // media reads in. Reply tokens expire, so a set delivered out of order

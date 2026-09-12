@@ -56,6 +56,7 @@ export interface LineGroupConfig {
   enabled?: boolean;
   allowFrom?: Array<string | number>;
   requireMention?: boolean;
+  requireMentionOnAllMessageTypes?: boolean;
   systemPrompt?: string;
   skills?: string[];
 }

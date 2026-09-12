@@ -239,6 +239,48 @@ function extractMessageText(message: MessageEvent["message"]): string {
   return "";
 }
 
+const LINE_ATTACHMENT_UNAVAILABLE_NOTICE = "[line attachment unavailable]";
+
+/**
+ * Says what did not arrive with a LINE send: images LINE announced for the set
+ * but never delivered, and attachments it delivered that could not be fetched.
+ * An answered turn applies it to the agent body and a gated one to the history
+ * entry, so a reader is told the same thing either way and a short set kept for
+ * a later mention does not read as the whole send.
+ */
+export function withLineDeliveryNotices(
+  body: string,
+  params: { missingParts?: number; mediaUnavailable?: boolean },
+): string {
+  const withShortfall = params.missingParts
+    ? formatInboundMediaUnavailableText({
+        body,
+        notice: `[line: ${params.missingParts === 1 ? "1 more image in this send was" : `${params.missingParts} more images in this send were`} not delivered]`,
+      })
+    : body;
+  return params.mediaUnavailable
+    ? formatInboundMediaUnavailableText({
+        body: withShortfall,
+        notice: LINE_ATTACHMENT_UNAVAILABLE_NOTICE,
+      })
+    : withShortfall;
+}
+
+/**
+ * Renders a message the group's mention gate kept as context instead of
+ * answering. It carries the facts an answered turn would have read, so a
+ * following mention still knows what was said; only kinds whose content lives
+ * entirely in the attachment fall back to naming the kind.
+ */
+export function describeLineMessageForHistory(message: MessageEvent["message"]): string {
+  const text = extractMessageText(message);
+  if (text) {
+    return text;
+  }
+  const fileName = message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+  return fileName ? `<file: ${fileName}>` : `<${message.type}>`;
+}
+
 function extractNativeMediaKind(
   message: MessageEvent["message"],
 ): ChannelInboundMediaInput["kind"] | undefined {
@@ -275,7 +317,10 @@ async function finalizeLineInboundContext(params: {
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
-  inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  // The whole entry, not the three fields a transcript line needs: a kept
+  // message's media and messageId are what a following mention reattaches, and
+  // narrowing here would drop them where the type still checks.
+  inboundHistory?: HistoryEntry[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
@@ -475,18 +520,10 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const rawBody = textContent;
   // The turn answers what arrived. Saying so keeps the agent from describing a
   // short set as the whole send.
-  const shortfallNotice = params.missingParts
-    ? `[line: ${params.missingParts === 1 ? "1 more image in this send was" : `${params.missingParts} more images in this send were`} not delivered]`
-    : undefined;
-  const withShortfall = shortfallNotice
-    ? formatInboundMediaUnavailableText({ body: rawBody, notice: shortfallNotice })
-    : rawBody;
-  const agentBody = mediaUnavailable
-    ? formatInboundMediaUnavailableText({
-        body: withShortfall,
-        notice: "[line attachment unavailable]",
-      })
-    : withShortfall;
+  const agentBody = withLineDeliveryNotices(rawBody, {
+    missingParts: params.missingParts,
+    mediaUnavailable,
+  });
 
   if (!agentBody && mediaFacts.length === 0) {
     return null;
