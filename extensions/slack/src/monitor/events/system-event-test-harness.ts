@@ -67,6 +67,8 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     isSlackAgentView: async () => true,
   } as unknown as SlackMonitorContext;
 
+  ctx.readRuntimeContext = async () => ctx;
+  ctx.isRuntimePolicyCurrent = () => true;
   return {
     ctx,
     getHandler(name: string): SlackSystemEventHandler | null {

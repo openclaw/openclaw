@@ -1092,6 +1092,7 @@ async function handleSlackBlockAction(params: {
 }): Promise<void> {
   const { ack, body, action, respond } = params.args;
   await ack();
+  params = { ...params, ctx: await params.ctx.readRuntimeContext() };
   const eventScope = resolveSlackListenerEventScope({
     identity: params.ctx.installationIdentity,
     body,

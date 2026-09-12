@@ -5,7 +5,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expect, it, vi } from "vitest";
-import { resolveSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackMonitorContext } from "./context.js";
 import { createSlackMessageHandler } from "./message-handler.js";
@@ -63,7 +62,6 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
       typingReaction: "",
       mediaMaxBytes: 1024,
     }),
-    account: resolveSlackAccount({ cfg, accountId: "default" }),
     abortSignal: abort.signal,
   });
   let sequence = 0;

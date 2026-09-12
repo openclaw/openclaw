@@ -32,6 +32,7 @@ const dispatchPreparedSlackMessageMock = vi.fn(async (_prepared: unknown) => {})
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
+const { createSlackRuntimeContextReader } = await import("./runtime-policy.js");
 const { createSlackMessageHandler } = await import("./message-handler.js");
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
@@ -89,7 +90,8 @@ function createContext(overrides?: {
     channelType: string | null | undefined,
   ) => void;
 }) {
-  return {
+  const ctx = {
+    installationIdentity: { kind: "degraded", reason: "auth_test_failed" },
     cfg: overrides?.cfg ?? {},
     accountId: "default",
     app: {
@@ -101,6 +103,8 @@ function createContext(overrides?: {
       channelType: string | null | undefined,
     ) => overrides?.rememberSlackChannelType?.(channel, channelType),
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
+  ctx.readRuntimeContext = createSlackRuntimeContextReader(ctx, "synthetic-lookup");
+  return ctx;
 }
 
 function createHandlerWithTracker(overrides?: {
@@ -116,7 +120,6 @@ function createHandlerWithTracker(overrides?: {
   const handler = createSlackMessageHandler({
     ctx,
     abortSignal: overrides?.abortSignal,
-    account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
     trackEvent,
   });
   return { handler, trackEvent, ctx };
@@ -162,9 +165,6 @@ describe("createSlackMessageHandler", () => {
     const context = createContext({ cfg: startupConfig });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     setRuntimeConfigSnapshot(updatedConfig, updatedConfig);
@@ -189,9 +189,12 @@ describe("createSlackMessageHandler", () => {
     expect(context.cfg).toBe(startupConfig);
   });
 
-  it("keeps cached runtime contexts synchronized with mutable monitor state", async () => {
+  it("shares recovered identity while keeping resolved policy snapshots immutable", async () => {
     const startupConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "max" } } };
-    const runtimeConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "ultra" } } };
+    const runtimeConfig: OpenClawConfig = {
+      agents: { defaults: { thinkingDefault: "ultra" } },
+      channels: { slack: { channels: { C_OLD: { enabled: true } } } },
+    };
     const initialChannels = { C_OLD: { enabled: true } };
     const resolvedChannels = { C_RESOLVED: { enabled: true } };
     setRuntimeConfigSnapshot(startupConfig, startupConfig);
@@ -200,9 +203,6 @@ describe("createSlackMessageHandler", () => {
     context.channelsConfig = initialChannels;
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
     setRuntimeConfigSnapshot(runtimeConfig, runtimeConfig);
 
@@ -238,7 +238,7 @@ describe("createSlackMessageHandler", () => {
     expect(reusedRuntimeContext).toMatchObject({
       cfg: runtimeConfig,
       botUserId: "U_RECOVERED",
-      channelsConfig: resolvedChannels,
+      channelsConfig: initialChannels,
     });
     expect(context.cfg).toBe(startupConfig);
   });
@@ -269,9 +269,6 @@ describe("createSlackMessageHandler", () => {
     const context = createContext({ cfg: explicitConfig });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     setRuntimeConfigSnapshot({ agents: { defaults: { thinkingDefault: "high" } } });
@@ -288,7 +285,9 @@ describe("createSlackMessageHandler", () => {
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
     await runOnFlush([entry]);
 
-    expect(prepareSlackMessageMock).toHaveBeenCalledWith(expect.objectContaining({ ctx: context }));
+    expect(prepareSlackMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ctx: expect.objectContaining({ cfg: explicitConfig }) }),
+    );
     expect(context.cfg).toBe(explicitConfig);
   });
 
@@ -306,9 +305,6 @@ describe("createSlackMessageHandler", () => {
     const context = createContext({ cfg: structuredClone(startupSourceConfig) });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     setRuntimeConfigSnapshot(updatedRuntimeConfig, updatedRuntimeConfig);
@@ -341,9 +337,6 @@ describe("createSlackMessageHandler", () => {
     const context = createContext({ cfg: startupConfig });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
     let releaseFirstPreparation!: () => void;
     const firstPreparation = new Promise<void>((resolve) => {
@@ -400,9 +393,6 @@ describe("createSlackMessageHandler", () => {
     const trackEvent = vi.fn();
     const handler = createSlackMessageHandler({
       ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
       trackEvent,
     });
 
@@ -506,9 +496,6 @@ describe("createSlackMessageHandler", () => {
   it("flushes pending top-level buffered keys before immediate non-debounce follow-ups", async () => {
     const handler = createSlackMessageHandler({
       ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     await handler(
@@ -540,9 +527,6 @@ describe("createSlackMessageHandler", () => {
   it("flushes buffered text before a table-bearing message", async () => {
     const handler = createSlackMessageHandler({
       ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     await handler(
@@ -582,9 +566,6 @@ describe("createSlackMessageHandler", () => {
   it("retires a buffered key when replay filtering drops every entry", async () => {
     const handler = createSlackMessageHandler({
       ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
     const bufferedMessage = {
       type: "message" as const,

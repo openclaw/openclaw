@@ -38,6 +38,7 @@ import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
 import { saveRemoteMedia } from "./media.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
+import { createSlackRuntimeContextReader } from "./runtime-policy.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
 import {
   type SlackSuggestedPromptsInput,
@@ -79,6 +80,8 @@ const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
+  readRuntimeContext: () => Promise<SlackMonitorContext>;
+  isRuntimePolicyCurrent: () => boolean;
   accountId: string;
   botToken: string;
   app: App;
@@ -188,6 +191,7 @@ export function createSlackMonitorContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   botToken: string;
+  lookupToken?: string;
   app: App;
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
@@ -248,11 +252,7 @@ export function createSlackMonitorContext(params: {
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
-  const groupDmChannelsLower = new Set(
-    normalizeAllowListLower(groupDmChannels).map((entry) => entry.replace(/^channel:/, "")),
-  );
   const defaultRequireMention = params.defaultRequireMention ?? true;
-  const hasChannelAllowlistConfig = Object.keys(params.channelsConfig ?? {}).length > 0;
   const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
   const scopedKey = (key: string, eventScope?: SlackEventScope) =>
@@ -464,28 +464,36 @@ export function createSlackMonitorContext(params: {
       client: params.app.client,
     });
 
-  const isChannelAllowed = (p: {
-    teamId?: string;
-    channelId?: string;
-    channelName?: string;
-    channelType?: SlackMessageEvent["channel_type"];
-  }) => {
+  function isChannelAllowed(
+    this: SlackMonitorContext,
+    p: {
+      teamId?: string;
+      channelId?: string;
+      channelName?: string;
+      channelType?: SlackMessageEvent["channel_type"];
+    },
+  ) {
     const channelType = normalizeSlackChannelType(p.channelType, p.channelId);
     const isDirectMessage = channelType === "im";
     const isGroupDm = channelType === "mpim";
     const isRoom = channelType === "channel" || channelType === "group";
 
-    if (isDirectMessage && !params.dmEnabled) {
+    if (isDirectMessage && !this.dmEnabled) {
       return false;
     }
-    if (isGroupDm && !params.groupDmEnabled) {
+    if (isGroupDm && !this.groupDmEnabled) {
       return false;
     }
 
-    if (isGroupDm && groupDmChannels.length > 0) {
+    if (isGroupDm && this.groupDmChannels.length > 0) {
+      const groupDmChannelsLower = new Set(
+        normalizeAllowListLower(this.groupDmChannels).map((entry) =>
+          entry.replace(/^channel:/, ""),
+        ),
+      );
       const candidates = [
         ...buildSlackChannelIdCandidates(p.channelId, p.teamId, {
-          allowUnscoped: params.installationIdentity?.kind !== "enterprise",
+          allowUnscoped: this.installationIdentity?.kind !== "enterprise",
         }),
         p.channelName ? `#${p.channelName}` : undefined,
         p.channelName,
@@ -504,42 +512,42 @@ export function createSlackMonitorContext(params: {
     if (isRoom && p.channelId) {
       const channelConfig = resolveSlackChannelConfig({
         teamId: p.teamId,
-        allowUnscoped: params.installationIdentity?.kind !== "enterprise",
+        allowUnscoped: this.installationIdentity?.kind !== "enterprise",
         channelId: p.channelId,
         channelName: p.channelName,
-        channels: params.channelsConfig,
-        channelKeys: channelsConfigKeys,
-        defaultRequireMention,
-        allowNameMatching: params.allowNameMatching,
+        channels: this.channelsConfig,
+        channelKeys: this.channelsConfigKeys,
+        defaultRequireMention: this.defaultRequireMention,
+        allowNameMatching: this.allowNameMatching,
       });
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
       const channelAllowed = channelConfig?.allowed !== false;
-      const channelAllowlistConfigured = hasChannelAllowlistConfig;
+      const channelAllowlistConfigured = this.channelsConfigKeys.length > 0;
       const allowedByPolicy = isSlackChannelAllowedByPolicy({
-        groupPolicy: params.groupPolicy,
+        groupPolicy: this.groupPolicy,
         channelAllowlistConfigured,
         channelAllowed,
       });
       const explicitlyDisabled =
-        params.groupPolicy !== "disabled" &&
+        this.groupPolicy !== "disabled" &&
         channelConfig?.allowed === false &&
         channelConfig.matchSource !== undefined;
       // Open policy still honors an explicit room disable; unlisted rooms remain open.
-      const shouldDrop = !allowedByPolicy || (params.groupPolicy === "open" && explicitlyDisabled);
+      const shouldDrop = !allowedByPolicy || (this.groupPolicy === "open" && explicitlyDisabled);
       if (shouldDrop) {
         if (explicitlyDisabled) {
           const reason = "channel_not_allowed";
-          const warningKey = `${params.accountId}:${p.teamId ? `${p.teamId}:` : ""}${p.channelId}:${reason}`;
+          const warningKey = `${this.accountId}:${p.teamId ? `${p.teamId}:` : ""}${p.channelId}:${reason}`;
           if (!channelDenialWarnings.peek(warningKey)) {
             channelDenialWarnings.check(warningKey);
             logger.warn(
               {
                 provider: "slack",
-                accountId: params.accountId,
+                accountId: this.accountId,
                 channelId: p.channelId,
                 reason,
                 cause: "channel_disabled",
-                groupPolicy: params.groupPolicy,
+                groupPolicy: this.groupPolicy,
                 matchSource: channelConfig.matchSource,
                 matchKey: channelConfig.matchKey,
               },
@@ -548,7 +556,7 @@ export function createSlackMonitorContext(params: {
           }
         }
         logVerbose(
-          `slack: drop channel ${p.channelId} (groupPolicy=${params.groupPolicy}, ${channelMatchMeta})`,
+          `slack: drop channel ${p.channelId} (groupPolicy=${this.groupPolicy}, ${channelMatchMeta})`,
         );
         return false;
       }
@@ -556,7 +564,7 @@ export function createSlackMonitorContext(params: {
     }
 
     return true;
-  };
+  }
 
   const shouldDropMismatchedSlackEvent = (body: unknown) => {
     if (!body || typeof body !== "object") {
@@ -590,6 +598,8 @@ export function createSlackMonitorContext(params: {
 
   const channelRuntime = params.channelRuntime as PluginRuntime["channel"] | undefined;
   const ctx: SlackMonitorContext = {
+    readRuntimeContext: () => readPolicy(),
+    isRuntimePolicyCurrent: () => false,
     cfg: params.cfg,
     accountId: params.accountId,
     botToken: params.botToken,
@@ -651,5 +661,6 @@ export function createSlackMonitorContext(params: {
     recordSlackManagedViewThread: agentViewState.recordManagedThread,
     isSlackManagedViewThread: agentViewState.isManagedThread,
   };
+  const readPolicy = createSlackRuntimeContextReader(ctx, params.lookupToken ?? params.botToken);
   return ctx;
 }

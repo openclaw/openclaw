@@ -54,13 +54,16 @@ function runOnFlush(entries: Array<Record<string, unknown>>): Promise<void> {
 }
 
 function createContext() {
-  return {
+  const ctx = {
     cfg: {},
     accountId: "default",
     app: { client: {} },
     runtime: {},
     rememberSlackChannelType: () => {},
   } as unknown as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
+  ctx.readRuntimeContext = async () => ctx;
+  ctx.isRuntimePolicyCurrent = () => true;
+  return ctx;
 }
 
 beforeEach(() => {
@@ -75,9 +78,6 @@ describe("Slack duplicate wait admission", () => {
     const onDispatchWaiting = vi.fn();
     const handler = createSlackMessageHandler({
       ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
       dispatchReplayGuard: {
         claim: async () => ({ kind: "inflight", pending: duplicate.promise }),
       } as unknown as NonNullable<
@@ -139,9 +139,6 @@ describe("Slack duplicate wait admission", () => {
       .mockResolvedValueOnce({ kind: "inflight", pending: owner.promise });
     const handler = createSlackMessageHandler({
       ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
       dispatchReplayGuard: { claim } as unknown as NonNullable<
         Parameters<typeof createSlackMessageHandler>[0]["dispatchReplayGuard"]
       >,

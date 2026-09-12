@@ -29,6 +29,7 @@ export function registerSlackMemberEvents(params: {
     client: AllMiddlewareArgs["client"];
   }) => {
     try {
+      const ctx = await params.ctx.readRuntimeContext();
       const eventScope = resolveSlackListenerEventScope({
         ctx,
         body: paramsLocal.body,

@@ -29,6 +29,7 @@ async function handleSlackShortcut(params: {
 }): Promise<void> {
   const { ack, body } = params.args;
   await ack();
+  params = { ...params, ctx: await params.ctx.readRuntimeContext() };
   const eventScope = resolveSlackListenerEventScope({
     identity: params.ctx.installationIdentity,
     body,

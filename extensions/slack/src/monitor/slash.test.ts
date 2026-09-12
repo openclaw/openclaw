@@ -322,6 +322,7 @@ function createArgMenusHarness(
     resolveUserName: async () => ({ name: "Ada" }),
   } as unknown;
 
+  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   const account = {
     accountId: "acct",
     config: { commands: { native: true, nativeSkills: false } },
@@ -1618,6 +1619,7 @@ function createPolicyHarness(overrides?: {
     resolveUserName: async () => ({ name: "Ada" }),
   } as unknown;
 
+  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   const account = { accountId: "acct", config: { commands: { native: false } } } as unknown;
 
   return {
@@ -1937,13 +1939,19 @@ describe("slack slash command session metadata", () => {
   const { deliverSlackSlashRepliesMock, recordSessionMetaFromInboundMock, resolveAgentRouteMock } =
     getSlackSlashMocks();
 
-  it("refreshes slash routing config between invocations", async () => {
+  it("refreshes slash routing and access policy between invocations", async () => {
     const harness = createPolicyHarness({
       channelId: "D123",
       channelName: "directmessage",
       resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
     });
-    const sourceCfg = (harness.ctx as { cfg: OpenClawConfig }).cfg;
+    const { createSlackRuntimeContextReader } = await import("./runtime-policy.js");
+    const ctx = harness.ctx as import("./context.js").SlackMonitorContext;
+    ctx.cfg = { ...ctx.cfg, channels: { slack: { dmPolicy: "open", allowFrom: ["*"] } } };
+    ctx.accountId = "acct";
+    const sourceCfg = ctx.cfg;
+    setRuntimeConfigSnapshot(sourceCfg, sourceCfg);
+    ctx.readRuntimeContext = createSlackRuntimeContextReader(ctx, "synthetic-lookup");
     const runtimeCfg = {
       ...sourceCfg,
       session: { dmScope: "per-channel-peer" },
@@ -1988,6 +1996,16 @@ describe("slack slash command session metadata", () => {
         }),
       }),
     );
+    const disabled: OpenClawConfig = {
+      ...runtimeCfg,
+      channels: { slack: { dmPolicy: "disabled" } },
+    };
+    setRuntimeConfigSnapshot(disabled, disabled);
+    await runSlashHandler({
+      commands: harness.commands,
+      command: { channel_id: harness.channelId, channel_name: harness.channelName },
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
   });
 
   it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {

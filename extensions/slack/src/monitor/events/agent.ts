@@ -122,6 +122,8 @@ export function registerSlackAgentEvents(params: {
   });
 
   slackApp.event("agent_session_title_changed", async ({ event, body, context, client }) => {
+    const ctx = await params.ctx.readRuntimeContext();
+    const account = resolveSlackAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
       return;
     }

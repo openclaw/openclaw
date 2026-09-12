@@ -56,6 +56,7 @@ export function registerSlackReactionEvents(params: {
     eventId: string,
   ) => {
     try {
+      const ctx = await params.ctx.readRuntimeContext();
       const item = event.item;
       if (!item || item.type !== "message") {
         return;

@@ -20,7 +20,8 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   eventKind: string;
   eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
-  const { ctx, senderId, channelId, channelType, eventKind } = params;
+  const { senderId, channelId, channelType, eventKind } = params;
+  const ctx = await params.ctx.readRuntimeContext();
   const auth = await authorizeSlackSystemEventSender({
     ctx,
     senderId,

@@ -26,13 +26,14 @@ export function registerSlackChannelEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  const enqueueChannelSystemEvent = (paramsLocal: {
+  const enqueueChannelSystemEvent = async (paramsLocal: {
     kind: "created" | "renamed";
     channelId: string | undefined;
     channelName: string | undefined;
     eventId: string;
     eventScope?: SlackEventScope;
   }) => {
+    const ctx = await params.ctx.readRuntimeContext();
     if (
       !ctx.isChannelAllowed({
         teamId: paramsLocal.eventScope?.teamId ?? ctx.teamId,
@@ -74,7 +75,7 @@ export function registerSlackChannelEvents(params: {
       const payload = event as SlackChannelCreatedEvent;
       const channelId = payload.channel?.id;
       const channelName = payload.channel?.name;
-      enqueueChannelSystemEvent({
+      await enqueueChannelSystemEvent({
         kind: "created",
         channelId,
         channelName,
@@ -100,7 +101,7 @@ export function registerSlackChannelEvents(params: {
       const payload = event as SlackChannelRenamedEvent;
       const channelId = payload.channel?.id;
       const channelName = payload.channel?.name_normalized ?? payload.channel?.name;
-      enqueueChannelSystemEvent({
+      await enqueueChannelSystemEvent({
         kind: "renamed",
         channelId,
         channelName,
@@ -183,14 +184,7 @@ export function registerSlackChannelIdChangedEvent(params: {
               }),
           });
           if (persisted.result?.migrated) {
-            // Persistence owns the migration. Update this monitor's captured
-            // config only after the durable write succeeds.
-            migrateSlackChannelConfig({
-              cfg: ctx.cfg,
-              accountId: ctx.accountId,
-              oldChannelId,
-              newChannelId,
-            });
+            // The config write publishes the next snapshot; admitted turns retain the old one.
             ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
           }
         } else if (preview.skippedExisting) {

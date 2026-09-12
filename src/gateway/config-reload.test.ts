@@ -948,6 +948,38 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+  describe("registered Slack policy reload boundaries", () => {
+    it.each([
+      ["channels.slack.allowFrom", true],
+      ["channels.slack.accounts.ops.dmPolicy", true],
+      ["channels.slack.accounts.ops.dm.groupChannels", true],
+      ["channels.slack.channels.C123.users", true],
+      ["channels.slack.accounts.ops.channels.C123.requireMention", true],
+      ["channels.slack.accounts.ops.streaming.progress.toolProgress", true],
+      ["channels.slack.replyToModeByChatType.direct", true],
+      ["channels.slack.textChunkLimit", true],
+      ["channels.slack.reactionNotifications", true],
+      ["channels.slack.enabled", false],
+      ["channels.slack.accounts.ops", false],
+      ["channels.slack.channels.C123", false],
+      ["channels.slack.accounts.ops.botToken", false],
+      ["channels.slack.slashCommand.name", false],
+      ["channels.slack.presenceEvents.mode", false],
+      ["channels.slack.channels.C123.presenceEvents.mode", false],
+      ["channels.slack.execApprovals.enabled", false],
+      ["channels.slack.dangerouslyAllowNameMatching", false],
+    ] as const)("plans %s without losing the owner boundary", async (path, dynamic) => {
+      const { slackSetupPlugin } = await import("../../extensions/slack/setup-plugin-api.js");
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "slack", plugin: slackSetupPlugin, source: "test" }]),
+      );
+      const plan = buildGatewayReloadPlan([path]);
+      expect(plan.restartGateway).toBe(false);
+      expect(plan.restartChannels).toEqual(new Set(dynamic ? [] : ["slack"]));
+      expect(isNoopGatewayReloadPlan(plan)).toBe(dynamic);
+    });
+  });
+
   it("restarts the matching channel for channel config changes", () => {
     const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
     expect(plan.restartGateway).toBe(false);
