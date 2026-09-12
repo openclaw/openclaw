@@ -389,11 +389,11 @@ function shouldIgnoreSkillsWatchPath(
 }
 
 function isSkillFileWatchPath(watchPath: string): boolean {
-  if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
-    return false;
-  }
   const normalized = watchPath.replaceAll("\\", "/");
-  return path.posix.basename(normalized) === "SKILL.md";
+  return (
+    path.posix.basename(normalized) === "SKILL.md" &&
+    !DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))
+  );
 }
 
 function getRawWatchedPath(details: unknown): string | undefined {
@@ -557,8 +557,8 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
     const changedPath = resolveRawSkillsWatchPath(rawPathText, details);
     if (
       changedPath &&
-      isPathInside(target.path, changedPath) &&
-      isSkillFileWatchPath(changedPath)
+      isSkillFileWatchPath(changedPath) &&
+      isPathInside(target.path, changedPath)
     ) {
       if (usePolling) {
         return;
