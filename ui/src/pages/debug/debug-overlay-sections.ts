@@ -4,6 +4,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -67,11 +68,6 @@ export type DebugOverlayStatusSnapshot = {
 export type DebugOverlayStatusSample = {
   at: number;
   status: DebugOverlayStatusSnapshot;
-};
-
-type ActiveSession = {
-  key?: string;
-  sessionId?: string;
 };
 
 function renderLanes(diagnostics: CommandLaneDiagnostics): TemplateResult {
@@ -217,16 +213,17 @@ function renderStatus(
   `;
 }
 
-function renderActiveRuns(sessions: ActiveSession[]): TemplateResult {
+function renderActiveRuns({ sessions, totalCount, hasMore }: SessionsListResult): TemplateResult {
   return html`
     <div class="debug-overlay__count">
-      ${t("debug.overlay.activeRunsCount", { count: String(sessions.length) })}
+      ${t("debug.overlay.activeRunsCount", { count: String(totalCount ?? sessions.length) })}
     </div>
+    ${hasMore ? html`<div class="debug-overlay__count">${t("activityFeed.showing", { shown: String(sessions.length), total: String(totalCount ?? sessions.length) })}</div>` : nothing}
     ${
       sessions.length > 0
         ? html`<ul class="debug-overlay__list">
             ${sessions.map((session) => {
-              const id = session.sessionId ?? session.key ?? t("common.unknown");
+              const id = session.sessionId ?? session.key;
               return html`<li class="mono" title=${id}>${truncateUtf16Safe(id, 32)}</li>`;
             })}
           </ul>`
@@ -277,12 +274,12 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
   defineDebugOverlaySection({
     id: "active-runs",
     titleKey: "debug.overlay.activeRuns",
-    load: async (context, signal) => {
-      const payload = await context.client.request<{
-        sessions?: Array<ActiveSession & { hasActiveRun?: boolean }>;
-      }>("sessions.list", {}, { signal });
-      return (payload.sessions ?? []).filter((session) => session.hasActiveRun === true);
-    },
+    load: (context, signal) =>
+      context.client.request<SessionsListResult>(
+        "sessions.list",
+        { activeOnly: true, archived: "all", includeGlobal: true, includeUnknown: true },
+        { signal },
+      ),
     render: renderActiveRuns,
   }),
   defineDebugOverlaySection({
