@@ -684,7 +684,7 @@ suite.define(() => {
     }
   });
 
-  it("explains node-list failures and exposes independent discovery settings", async () => {
+  it("explains node-list failures beside available sessions and exposes independent discovery settings", async () => {
     const page = await suite.browser.newPage({ viewport: { height: 1100, width: 1440 } });
     await installMockGateway(page, {
       featureMethods: [
@@ -790,6 +790,21 @@ suite.define(() => {
               capabilities: { continueSession: true, archive: true },
               hosts: [
                 {
+                  hostId: "gateway:local",
+                  label: "Local Codex",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "available-native-session",
+                      name: "Available native session",
+                      status: "idle",
+                      source: "cli",
+                      archived: false,
+                    },
+                  ],
+                },
+                {
                   hostId: "node:registry",
                   label: "Paired nodes",
                   kind: "node",
@@ -817,6 +832,7 @@ suite.define(() => {
       await expect.poll(() => tooltipTitleText(warning)).toContain("[NODE_LIST_FAILED]");
       await expect.poll(() => tooltipTitleText(warning)).toContain("pairing database is locked");
       await expect.poll(() => tooltipTitleText(warning)).toContain("Settings > Plugins");
+      expect(await page.getByText("Available native session", { exact: true }).count()).toBe(1);
       expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
 
       if (captureUiProofEnabled) {

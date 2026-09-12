@@ -103,9 +103,13 @@ export function resolveCodexBindingAppServerConnection(
     const catalogHome = persistedFingerprint
       ? resolveCodexCatalogConnectionHome(persistedFingerprint, runtimeParams.agentDir)
       : undefined;
-    if (catalogHome) {
-      // Connection recovery changes only the store location. The freshly resolved
-      // runtime keeps its native-model review and permission policy.
+    let currentFingerprint = buildCodexAppServerConnectionFingerprint(
+      appServer,
+      runtimeParams.agentDir,
+    );
+    if (catalogHome && currentFingerprint !== persistedFingerprint) {
+      // The primary store already has its configured scope. Secondary stores
+      // need their explicit home; both keep current review and permission policy.
       appServer = {
         ...appServer,
         start: {
@@ -114,11 +118,11 @@ export function resolveCodexBindingAppServerConnection(
           env: { ...appServer.start.env, CODEX_HOME: catalogHome },
         },
       };
+      currentFingerprint = buildCodexAppServerConnectionFingerprint(
+        appServer,
+        runtimeParams.agentDir,
+      );
     }
-    const currentFingerprint = buildCodexAppServerConnectionFingerprint(
-      appServer,
-      runtimeParams.agentDir,
-    );
     if (!persistedFingerprint || persistedFingerprint !== currentFingerprint) {
       throw new Error(
         "Codex supervision connection changed; refusing to operate on its bound native thread",

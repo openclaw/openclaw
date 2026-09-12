@@ -140,7 +140,7 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
 
 export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCatalogHost[] };
 
-/** Section peers and rendering share owner-filtered rows; paging and failures remain visible. */
+/** Section peers and rendering share the same nonempty, owner-filtered catalogs. */
 export function projectSidebarSessionCatalogs(
   catalogs: readonly SessionCatalog[],
   ownerId: string | null,
@@ -150,11 +150,7 @@ export function projectSidebarSessionCatalogs(
   const liveOwners = new Map(liveRows.toReversed().map(({ key, owner }) => [key, owner?.actor.id]));
   return catalogs.flatMap((catalog) => {
     const visibleHosts = visibleCatalogHosts(catalog.hosts, ownerId, liveOwners);
-    return visibleHosts.length > 0 ||
-      catalog.hosts.some((host) => Boolean(host.nextCursor)) ||
-      catalogErrorMessages(catalog).length > 0
-      ? [{ ...catalog, visibleHosts }]
-      : [];
+    return visibleHosts.length > 0 ? [{ ...catalog, visibleHosts }] : [];
   });
 }
 

@@ -48,10 +48,15 @@ const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
 
 type CodexCatalogRequestOptions = {
-  agentDir: string;
+  agentDir: string | undefined;
   config: OpenClawConfig | undefined;
   startOptions: CodexAppServerStartOptions;
 };
+
+type CodexCatalogControlSource = Pick<
+  CodexCatalogHome,
+  "appServer" | "localSessionsRoot" | "sourceHomeId"
+> & { agentDir?: string };
 
 type CodexCatalogPageCacheEntry = {
   expiresAt: number;
@@ -61,8 +66,8 @@ type CodexCatalogPageCacheEntry = {
 
 function codexCatalogPageCacheKey(
   params: CodexSessionCatalogPageParams,
-  agentId: string,
-  source?: CodexCatalogHome,
+  agentId: string | undefined,
+  source?: CodexCatalogControlSource,
 ): string {
   // Mirror listPage's search/cwd normalization; these trimmed values are what reach app-server.
   return JSON.stringify([
@@ -369,11 +374,12 @@ export function createCodexSessionCatalogControl(params: {
   >();
   const resolveRequestOptions = (
     startOptions: CodexAppServerStartOptions,
-    agentId: string,
-    source?: CodexCatalogHome,
+    agentId: string | undefined,
+    source?: CodexCatalogControlSource,
   ): CodexCatalogRequestOptions => {
     const runtimeConfig = params.getRuntimeConfig();
-    const agentDir = source?.agentDir ?? resolveAgentDir(runtimeConfig ?? {}, agentId);
+    const agentDir =
+      source?.agentDir ?? (agentId ? resolveAgentDir(runtimeConfig ?? {}, agentId) : undefined);
     const resolvedStartOptions = source?.appServer.start ?? startOptions;
     if (!runtimeConfig) {
       return {
@@ -403,8 +409,8 @@ export function createCodexSessionCatalogControl(params: {
     return resolved;
   };
   const createRequestSnapshot = (
-    agentId: string,
-    source?: CodexCatalogHome,
+    agentId: string | undefined,
+    source?: CodexCatalogControlSource,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = getPluginConfig();
     const runtime = source?.appServer ?? params.resolveRuntimeOptions({ pluginConfig });
@@ -415,6 +421,7 @@ export function createCodexSessionCatalogControl(params: {
         const { codexControlRequest } = await import("./command-rpc.js");
         return await codexControlRequest(pluginConfig, method, requestParams, {
           ...requestOptions,
+          authProfileId: null,
           assertCurrent,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
@@ -422,7 +429,10 @@ export function createCodexSessionCatalogControl(params: {
     );
   };
 
-  const forRequest = (agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl => {
+  const forRequest = (
+    agentId: string | undefined,
+    source?: CodexCatalogControlSource,
+  ): CodexSessionCatalogControl => {
     const withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"] = async (
       run,
     ) => {
@@ -446,6 +456,7 @@ export function createCodexSessionCatalogControl(params: {
         agentDir,
         config: runtimeConfig,
         startOptions,
+        authProfileId: null,
         timeoutMs: runtime.requestTimeoutMs,
       });
       try {
@@ -468,13 +479,15 @@ export function createCodexSessionCatalogControl(params: {
         );
         const pinnedControl: CodexSessionCatalogControl =
           createCodexSessionCatalogControlFromRequests({
-            forkContext: {
-              client,
-              appServer: runtime,
-              pluginConfig,
-              agentDir,
-              localSessionsRoot: source?.localSessionsRoot,
-            },
+            forkContext: agentDir
+              ? {
+                  client,
+                  appServer: runtime,
+                  pluginConfig,
+                  agentDir,
+                  localSessionsRoot: source?.localSessionsRoot,
+                }
+              : undefined,
             clientId: resolveCodexAppServerClientInstanceId(client),
             retireConnection: () => {
               retireSharedCodexAppServerClientIfCurrent(client);
@@ -580,5 +593,17 @@ export function createCodexSessionCatalogControl(params: {
     );
     return source ? forRequest(agentId, source) : undefined;
   };
-  return { forRequest, forUpstream, homesForAgent };
+  return {
+    forRequest,
+    forUpstream,
+    homesForAgent,
+    forNode() {
+      const source = homeResolver.forNode();
+      return {
+        control: forRequest(undefined, source),
+        sourceHomeId: source.sourceHomeId,
+        codexHome: source.codexHome,
+      };
+    },
+  };
 }

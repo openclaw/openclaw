@@ -100,7 +100,7 @@ const scopedOAuthRefreshQueues = new WeakMap<
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
   agentId?: string;
-  agentDir: string;
+  agentDir?: string;
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
   preparedAuth?: CodexAppServerPreparedAuth;
@@ -152,7 +152,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
 function assertNoUnimportedAgentCodexAuthFile(params: {
   startOptions: CodexAppServerStartOptions;
   agentId?: string;
-  agentDir: string;
+  agentDir?: string;
   authRequirement?: CodexAppServerAuthRequirement;
 }): void {
   // Ephemeral stdio starts cannot load this stale file, and the shared-client key
@@ -173,7 +173,7 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
 function resolveUnimportedAgentCodexAuthMessage(params: {
   startOptions: CodexAppServerStartOptions;
   agentId?: string;
-  agentDir: string;
+  agentDir?: string;
 }): string | undefined {
   if (params.startOptions.transport !== "stdio" || params.startOptions.homeScope === "user") {
     return undefined;
@@ -395,7 +395,7 @@ export { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 
 async function withCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,
-  agentDir: string,
+  agentDir: string | undefined,
 ): Promise<CodexAppServerStartOptions> {
   const codexHome = resolveCodexAppServerLocalHomeDir(startOptions, agentDir);
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
@@ -425,7 +425,7 @@ async function withCodexHomeEnvironment(
 /** Reconciles Computer Use artifacts for the exact managed command about to start. */
 export async function reconcileCodexComputerUseStartArtifacts(params: {
   startOptions: CodexAppServerStartOptions;
-  agentDir: string;
+  agentDir?: string;
   pluginConfig?: unknown;
   ownsIsolatedCodexHome?: boolean;
   desktopGeneration?: CodexDesktopGeneration;
@@ -492,7 +492,7 @@ export async function reconcileCodexComputerUseStartArtifacts(params: {
 
 async function reconcileCodexComputerUseStartArtifactsOnce(params: {
   startOptions: CodexAppServerStartOptions;
-  agentDir: string;
+  agentDir?: string;
   pluginConfig?: unknown;
   ownsIsolatedCodexHome?: boolean;
   codexHome: string;
@@ -509,8 +509,12 @@ async function reconcileCodexComputerUseStartArtifactsOnce(params: {
       !params.startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim());
   const shouldProvisionComputerUse =
     computerUseConfig.enabled && computerUseConfig.autoInstall && ownsIsolatedCodexHome;
-  if (shouldProvisionComputerUse) {
-    await ensureOwnedCodexHome(codexHome, params.agentDir);
+  const provisioningAgentDir = shouldProvisionComputerUse ? params.agentDir : undefined;
+  if (shouldProvisionComputerUse && !provisioningAgentDir) {
+    throw new Error("Managed Codex Computer Use requires an OpenClaw agent directory");
+  }
+  if (provisioningAgentDir) {
+    await ensureOwnedCodexHome(codexHome, provisioningAgentDir);
   } else {
     await fs.mkdir(codexHome, { recursive: true });
   }
@@ -535,7 +539,7 @@ async function reconcileCodexComputerUseStartArtifactsOnce(params: {
       })
     : exactDesktopCandidate;
   params.assertCurrent();
-  if (shouldProvisionComputerUse) {
+  if (provisioningAgentDir) {
     if (desktopCandidates.length > 0 && !artifactCandidate) {
       throw new CodexComputerUseCandidateArtifactsUnavailableError();
     }
@@ -543,7 +547,7 @@ async function reconcileCodexComputerUseStartArtifactsOnce(params: {
       const marketplacePath = usesManagedBundledMarketplace
         ? await ensureCodexManagedBundledMarketplace({
             codexHome,
-            ownershipRoot: params.agentDir,
+            ownershipRoot: provisioningAgentDir,
             ...(artifactCandidate
               ? {
                   appServerCommand: artifactCandidate.appServerCommandPath,
@@ -658,7 +662,7 @@ function withoutClearedCodexHomeEnv(clearEnv: string[] | undefined): string[] | 
 
 export async function applyCodexAppServerAuthProfile(params: {
   client: CodexAppServerClient;
-  agentDir: string;
+  agentDir?: string;
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
   preparedAuth?: CodexAppServerResolvedPreparedAuth;
@@ -676,13 +680,14 @@ export async function applyCodexAppServerAuthProfile(params: {
     );
     return undefined;
   }
+  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config ?? {});
   let loginParams: CodexLoginAccountParams | undefined =
     params.preparedAuth?.kind === "profile"
       ? params.preparedAuth.snapshot.loginParams
       : params.preparedAuth?.kind === "api-key"
         ? { type: "apiKey", apiKey: params.preparedAuth.apiKey }
         : await resolveCodexAppServerAuthProfileLoginParams({
-            agentDir: params.agentDir,
+            agentDir,
             authProfileId: params.authProfileId ?? undefined,
             authProfileStore: params.authProfileStore,
             config: params.config,

@@ -57,62 +57,79 @@ describe("Codex binding app-server connection", () => {
     expect(connection.clientAuthProfileId).toBeNull();
   });
 
-  it("recovers the exact secondary Codex home recorded by a supervised binding", async () => {
-    const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-home-")),
-    );
-    try {
-      const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
-      const betaAgentDir = path.join(root, "agents", "beta", "agent");
-      const processCodexHome = path.join(root, "process-codex-home");
-      const alphaCodexHome = resolveCodexAppServerHomeDir(alphaAgentDir);
-      await Promise.all(
-        [processCodexHome, alphaCodexHome, resolveCodexAppServerHomeDir(betaAgentDir)].map((dir) =>
-          fs.mkdir(dir, { recursive: true }),
-        ),
+  it.each([
+    { sourceKind: "primary", homeScope: "agent" },
+    { sourceKind: "secondary", homeScope: "agent" },
+    { sourceKind: "secondary", homeScope: "user" },
+  ] as const)(
+    "recovers the exact $sourceKind Codex home with configured $homeScope scope",
+    async ({ sourceKind, homeScope }) => {
+      const root = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-home-")),
       );
-      const config = {
-        agents: {
-          ownership: "explicit",
-          list: [
-            { id: "alpha", agentDir: alphaAgentDir },
-            { id: "beta", agentDir: betaAgentDir },
-          ],
-        },
-      } as OpenClawConfig;
-      const env = { ...process.env, CODEX_HOME: processCodexHome };
-      const source = createCodexCatalogHomeResolver({
-        resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-        config,
-        getRuntimeConfig: () => config,
-        getPluginConfig: () => ({ supervision: { enabled: true } }),
-        env,
-      })
-        .forAgent("beta")
-        .find((home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome);
-      expect(source).toBeDefined();
-      const fingerprint = buildCodexAppServerConnectionFingerprint(source!.appServer, betaAgentDir);
+      try {
+        const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
+        const betaAgentDir = path.join(root, "agents", "beta", "agent");
+        const processCodexHome = path.join(root, "process-codex-home");
+        const alphaCodexHome = resolveCodexAppServerHomeDir(alphaAgentDir);
+        await Promise.all(
+          [processCodexHome, alphaCodexHome, resolveCodexAppServerHomeDir(betaAgentDir)].map(
+            (dir) => fs.mkdir(dir, { recursive: true }),
+          ),
+        );
+        const config = {
+          agents: {
+            ownership: "explicit",
+            list: [
+              { id: "alpha", agentDir: alphaAgentDir },
+              { id: "beta", agentDir: betaAgentDir },
+            ],
+          },
+        } as OpenClawConfig;
+        const pluginConfig = { supervision: { enabled: true }, appServer: { homeScope } };
+        const env = { ...process.env, CODEX_HOME: processCodexHome };
+        const homes = createCodexCatalogHomeResolver({
+          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+          config,
+          getRuntimeConfig: () => config,
+          getPluginConfig: () => pluginConfig,
+          env,
+        }).forAgent("beta");
+        const source =
+          sourceKind === "primary"
+            ? homes[0]
+            : homes.find((home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome);
+        expect(source).toBeDefined();
+        const fingerprint = buildCodexAppServerConnectionFingerprint(
+          source!.appServer,
+          betaAgentDir,
+        );
 
-      const connection = resolveCodexBindingAppServerConnection({
-        binding: {
-          connectionScope: "supervision",
-          appServerRuntimeFingerprint: fingerprint,
-        },
-        pluginConfig: { supervision: { enabled: true } },
-        config,
-        agentDir: betaAgentDir,
-        env,
-        requirementsToml: null,
-      });
+        const connection = resolveCodexBindingAppServerConnection({
+          binding: {
+            connectionScope: "supervision",
+            appServerRuntimeFingerprint: fingerprint,
+          },
+          pluginConfig,
+          config,
+          agentDir: betaAgentDir,
+          env,
+          requirementsToml: null,
+        });
 
-      expect(connection.appServer.start.env?.CODEX_HOME).toBe(alphaCodexHome);
-      expect(buildCodexAppServerConnectionFingerprint(connection.appServer, betaAgentDir)).toBe(
-        fingerprint,
-      );
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
+        expect(connection.appServer.start.homeScope).toBe(source!.appServer.start.homeScope);
+        expect(connection.clientAuthProfileId).toBeNull();
+        if (sourceKind === "secondary") {
+          expect(connection.appServer.start.env?.CODEX_HOME).toBe(alphaCodexHome);
+        }
+        expect(buildCodexAppServerConnectionFingerprint(connection.appServer, betaAgentDir)).toBe(
+          fingerprint,
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("requires the exact native model pair for materialized supervised requests", () => {
     expect(

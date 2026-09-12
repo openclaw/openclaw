@@ -7,7 +7,10 @@ import { normalizeCodexAppServerArgs } from "./launch-args.js";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="ephemeral"';
 
-export function resolveCodexAppServerHomeDir(agentDir: string): string {
+export function resolveCodexAppServerHomeDir(agentDir: string | undefined): string {
+  if (!agentDir) {
+    throw new Error("Agent-scoped Codex requires an OpenClaw agent directory");
+  }
   return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
 }
 
@@ -23,7 +26,7 @@ export function resolveCodexAppServerUserHomeDir(
 /** Resolves the local CODEX_HOME used when starting one app-server connection. */
 export function resolveCodexAppServerLocalHomeDir(
   startOptions: CodexAppServerStartOptions,
-  agentDir: string,
+  agentDir: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const configured = startOptions.env?.CODEX_HOME;

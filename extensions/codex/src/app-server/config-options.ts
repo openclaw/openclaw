@@ -381,7 +381,7 @@ export function createCodexAppServerConfig({
  */
 export function resolveCodexAppServerStartOptionsForAgent(params: {
   startOptions: CodexAppServerStartOptions;
-  agentDir: string;
+  agentDir?: string;
   codexConfigToml?: string | null;
   env?: NodeJS.ProcessEnv;
 }): CodexAppServerStartOptions {
@@ -395,6 +395,9 @@ export function resolveCodexAppServerStartOptionsForAgent(params: {
   }
   if (startOptions.homeScope === "user") {
     return { ...startOptions, managedCommandOrder: "desktop-first" };
+  }
+  if (!params.agentDir) {
+    throw new Error("Agent-scoped Codex requires an OpenClaw agent directory");
   }
   const nativeComputerUseEnabled = codexConfigEnablesNativeComputerUse({
     agentDir: params.agentDir,

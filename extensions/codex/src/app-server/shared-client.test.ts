@@ -395,6 +395,47 @@ describe("shared Codex app-server client", () => {
     await client.closeAndWait();
   });
 
+  it.each(["shared", "isolated"] as const)(
+    "opens a native %s catalog client without selecting an OpenClaw agent",
+    async (kind) => {
+      const harness = createAutoInitializingClientHarness();
+      const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+      const acquire =
+        kind === "shared" ? getSharedCodexAppServerClient : createIsolatedCodexAppServerClient;
+      await mocks.resolveDefaultAgentDir.withImplementation(
+        () => {
+          throw new Error("An OpenClaw agent must be selected");
+        },
+        async () => {
+          const client = await acquire({
+            config: { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } },
+            startOptions: {
+              transport: "stdio",
+              homeScope: "user",
+              command: "codex",
+              commandSource: "managed",
+              args: ["app-server"],
+              headers: {},
+              env: { CODEX_HOME: "/native/codex" },
+            },
+            authProfileId: null,
+            timeoutMs: 1_000,
+          });
+          expect(client).toBe(harness.client);
+          expect(startSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              homeScope: "user",
+              managedCommandOrder: "desktop-first",
+              env: { CODEX_HOME: "/native/codex" },
+            }),
+            expect.anything(),
+          );
+          await client.closeAndWait();
+        },
+      );
+    },
+  );
+
   it("closes the shared app-server when the version gate fails", async () => {
     const harness = createClientHarness();
     const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);

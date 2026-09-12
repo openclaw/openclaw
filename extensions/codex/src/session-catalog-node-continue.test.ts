@@ -350,16 +350,21 @@ describe("Codex supervision actions", () => {
     expect(alpha?.sessionKey).toMatch(/^agent:alpha:harness:codex:node-session:/);
     expect(beta?.sessionKey).toMatch(/^agent:beta:harness:codex:node-session:/);
     expect(alpha?.sessionKey).not.toBe(beta?.sessionKey);
-    expect(alpha).toMatchObject({ conversationBinding: { data: { agentId: "alpha" } } });
-    expect(beta).toMatchObject({ conversationBinding: { data: { agentId: "beta" } } });
+    expect(alpha).toMatchObject({
+      conversationBinding: {
+        data: { agentId: "alpha", nodeId: "devbox", sessionId: "thread-remote" },
+      },
+    });
+    expect(beta).toMatchObject({
+      conversationBinding: {
+        data: { agentId: "beta", nodeId: "devbox", sessionId: "thread-remote" },
+      },
+    });
     expect(createSessionEntry).toHaveBeenCalledTimes(2);
-    expect(
-      new Set(
-        invoke.mock.calls.map(
-          ([request]) => (request.params as { agentId?: string } | undefined)?.agentId,
-        ),
-      ),
-    ).toEqual(new Set(["alpha", "beta"]));
+    for (const [request] of invoke.mock.calls) {
+      expect(request.nodeId).toBe("devbox");
+      expect(request.params).not.toHaveProperty("agentId");
+    }
   });
 
   it("rejects paired-node continue without the permitted run command", async () => {
@@ -685,10 +690,9 @@ describe("Codex supervision actions", () => {
     await expect(
       getProvider()?.startTerminalSession?.({ agentId: "main", cwd: "/workspace/blank" }),
     ).resolves.toMatchObject({ argv: [executable], cwd: "/workspace/blank" });
-    const fresh = createCodexSessionCatalogNodeHostCommands(control, {
-      getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => ({ agents: { ownership: "explicit", entries: { unrelated: {} } } }),
-    }).find((command) => command.command === CODEX_TERMINAL_START_COMMAND)!;
+    const fresh = createCodexSessionCatalogNodeHostCommands(control).find(
+      (command) => command.command === CODEX_TERMINAL_START_COMMAND,
+    )!;
     process.env.PATH = binDir;
     const io = { signal: new AbortController().signal, emitChunk: vi.fn(), onInput: vi.fn() };
     await fresh.handle(
@@ -959,7 +963,6 @@ describe("Codex supervision actions", () => {
         nodeId: "devbox",
         command,
         params: {
-          agentId: "main",
           threadId: "thread-remote",
           cursor: "remote-position-1",
           limit: nativeLimit,

@@ -199,11 +199,6 @@ export default definePluginEntry({
       });
       for (const command of createCodexSessionCatalogNodeHostCommands(
         sessionCatalogControlFactory,
-        {
-          getPluginConfig: resolveCurrentPluginConfig,
-          getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
-          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-        },
         bindingStore,
       )) {
         api.registerNodeHostCommand(command);

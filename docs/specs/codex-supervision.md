@@ -128,6 +128,12 @@ turns on the supervision connection. Live status and ownership remain
 process-local; a thread unknown to OpenClaw's supervision process is `notLoaded`
 even when Codex Desktop is actively running it.
 
+Catalog reads and pinned source leases explicitly select native authentication.
+They do not import or replace credentials in either OpenClaw's auth store or the
+selected Codex home. This also applies to a primary catalog source configured
+with agent home scope: its physical home and connection fingerprint remain
+unchanged. Ordinary managed inference keeps its agent-auth preflight.
+
 Codex has an experimental canonical local daemon with a separate
 installer-managed bootstrap contract. This feature must not bootstrap, claim,
 or assume that daemon implicitly.
@@ -160,6 +166,15 @@ nor command; direct invocation also fails closed. It must never expose the user
 Codex home for an agent-scoped configuration or substitute local stdio for an
 explicit endpoint.
 
+Headless node catalogs likewise bind to the node's native `CODEX_HOME` or
+`~/.codex`, independently of the Gateway's route agent and the node's agent
+roster. They require user-home stdio and retain the configured command, arguments,
+and cleared environment variables. The Gateway does not send its agent id as a
+node source selector; older callers' optional `agentId` is validated only as
+inert route context. Catalog reads and native terminal resume use the same home
+as the node's existing CLI session listing and continuation commands. Explicit
+non-native connection settings fail instead of redirecting to another store.
+
 The catalog projection normalizes identifiers, title, cwd, status, active wait
 flags, timestamps, source, model provider, Codex version, and Git branch. It
 does not return transcript previews, turns, rollout paths, Codex home paths,
@@ -171,6 +186,11 @@ Host failures remain local to each host result. An offline node or unavailable
 local App Server does not erase healthy hosts from the page. Connectivity is a
 host property, not a thread status: a failed host result contains no fresh
 session rows and does not project `offline` onto native threads.
+
+An empty catalog does not create a sidebar section, even when it has an error
+or a continuation cursor. Existing bounded provider discovery and normal
+refreshes still run. Catalogs containing visible sessions remain present when
+another host fails.
 
 The Control UI requests progressive catalog updates. Each local or paired host
 appears when its own App Server listing settles; the aggregate response remains

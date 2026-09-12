@@ -79,6 +79,9 @@ function createActivityChecker(params: {
     bindingStore,
     control: {
       forRequest: () => params.control,
+      forNode: () => {
+        throw new Error("Node source is outside this local activity fixture");
+      },
       homesForAgent: () => [],
       forUpstream: () => params.control,
     } satisfies CodexSessionCatalogControlFactory,
