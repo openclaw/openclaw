@@ -277,6 +277,35 @@ describe("captured model decisions", () => {
     });
   });
 
+  it("yields to the event loop instead of monopolizing it across a large catalog scan", async () => {
+    // Each call reports a fresh, steadily increasing timestamp so the batch
+    // threshold is always exceeded, regardless of how many other
+    // performance.now() calls land in between (auth resolution, route
+    // matching, etc.).
+    let clockMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (clockMs += 100));
+    const immediateSpy = vi.spyOn(global, "setImmediate");
+    const entries: ModelCatalogEntry[] = Array.from({ length: 5 }, (_, index) => ({
+      provider: "openai",
+      id: `gpt-5.4-${index}`,
+      name: "GPT",
+    }));
+    const owner = createModelCatalogDecisions({
+      cfg: {},
+      agentId: "main",
+      workspaceDir: "/tmp/catalog-workspace",
+      snapshot: { entries, routeVariants: entries },
+      metadataSnapshot: metadata,
+      preparedAuthStore: { version: 1, profiles: {} },
+      routeResolverFactory: routeResolverFactory(dualRoutes),
+    });
+    const results = await Promise.all(entries.map((candidate) => owner.evaluateEntry(candidate)));
+    expect(results).toHaveLength(entries.length);
+    // A scan this size must yield at least once; it must not run every entry
+    // in one uninterrupted microtask batch that starves the event loop.
+    expect(immediateSpy).toHaveBeenCalled();
+  });
+
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
     expect(
       resolveUsableAgentCredentialModes({

@@ -1,6 +1,7 @@
 /**
  * Provider-entry configuration and stored-profile binding for model auth.
  */
+import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
 import {
@@ -640,9 +641,14 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   });
   // Shared provider objects need no catalog traversal; distinct mutable inputs
   // still compare their current bytes before reusing runtime SecretRef provenance.
+  // A deep-equal pass is cheap next to hashing a large provider model catalog
+  // (400+ entries) and catches the common case -- structurally identical but
+  // not object-identical provider configs -- without the cost of two full
+  // structural hashes (openclaw/openclaw#138139).
   return inputProvider && runtimeProvider
     ? params.inputConfig === params.runtimeConfig ||
         inputProvider === runtimeProvider ||
+        isDeepStrictEqual(inputProvider, runtimeProvider) ||
         hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
           hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
     : false;
