@@ -243,8 +243,11 @@ async function planMemoryIndex(params: {
         chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
           ? executeSqliteQuerySync(
               db,
-              kysely.selectFrom("memory_index_chunks_fts").select("id").where("id", "in", chunkIds),
-            ).rows.length
+              kysely
+                .selectFrom("memory_index_chunks_fts")
+                .select((eb) => eb.fn.countAll<number>().as("count"))
+                .where("id", "in", chunkIds),
+            ).rows[0]!.count
           : 0;
       const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
       let embeddingCacheRows = 0;
@@ -295,13 +298,13 @@ async function planMemoryIndex(params: {
           db,
           vectorKysely
             .selectFrom("memory_index_chunks_vec")
-            .select("id")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
             .where(
               "id",
               "in",
               result.value.chunks.map((chunk) => chunk.id),
             ),
-        ).rows.length;
+        ).rows[0]!.count;
       },
       { agentId: params.agentId },
       { allowExtension: true },
