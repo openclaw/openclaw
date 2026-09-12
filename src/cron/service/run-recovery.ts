@@ -13,7 +13,6 @@ import {
 import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
-  inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
   listActiveCronRunReceiptJobIdsInDatabase,
   type CronRunReceiptRecoveryCandidate,
@@ -38,6 +37,7 @@ export type CronRunRecoveryProposal = {
   jobId: string;
   queuedAtMs?: number;
   runningAtMs?: number;
+  runningReceiptId?: string;
   receipt?: CronRunReceiptRecoveryCandidate;
 };
 
@@ -110,6 +110,13 @@ function repairInDatabase(params: {
     }
     return { kind: "superseded" };
   }
+  if (
+    proposal.runningAtMs !== undefined &&
+    job.state.runningAtMs === proposal.runningAtMs &&
+    job.state.runningReceiptId !== proposal.runningReceiptId
+  ) {
+    return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
+  }
   let changed = false;
   if (proposal.queuedAtMs !== undefined && job.state.queuedAtMs === proposal.queuedAtMs) {
     delete job.state.queuedAtMs;
@@ -146,10 +153,10 @@ function repairInDatabase(params: {
       jobId: proposal.jobId,
       startedAt: proposal.runningAtMs,
       storeKey,
-      receiptId: proposal.receipt?.receiptId,
+      receiptId: proposal.runningReceiptId ?? proposal.receipt?.receiptId,
     });
     const finalized = task.finalized;
-    const receiptId = currentReceipt?.receiptId ?? task.receiptId;
+    const receiptId = proposal.runningReceiptId ?? currentReceipt?.receiptId ?? task.receiptId;
     const triggerStateRetired = receiptId
       ? isCronRunTriggerStateRetiredInDatabase({
           database: database.db,
@@ -260,16 +267,34 @@ export function proposeCronRunRecovery(
   queuedAtMs: number | undefined,
   runningAtMs: number | undefined,
 ): CronRunRecoveryProposal {
-  return {
+  const proposal = {
     jobId,
     ...(queuedAtMs !== undefined ? { queuedAtMs } : {}),
-    ...(queuedAtMs !== undefined || runningAtMs !== undefined
-      ? {
-          receipt: inspectActiveCronRunReceipt({ storePath: state.deps.storePath, jobId }),
-        }
-      : {}),
     ...(runningAtMs !== undefined ? { runningAtMs } : {}),
   };
+  if (queuedAtMs === undefined && runningAtMs === undefined) {
+    return proposal;
+  }
+  // Observe the pending marker and execution authority in one transaction.
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const storePath = state.deps.storePath;
+      const receipt = findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId });
+      const rows =
+        runningAtMs === undefined
+          ? []
+          : loadCronRows(db, cronStoreKey(storePath), new Set([jobId]));
+      const job = loadedCronStoreFromRows(rows).store.jobs[0];
+      return {
+        ...proposal,
+        receipt,
+        runningReceiptId:
+          job?.state.runningAtMs === runningAtMs ? job?.state.runningReceiptId : undefined,
+      };
+    },
+    {},
+    { operationLabel: "cron.run-recovery.propose" },
+  );
 }
 
 /** Reconciles the bounded durable marker set so live siblings can adopt dead owners. */

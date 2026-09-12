@@ -468,7 +468,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       !ownsCronRunMarker(state, job.id, job.state.runningAtMs, true) &&
       !isCronJobActive(job.id)
     ) {
-      job.state.runningAtMs = undefined;
+      Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
       changed = true;
     }
     return { changed, skip: true };
@@ -513,7 +513,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       { jobId: job.id, runningAtMs: runningAt },
       "cron: clearing stuck running marker",
     );
-    job.state.runningAtMs = undefined;
+    Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
     changed = true;
     const nextRun = job.state.nextRunAtMs;
     const lastRun = job.state.lastRunAtMs;

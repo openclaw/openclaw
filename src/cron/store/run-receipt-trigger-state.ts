@@ -67,7 +67,10 @@ export function retireCronRunTriggerStateInDatabase(params: {
   ).store.jobs[0];
   // Queued runs capture current state at activation. Terminal receipts can
   // still own unreconciled facts, so the durable running marker gates retirement.
-  if (job?.state.runningAtMs !== receipt.started_at_ms) {
+  if (
+    job?.state.runningAtMs !== receipt.started_at_ms ||
+    (job.state.runningReceiptId !== undefined && job.state.runningReceiptId !== receipt.receipt_id)
+  ) {
     return;
   }
   ensureRetirementsTable(database);

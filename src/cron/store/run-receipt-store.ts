@@ -347,6 +347,9 @@ function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
 }
 
 function pruneTerminalReceipts(database: DatabaseSync, storeKey: string, jobId: string): void {
+  const job = currentJob(database, storeKey, jobId);
+  const pendingReceiptId =
+    job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId;
   const terminalIds = executeSqliteQuerySync(
     database,
     query(database)
@@ -358,7 +361,13 @@ function pruneTerminalReceipts(database: DatabaseSync, storeKey: string, jobId: 
       .orderBy("finished_at_ms", "desc")
       .orderBy("started_at_ms", "desc")
       .orderBy("receipt_id", "desc"),
-  ).rows.slice(CRON_RUN_RECEIPT_TERMINAL_RETENTION);
+  )
+    .rows.toSorted(
+      (left, right) =>
+        Number(right.receipt_id === pendingReceiptId) -
+        Number(left.receipt_id === pendingReceiptId),
+    )
+    .slice(CRON_RUN_RECEIPT_TERMINAL_RETENTION);
   for (let index = 0; index < terminalIds.length; index += CRON_RUN_RECEIPT_DELETE_BATCH_SIZE) {
     const receiptIds = terminalIds
       .slice(index, index + CRON_RUN_RECEIPT_DELETE_BATCH_SIZE)

@@ -93,11 +93,8 @@ export async function quiesceJobs(
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
 ): Promise<readonly string[] | undefined> {
-  if (!state.deps.listConfiguredChannels) {
-    return undefined;
-  }
   try {
-    return await state.deps.listConfiguredChannels();
+    return await state.deps.listConfiguredChannels?.();
   } catch {
     // Channel discovery is advisory at mutation time. Runtime delivery remains
     // authoritative, so discovery failures must not create false rejections.
@@ -214,11 +211,14 @@ function finalizeUpdatedJob(params: {
       // Preserve only genuine execution. Queued reservations must clear so a
       // disabled job can accept a later force run with the same timestamp.
       if (!isCronJobActive(nextJob.id)) {
-        nextJob.state.runningAtMs = undefined;
+        Object.assign(nextJob.state, { runningAtMs: undefined, runningReceiptId: undefined });
       }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+  }
+  if (nextJob.state.runningAtMs !== job.state.runningAtMs) {
+    delete nextJob.state.runningReceiptId;
   }
 }
 

@@ -9,6 +9,7 @@ describe("toPublicCronJob", () => {
       state: {
         nextRunAtMs: 2_000,
         queuedAtMs: 1_900,
+        runningReceiptId: "pending-receipt",
         startupCatchupAtMs: 2_000,
         pacedNextRunAtMs: 2_000,
         forcePreservedNextRunAtMs: 2_000,
@@ -18,10 +19,12 @@ describe("toPublicCronJob", () => {
     const publicJob = toPublicCronJob(job);
 
     expect(publicJob.state.queuedAtMs).toBeUndefined();
+    expect(publicJob.state.runningReceiptId).toBeUndefined();
     expect(publicJob.state.startupCatchupAtMs).toBeUndefined();
     expect(publicJob.state.pacedNextRunAtMs).toBeUndefined();
     expect(publicJob.state.forcePreservedNextRunAtMs).toBeUndefined();
     expect(job.state.queuedAtMs).toBe(1_900);
+    expect(job.state.runningReceiptId).toBe("pending-receipt");
     expect(job.state.startupCatchupAtMs).toBe(2_000);
     expect(job.state.pacedNextRunAtMs).toBe(2_000);
     expect(job.state.forcePreservedNextRunAtMs).toBe(2_000);

@@ -144,17 +144,19 @@ function retireServiceCronRunTriggerStateInDatabase(params: {
   const job = loadedCronStoreFromRows(loadCronRows(database, storeKey, new Set([jobId]))).store
     .jobs[0];
   const startedAtMs = job?.state.runningAtMs;
-  if (startedAtMs === undefined) {
+  if (!job || startedAtMs === undefined) {
     return;
   }
-  // An owner edit can terminalize the receipt before its completed task is
-  // reconciled. The selected task's exact receipt still owns those pending facts.
-  const { receiptId } = findCronTaskRunRecoveryInDatabase({
-    database,
-    jobId,
-    storeKey,
-    startedAt: startedAtMs,
-  });
+  // Owner edits close execution authority before scheduler reconciliation.
+  // Only legacy markers without a receipt association need task-history fallback.
+  const receiptId =
+    job.state.runningReceiptId ??
+    findCronTaskRunRecoveryInDatabase({
+      database,
+      jobId,
+      storeKey,
+      startedAt: startedAtMs,
+    }).receiptId;
   if (receiptId) {
     retireCronRunTriggerStateInDatabase({
       database,
