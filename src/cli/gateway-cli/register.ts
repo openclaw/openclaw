@@ -34,6 +34,7 @@ import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
+import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -262,20 +263,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   }
 
   return lines;
-}
-
-function normalizeStabilityBundleTarget(raw: unknown): string | null {
-  if (raw === undefined || raw === false) {
-    return null;
-  }
-  if (raw === true) {
-    return "latest";
-  }
-  if (typeof raw !== "string") {
-    return "latest";
-  }
-  const value = raw.trim();
-  return value === "" ? "latest" : value;
 }
 
 function formatBundleError(result: ReadDiagnosticStabilityBundleResult): string {
