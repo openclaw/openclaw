@@ -278,6 +278,9 @@ async function deleteCallRecordEventRows(
 
 /** Keep only the newest bounded call record events. */
 async function pruneCallRecordEvents(stores: CallRecordStateStores): Promise<void> {
+  if (stores.events.count && (await stores.events.count()) <= MAX_CALL_RECORD_EVENTS) {
+    return;
+  }
   const rows = await stores.events.entries();
   if (rows.length <= MAX_CALL_RECORD_EVENTS) {
     return;

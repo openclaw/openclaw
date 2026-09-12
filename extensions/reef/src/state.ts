@@ -425,6 +425,9 @@ export class ReviewApprovalStore {
       throw new Error("Reef review retention requires atomic plugin-state deleteIf");
     }
     while (true) {
+      if (this.#store.count && this.#store.count() < this.#maxEntries) {
+        return;
+      }
       const entries = this.#store.entries();
       if (entries.length < this.#maxEntries) {
         return;

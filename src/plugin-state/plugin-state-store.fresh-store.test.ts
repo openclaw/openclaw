@@ -19,7 +19,7 @@ afterEach(() => {
 
 async function expectPluginStateReadFailure(
   promise: Promise<unknown>,
-  expected: { operation: "entries" | "lookup"; path: string },
+  expected: { operation: "entries" | "lookup" | "count"; path: string },
 ): Promise<void> {
   let storeError: unknown;
   try {
@@ -52,6 +52,7 @@ describe("plugin state fresh-store reads", () => {
         await expect(store.lookup("k")).resolves.toBeUndefined();
         await expect(store.lookupMany(["k"])).resolves.toEqual([{ ok: true, value: undefined }]);
         await expect(store.entries()).resolves.toEqual([]);
+        await expect(store.count()).resolves.toBe(0);
         expect(
           pluginStateEntriesInKeyRange({
             pluginId: "discord",
@@ -103,6 +104,10 @@ describe("plugin state fresh-store reads", () => {
         });
         await expectPluginStateReadFailure(store.entries(), {
           operation: "entries",
+          path: databasePath,
+        });
+        await expectPluginStateReadFailure(store.count(), {
+          operation: "count",
           path: databasePath,
         });
       },

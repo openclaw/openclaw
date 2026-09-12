@@ -641,7 +641,7 @@ export class ClickClackDiscussionService {
     // Without a gateway-event subscription (no broadcaster in this process),
     // bindings fall back to the interval poll or renames would never reconcile.
     const needsBindingPoll =
-      this.#unsubscribeSessionsChanged === undefined && this.#store.entries().length > 0;
+      this.#unsubscribeSessionsChanged === undefined && this.#store.count() > 0;
     if (this.#closed || (!hasPendingOpens && !needsBindingPoll)) {
       if (this.#timer) {
         clearInterval(this.#timer);

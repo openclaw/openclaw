@@ -335,7 +335,7 @@ const pluginStateNamespaceCountQueries = new WeakMap<
   ReturnType<typeof prepareSqliteQuerySync<PluginStateNamespaceCountParams, PluginStateCountRow>>
 >();
 
-function countLivePluginStateNamespaceEntries(
+export function countLivePluginStateNamespaceEntries(
   db: DatabaseSync,
   params: PluginStateNamespaceCountParams,
 ): number {

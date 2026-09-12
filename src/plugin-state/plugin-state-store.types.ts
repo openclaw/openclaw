@@ -29,6 +29,8 @@ export type PluginStateKeyedStore<T> = {
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
+  /** Counts live stored rows without decoding values; absent on older hosts and adapters. */
+  count?: () => Promise<number>;
   clear(): Promise<void>;
 };
 
@@ -53,6 +55,8 @@ export type PluginStateSyncKeyedStore<T> = {
   consume(key: string): T | undefined;
   delete(key: string): boolean;
   entries(): PluginStateEntry<T>[];
+  /** Counts live stored rows without decoding values; absent on older hosts and adapters. */
+  count?: () => number;
   clear(): void;
 };
 
@@ -85,6 +89,7 @@ export type PluginStateStoreOperation =
   | "consume"
   | "delete"
   | "entries"
+  | "count"
   | "clear"
   | "sweep"
   | "probe"

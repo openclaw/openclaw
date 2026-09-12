@@ -38,6 +38,7 @@ import {
   deleteExpiredPluginStateEntries,
   allocatePluginStateNamespaceCreatedAt,
   countLivePluginStateEntries,
+  countLivePluginStateNamespaceEntries,
   readPluginStateRetention,
   enforcePostRegisterLimits,
   assertCanInsertPluginStateEntry,
@@ -887,6 +888,36 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
       return entry;
     },
   );
+}
+
+export function pluginStateCount(params: {
+  pluginId: string;
+  namespace: string;
+  env?: NodeJS.ProcessEnv;
+}): number {
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
+  try {
+    return (
+      withPluginStateDatabaseReadOnly(
+        "count",
+        ({ db }) =>
+          countLivePluginStateNamespaceEntries(db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            now: Date.now(),
+          }),
+        envOptions(params.env),
+      ) ?? 0
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "count",
+      "PLUGIN_STATE_READ_FAILED",
+      "Failed to count plugin state entries.",
+      pathname,
+    );
+  }
 }
 
 export function pluginStateEntries(params: {

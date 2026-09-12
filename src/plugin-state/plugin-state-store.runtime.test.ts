@@ -101,6 +101,8 @@ describe("plugin runtime state proxy", () => {
         maxEntries: 10,
       });
       await expect(telegramStore.lookup("k")).resolves.toBeUndefined();
+      await expect(telegramStore.count?.()).resolves.toBe(0);
+      await expect(store.count?.()).resolves.toBe(1);
       await expect(telegramStore.lookupMany?.(["k"])).resolves.toEqual([
         { ok: true, value: undefined },
       ]);

@@ -9,6 +9,7 @@ import {
   pluginStateImportBatch,
   pluginStateClear,
   pluginStateConsume,
+  pluginStateCount,
   pluginStateDelete,
   pluginStateDeleteIf,
   pluginStateEntries,
@@ -180,6 +181,7 @@ function createKeyedStoreForPluginId<T>(
     consume: async (...args) => store.consume(...args),
     delete: async (...args) => store.delete(...args),
     entries: async () => store.entries(),
+    count: async () => store.count(),
     clear: async () => store.clear(),
   };
 }
@@ -305,6 +307,9 @@ function createSyncKeyedStoreForPluginId<T>(
         namespace,
         ...(env ? { env } : {}),
       }) as PluginStateEntry<T>[];
+    },
+    count() {
+      return pluginStateCount({ pluginId, namespace, ...(env ? { env } : {}) });
     },
     clear() {
       pluginStateClear({ pluginId, namespace, ...(env ? { env } : {}) });

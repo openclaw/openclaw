@@ -147,6 +147,8 @@ describe("plugin state open errors", () => {
           await expect(store.lookupMany(["key"])).resolves.toEqual([
             { ok: false, error: expect.objectContaining({ ...expected, operation: "lookup" }) },
           ]);
+          expect(sync.count()).toBe(1);
+          await expect(store.count()).resolves.toBe(1);
         }
         let callbackCalled = false;
         for (const stateStore of [sync, store]) {

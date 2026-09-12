@@ -46,7 +46,7 @@ function installStateRuntime({
   bulkReads?: boolean;
   beforeOperation?: (
     namespace: string,
-    operation: "register" | "entries",
+    operation: "register" | "entries" | "count",
     key?: string,
   ) => Promise<void>;
 } = {}): void {
@@ -67,12 +67,16 @@ function installStateRuntime({
                 await beforeOperation(options.namespace, "entries");
                 return backingStore.entries();
               },
+              async count() {
+                await beforeOperation(options.namespace, "count");
+                return (await backingStore.count?.()) ?? (await backingStore.entries()).length;
+              },
             }
           : backingStore;
         if (bulkReads) {
           return store;
         }
-        const { lookupMany: _lookupMany, ...legacy } = store;
+        const { lookupMany: _lookupMany, count: _count, ...legacy } = store;
         return legacy;
       },
     },
@@ -423,11 +427,11 @@ describe("voice-call call record store", () => {
   it("propagates pruning rejection and preserves restore versus status read errors", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-read-error" }));
-    const failure = new Error("delayed SQLite listing rejected");
+    const failure = new Error("delayed SQLite read rejected");
     installStateRuntime({
       beforeOperation: async (_namespace, operation) => {
         await Promise.resolve();
-        if (operation === "entries") {
+        if (operation === "entries" || operation === "count") {
           throw failure;
         }
       },
