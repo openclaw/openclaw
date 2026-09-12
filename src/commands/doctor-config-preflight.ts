@@ -2,6 +2,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
+import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import {
   parseConfigJson5,
   recoverConfigFromJsonRootSuffix,
@@ -10,7 +11,7 @@ import {
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveIsConfigReadOnly, resolveStateDir } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -59,6 +60,7 @@ import {
 import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
+import { isLegacyPackageUpdateDoctorPass } from "./doctor/shared/update-phase.js";
 
 const loadState = createLazyRuntimeModule(() => import("../infra/state-migrations.state-dir.js"));
 
@@ -411,11 +413,16 @@ export async function runDoctorConfigPreflight(
     }
 
     let baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+    // Legacy parents have no later repair handoff; the planner still fully validates plugins.
     let automaticConfigRepair =
       activeConfigRepair ??
-      (gatewayStartupCheckpointRequired &&
+      ((gatewayStartupCheckpointRequired ||
+        (stateMigrationsRequested && options.migrateLegacyConfig !== false)) &&
       !snapshot.valid &&
-      !shouldSkipPluginValidationForDoctorConfigPreflight()
+      (!shouldSkipPluginValidationForDoctorConfigPreflight() ||
+        (!gatewayStartupCheckpointRequired && isLegacyPackageUpdateDoctorPass(process.env))) &&
+      !resolveIsConfigReadOnly(process.env) &&
+      !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot })
         ? planScopedConfigRepair(snapshot)
         : null);
     shouldPersistRefreshedPluginIndex =
@@ -656,7 +663,7 @@ export async function runDoctorConfigPreflight(
         ),
       );
       note(
-        `Migrated legacy config keys${activeConfigRepair ? " in the active openclaw.json" : " at startup"}:\n${automaticConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
+        `Migrated legacy config keys${gatewayStartupCheckpointRequired ? " at startup" : " in the active openclaw.json"}:\n${automaticConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
         "Doctor changes",
       );
       configSnapshotRead = await readConfigSnapshotForPreflight(false);

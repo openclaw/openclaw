@@ -21,7 +21,8 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 function createRepairableConfig(home: string) {
   return {
     agents: { entries: { main: { workspace: path.join(home, "workspace") } } },
-    browser: { enabled: false, actionTimeoutMs: 5000 },
+    // A typo requires a repair proposal; known retired keys normalize automatically.
+    browser: { enabled: false, actionTimeoutTypoMs: 5000 },
     gateway: { mode: "local" },
     logging: { level: "info", file: path.join(home, "doctor.log") },
     plugins: { enabled: false },
