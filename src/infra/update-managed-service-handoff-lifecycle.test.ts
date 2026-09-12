@@ -485,6 +485,7 @@ describe("managed service update handoff", () => {
       expect(commands).toEqual([]);
       expect(parentSignal).toBeNull();
       expect(repairEffects, log).toEqual({
+        packagedReadOnly: true,
         firstSpawn: true,
         secondSpawn: !revoke,
         firstExec: true,
