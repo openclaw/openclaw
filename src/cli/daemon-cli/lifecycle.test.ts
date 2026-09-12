@@ -457,6 +457,47 @@ describe("runDaemonRestart health checks", () => {
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
   });
 
+  it("passes the installed service environment to migration-aware restart waits", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-service-state",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+      },
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-service-state",
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+        }),
+      }),
+    );
+  });
+
+  it("reports the elapsed migration-aware timeout duration", async () => {
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      waitOutcome: "timeout",
+      elapsedMs: 360_000,
+    });
+
+    const error = await expectRestartError(runDaemonRestart({ json: true }));
+    expect(error.message).toBe("Gateway restart timed out after 360s waiting for health checks.");
+  });
+
   it("waits longer for Windows gateway restart health", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     waitForGatewayHealthyRestart.mockResolvedValue({

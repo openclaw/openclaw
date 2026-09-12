@@ -56,7 +56,7 @@ function postRestartHealthAttempts(): number {
 function formatRestartFailure(params: {
   health: GatewayRestartSnapshot;
   port: number;
-  timeoutSeconds: number;
+  defaultTimeoutSeconds: number;
 }): { statusLine: string; failMessage: string } {
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
@@ -66,13 +66,24 @@ function formatRestartFailure(params: {
     };
   }
 
+  const timeoutSeconds = Math.max(
+    1,
+    Math.round(
+      params.health.elapsedMs === undefined
+        ? params.defaultTimeoutSeconds
+        : params.health.elapsedMs / 1000,
+    ),
+  );
   return {
-    statusLine: `Timed out after ${params.timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${params.timeoutSeconds}s waiting for health checks.`,
+    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
+    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
 }
 
-async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
+async function resolveGatewayLifecycleContext(service = resolveGatewayService()): Promise<{
+  port: number;
+  env: NodeJS.ProcessEnv;
+}> {
   const command = await service.readCommand(process.env).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
   const mergedEnv = {
@@ -81,7 +92,14 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   } as NodeJS.ProcessEnv;
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
+  return {
+    port: portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv),
+    env: mergedEnv,
+  };
+}
+
+async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
+  return (await resolveGatewayLifecycleContext(service)).port;
 }
 
 function resolveGatewayPortFallback(): Promise<number> {
@@ -324,9 +342,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPortFallback(),
-  );
+  const restartContext = await resolveGatewayLifecycleContext(service).catch(async () => ({
+    port: await resolveGatewayPortFallback(),
+    env: process.env,
+  }));
+  const restartPort = restartContext.port;
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
@@ -390,6 +410,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         port: restartPort,
         attempts: restartHealthAttempts,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        env: restartContext.env,
         includeUnknownListenersAsStale: process.platform === "win32",
       });
 
@@ -413,6 +434,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: restartPort,
           attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          env: restartContext.env,
           includeUnknownListenersAsStale: process.platform === "win32",
         });
       }
@@ -425,7 +447,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const failure = formatRestartFailure({
         health,
         port: restartPort,
-        timeoutSeconds: restartWaitSeconds,
+        defaultTimeoutSeconds: restartWaitSeconds,
       });
       const runningNoPortLine =
         health.runtime.status === "running" && health.portUsage.status === "free"

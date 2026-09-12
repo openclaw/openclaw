@@ -1674,6 +1674,7 @@ async function runUpdatedInstallGatewayRestart(params: {
   invocationCwd?: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  timeoutMs: number;
 }): Promise<boolean> {
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
@@ -1691,7 +1692,7 @@ async function runUpdatedInstallGatewayRestart(params: {
     {
       cwd: params.result.root,
       env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
-      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+      timeoutMs: params.timeoutMs,
     },
   );
   if (res.code === 0) {
@@ -2570,6 +2571,7 @@ async function maybeRestartService(params: {
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
   requireRunningServiceAfterRestart?: boolean;
+  timeoutMs: number;
 }): Promise<boolean> {
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
@@ -2583,6 +2585,7 @@ async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         return;
       }
@@ -2759,6 +2762,7 @@ async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         if (
           updatedInstallRestartNeedsServiceRootProof &&
@@ -4626,6 +4630,7 @@ async function updateCommandInternal(
     skipLegacyServiceRestart,
     requireRunningServiceAfterRestart:
       resultWithPostUpdate.mode === "git" && preManagedServiceStop?.stopped === true,
+    timeoutMs: updateStepTimeoutMs,
   });
   if (!restartOk) {
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({

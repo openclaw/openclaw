@@ -1,14 +1,17 @@
 // Coordinates gateway startup migration version checkpoints in shared state.
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 type StartupMigrationCheckpointDatabase = Pick<
@@ -19,7 +22,7 @@ type StartupMigrationCheckpointDatabase = Pick<
 const STARTUP_MIGRATION_META_KEY = "startup-migrations";
 const STARTUP_MIGRATION_LEASE_SCOPE = "startup-migrations";
 const STARTUP_MIGRATION_LEASE_KEY = "global";
-const STARTUP_MIGRATION_LEASE_TTL_MS = 5 * 60_000;
+export const STARTUP_MIGRATION_LEASE_TTL_MS = 5 * 60_000;
 
 export type StartupMigrationLease = {
   heartbeat: (params?: { nowMs?: number }) => void;
@@ -55,6 +58,35 @@ export function readStartupMigrationVersion(env: NodeJS.ProcessEnv = process.env
     );
     return row?.appVersion ?? null;
   });
+}
+
+/** Returns whether the canonical gateway startup-migration lease is still live. */
+export function hasActiveStartupMigrationLease(
+  params: { env?: NodeJS.ProcessEnv; nowMs?: number } = {},
+): boolean {
+  const env = params.env ?? process.env;
+  const pathname = resolveOpenClawStateSqlitePath(env);
+  if (!existsSync(pathname)) {
+    return false;
+  }
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  try {
+    const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
+    return Boolean(
+      executeSqliteQueryTakeFirstSync(
+        db,
+        stateDb
+          .selectFrom("state_leases")
+          .select("owner")
+          .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
+          .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
+          .where("expires_at", ">", params.nowMs ?? Date.now()),
+      ),
+    );
+  } finally {
+    db.close();
+  }
 }
 
 export function needsStartupMigrationCheckpoint(
