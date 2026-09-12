@@ -1544,7 +1544,7 @@ wa-popover.new-session-page__where-popover::part(body) {
     border-radius: var(--radius-sm);
     color: var(--muted);
     background: transparent;
-    cursor: pointer;
+    cursor: var(--cursor-action);
   }
 
   .new-session-page__touch-details svg {
