@@ -208,7 +208,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
   if (onlyPluginIds.length === 0 || params.providerIds?.length === 0) {
     return [];
   }
-  return resolveProviderPluginsForHooks({
+  const providers = resolveProviderPluginsForHooks({
     ...params,
     workspaceDir,
     env,
@@ -216,6 +216,10 @@ function resolveProviderPluginsForCatalogHooks(params: {
     providerRefs: params.providerIds,
     pluginMetadataSnapshot: params.metadataSnapshot,
   });
+  const providerIds = params.providerIds;
+  return providerIds
+    ? providers.filter((provider) => matchesAnyProviderPluginRef(provider, providerIds))
+    : providers;
 }
 
 export const runProviderDynamicModel = normalizedRuntimeHook("resolveDynamicModel");
