@@ -276,12 +276,12 @@ export class RequestClient {
     try {
       // No async work may separate the live-owner check from this HTTP attempt.
       params.assertConversationReadAuthority?.();
-      const response = await (this.customFetch ?? fetch)(url, {
-        method,
-        headers,
-        body,
-        signal,
-      });
+      // A shared scheduler may execute under another request's async context.
+      // Restore this queued request's captured owner for transport preflight too.
+      const response = await discordConversationReadAuthority.run(
+        params.assertConversationReadAuthority,
+        () => (this.customFetch ?? fetch)(url, { method, headers, body, signal }),
+      );
       const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);

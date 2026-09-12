@@ -986,7 +986,12 @@ export const sendHandlers: GatewayRequestHandlers = {
             (request.action === "poll" && Boolean(plugin?.outbound?.sendPoll))) &&
           (!plugin?.actions?.handleAction ||
             plugin.actions.supportsAction?.({ action: request.action }) === false);
-        if (!plugin || (!plugin.actions?.handleAction && !canonicalAction)) {
+        if (
+          !plugin ||
+          (!plugin.actions?.handleAction &&
+            plugin.actions?.conversationReadAuthority?.version !== 2 &&
+            !canonicalAction)
+        ) {
           respond(
             false,
             undefined,

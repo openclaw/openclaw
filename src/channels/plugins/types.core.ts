@@ -778,6 +778,8 @@ export type ChannelMessageActionContextV2 = Omit<
   "assertConversationReadAuthority"
 > & {
   assertConversationReadAuthority: () => void;
+  /** Resolve host-owned targets within the provider authority scope before handling. */
+  prepareConversationReadTarget: () => Promise<void>;
 };
 
 /** Opt-in read entrypoint kept separate from the source-compatible legacy action handler. */

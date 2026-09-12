@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { discordConversationReadAuthority } from "./conversation-read-authority.js";
 import { discordDirectoryCacheState } from "./directory-cache-state.js";
 
 const DISCORD_DIRECTORY_CACHE_MAX_ENTRIES = 4000;
@@ -67,6 +68,7 @@ export function rememberDiscordDirectoryUser(params: {
   userId: string | number | bigint;
   handles: Array<string | null | undefined>;
 }): void {
+  discordConversationReadAuthority.getStore()?.();
   const userId = normalizeSnowflake(params.userId);
   if (!userId) {
     return;

@@ -528,7 +528,10 @@ export async function executeMessagePlugin(
     };
   }
 
-  if (!channelPlugin?.actions?.handleAction) {
+  if (
+    !channelPlugin?.actions?.handleAction &&
+    channelPlugin?.actions?.conversationReadAuthority?.version !== 2
+  ) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
 

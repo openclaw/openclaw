@@ -125,6 +125,9 @@ describe("official channel delegated read provenance", () => {
     expectTypeOf<
       Parameters<ChannelMessageReadAuthorityAdapterV2["handleAction"]>[0]
     >().toEqualTypeOf<ChannelMessageActionContextV2>();
+    expectTypeOf<ChannelMessageActionContextV2["prepareConversationReadTarget"]>().toEqualTypeOf<
+      () => Promise<void>
+    >();
     expectTypeOf<ChannelMessageActionContextV2["assertConversationReadAuthority"]>().toEqualTypeOf<
       () => void
     >();
@@ -242,7 +245,8 @@ describe("official channel delegated read provenance", () => {
   ] as const)("enforces registered $name across conversations", async (testCase) => {
     const { handleAction } = registerChannel(testCase);
     if (testCase.allowed) {
-      expect(shouldDeferExternalMessageActionTargetResolution(context)).toBe(false);
+      // Trusted reads still defer directory I/O until the V2 authority scope.
+      expect(shouldDeferExternalMessageActionTargetResolution(context)).toBe(true);
       expect(prepareExternalMessageActionTargetForResolution(context)).toEqual(context.params);
       expect(await dispatchChannelMessageAction(context)).toBe(receipt);
       expect(handleAction).toHaveBeenCalledOnce();

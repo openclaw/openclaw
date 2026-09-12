@@ -274,9 +274,10 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   conversationReadAuthority: {
     version: 2,
     handleAction: async (ctx) =>
-      await discordConversationReadAuthority.run(ctx.assertConversationReadAuthority, async () =>
-        handleDiscordAction(ctx),
-      ),
+      await discordConversationReadAuthority.run(ctx.assertConversationReadAuthority, async () => {
+        await ctx.prepareConversationReadTarget();
+        return handleDiscordAction(ctx);
+      }),
   },
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,

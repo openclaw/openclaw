@@ -87,6 +87,7 @@ function invoke(overrides: Partial<ChannelMessageActionContext> = {}) {
     return adapter.handleAction({
       ...context,
       assertConversationReadAuthority: context.assertConversationReadAuthority,
+      prepareConversationReadTarget: async () => {},
     });
   }
   return discordMessageActions.handleAction(context);

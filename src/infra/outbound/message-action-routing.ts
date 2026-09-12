@@ -30,12 +30,8 @@ import {
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import { enforceCrossContextPolicy } from "./outbound-policy.js";
-import {
-  invalidMessageActionTargetError,
-  missingMessageActionTargetError,
-} from "./target-errors.js";
+import { missingMessageActionTargetError } from "./target-errors.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
-import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
 async function resolveChannel(
   cfg: OpenClawConfig,
@@ -158,77 +154,6 @@ function resolveTargetBoundAccountId(params: {
     exactPeerIdAliases,
     peerKind: inferPeerKindForAccountBinding(params.channel, target, params.channelPlugin),
   });
-}
-
-async function resolveActionTarget(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  action: ChannelMessageActionName;
-  args: Record<string, unknown>;
-  accountId?: string | null;
-  plugin?: ChannelPlugin;
-}): Promise<ResolvedMessagingTarget | undefined> {
-  let resolvedTarget: ResolvedMessagingTarget | undefined;
-  const toRaw = normalizeOptionalString(params.args.to) ?? "";
-  if (toRaw) {
-    const resolved = await resolveResolvedTargetOrThrow({
-      cfg: params.cfg,
-      channel: params.channel,
-      input: toRaw,
-      accountId: params.accountId ?? undefined,
-      plugin: params.plugin,
-    });
-    params.args.to = resolved.to;
-    resolvedTarget = resolved;
-  }
-  const channelIdRaw = normalizeOptionalString(params.args.channelId) ?? "";
-  if (channelIdRaw) {
-    const resolved = await resolveResolvedTargetOrThrow({
-      cfg: params.cfg,
-      channel: params.channel,
-      input: channelIdRaw,
-      accountId: params.accountId ?? undefined,
-      plugin: params.plugin,
-      preferredKind: "group",
-      validateResolvedTarget: (target) =>
-        target.kind === "user"
-          ? `Channel id "${channelIdRaw}" resolved to a user target.`
-          : undefined,
-    });
-    params.args.channelId = sanitizeGroupTargetId(resolved.to);
-  }
-  return resolvedTarget;
-}
-
-function sanitizeGroupTargetId(target: string): string {
-  return target.replace(/^(channel|group):/i, "");
-}
-
-async function resolveResolvedTargetOrThrow(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  input: string;
-  accountId?: string;
-  plugin?: ChannelPlugin;
-  preferredKind?: "group" | "user" | "channel";
-  validateResolvedTarget?: (target: ResolvedMessagingTarget) => string | undefined;
-}): Promise<ResolvedMessagingTarget> {
-  const resolved = await resolveChannelTarget({
-    cfg: params.cfg,
-    channel: params.channel,
-    input: params.input,
-    accountId: params.accountId,
-    preferredKind: params.preferredKind,
-    plugin: params.plugin,
-  });
-  if (!resolved.ok) {
-    throw resolved.error;
-  }
-  const validationError = params.validateResolvedTarget?.(resolved.target);
-  if (validationError) {
-    throw invalidMessageActionTargetError(validationError);
-  }
-  return resolved.target;
 }
 
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
@@ -422,10 +347,8 @@ export async function prepareMessageRoute(params: {
     cfg,
     agentId,
   });
-  const defersExternalTargetResolution =
-    delegatesActionToGateway &&
-    !dryRun &&
-    shouldDeferExternalMessageActionTargetResolution({
+  const defersExternalTargetResolution = shouldDeferExternalMessageActionTargetResolution(
+    {
       channel,
       action,
       cfg,
@@ -434,7 +357,9 @@ export async function prepareMessageRoute(params: {
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         input.conversationReadOrigin,
       ),
-    });
+    },
+    delegatesActionToGateway && !dryRun,
+  );
   if (!delegatesActionToGateway || dryRun) {
     const authorization = input.messageActionAuthorization;
     actionParams = prepareExternalMessageActionTargetForResolution({
@@ -464,35 +389,4 @@ export async function prepareMessageRoute(params: {
   };
 }
 
-export async function resolveMessageTarget(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  action: ChannelMessageActionName;
-  args: Record<string, unknown>;
-  accountId?: string | null;
-  toolContext?: ChannelThreadingToolContext;
-  agentId?: string | null;
-  deferExternalTargetResolution?: boolean;
-  plugin?: ChannelPlugin;
-}): Promise<ResolvedMessagingTarget | undefined> {
-  const resolvedTarget = params.deferExternalTargetResolution
-    ? undefined
-    : await resolveActionTarget({
-        cfg: params.cfg,
-        channel: params.channel,
-        action: params.action,
-        args: params.args,
-        accountId: params.accountId,
-        plugin: params.plugin,
-      });
-
-  enforceCrossContextPolicy({
-    channel: params.channel,
-    action: params.action,
-    args: params.args,
-    toolContext: params.toolContext,
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  return resolvedTarget;
-}
+export { resolveMessageTarget } from "./message-action-target-resolution.js";

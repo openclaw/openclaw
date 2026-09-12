@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { resetDirectoryCache } from "../../infra/outbound/target-resolver.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { revokePluginRecord } from "../../plugins/registry-lifecycle.js";
@@ -58,7 +60,7 @@ function responseFor(input: Parameters<typeof fetch>[0], init?: RequestInit) {
   }
 }
 
-function registerDiscord() {
+function registerDiscord(v2Only = false) {
   // This is registered-adapter composition proof, not installed-package provenance proof.
   const owner = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -75,7 +77,9 @@ function registerDiscord() {
   instances.add(instance);
   instance.run(() => {
     owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
-      plugin: discordPlugin,
+      plugin: v2Only
+        ? { ...discordPlugin, actions: { ...discordPlugin.actions, handleAction: undefined } }
+        : discordPlugin,
     });
   });
   setActivePluginRegistry(owner.registry);
@@ -87,6 +91,9 @@ function invoke(
     allowed?: boolean;
     currentChannel?: string;
     requesterAccountId?: string;
+    runner?: boolean;
+    target?: string;
+    dryRun?: boolean;
   } = {},
 ) {
   const cfg: OpenClawConfig = {
@@ -108,8 +115,9 @@ function invoke(
     channel: "discord",
     action: "read",
     cfg,
-    params: { channelId, limit: 1 },
+    params: { channelId: options.target ?? channelId, limit: 1 },
     accountId: "default",
+    dryRun: options.dryRun,
     requesterAccountId: options.requesterAccountId ?? "default",
     conversationReadOrigin: "delegated",
     toolContext: {
@@ -117,10 +125,13 @@ function invoke(
       currentChannelId: options.currentChannel ?? currentChannelId,
     },
   };
-  return dispatchChannelMessageAction(context);
+  return options.runner
+    ? runMessageAction({ ...context, params: { ...context.params, channel: "discord" } })
+    : dispatchChannelMessageAction(context);
 }
 
 beforeEach(() => {
+  resetDirectoryCache();
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (input, init) => responseFor(input, init));
   vi.stubGlobal("fetch", fetchMock);
@@ -138,6 +149,61 @@ afterEach(async () => {
 });
 
 describe("registered official Discord read authority through HTTP", () => {
+  it("runs a V2-only adapter through the real message-tool runner", async () => {
+    registerDiscord(true);
+    await expect(invoke({ runner: true })).resolves.toMatchObject({ kind: "action" });
+    expect(fetchMock.mock.calls.map(([input]) => requestPath(input))).toEqual([
+      channelPath,
+      messagesPath,
+    ]);
+  });
+
+  it("keeps official dry runs network-free without claiming name validation", async () => {
+    registerDiscord();
+    await expect(
+      invoke({ runner: true, target: "unverified-name", dryRun: true }),
+    ).resolves.toMatchObject({ handledBy: "dry-run", dryRun: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a named target inside the real runner's fenced provider path", async () => {
+    registerDiscord();
+    fetchMock.mockImplementation(async (input, init) => {
+      const path = requestPath(input);
+      if (path === "/users/@me/guilds") return jsonResponse([{ id: guildId, name: "fixture" }]);
+      if (path === `/guilds/${guildId}/channels`) return jsonResponse([channel]);
+      return responseFor(input, init);
+    });
+    await expect(invoke({ runner: true, target: "synthetic-target" })).resolves.toMatchObject({
+      kind: "action",
+    });
+    expect(fetchMock.mock.calls.map(([input]) => requestPath(input))).toContain(messagesPath);
+  });
+
+  it("stops directory continuation after revocation during named-target lookup", async () => {
+    const { revoke } = registerDiscord();
+    const started = createDeferred();
+    const release = createDeferred();
+    fetchMock.mockImplementation(async (input) => {
+      expect(requestPath(input)).toBe("/users/@me/guilds");
+      started.resolve();
+      await release.promise;
+      return jsonResponse([{ id: guildId, name: "fixture" }]);
+    });
+    const pending = invoke({ runner: true, target: "synthetic-target" });
+    const result = Promise.allSettled([pending]);
+    await Promise.race([
+      started.promise,
+      pending.then(() => {
+        throw new Error("Expected directory lookup");
+      }),
+    ]);
+    revoke();
+    release.resolve();
+    expect((await result)[0]).toMatchObject({ status: "rejected", reason: expect.any(Error) });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("allows configured cross-conversation reads through the real adapter", async () => {
     registerDiscord();
     await expect(invoke()).resolves.toMatchObject({ details: { ok: true } });
