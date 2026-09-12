@@ -6,7 +6,9 @@ import {
   resamplePcm,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import {
+  OpenAIQuicksilverAudioClock,
   OpenAIQuicksilverPendingAudio,
+  OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS,
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
 } from "./realtime-quicksilver-audio-buffer.js";
 
@@ -14,7 +16,6 @@ const QUICKSILVER_SAMPLE_RATE = 48_000;
 const RELAY_SAMPLE_RATE = 24_000;
 const QUICKSILVER_CHANNELS = 2;
 const OPUS_FRAME_SAMPLES = 960;
-const OPUS_FRAME_DURATION_MS = 20;
 // The centered 31-tap filter withholds 15 input samples. Prime the 2x path with
 // the matching 30-sample silence so every Opus tick still receives one full frame.
 const OUTBOUND_RESAMPLE_PREROLL_SAMPLES = 30;
@@ -177,7 +178,10 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private outboundPacketFailed = false;
   private activeInboundSsrc: number | undefined;
   private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
-  private mediaTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly audioClock = new OpenAIQuicksilverAudioClock((skippedFrames) => {
+    this.timestamp = (this.timestamp + skippedFrames * OPUS_FRAME_SAMPLES) >>> 0;
+    this.sendNextAudioFrame();
+  });
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
   private pendingResampledAudio = Buffer.alloc(OUTBOUND_RESAMPLE_PREROLL_SAMPLES * 2);
   private readonly inboundResampler = createStreamingPcmResampler(
@@ -210,9 +214,10 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       }
       if (connectionState === "connected") {
         this.connected = true;
-        this.startMediaPump();
+        this.audioClock.start();
       } else if (["failed", "disconnected", "closed"].includes(connectionState)) {
         this.connected = false;
+        this.audioClock.stop();
         // werift-ice 0.2.2 exits consent polling after setting disconnected
         // (lib/ice/src/ice.js:289), so recovery requires an explicit ICE restart.
         this.state.callbacks.onError(
@@ -265,10 +270,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       return;
     }
     this.closed = true;
-    if (this.mediaTimer) {
-      clearTimeout(this.mediaTimer);
-      this.mediaTimer = undefined;
-    }
+    this.audioClock.stop();
     this.pendingAudio.clear();
     this.pendingResampledAudio = Buffer.alloc(0);
     this.inboundResampler.flush();
@@ -332,6 +334,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.flushInboundReorderWindow(state);
       this.scheduleInboundFlush(state);
     } catch (error) {
+      this.audioClock.stop();
       this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
     }
   }
@@ -403,9 +406,10 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       try {
         this.flushInboundReorderWindow(state, true);
       } catch (error) {
+        this.audioClock.stop();
         this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
       }
-    }, INBOUND_REORDER_DEPTH * OPUS_FRAME_DURATION_MS);
+    }, INBOUND_REORDER_DEPTH * OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS);
     state.flushTimer.unref?.();
   }
 
@@ -458,30 +462,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     }
   }
 
-  private startMediaPump(): void {
-    if (this.mediaTimer || this.closed) {
-      return;
-    }
-    let nextFrameAt = performance.now();
-    const tick = () => {
-      if (this.closed) {
-        return;
-      }
-      // Skip elapsed media slots after a stall without draining queued microphone audio.
-      const missedSlots = Math.max(
-        0,
-        Math.floor((performance.now() - nextFrameAt) / OPUS_FRAME_DURATION_MS),
-      );
-      this.timestamp = (this.timestamp + missedSlots * OPUS_FRAME_SAMPLES) >>> 0;
-      nextFrameAt += (missedSlots + 1) * OPUS_FRAME_DURATION_MS;
-      // Publish before sending so synchronous error teardown can cancel the next tick.
-      this.mediaTimer = setTimeout(tick, Math.max(0, nextFrameAt - performance.now()));
-      this.mediaTimer.unref?.();
-      this.sendNextAudioFrame();
-    };
-    tick();
-  }
-
   private sendNextAudioFrame(): void {
     if (!this.connected || this.closed) {
       return;
@@ -521,6 +501,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
           // A successful send restores usability. Another failure without one
           // means the transport cannot sustain packet-level recovery.
           if (this.outboundPacketFailed) {
+            this.audioClock.stop();
             this.state.callbacks.onError(
               toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"),
             );
@@ -531,6 +512,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         },
       );
     } catch (error) {
+      this.audioClock.stop();
       this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
     }
   }

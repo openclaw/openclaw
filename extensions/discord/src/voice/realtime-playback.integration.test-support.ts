@@ -13,7 +13,10 @@ import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
 
-export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) => void) {
+export function createRealtimePlaybackFixture(
+  onTalkEvent?: (event: TalkEvent) => void,
+  options: { outputAudioMode?: "response" | "continuous"; bargeIn?: boolean } = {},
+) {
   const voiceSdk = loadDiscordVoiceSdk();
   const player = voiceSdk.createAudioPlayer({
     behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
@@ -98,7 +101,8 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
       mode: "agent-proxy",
       onTerminalError,
       providerId: () => "openai",
-      realtimeConfig: () => undefined,
+      realtimeConfig: () =>
+        options.bargeIn === undefined ? undefined : { bargeIn: options.bargeIn },
       stopTerminally,
       stopped: () => closed,
       wakeNameRequired: () => false,
@@ -111,6 +115,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
         createBridge: (events) => {
           callbacks = events;
           return {
+            outputAudioMode: options.outputAudioMode,
             connect: async () => {},
             close: () => {},
             sendAudio: () => {},

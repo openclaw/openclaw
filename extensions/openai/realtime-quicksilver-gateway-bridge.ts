@@ -9,7 +9,11 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { type RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
-import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
+import {
+  OpenAIQuicksilverAudioClock,
+  OpenAIQuicksilverPendingAudio,
+  OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
+} from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import type {
   OpenAIQuicksilverAudioPeerCallbacks,
@@ -86,6 +90,9 @@ function describeSidebandClose(code: number, reason: string): string {
 export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation = false;
   readonly supportsToolResultSuppression = false;
+  readonly handlesInputAudioBargeIn = true;
+  readonly outputAudioMode = "continuous";
+  readonly pacesInputAudio = true;
 
   private abortController = new AbortController();
   private connectPromise: Promise<void> | undefined;
@@ -98,6 +105,19 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private providerSessionClosed = false;
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
+  private readonly audioClock = new OpenAIQuicksilverAudioClock(() => {
+    if (!this.ready || this.closed || this.sideband?.socket.readyState !== WEBSOCKET_OPEN) {
+      this.audioClock.stop();
+      return;
+    }
+    const frame = Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+    this.pendingAudio.readInto(frame);
+    try {
+      this.sendDirectAudio(frame);
+    } catch (error) {
+      this.fail(error instanceof Error ? error : new Error("GPT-Live input audio send failed"));
+    }
+  });
   private ready = false;
   private sideband: ActiveSideband | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -120,13 +140,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     if (this.closed) {
       return;
     }
-    if (
-      this.transport === "direct" &&
-      this.ready &&
-      this.sideband?.socket.readyState === WEBSOCKET_OPEN
-    ) {
-      this.sendDirectAudio(audio);
-    } else if (this.peer) {
+    if (this.peer) {
       this.peer.sendAudio(audio);
     } else if (!this.closed && !this.abortController.signal.aborted) {
       // Relay capture starts before transport readiness and may recycle its input buffers.
@@ -390,7 +404,12 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
           if (!this.ready) {
             this.connected = true;
             this.ready = true;
-            this.flushPendingDirectAudio();
+            if (this.transport === "direct") {
+              this.audioClock.start();
+            }
+            if (this.closed) {
+              return;
+            }
             this.config.onReady?.();
           }
           params?.onSessionStarted?.();
@@ -408,17 +427,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       },
       this.runtime.formatErrorMessage,
     );
-  }
-
-  private flushPendingDirectAudio(): void {
-    if (this.transport !== "direct" || this.pendingAudio.length === 0) {
-      return;
-    }
-    const audio = Buffer.allocUnsafe(this.pendingAudio.length);
-    const bytes = this.pendingAudio.readInto(audio);
-    if (bytes > 0) {
-      this.sendDirectAudio(audio.subarray(0, bytes));
-    }
   }
 
   private sendDirectAudio(audio: Buffer): void {
@@ -499,6 +507,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       return this.closingPromise;
     }
     this.closed = true;
+    this.audioClock.stop();
     this.closeReason = reason;
     const socket = this.sideband?.socket;
     if (
@@ -556,6 +565,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private releaseResources(disposition: RealtimeVoiceCloseDisposition): void {
+    this.audioClock.stop();
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;
     this.ready = false;

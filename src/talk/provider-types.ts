@@ -212,7 +212,7 @@ export type RealtimeVoiceProviderCapabilities = {
   outputAudioFormats: RealtimeVoiceAudioFormat[];
   supportsBrowserSession?: boolean;
   supportsBargeIn?: boolean;
-  /** True when provider VAD reports confirmed interruptions through onClearAudio("barge-in"). */
+  /** True when the provider owns interruption from incoming audio. */
   handlesInputAudioBargeIn?: boolean;
   supportsToolCalls?: boolean;
   /** True when user transcripts are reliable enough to gate responses on a leading wake name. */
@@ -356,6 +356,10 @@ export type RealtimeVoiceBrowserSession =
   | RealtimeVoiceBrowserManagedRoomSession;
 
 export type RealtimeVoiceBridge = {
+  /** Continuous audio has no response boundaries; the provider owns interruption. */
+  outputAudioMode?: "response" | "continuous";
+  /** Buffers input at its sample rate and supplies silence between microphone writes. */
+  pacesInputAudio?: boolean;
   supportsToolResultContinuation?: boolean;
   /** False when the provider cannot accept a tool result without starting a response. */
   supportsToolResultSuppression?: boolean;

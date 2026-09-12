@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
+import { OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   releaseOpenAIQuicksilverSession,
@@ -8,6 +9,85 @@ import {
 import { emitSideband, FakeSocket, parseSent } from "./realtime-quicksilver.test-helpers.js";
 
 describe("GPT-Live Gateway direct transport", () => {
+  it.each(["close", "transport-error"] as const)(
+    "paces buffered public microphone audio and silence until %s",
+    async (terminal) => {
+      let socket: FakeSocket | undefined;
+      const onReady = vi.fn();
+      const bridge = new OpenAIQuicksilverGatewayBridge(
+        {
+          providerConfig: {},
+          model: "gpt-live-1",
+          onAudio: vi.fn(),
+          onClearAudio: vi.fn(),
+          onReady,
+          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+          logger: { debug: vi.fn(), warn: vi.fn() },
+          resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
+          webSocketFactory: () => {
+            socket = new FakeSocket();
+            return socket;
+          },
+        },
+        openAIRealtimeHost,
+      );
+      const connection = bridge.connect();
+      await vi.waitFor(() => expect(socket?.sent).toHaveLength(1));
+      const connectedSocket = socket!;
+      const frames = [1, 2].map((value) =>
+        Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES, value),
+      );
+      const capture = Buffer.concat([...frames, Buffer.from([3, 4])]);
+      bridge.sendAudio(capture);
+      capture.fill(0);
+      const readAudio = () =>
+        parseSent(connectedSocket)
+          .filter((event) => event.type === "session.input_audio.append")
+          .map((event) => Buffer.from(String(event.audio), "base64"));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const timerNow = performance.now.bind(performance);
+      let suspensionMs = 0;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
+      try {
+        expect(readAudio()).toEqual([]);
+        emitSideband(connectedSocket, { type: "session.started", session: {} });
+        await connection;
+        expect(bridge.pacesInputAudio).toBe(true);
+        expect(onReady).toHaveBeenCalledOnce();
+        expect(readAudio()).toEqual([frames[0]]);
+        suspensionMs = 5_000;
+        await vi.advanceTimersByTimeAsync(20);
+        expect(readAudio()).toEqual(frames);
+        await vi.advanceTimersByTimeAsync(20);
+        const partial = Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+        partial.set([3, 4]);
+        expect(readAudio()).toEqual([...frames, partial]);
+        await vi.advanceTimersByTimeAsync(40);
+        expect(readAudio()).toEqual([
+          ...frames,
+          partial,
+          Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
+          Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
+        ]);
+        if (terminal === "transport-error") {
+          connectedSocket.emit("error", new Error("synthetic transport failure"));
+        }
+        const closing = bridge.close();
+        const beforeClose = connectedSocket.sent.length;
+        bridge.sendAudio(frames[0]!);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(connectedSocket.sent).toHaveLength(beforeClose);
+        emitSideband(connectedSocket, { type: "session.closed", reason: "close_requested" });
+        await closing;
+      } finally {
+        emitSideband(connectedSocket, { type: "session.closed", reason: "close_requested" });
+        await bridge.close();
+        now.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps a public provider error authoritative through reentrant transcript cleanup", async () => {
     let socket: FakeSocket | undefined;
     const onClose = vi.fn();
@@ -249,14 +329,14 @@ describe("GPT-Live Gateway direct transport", () => {
       vi.useFakeTimers();
       emitSideband(connectedSocket, {
         type: "session.started",
-        session: {},
+        session: { expires_at: Math.floor(Date.now() / 1000) + 1 },
       });
       await connection;
 
       expect(onReady).toHaveBeenCalledOnce();
       expect(parseSent(connectedSocket)).toContainEqual({
         type: "input_audio.append",
-        audio: "AQI=",
+        audio: Buffer.concat([Buffer.from([0x01, 0x02]), Buffer.alloc(958)]).toString("base64"),
       });
       emitSideband(connectedSocket, {
         type: "output_audio.delta",
@@ -279,7 +359,7 @@ describe("GPT-Live Gateway direct transport", () => {
           parseSent(connectedSocket).filter((event) => event.type === "delegation.context.append"),
         ).toHaveLength(1),
       );
-      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
     } finally {
       vi.useRealTimers();

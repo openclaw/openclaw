@@ -196,6 +196,9 @@ describe("OpenAI realtime voice provider routing", () => {
     ).toMatchObject({
       handlesAgentConsult: true,
       supportsToolCalls: false,
+      supportsBargeIn: false,
+      handlesInputAudioBargeIn: true,
+      supportsActivationNameGating: false,
       voices,
       voiceSelectionPolicy: "allowlist-default",
     });

@@ -188,6 +188,7 @@ export {
 } from "../talk/provider-registry.js";
 export {
   resolveConfiguredRealtimeVoiceProvider,
+  resolveRealtimeVoiceProviderCapabilities,
   type ResolvedRealtimeVoiceProvider,
   type ResolveConfiguredRealtimeVoiceProviderParams,
 } from "../talk/provider-resolver.js";

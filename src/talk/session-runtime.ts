@@ -6,6 +6,7 @@ import {
 } from "./agent-run-control-shared.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
@@ -76,6 +77,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
+  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   handleDelegationInput?: RealtimeVoiceBridgeCallbacks["handleDelegationInput"];
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
@@ -101,6 +103,7 @@ export function createRealtimeVoiceBridgeSession(
 ): RealtimeVoiceBridgeSession {
   const bridgeRef: { current?: RealtimeVoiceBridge } = {};
   const handleDelegationInput = params.handleDelegationInput;
+  const runAgentConsult = params.runAgentConsult;
   const getPlaybackState = params.audioSink.getPlaybackState;
   // Local disposal owns provider cleanup. Only a terminal callback fired before bridge
   // adoption may reopen; adopted bridges own reconnects and stale-event fencing internally.
@@ -231,6 +234,22 @@ export function createRealtimeVoiceBridgeSession(
     autoRespondToAudio: params.autoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
+    ...(runAgentConsult
+      ? {
+          runAgentConsult: async (request) => {
+            if (!isAdmitting()) {
+              throw new Error("Realtime voice session is closed");
+            }
+            request.signal?.throwIfAborted();
+            const result = await runAgentConsult(request);
+            request.signal?.throwIfAborted();
+            if (!isAdmitting()) {
+              throw new Error("Realtime voice session is closed");
+            }
+            return result;
+          },
+        }
+      : {}),
     onAudio: (audio, metadata) => {
       if (canSendAudio()) {
         params.audioSink.sendAudio(audio, metadata);

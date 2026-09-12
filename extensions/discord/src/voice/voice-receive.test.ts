@@ -46,6 +46,31 @@ defineDiscordVoiceTests(
     receiveRecordedSpeech,
     agentCommandMock,
   }) => {
+    it.each([false, true])(
+      "keeps Live microphone input open during playback without local interruption (recording: %s)",
+      async (recording) => {
+        realtimeSessionMock.bridge.outputAudioMode = "continuous";
+        resolveVoiceIngressWithParticipantsMock.mockResolvedValue({
+          speakerLabel: "Speaker",
+          senderIsOwner: true,
+        });
+        const manager = createAgentProxyManager();
+        try {
+          await manager.join({ guildId: "g1", channelId: "1001" });
+          if (recording) {
+            await startTranscripts(manager, vi.fn());
+          }
+          const entry = getSessionEntry(manager);
+          getLastAudioPlayer().state.status = "playing";
+          await receiveRecordedSpeech(manager, "A spoken interruption", entry);
+          expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+          expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
+
     it.each(["agent-proxy", "bidi"] as const)(
       "keeps exact capture and %s conversation after destructive recovery",
       async (mode) => {

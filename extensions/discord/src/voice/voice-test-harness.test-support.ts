@@ -137,6 +137,8 @@ function buildVoiceTestHarness() {
     realtimeSessionMock.setMediaTimestamp.mockClear();
     realtimeSessionMock.submitToolResult.mockClear();
     realtimeSessionMock.bridge.supportsToolResultSuppression = true;
+    realtimeSessionMock.bridge.pacesInputAudio = false;
+    realtimeSessionMock.bridge.outputAudioMode = "response";
     createRealtimeVoiceBridgeSessionMock.mockReset();
     createRealtimeVoiceBridgeSessionMock.mockImplementation(() =>
       createRealtimeVoiceBridgeSessionMock.mock.calls.length === 1

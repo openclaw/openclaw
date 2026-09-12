@@ -118,6 +118,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   runtime: RuntimeEnv;
   context?: DiscordVoiceIngressContext;
   toolsAllow?: string[];
+  signal?: AbortSignal;
   admissionAllowFrom?: string[];
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
@@ -137,6 +138,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   if (!context) {
     return null;
   }
+  params.signal?.throwIfAborted();
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
   const result = await getDiscordRuntime().agent.runCommandFromIngress(
     {
@@ -152,6 +154,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       model: voiceModel,
       toolsAllow: params.toolsAllow,
       deliver: false,
+      ...(params.signal ? { abortSignal: params.signal } : {}),
     },
     params.runtime,
   );

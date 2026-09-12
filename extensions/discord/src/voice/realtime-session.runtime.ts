@@ -139,6 +139,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     return session?.isBargeInEnabled() ?? false;
   }
 
+  canReceiveDuringPlayback(): boolean {
+    const session = this.warmSession ?? this.sessions.values().next().value?.session;
+    return session?.canReceiveDuringPlayback() ?? false;
+  }
+
   private createSession(): DiscordRealtimeSpeakerSession {
     const session = new DiscordRealtimeSpeakerSession({
       ...this.params,
