@@ -590,3 +590,80 @@ describe("mediaKindFromMime", () => {
     expect(kindFromMime(mime)).toBe(expected);
   });
 });
+
+// A remote sender controls the Content-Type header, so a header value that names
+// an Object.prototype member must classify like any other unknown type instead of
+// resolving to an inherited object/function that breaks the next string operation.
+describe("prototype-named MIME values", () => {
+  it.each([
+    "__proto__",
+    "constructor",
+    "__defineGetter__",
+    "__lookupSetter__",
+    "toString",
+    "valueOf",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+  ] as const)("treats %s as an unknown MIME type", (raw) => {
+    const normalized = normalizeMimeType(raw);
+    expect(typeof normalized).toBe("string");
+    expect(normalized).toBe(raw.toLowerCase());
+    expect(extensionForMime(raw)).toBeUndefined();
+    expect(kindFromMime(raw)).toBeUndefined();
+  });
+
+  it.each([
+    { raw: "__proto__; charset=utf-8", expected: "__proto__" },
+    { raw: " Constructor ; charset=utf-8", expected: "constructor" },
+    { raw: "   ", expected: undefined },
+    { raw: "", expected: undefined },
+  ] as const)("normalizes parameterized prototype name $raw", ({ raw, expected }) => {
+    expect(normalizeMimeType(raw)).toBe(expected);
+    expect(extensionForMime(raw)).toBeUndefined();
+    expect(kindFromMime(raw)).toBeUndefined();
+  });
+
+  it("does not leak an inherited value for an oversized prototype-named header", () => {
+    const raw = `constructor${"x".repeat(64 * 1024)}`;
+    expect(normalizeMimeType(raw)).toBe(raw);
+    expect(extensionForMime(raw)).toBeUndefined();
+  });
+
+  it("never returns an inherited value from detectMime header hints", async () => {
+    // detectMime keeps the normalized header as its last-resort fallback, so the
+    // contract is "a plain unknown-type string", never an inherited object.
+    for (const headerMime of ["__proto__", "constructor"] as const) {
+      const detected = await detectMime({ headerMime });
+      expect(typeof detected).toBe("string");
+      expect(detected).toBe(headerMime);
+      expect(kindFromMime(detected)).toBeUndefined();
+      expect(extensionForMime(detected)).toBeUndefined();
+    }
+  });
+});
+
+describe("known MIME types are unchanged", () => {
+  it.each([
+    { mime: "image/png", ext: ".png", kind: "image" },
+    { mime: "text/html", ext: ".html", kind: "document" },
+    { mime: "text/html; charset=utf-8", ext: ".html", kind: "document" },
+    { mime: "application/pdf", ext: ".pdf", kind: "document" },
+    { mime: "text/csv", ext: ".csv", kind: "document" },
+    { mime: "text/plain", ext: ".txt", kind: "document" },
+    { mime: "image/apng", ext: ".png", kind: "image" },
+  ] as const)("keeps $mime mapped to $ext", ({ mime, ext, kind }) => {
+    expect(extensionForMime(mime)).toBe(ext);
+    expect(kindFromMime(mime)).toBe(kind);
+  });
+
+  it.each([
+    { filePath: "note.html", expected: "text/html" },
+    { filePath: "note.txt", expected: "text/plain" },
+    { filePath: "sheet.csv", expected: "text/csv" },
+    { filePath: "doc.pdf", expected: "application/pdf" },
+    { filePath: "no-extension", expected: undefined },
+  ] as const)("maps $filePath to $expected", ({ filePath, expected }) => {
+    expect(mimeTypeFromFilePath(filePath)).toBe(expected);
+  });
+});
