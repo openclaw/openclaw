@@ -535,14 +535,18 @@ describe("claudeCliSessionTranscriptHasContent", () => {
     });
     // Outside the env override the transcript must not resolve under the
     // default <homeDir>/.claude/projects tree, proving it was written to and
-    // read from $CLAUDE_CONFIG_DIR/projects instead.
-    expect(
-      await claudeCliSessionTranscriptHasContent({
-        sessionId: "config-dir-session",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
+    // read from $CLAUDE_CONFIG_DIR/projects instead. Use a direct path check
+    // to avoid the grace-period wait and warning side-effect of the probe.
+    const defaultProjectDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+      homeDir: tmpDir,
+    });
+    const defaultTranscriptPath = path.join(defaultProjectDir, "config-dir-session.jsonl");
+    const exists = await fs
+      .access(defaultTranscriptPath)
+      .then(() => true)
+      .catch(() => false);
+    expect(exists).toBe(false);
   });
 
   it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
