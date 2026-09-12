@@ -58,6 +58,32 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it.each(["error", "turn/completed"] as const)(
+    "reconstructs permanent OpenAI OAuth evidence from Codex %s failures",
+    async (method) => {
+      const projector = await createProjector();
+      const error = {
+        message: "auth refresh request failed: code=-32090",
+        codexErrorInfo: "other",
+      };
+      await projector.handleNotification(
+        forCurrentTurn(
+          method,
+          method === "error"
+            ? { error, willRetry: false }
+            : { turn: { id: TURN_ID, status: "failed", items: [], error } },
+        ),
+      );
+
+      const terminal = readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()));
+      expect(terminal.promptError).toMatchObject({
+        name: "Error",
+        message: "OAuth reauthentication required",
+        rawError: "OAuth token refresh failed for openai: sign_in_again",
+      });
+    },
+  );
+
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
 

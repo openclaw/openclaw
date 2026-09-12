@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexExternalAuthReauthFailure } from "./auth-refresh-error.js";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServerNotification, type JsonValue } from "./protocol.js";
@@ -45,6 +46,10 @@ export class CodexUsageLimitPromptError extends Error {
 export function resolveCodexPromptError(
   source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
 ): string | Error | undefined {
+  const authRefreshFailure = readCodexExternalAuthReauthFailure(source.message);
+  if (authRefreshFailure) {
+    return authRefreshFailure;
+  }
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
     return new CodexUsageLimitPromptError(usageLimitMessage);

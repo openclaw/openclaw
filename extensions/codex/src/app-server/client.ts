@@ -9,6 +9,11 @@ import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/erro
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
+import {
+  CODEX_EXTERNAL_AUTH_REAUTH_REQUIRED_ERROR_CODE,
+  CODEX_EXTERNAL_AUTH_REAUTH_REQUIRED_RESPONSE_MESSAGE,
+  isPermanentOpenAIOAuthRefreshFailure,
+} from "./auth-refresh-error.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-execution.js";
@@ -1016,11 +1021,16 @@ export class CodexAppServerClient {
         method: request.method,
         error,
       });
+      const permanentOAuthFailure =
+        request.method === "account/chatgptAuthTokens/refresh" &&
+        isPermanentOpenAIOAuthRefreshFailure(error);
       this.writeMessage({
         id: request.id,
         error: {
-          code: -32603,
-          message,
+          code: permanentOAuthFailure ? CODEX_EXTERNAL_AUTH_REAUTH_REQUIRED_ERROR_CODE : -32603,
+          message: permanentOAuthFailure
+            ? CODEX_EXTERNAL_AUTH_REAUTH_REQUIRED_RESPONSE_MESSAGE
+            : message,
         },
       });
     }

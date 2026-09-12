@@ -158,7 +158,7 @@ describe("Codex app-server client runtime", () => {
 
     expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
       id: "refresh-timed-out",
-      error: { message: expect.stringContaining("token refresh timed out") },
+      error: { code: -32603, message: expect.stringContaining("token refresh timed out") },
     });
   });
 

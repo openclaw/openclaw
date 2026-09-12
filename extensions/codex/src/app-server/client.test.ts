@@ -13,6 +13,14 @@ import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
+function createStructuredOAuthRefreshFailure(provider: string, reason: string): Error {
+  return Object.assign(new Error("sanitized OAuth refresh failure"), {
+    name: "OAuthRefreshFailureError",
+    provider,
+    reason,
+  });
+}
+
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
   const newerMinorVersion = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
@@ -780,13 +788,13 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("returns JSON-RPC internal errors when server request handlers throw", async () => {
+  it("returns a private JSON-RPC code for permanent OAuth refresh failures", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();
     clients.push(harness.client);
     harness.client.addRequestHandler((request) => {
       if (request.method === "account/chatgptAuthTokens/refresh") {
-        throw new Error("refresh_token_invalidated: reauthentication required");
+        throw createStructuredOAuthRefreshFailure("openai", "token_invalidated");
       }
       return undefined;
     });
@@ -801,8 +809,8 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "srv-refresh",
       error: {
-        code: -32603,
-        message: "refresh_token_invalidated: reauthentication required",
+        code: -32090,
+        message: "OAuth reauthentication required",
       },
     });
     expect(warn).toHaveBeenCalledWith("codex app-server server request handler failed", {
@@ -810,6 +818,55 @@ describe("CodexAppServerClient", () => {
       method: "account/chatgptAuthTokens/refresh",
       error: expect.any(Error),
     });
+  });
+
+  it.each([
+    {
+      label: "transient failures",
+      error: new Error("temporary auth service failure"),
+    },
+    {
+      label: "other providers",
+      error: createStructuredOAuthRefreshFailure("anthropic", "token_invalidated"),
+    },
+    {
+      label: "unverified login hints",
+      error: createStructuredOAuthRefreshFailure("openai", "sign_in_again"),
+    },
+    {
+      label: "wrapped permanent failures",
+      error: new Error("wrapper", {
+        cause: createStructuredOAuthRefreshFailure("openai", "token_invalidated"),
+      }),
+    },
+    {
+      label: "non-Error lookalikes",
+      error: {
+        name: "OAuthRefreshFailureError",
+        provider: "openai",
+        reason: "token_invalidated",
+      },
+    },
+  ])("keeps $label on the JSON-RPC internal error code", async ({ error }) => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    harness.client.addRequestHandler(() => {
+      throw error;
+    });
+
+    harness.send({
+      id: "srv-generic",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { accountId: "acct-1" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toMatchObject({
+      id: "srv-generic",
+      error: { code: -32603 },
+    });
+    expect(warn).toHaveBeenCalledOnce();
   });
 
   it("fails closed when a dynamic tool server request handler hangs", async () => {
