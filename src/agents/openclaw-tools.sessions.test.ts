@@ -2392,6 +2392,126 @@ describe("sessions tools", () => {
     expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 
+  it("sessions_send skips duplicate A2A delivery for waited visible spawn children on dashboard keys", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:dashboard:parent-uuid";
+    const targetKey = "agent:penny:dashboard:child-uuid";
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            parentSessionKey: requesterKey,
+            spawnDepth: 1,
+          }
+        : undefined,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-child",
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "child reply" },
+        };
+      }
+      return {};
+    });
+
+    const tool = getSessionTool("sessions_send", { agentSessionKey: requesterKey });
+
+    const waited = await tool.execute("call-parent-owned-dashboard-child", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("child reply");
+    expect(waitedDetails.delivery?.status).toBe("skipped");
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+  });
+
+  it("sessions_send keeps the delayed continuation when a visible spawn child outlives the wait", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:dashboard:parent-uuid";
+    const targetKey = "agent:penny:dashboard:child-uuid";
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? { sessionId: "child-session", updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 }
+        : undefined,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-slow-child", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        // The child is still running: a nonterminal timeout, not a failed run.
+        return { runId: "run-slow-child", status: "timeout" };
+      }
+      return {};
+    });
+
+    const tool = getSessionTool("sessions_send", { agentSessionKey: requesterKey });
+    const result = await tool.execute("call-slow-visible-child", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    // The late reply still has a delivery path; only inline replies skip it.
+    expect(details.delivery?.status).toBe("pending");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(countMatching(calls, (call) => call.method === "agent.wait")).toBeGreaterThan(1);
+  });
+
+  it("sessions_send keeps the A2A flow for dashboard threads that were not spawned by the requester", async () => {
+    const requesterKey = "agent:main:dashboard:parent-uuid";
+    const targetKey = "agent:main:dashboard:thread-uuid";
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? { sessionId: "thread-session", updatedAt: 1, parentSessionKey: requesterKey }
+        : undefined,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-thread", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-thread",
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "thread reply" },
+        };
+      }
+      return {};
+    });
+
+    const tool = getSessionTool("sessions_send", { agentSessionKey: requesterKey });
+    const waited = await tool.execute("call-dashboard-thread", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.reply).toBe("thread reply");
+    expect(waitedDetails.delivery?.status).toBe("pending");
+  });
+
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;

@@ -285,21 +285,24 @@ function isRequesterParentOfNativeSubagentSession(params: {
   requesterSessionKey: string | null | undefined;
   targetSessionKey: string;
 }): boolean {
-  if (
-    !params.entry ||
-    params.acpMeta ||
-    params.entry.acp ||
-    !isSubagentSessionKey(params.targetSessionKey)
-  ) {
+  if (!params.entry || params.acpMeta || params.entry.acp) {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
   if (!requester) {
     return false;
   }
-  const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
-  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey;
+  // spawnedBy is written only by the spawn policy, so it identifies a native
+  // child regardless of key shape: visible children live under persistent
+  // dashboard keys, not subagent keys. parentSessionKey also records ordinary
+  // UI threading and forks, so it only counts for subagent-keyed targets.
+  if (requester === normalizeOptionalString(params.entry.spawnedBy)) {
+    return true;
+  }
+  return (
+    isSubagentSessionKey(params.targetSessionKey) &&
+    requester === normalizeOptionalString(params.entry.parentSessionKey)
+  );
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
@@ -1055,8 +1058,11 @@ export function createSessionsSendTool(opts?: {
             });
           // A scoped grant belongs to one exact session incarnation. Do not create
           // post-return work or durable watches that could follow a reused key.
-          const skipA2AFlow =
-            skipAcpA2AFlow || skipNativeParentA2AFlow || Boolean(expectedSessionId);
+          const skipDelayedA2AFlow = skipAcpA2AFlow || Boolean(expectedSessionId);
+          // Native-parent suppression only covers a reply that already returned inline.
+          // A send is not a registered spawn run, so when the wait expires before the
+          // child finishes, nothing else delivers the late reply: keep that continuation.
+          const skipA2AFlow = skipDelayedA2AFlow || skipNativeParentA2AFlow;
           const startA2AFlow = (
             reply?: Awaited<ReturnType<typeof waitForAgentRunReply>>,
             waitRunId?: string,
@@ -1064,7 +1070,7 @@ export function createSessionsSendTool(opts?: {
             flowDisplayKey = displayKey,
             notifyRequesterOnWaitFailure = false,
           ) => {
-            if (skipA2AFlow) {
+            if (reply === undefined ? skipDelayedA2AFlow : skipA2AFlow) {
               return;
             }
             // This detached flow can outlive the tool request that launched it.
@@ -1129,6 +1135,10 @@ export function createSessionsSendTool(opts?: {
             skipA2AFlow || start.targetDisposition === "steered"
               ? ({ status: "skipped", mode: "announce" } as const)
               : ({ status: "pending", mode: "announce" } as const);
+          const delayedDelivery =
+            skipDelayedA2AFlow || start.targetDisposition === "steered"
+              ? ({ status: "skipped", mode: "announce" } as const)
+              : ({ status: "pending", mode: "announce" } as const);
           recordSessionToolActionFact({
             operation: "send",
             fact: "committed",
@@ -1174,7 +1184,7 @@ export function createSessionsSendTool(opts?: {
                 error: result.error,
                 sentBeforeError: true,
                 sessionKey: displayKey,
-                delivery,
+                delivery: delayedDelivery,
                 ...watchField,
               });
             }
@@ -1185,7 +1195,7 @@ export function createSessionsSendTool(opts?: {
                 status: "accepted",
                 sessionKey: displayKey,
                 targetDisposition: start.targetDisposition,
-                delivery,
+                delivery: delayedDelivery,
                 ...watchField,
               });
             }
