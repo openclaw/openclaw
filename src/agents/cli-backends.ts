@@ -114,7 +114,7 @@ function resolveCliBackendModelProvider(
 
 function addCliRuntimeModelBinding(
   bindings: Map<string, CliRuntimeModelBackendBinding>,
-  params: { backend: CliBackendPlugin; pluginId?: string },
+  params: { backend: Pick<CliBackendPlugin, "id" | "modelProvider">; pluginId?: string },
 ): void {
   const provider = resolveCliBackendModelProvider(params.backend);
   const runtime = normalizeBackendKey(params.backend.id);
@@ -137,7 +137,7 @@ export function listCliRuntimeModelBackendBindings(
   } = {},
 ): CliRuntimeModelBackendBinding[] {
   const bindings = new Map<string, CliRuntimeModelBackendBinding>();
-  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends()) {
+  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends("metadata")) {
     addCliRuntimeModelBinding(bindings, {
       backend,
       ...(backend.pluginId ? { pluginId: backend.pluginId } : {}),
