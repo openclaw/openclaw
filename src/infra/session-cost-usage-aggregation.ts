@@ -310,9 +310,10 @@ async function scanJsonlRange(params: {
       }
       chunkStart += bytes.length;
     }
-    if (lineBytes > 0) {
+    const firstChunk = lineChunks[0];
+    if (firstChunk) {
       const record = parseJsonlRecord(
-        lineChunks.length === 1 ? lineChunks[0] : Buffer.concat(lineChunks, lineBytes),
+        lineChunks.length === 1 ? firstChunk : Buffer.concat(lineChunks, lineBytes),
       );
       if (record) {
         params.onRecord(record);
