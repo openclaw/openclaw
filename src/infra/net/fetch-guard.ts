@@ -660,7 +660,7 @@ async function fetchWithSsrFGuardInternal(
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
-        signal: init.signal ?? undefined,
+        signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
         requestBody:
           (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,

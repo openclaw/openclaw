@@ -131,7 +131,9 @@ function readCapturedResponseBodyBounded(
   owner.pending.add(finalize);
   if (signal) {
     const onAbort = () => {
-      queueMicrotask(() => {
+      // Bun can deliver the caller's abort in the same turn as a clean body
+      // EOF. Give the pending stream read one poll turn to record that EOF.
+      setTimeout(() => {
         if (finished) {
           return;
         }
@@ -143,7 +145,7 @@ function readCapturedResponseBodyBounded(
               ? signal.reason
               : new Error("Response capture aborted", { cause: signal.reason }),
         });
-      });
+      }, 0);
     };
     if (signal.aborted) {
       onAbort();
