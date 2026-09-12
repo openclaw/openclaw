@@ -348,7 +348,7 @@ export function renderAgentCron(params: {
                   </a>
                   <button
                     class="btn btn--sm"
-                    ?disabled=${!params.canRunNow || !job.enabled}
+                    ?disabled=${!params.canRunNow}
                     @click=${() => params.onRunNow(job.id)}
                   >
                     ${t("agents.cronPanel.runNow")}
