@@ -180,9 +180,7 @@ export async function prepareReplyAgentPayloads(state: {
           committedMessagingToolSourceReplyDelivery ||
           runResult.didSendDeterministicApprovalPrompt === true,
       });
-  const retryBlockedSourceReply = rawPayloadArray.some((payload) =>
-    blockReplyPipeline?.isFinalPayloadRetryBlocked?.(payload),
-  );
+  const retryBlockedSourceReply = blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.() === true;
   const emptyInteractiveReplyPayload =
     terminalFailurePayload || retryBlockedSourceReply
       ? undefined

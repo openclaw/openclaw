@@ -29,25 +29,32 @@ it.each([
   "timeout",
   "all-ambiguous",
   "timeout-media",
+  "ambiguous-media",
+  "recovery-owned-media",
+  "all-ambiguous-media",
 ] as const)(
   "dispatchInboundMessageWithBufferedDispatcher settles %s streamed blocks before final suppression",
   async (scenario) => {
     const timesOut = scenario === "timeout" || scenario === "timeout-media";
+    const allAmbiguous = scenario === "all-ambiguous" || scenario === "all-ambiguous-media";
+    const uncertainMedia =
+      scenario === "ambiguous-media" ||
+      scenario === "recovery-owned-media" ||
+      scenario === "all-ambiguous-media";
     const responseText =
-      scenario === "timeout-media" ? `${finalText}\nMEDIA:${finalMediaUrl}` : finalText;
+      scenario === "timeout-media" || uncertainMedia
+        ? `${finalText}\nMEDIA:${finalMediaUrl}`
+        : finalText;
     const state = await createOpenClawTestState({
       label: "block-streaming-recovery",
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
-    const requests: string[] = [];
+    const requests: Array<{ method?: string; url?: string }> = [];
     const attempted: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
     const delivered: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
-    const server = createServer(async (request, response) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      requests.push(Buffer.concat(chunks).toString());
+    const server = createServer((request, response) => {
+      requests.push({ method: request.method, url: request.url });
+      request.resume();
       response.writeHead(200, { "content-type": "text/event-stream" });
       for (const text of [responseText.slice(0, 180), responseText.slice(180)]) {
         response.write(
@@ -161,27 +168,31 @@ it.each([
             attempted.push(call);
             if (info.kind === "block") {
               blocks++;
-              if (scenario === "all-ambiguous") {
+              if (allAmbiguous) {
                 throw new Error("transport response lost after send");
               }
               if (scenario === "concurrent" && blocks === 1) {
                 blockStarted.resolve();
                 await releaseBlock.promise;
               }
-              if (blocks === 2) {
+              if (uncertainMedia ? payload.mediaUrls?.includes(finalMediaUrl) : blocks === 2) {
                 if (timesOut) {
                   await releaseBlock.promise;
                   delivered.push(call);
                   return { visibleReplySent: true };
                 }
-                if (scenario === "recovery-owned") {
+                if (scenario === "recovery-owned" || scenario === "recovery-owned-media") {
                   const error = new OutboundDeliveryError("retained for recovery", {
                     cause: noSend,
                   });
                   error.queueCustody = "held";
                   throw error;
                 }
-                if (scenario === "ambiguous" || scenario === "mixed") {
+                if (
+                  scenario === "ambiguous" ||
+                  scenario === "ambiguous-media" ||
+                  scenario === "mixed"
+                ) {
                   throw new Error("transport response lost after send");
                 }
                 if (scenario === "deferred-rejection") {
@@ -238,15 +249,39 @@ it.each([
         JSON.stringify({
           scenario,
           requests: requests.length,
+          requestEndpoints: requests,
           attempted,
           delivered,
           result,
           concurrentElapsedMs,
         }),
       );
-      expect(requests.length).toBeGreaterThan(0);
+      expect(requests).toEqual(
+        scenario === "concurrent"
+          ? [
+              { method: "POST", url: "/v1/chat/completions" },
+              { method: "POST", url: "/v1/chat/completions" },
+            ]
+          : [{ method: "POST", url: "/v1/chat/completions" }],
+      );
       expect(blocks).toBeGreaterThanOrEqual(2);
-      if (scenario === "timeout-media") {
+      if (uncertainMedia) {
+        const mediaAttempts = attempted.filter((call) => call.mediaUrls?.includes(finalMediaUrl));
+        expect(mediaAttempts).toEqual([
+          expect.objectContaining({ kind: "block", mediaUrls: [finalMediaUrl] }),
+        ]);
+        expect(mediaAttempts[0]?.text).not.toBe(finalText);
+        expect(delivered.filter((call) => call.mediaUrls?.length)).toEqual([]);
+        expect(result.settledReceipt?.counts.block.delivered).toBe(allAmbiguous ? 0 : blocks - 1);
+        expect(attempted.filter((call) => call.kind === "final")).toEqual([]);
+        if (scenario === "recovery-owned-media") {
+          expect(result.settledReceipt?.hasPendingDelivery).toBe(true);
+        } else {
+          expect(result.settledReceipt?.counts.block.failedAfterSend).toBe(
+            allAmbiguous ? blocks : 1,
+          );
+        }
+      } else if (scenario === "timeout-media") {
         expect(blocks).toBe(2);
         expect(attempted.filter((call) => call.kind === "final")).toEqual([
           { kind: "final", text: undefined, mediaUrls: [finalMediaUrl] },

@@ -424,11 +424,12 @@ export async function buildReplyPayloads(params: {
               : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
           )
         : dedupedPayloads;
-  const blockSentMediaUrls = await normalizeSentMediaUrlsForDedupe({
+  const blockMediaUrlsToOmit = await normalizeSentMediaUrlsForDedupe({
     sentMediaUrls: [
       ...(params.blockStreamingEnabled
         ? (params.blockReplyPipeline?.getSentMediaUrls() ?? [])
         : []),
+      ...(params.blockReplyPipeline?.getRetryBlockedMediaUrls?.() ?? []),
       ...(params.directlySentBlockPayloads ?? []).flatMap(
         (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
       ),
@@ -436,10 +437,10 @@ export async function buildReplyPayloads(params: {
     normalizeMediaPaths: params.normalizeMediaPaths,
   });
   const filteredPayloads =
-    blockSentMediaUrls.length > 0
+    blockMediaUrlsToOmit.length > 0
       ? (await loadReplyPayloadsDedupeRuntime()).filterMessagingToolMediaDuplicates({
           payloads: contentSuppressedPayloads,
-          sentMediaUrls: blockSentMediaUrls,
+          sentMediaUrls: blockMediaUrlsToOmit,
         })
       : contentSuppressedPayloads;
   return {

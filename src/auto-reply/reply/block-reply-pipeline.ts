@@ -35,6 +35,8 @@ export type BlockReplyPipeline = {
   hasSentExactPayload?: (payload: ReplyPayload) => boolean;
   isFinalPayloadRetryBlocked?: (payload: ReplyPayload) => boolean;
   getSentMediaUrls: () => readonly string[];
+  getRetryBlockedMediaUrls?: () => readonly string[];
+  hasRetryBlockedTerminalDelivery?: () => boolean;
 };
 
 /** Optional buffering strategy used before payloads enter block delivery. */
@@ -130,6 +132,8 @@ export function createBlockReplyPipeline(params: {
   type BlockAttempt = Awaited<ReturnType<typeof deliverBlockReply>> & {
     source: string;
     contentKey: string;
+    mediaUrls: readonly string[];
+    terminal: boolean;
   };
   const blockAttemptsByMessage = new Map<number | undefined, BlockAttempt[]>();
   let bufferedAssistantMessageIndex: number | undefined;
@@ -170,13 +174,13 @@ export function createBlockReplyPipeline(params: {
       outcome: "cancelled",
       source: blockSourceText ?? reply.trimmedText,
       contentKey,
+      mediaUrls: reply.mediaUrls,
+      terminal: isTerminalContent,
     };
-    if (isTerminalContent) {
-      const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-      const attempts = blockAttemptsByMessage.get(index) ?? [];
-      attempts.push(attempt);
-      blockAttemptsByMessage.set(index, attempts);
-    }
+    const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    const attempts = blockAttemptsByMessage.get(index) ?? [];
+    attempts.push(attempt);
+    blockAttemptsByMessage.set(index, attempts);
 
     // Preserve outbound order by chaining sends; abort after timeout to avoid stale blocks.
     const fallbackAbortController = new AbortController();
@@ -356,6 +360,9 @@ export function createBlockReplyPipeline(params: {
       : [blockAttemptsByMessage.get(index) ?? []];
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
+  const isRetryBlocked = (attempt: BlockAttempt) =>
+    attempt.pending ||
+    (attempt.outcome !== "delivered" && !shouldRetryReplyDispatch(attempt.outcome));
   const matchesSource = (payload: ReplyPayload, attempts: BlockAttempt[]) => {
     const reply = resolveSendableOutboundReplyParts(payload);
     return (
@@ -382,12 +389,9 @@ export function createBlockReplyPipeline(params: {
       const reply = resolveSendableOutboundReplyParts(payload);
       const text = normalizeSource(reply.trimmedText);
       const textOnly = !hasOutboundReplyContent({ ...payload, text: undefined });
-      for (const attempts of matchingAttempts(payload)) {
-        const blocked = attempts.filter(
-          (attempt) =>
-            attempt.pending ||
-            (attempt.outcome !== "delivered" && !shouldRetryReplyDispatch(attempt.outcome)),
-        );
+      for (const group of matchingAttempts(payload)) {
+        const attempts = group.filter((attempt) => attempt.terminal);
+        const blocked = attempts.filter(isRetryBlocked);
         const sourcePrefix = normalizeSource(attempts.map((attempt) => attempt.source).join(""));
         if (
           blocked.some((attempt) => attempt.contentKey === contentKey) ||
@@ -413,7 +417,9 @@ export function createBlockReplyPipeline(params: {
         if (
           matchesSource(
             payload,
-            attempts.filter((attempt) => attempt.outcome === "delivered" && !attempt.pending),
+            attempts.filter(
+              (attempt) => attempt.terminal && attempt.outcome === "delivered" && !attempt.pending,
+            ),
           )
         ) {
           return true;
@@ -422,5 +428,17 @@ export function createBlockReplyPipeline(params: {
       return false;
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
+    hasRetryBlockedTerminalDelivery: () =>
+      Array.from(blockAttemptsByMessage.values()).some((attempts) =>
+        attempts.some((attempt) => attempt.terminal && isRetryBlocked(attempt)),
+      ),
+    getRetryBlockedMediaUrls: () =>
+      Array.from(
+        new Set(
+          Array.from(blockAttemptsByMessage.values()).flatMap((attempts) =>
+            attempts.filter(isRetryBlocked).flatMap((attempt) => attempt.mediaUrls),
+          ),
+        ),
+      ),
   };
 }
