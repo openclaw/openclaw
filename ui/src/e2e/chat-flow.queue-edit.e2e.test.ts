@@ -216,6 +216,8 @@ suite.define(() => {
         await page.getByRole("button", { name: "Queue message" }).click();
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
+      const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
+      await editRow.dblclick();
       await gateway.setOnline(false);
       await gateway.closeLatest();
       await page
@@ -224,8 +226,6 @@ suite.define(() => {
         )
         .waitFor({ timeout: 10_000 });
 
-      const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
-      await editRow.dblclick();
       // `hasText` stops matching once the row text becomes a textarea value.
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
@@ -233,6 +233,7 @@ suite.define(() => {
       await page.keyboard.insertText("edited before send");
       await inlineEditor.press("Control+Enter");
       await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
+      expect(await page.getByRole("alert").count()).toBe(0);
 
       const lastGrip = page
         .locator(".chat-queue__item", { hasText: "send last" })

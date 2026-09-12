@@ -2,6 +2,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { chatOutboxDeliveryKey, type StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
@@ -24,6 +25,7 @@ import {
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
 import { admitChatSubmission, shouldDisplayChatSubmission } from "./history-merge.ts";
 import {
   captureOutboxPayloadOwner,
@@ -38,6 +40,27 @@ export const UNCONFIRMED_CHAT_SEND_ERROR =
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+
+export function formatChatQueueAdmissionError(
+  result: Exclude<ChatQueueAdmissionResult, "admitted">,
+  editing: boolean,
+): string {
+  if (result === "source-changed") {
+    return t("chat.queue.editSourceChanged");
+  }
+  if (result === "full") {
+    return t("chat.queue.full");
+  }
+  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+}
+
+export function isChatResetCommand(text: string) {
+  const parsed = parseSlashCommand(text);
+  return (
+    parsed?.command.key === "new" ||
+    (parsed?.command.key === "reset" && !/^soft(?:\s|$)/i.test(parsed.args))
+  );
+}
 
 /** Commands and Goals have their own terminal receipts; chat needs input consumption. */
 export function requiresChatInputConsumption(item: ChatQueueItem): boolean {

@@ -33,7 +33,7 @@ import {
   applySelectedSessionProjection,
   resolveAssistantAttachmentAuthToken,
 } from "./chat-pane-state.ts";
-import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
+import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";

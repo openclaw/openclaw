@@ -14,6 +14,7 @@ import {
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import {
   admitQueuedMessageForSession,
   removeQueuedMessageWithoutReleasing,
@@ -27,7 +28,6 @@ import {
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -165,6 +165,25 @@ describe("queued message edit round-trip", () => {
     expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
   });
 
+  it("saves an unsent queued edit after the connection drops", async () => {
+    const { host } = queueHost([
+      {
+        sendState: "waiting-idle",
+        sendRunId: "queued-run",
+        sendAttempts: 0,
+      },
+    ]);
+    beginQueuedMessageEdit(host, "queued-1");
+    updateQueuedMessageEdit(host, "corrected while reconnecting");
+
+    markQueuedChatSendsWaitingForReconnect(host);
+    await submitQueuedEdit(host);
+
+    expect(storedOrder(host)).toEqual(["corrected while reconnecting"]);
+    expect(host.chatQueuedEdit).toBeNull();
+    expect(host.chatError).toBeNull();
+  });
+
   it("leaves the queue untouched when the edit is cancelled", () => {
     const { host } = queueHost([{}, {}, {}]);
     host.chatMessage = "separate composer draft";
@@ -272,7 +291,7 @@ describe("queued message edit round-trip", () => {
       expect(host.chatQueuedEdit?.source).toBe(captured);
       expect(storedOrder(host)).toEqual(expectedOrder);
       expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
-      expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+      expect(host.chatError).toContain("This queued message changed while you were editing.");
       expect(cancelQueuedMessageEdit(host as never)).toBe(true);
       expect(storedOrder(host)).toEqual(expectedOrder);
     },
@@ -359,7 +378,12 @@ describe("queued message edit round-trip", () => {
     expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
     expect(host.chatQueuedEdit?.draftText).toBe("message 2, corrected");
-    expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+    expect(host.chatError).toContain("Your edit could not be saved in this browser.");
+    vi.restoreAllMocks();
+    await submitQueuedEdit(host);
+    expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
+    expect(host.chatQueuedEdit).toBeNull();
+    expect(host.chatError).toBeNull();
   });
 
   it("fences peer remove, reorder, retry, and steer actions while a row edit is open", async () => {
