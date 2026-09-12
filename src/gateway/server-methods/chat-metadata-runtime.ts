@@ -31,7 +31,9 @@ import type {
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
 import {
+  hasSessionCatalogContext,
   prepareChatMetadataModelProjection,
+  sessionProjectionKey,
   resolveSessionCatalogProfiles,
   projectChatSessionMetadata,
   type ChatMetadataProjectionFacts,
@@ -182,28 +184,6 @@ function generationFactsMatch(
       candidate.skillsVersion === agent.skillsVersion
     );
   });
-}
-
-function sessionProjectionKey(
-  agentId: string,
-  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
-): string {
-  return [
-    normalizeAgentId(agentId),
-    profiles.preferredProfileId ?? "",
-    profiles.pinnedProfileId ?? "",
-    profiles.profileProvider ?? "",
-    profiles.runtimeOverride ?? "",
-  ].join("\0");
-}
-
-function hasSessionCatalogContext(profiles: ReturnType<typeof resolveSessionCatalogProfiles>) {
-  return (
-    profiles.preferredProfileId !== undefined ||
-    profiles.pinnedProfileId !== undefined ||
-    profiles.profileProvider !== undefined ||
-    profiles.runtimeOverride !== undefined
-  );
 }
 
 async function defaultBuildCommands(params: {
