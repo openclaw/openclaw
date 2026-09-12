@@ -41,6 +41,7 @@ type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
 };
 
 type SidebarSessionListHost = SessionListHost & {
+  readonly sessionInvolvingMeFilterActive: boolean;
   loadMoreSidebarSessions(): Promise<void>;
 };
 
@@ -558,14 +559,17 @@ function renderSessionListBody(params: {
           }
           return renderSessionSection({ host, section, personHeaders });
         }
-        // Empty Other remains useful only as a collaborator or drag destination.
+        // An owner filter hides empty Other regardless of paging or drag state.
+        // Without it, preserve the collaborator and drag destination behavior.
         if (
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
-          !params.nativeSessionsHaveMore &&
-          !host.sessionOwnershipVisible &&
-          host.sessionsStatusFilter === "active" &&
-          host.sessionOrganizer.draggingSessionKey === null
+          (host.sessionOwnerFilterActive ||
+            host.sessionInvolvingMeFilterActive ||
+            (!params.nativeSessionsHaveMore &&
+              !host.sessionOwnershipVisible &&
+              host.sessionsStatusFilter === "active" &&
+              host.sessionOrganizer.draggingSessionKey === null))
         ) {
           return nothing;
         }
