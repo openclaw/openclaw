@@ -4968,6 +4968,9 @@ export const en: TranslationMap & {
       cliHarnessContext: {
         label: "System · injected context",
       },
+      claudeCliTaskNotification: {
+        label: "System · background task",
+      },
       showContent: "Show content",
     },
     progressLabels: {

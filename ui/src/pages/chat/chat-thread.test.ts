@@ -2341,7 +2341,7 @@ describe("buildCachedChatItems", () => {
     expect(filtered.some((item) => item.kind === "notice")).toBe(false);
   });
 
-  it("renders CLI harness-injected user turns as collapsed context, not operator bubbles", () => {
+  it("renders Claude CLI internal user turns as notices, not operator bubbles", () => {
     const items = buildCachedChatItems(
       createProps({
         messages: [
@@ -2359,14 +2359,24 @@ describe("buildCachedChatItems", () => {
               },
             },
           ),
-          assistantMessage("review finished", 1002),
+          userMessage(
+            "<task-notification>\n<status>completed</status>\n</task-notification>",
+            1002,
+            {
+              provenance: {
+                kind: "internal_system",
+                sourceTool: "claude_cli_task_notification",
+              },
+            },
+          ),
+          assistantMessage("review finished", 1003),
         ],
       }),
     );
 
     // The operator turn keeps its bubble; the injected turn becomes a
     // collapsed system notice that does not start a new operator turn.
-    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "notice", "group"]);
     expect(items[0]).toMatchObject({ kind: "group", role: "user" });
     expect(items[1]).toMatchObject({
       kind: "notice",
@@ -2377,7 +2387,16 @@ describe("buildCachedChatItems", () => {
       timestamp: 1001,
     });
     expect((items[1] as { startsTurn?: true }).startsTurn).toBeUndefined();
-    expect(items[2]).toMatchObject({ kind: "group", role: "assistant" });
+    expect(items[2]).toMatchObject({
+      kind: "notice",
+      icon: "cpu",
+      label: "System · background task",
+      collapsedBody: true,
+      text: "<task-notification>\n<status>completed</status>\n</task-notification>",
+      timestamp: 1002,
+    });
+    expect((items[2] as { startsTurn?: true }).startsTurn).toBeUndefined();
+    expect(items[3]).toMatchObject({ kind: "group", role: "assistant" });
   });
 
   it("attributes assistant groups to the latest user in multi-sender threads", () => {

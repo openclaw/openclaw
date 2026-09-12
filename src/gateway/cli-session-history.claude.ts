@@ -7,6 +7,7 @@ import {
   asFiniteNumber,
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   readCliImageTurnContext,
@@ -39,6 +40,7 @@ export type ClaudeCliProjectEntry = {
   isMeta?: unknown;
   isCompactSummary?: unknown;
   isVisibleInTranscriptOnly?: unknown;
+  origin?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
@@ -285,6 +287,20 @@ function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean
   return entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true;
 }
 
+function isClaudeCliTaskNotification(
+  entry: ClaudeCliProjectEntry,
+  content: string | unknown[],
+): boolean {
+  // Native origin establishes authorship; operator-pasted XML must stay a user turn.
+  return (
+    isRecord(entry.origin) &&
+    entry.origin.kind === "task-notification" &&
+    typeof content === "string" &&
+    content.startsWith("<task-notification>") &&
+    content.endsWith("</task-notification>")
+  );
+}
+
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
@@ -417,16 +433,18 @@ export function parseClaudeCliHistoryEntry(
     if (cliImageTurnKey && typeof content === "string") {
       content = stripCliImageTurnContext(content, cliImageTurnKey);
     }
-    // Record provenance here, where the native flags are known, so downstream
+    // Record provenance here, where the native row shape is known, so downstream
     // display never has to infer operator authorship from message text.
-    const harnessInjected = isClaudeCliVisibleHarnessContext(entry);
+    const sourceTool = isClaudeCliTaskNotification(entry, content)
+      ? "claude_cli_task_notification"
+      : isClaudeCliVisibleHarnessContext(entry)
+        ? "cli_harness_context"
+        : undefined;
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
-        ...(harnessInjected
-          ? { provenance: { kind: "internal_system", sourceTool: "cli_harness_context" } }
-          : {}),
+        ...(sourceTool ? { provenance: { kind: "internal_system", sourceTool } } : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
       { ...baseMeta, ...(cliImageTurnKey ? { cliImageTurnKey } : {}) },
