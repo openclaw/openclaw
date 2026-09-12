@@ -11,7 +11,7 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Managed-cloud provider: `google-vertex` with Google Cloud Application Default Credentials
+- Managed-cloud provider: `google-vertex` with Google Cloud Application Default Credentials; the stored credential must be the literal value `gcp-vertex-credentials`
 - Optional runtime: `agentRuntime.id: "google-gemini-cli"` runs an explicitly configured model through the local Gemini CLI
 
 ## Getting started
@@ -139,6 +139,61 @@ the Gateway already runs inside a managed Google Cloud environment.
 
     `google-gemini-cli/*` refs remain legacy compatibility aliases. New configs
     should use `google/*` model refs plus the explicit runtime selection above.
+
+  </Tab>
+
+  <Tab title="Vertex AI (ADC)">
+    **Recommended for:** Gateways running inside Google Cloud with an attached
+    service account or workload identity.
+
+    `google-vertex` authenticates through Google Cloud Application Default
+    Credentials (ADC) and refreshes the access token itself, so no credential
+    rotation is needed. The stored provider credential is a marker, not a
+    secret.
+
+    <Steps>
+      <Step title="Provide Application Default Credentials">
+        On GCE, Cloud Run, and GKE the metadata server supplies ADC. Elsewhere,
+        run:
+
+        ```bash
+        gcloud auth application-default login
+        ```
+
+        Or point `GOOGLE_APPLICATION_CREDENTIALS` at a service-account key file.
+      </Step>
+      <Step title="Set the project and location">
+        `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`
+        must be set in the Gateway service environment:
+
+        ```bash
+        export GOOGLE_CLOUD_PROJECT="my-project"
+        export GOOGLE_CLOUD_LOCATION="us-central1"
+        ```
+
+        Without a project the run fails with `Vertex AI requires a project ID.
+        Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.`
+      </Step>
+      <Step title="Store the ADC credential marker">
+        Store the literal value `gcp-vertex-credentials` as the provider
+        credential:
+
+        ```bash
+        openclaw models auth paste-api-key --provider google-vertex
+        # paste exactly: gcp-vertex-credentials
+        ```
+
+        OpenClaw treats that value as a marker and resolves ADC headers instead
+        of sending the value as an API key. Any other value, including a valid
+        token from `gcloud auth print-access-token`, is sent as
+        `x-goog-api-key` and rejected by Vertex with `401 UNAUTHENTICATED`.
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider google-vertex
+        ```
+      </Step>
+    </Steps>
 
   </Tab>
 </Tabs>
