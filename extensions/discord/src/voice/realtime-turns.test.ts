@@ -37,6 +37,19 @@ defineDiscordVoiceTests(
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
   }) => {
+    it("leaves trailing silence to the provider's input clock", async () => {
+      realtimeSessionMock.bridge.pacesInputAudio = true;
+      const { entry, manager } = await createJoinedAgentProxyFixture();
+      try {
+        const turn = beginSpeakerTurn(entry);
+        expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+        const microphoneWrites = realtimeSessionMock.sendAudio.mock.calls.length;
+        turn.close();
+        expect(realtimeSessionMock.sendAudio).toHaveBeenCalledTimes(microphoneWrites);
+      } finally {
+        await manager.destroy();
+      }
+    });
     it.each(["before-final", "before-delivery"] as const)(
       "keeps realtime transcript output with its retired audio binding %s",
       async (ordering) => {
@@ -105,6 +118,7 @@ defineDiscordVoiceTests(
       expect(providerOptions.configuredProviderId).toBeUndefined();
       expect(providerOptions.agentId).toBe("agent-1");
       expect(providerOptions.defaultModel).toBe("gpt-realtime-2");
+      expect(providerOptions.useProviderDefaultModel).toBe(true);
       expect(requireRecord(providerOptions.providerConfigs, "provider configs").openai).toEqual({
         model: "provider-default",
         voice: "marin",

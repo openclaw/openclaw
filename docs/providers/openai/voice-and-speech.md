@@ -51,8 +51,9 @@ sidebarTitle: "Voice and speech"
     OAuth-only installs can use Codex-backed chat models and GA Realtime browser
     Talk over a ChatGPT subscription when the account has access (see the
     Realtime accordion).
-    OpenAI TTS, Voice Call, GA Gateway relay, and Discord realtime voice still
-    require a Platform API key.
+    OpenAI TTS, Voice Call, GA Gateway relay, and GA Discord realtime voice still
+    require a Platform API key. Discord's Codex GPT-Live route supports ChatGPT
+    OAuth through the Gateway-owned bridge.
     </Note>
 
   </Accordion>
@@ -187,7 +188,7 @@ sidebarTitle: "Voice and speech"
     unavailable Platform credential fails instead of falling back to OAuth.
 
     Gateway-controlled GA relay, iOS client-owned WebRTC, Voice Call, direct
-    backend sockets, and Discord realtime voice require Platform auth.
+    backend sockets, and GA Discord realtime voice require Platform auth.
 
     #### GPT-Live API
 
@@ -206,9 +207,11 @@ sidebarTitle: "Voice and speech"
     Explicit model choices and voices supported by that model stay in effect;
     an explicit GPT-Live model is audio-only. Requests requiring video or forced
     agent-consult replies retain `gpt-realtime-2.1` when no model is pinned.
-    Direct tool bridges, including Discord's wake-name and agent-proxy modes,
-    and Azure deployments retain their existing defaults. Installing an update
-    does not rewrite saved configuration or switch an active session.
+    Direct tool bridges, Discord voice without an explicit model, and Azure
+    deployments retain their existing defaults. An explicit GPT-Live model in
+    Discord uses the shared Gateway relay bridge and provider-owned delegation.
+    Installing an update does not rewrite saved configuration or switch an
+    active session.
 
     Set `talk.realtime.model` explicitly to `gpt-live-1` for the public
     [GPT-Live API](https://developers.openai.com/api/docs/guides/live). GPT-Live
@@ -236,8 +239,8 @@ sidebarTitle: "Voice and speech"
 
     Browser Talk uses Gateway-brokered WebRTC; the Platform key stays on the
     Gateway. Set `transport: "gateway-relay"` for the direct server WebSocket
-    path. Discord bidirectional voice and Voice Call also use the Platform-key
-    backend WebSocket.
+    path. Discord realtime voice with `gpt-live-1` uses the same Gateway-owned
+    direct WebSocket bridge; Voice Call uses the Platform-key backend WebSocket.
 
     iOS uses the same brokered WebRTC path and displays public Live captions.
     Physical-device voice validation remains pending.
@@ -247,6 +250,8 @@ sidebarTitle: "Voice and speech"
     `gleam`, `marin`, `meridian`, `quartz`, `ripple`, `sage`, `shimmer`, `stone`,
     `tempo`, `verse`, `vesper`, and `willow`. Unsupported configured voices fall
     back to `marin`. Choose the voice before starting a session.
+    `cove` belongs to `gpt-live-1-codex`; selecting it with the public
+    `gpt-live-1` model falls back to `marin`.
 
     The public API uses `/v1/live/sessions` for WebRTC creation and primary
     WebSockets. Direct sockets start with `session.start`; browser sessions
@@ -280,6 +285,25 @@ sidebarTitle: "Voice and speech"
     `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth profile
     with `openclaw models auth login --provider openai`.
 
+    Discord uses this same Gateway-owned WebRTC bridge when
+    `channels.discord.voice.realtime.model` is `gpt-live-1-codex`. Set
+    `channels.discord.voice.realtime.speakerVoice` to `cove` for the Codex
+    default voice. The other supported voices are `arbor`, `breeze`, `ember`,
+    `juniper`, `maple`, `sol`, `spruce`, and `vale`. A voice selection is specific
+    to its model route, regardless of whether the client is Talk or Discord.
+
+    Both GPT-Live routes produce continuous audio and own interruption.
+    Gateway WebSocket and WebRTC use the same sample clock to send microphone
+    input at its recorded rate and supply silence between captures.
+    Discord does not add speaker-start cancellation or wait for a response-done
+    event to play short replies. Explicit Discord `requireWakeName: true` or
+    `consultPolicy: "always"` is rejected because GPT-Live cannot enforce those
+    host policies; its default uses automatic provider delegation. Each
+    speaker's delegated work retains their Discord identity and permissions.
+    The shared OpenClaw agent conversation supplies room context, while each
+    speaker's voice-model connection has separate acoustic conversation history.
+    See [GPT-Live in Discord](/channels/discord/voice-channels#gpt-live-in-discord).
+
     Both credential types stay in the Gateway. The single-use offer broker
     exchanges the browser's SDP and returns only the answer SDP; it does not
     send an OAuth token, Platform key, or ephemeral client secret to the browser.
@@ -295,9 +319,9 @@ sidebarTitle: "Voice and speech"
 
     The enabled OpenAI plugin starts the broker automatically, including when
     you sign in after the Gateway has started. The broker opens a provider
-    session only when you start Talk; signing in does not open the microphone or
-    start a voice session. Returning to the browser after sign-in refreshes the
-    chat microphone's readiness.
+    session only when you start a voice session; signing in does not open the
+    microphone or join Discord voice. Returning to the browser after sign-in
+    refreshes the chat microphone's readiness.
 
     #### Unlisted and private realtime transport paths
 

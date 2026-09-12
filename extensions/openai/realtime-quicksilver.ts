@@ -91,6 +91,9 @@ export function isOpenAIGptLiveModel(model: string | undefined): boolean {
 export const OPENAI_QUICKSILVER_CAPABILITIES = {
   transports: ["webrtc" as const, "gateway-relay" as const],
   handlesAgentConsult: true as const,
+  supportsBargeIn: false,
+  handlesInputAudioBargeIn: true,
+  supportsActivationNameGating: false,
   supportsToolCalls: false,
   supportsVideoFrames: false,
 } satisfies Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };

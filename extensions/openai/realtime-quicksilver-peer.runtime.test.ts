@@ -41,7 +41,6 @@ function createRelayTone(): Buffer {
 type TestableAudioPeer = {
   connected: boolean;
   handleInboundRtp(packet: unknown): void;
-  mediaTimer: ReturnType<typeof setTimeout> | undefined;
   pendingAudio: OpenAIQuicksilverPendingAudio;
   sequenceNumber: number;
   timestamp: number;
@@ -656,8 +655,6 @@ describe("GPT-Live werift audio peer", () => {
       expect(encode).toHaveBeenCalledOnce();
       expect(onError).toHaveBeenCalledOnce();
       expect(onError).toHaveBeenCalledWith(encodeError);
-      expect(testPeer.mediaTimer).toBeUndefined();
-
       await vi.advanceTimersByTimeAsync(100);
 
       expect(encode).toHaveBeenCalledOnce();

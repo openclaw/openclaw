@@ -261,7 +261,13 @@ export class DiscordRealtimeTurns {
 
   private sendRealtimeTrailingSilenceForTurn(turn: PendingSpeakerTurn): void {
     const bridge = this.params.bridge();
-    if (!bridge || this.params.stopped() || turn.closed || !turn.hasAudio) {
+    if (
+      !bridge ||
+      bridge.bridge.pacesInputAudio ||
+      this.params.stopped() ||
+      turn.closed ||
+      !turn.hasAudio
+    ) {
       return;
     }
     const providerId =

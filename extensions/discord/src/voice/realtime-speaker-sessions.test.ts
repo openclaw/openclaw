@@ -15,12 +15,109 @@ defineDiscordVoiceTests(
     emitFinalRealtimeUserTranscript,
     lastAgentCommandArgs,
     lastRealtimeBridge,
+    realtimeBridgeAt,
     loggerWarnMock,
     sentUserMessages,
     createClient,
     startTranscripts,
     receiveRecordedSpeech,
+    resolveConfiguredRealtimeVoiceProviderMock,
+    resolveVoiceIngressWithParticipantsMock,
+    createAgentProxyManager,
   }) => {
+    const useNativeDelegation = () =>
+      resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
+        provider: {
+          id: "openai",
+          capabilities: { supportsActivationNameGating: false, handlesAgentConsult: true },
+        },
+        providerConfig: { model: "gpt-live-1", voice: "marin" },
+      });
+
+    it("routes native Live delegations with each speaker's authority without duplicate transcript turns", async () => {
+      useNativeDelegation();
+      resolveVoiceIngressWithParticipantsMock.mockImplementation(async ({ userId }) => ({
+        senderIsOwner: userId === "owner",
+        speakerLabel: userId,
+      }));
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: "Agenda checked." }] });
+      const { entry, manager, bridgeParams } = await createJoinedAgentProxyFixture();
+      try {
+        expect(bridgeParams.autoRespondToAudio).toBe(true);
+        beginSpeakerTurn(entry, {
+          userId: "guest",
+          senderIsOwner: false,
+          speakerLabel: "guest",
+        }).close();
+        const guest = lastRealtimeBridge();
+        beginSpeakerTurn(entry, {
+          userId: "owner",
+          senderIsOwner: true,
+          speakerLabel: "owner",
+        }).close();
+        const owner = lastRealtimeBridge();
+        await emitFinalRealtimeUserTranscript(guest.bridgeParams, "Read the agenda.");
+        await emitFinalRealtimeUserTranscript(owner.bridgeParams, "Check the appointment.");
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        for (const [index, source] of [guest, owner].entries()) {
+          const signal = new AbortController().signal;
+          const runner = source.bridgeParams.runAgentConsult;
+          expect(runner).toBeTypeOf("function");
+          await expect(runner!({ prompt: "Check my request", signal })).resolves.toEqual({
+            text: "Agenda checked.",
+          });
+          expect(agentCommandArgsAt(index)).toMatchObject({
+            senderIsOwner: index === 1,
+            sessionKey: "discord:g1:c1",
+            abortSignal: signal,
+          });
+        }
+        await manager.destroy();
+        await expect(guest.bridgeParams.runAgentConsult!({ prompt: "Stale task" })).rejects.toThrow(
+          "closed",
+        );
+        expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      } finally {
+        await manager.destroy();
+      }
+    });
+
+    it("rejects native delegation when the admitted speaker loses owner authority", async () => {
+      useNativeDelegation();
+      const { entry, manager, bridgeParams } = await createJoinedAgentProxyFixture();
+      try {
+        beginSpeakerTurn(entry, { userId: "owner", senderIsOwner: true }).close();
+        resolveVoiceIngressWithParticipantsMock.mockResolvedValue({
+          senderIsOwner: false,
+          speakerLabel: "owner",
+        });
+        const runner = bridgeParams.runAgentConsult;
+        expect(runner).toBeTypeOf("function");
+        await expect(
+          runner!({ prompt: "Run my task", signal: new AbortController().signal }),
+        ).rejects.toThrow("authorization changed");
+        expect(agentCommandMock).not.toHaveBeenCalled();
+      } finally {
+        await manager.destroy();
+      }
+    });
+
+    it.each([{ requireWakeName: true }, { consultPolicy: "always" as const }])(
+      "rejects unsupported host turn policy for native Live: %j",
+      async (realtime) => {
+        useNativeDelegation();
+        const manager = createAgentProxyManager(undefined, { voice: { realtime } });
+        try {
+          await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject({
+            ok: false,
+            message: expect.stringContaining("owns voice responses and delegation"),
+          });
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
+
     it("preserves immediate acknowledgments for installed providers with unscoped marks", async () => {
       const { entry, manager } = await createJoinedAgentProxyFixture();
       try {
@@ -358,6 +455,13 @@ defineDiscordVoiceTests(
           "Voice is busy",
         );
         clock.mockReturnValue(now + 60_001);
+        for (let index = 0; index < 8; index += 1) {
+          // WebRTC transport silence keeps arriving after the speaker stops.
+          realtimeBridgeAt(index).bridgeParams.onEvent?.({
+            direction: "server",
+            type: "output_audio.rtp",
+          });
+        }
         beginSpeakerTurn(entry, { userId: "owner", senderIsOwner: true }).close();
         const owner = lastRealtimeBridge();
         expect(retired.session.close).toHaveBeenCalledOnce();

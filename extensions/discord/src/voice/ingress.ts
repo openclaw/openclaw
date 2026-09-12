@@ -18,6 +18,7 @@ const logger = createSubsystemLogger("discord/voice");
 
 export type DiscordVoiceIngressContext = {
   extraSystemPrompt?: string;
+  isCurrent?: () => boolean;
   senderIsOwner: boolean;
   speakerLabel: string;
 };
@@ -102,6 +103,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
   }
   return {
     extraSystemPrompt: buildDiscordGroupSystemPrompt(access.channelConfig),
+    isCurrent: access.isCurrent,
     senderIsOwner: speaker.senderIsOwner,
     speakerLabel: speaker.label,
   };
@@ -118,6 +120,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   runtime: RuntimeEnv;
   context?: DiscordVoiceIngressContext;
   toolsAllow?: string[];
+  signal?: AbortSignal;
   admissionAllowFrom?: string[];
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
@@ -134,9 +137,10 @@ export async function runDiscordVoiceAgentTurn(params: {
       fetchGuildName: params.fetchGuildName,
       speakerContext: params.speakerContext,
     }));
-  if (!context) {
+  if (!context || context.isCurrent?.() === false) {
     return null;
   }
+  params.signal?.throwIfAborted();
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
   const result = await getDiscordRuntime().agent.runCommandFromIngress(
     {
@@ -152,6 +156,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       model: voiceModel,
       toolsAllow: params.toolsAllow,
       deliver: false,
+      ...(params.signal ? { abortSignal: params.signal } : {}),
     },
     params.runtime,
   );

@@ -73,14 +73,22 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
         ...callbacks,
         providerConfig: { apiKey: "test-key", model: "gpt-live-test-canary" },
       }),
-    ).toMatchObject({ supportsToolResultContinuation: true });
+    ).toMatchObject({
+      supportsToolResultContinuation: true,
+      handlesInputAudioBargeIn: true,
+      outputAudioMode: "continuous",
+    });
     expect(
       provider.createBridge({
         ...callbacks,
         providerConfig: { apiKey: "test-key", model: "gpt-live-1" },
         runAgentConsult: vi.fn(async () => ({ text: "done" })),
       }),
-    ).toMatchObject({ supportsToolResultContinuation: false });
+    ).toMatchObject({
+      supportsToolResultContinuation: false,
+      handlesInputAudioBargeIn: true,
+      outputAudioMode: "continuous",
+    });
     expect(() =>
       provider.createBridge({
         ...callbacks,

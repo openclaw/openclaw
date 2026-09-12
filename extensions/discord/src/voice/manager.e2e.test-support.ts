@@ -29,6 +29,7 @@ export type TestRealtimeBridgeParams = {
   ) => Promise<void> | void;
   onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
   tools?: Array<{ name: string }>;
+  runAgentConsult?: RealtimeVoiceBridgeCreateRequest["runAgentConsult"];
 };
 
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {

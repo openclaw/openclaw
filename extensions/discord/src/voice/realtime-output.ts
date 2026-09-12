@@ -24,6 +24,7 @@ export class DiscordRealtimeOutput {
   private request: DiscordRealtimePlayerRequest | undefined;
   private playbackMarks: Array<{ endBytes: number; acknowledge: () => void }> = [];
   private playedPcmBytes = 0;
+  private lastAudiblePcmEndBytes = 0;
   private reportedPlaybackMs = 0;
   private readonly audioSpans: Array<{
     item: RealtimeVoicePlaybackItem;
@@ -41,6 +42,7 @@ export class DiscordRealtimeOutput {
     private readonly params: {
       player: DiscordRealtimePlayer;
       logContext: string;
+      continuous: boolean;
       onStart: () => void;
       onClose: (output: DiscordRealtimeOutput, reason: string) => void;
       onBargeIn: (reason: string) => void;
@@ -60,6 +62,10 @@ export class DiscordRealtimeOutput {
     return this.closed
       ? 0
       : this.bufferedBytes + this.stream.writableLength + this.stream.readableLength;
+  }
+
+  hasUnplayedAudibleAudio(): boolean {
+    return !this.closed && this.playedPcmBytes < this.lastAudiblePcmEndBytes;
   }
 
   playbackItems(): RealtimeVoicePlaybackItem[] {
@@ -90,6 +96,7 @@ export class DiscordRealtimeOutput {
   append(
     pcm: Buffer,
     activity: RealtimeVoiceOutputActivityDelta & { audioMs: number },
+    audible: boolean,
     item?: RealtimeVoicePlaybackItem,
   ): void {
     if (this.closed) {
@@ -106,6 +113,9 @@ export class DiscordRealtimeOutput {
       }
     }
     this.activity.markAudio(activity);
+    if (audible) {
+      this.lastAudiblePcmEndBytes = this.activity.snapshot().sinkAudioBytes;
+    }
     if (this.activity.snapshot().playbackStarted && !this.drainHandler) {
       // A false write return accepts this chunk; only later chunks are queued.
       if (!this.stream.write(pcm)) {
@@ -115,10 +125,8 @@ export class DiscordRealtimeOutput {
     }
     this.buffers.push(pcm);
     this.bufferedBytes += pcm.length;
-    if (
-      !this.drainHandler &&
-      this.bufferedBytes >= DISCORD_RAW_PCM_FRAME_BYTES * DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES
-    ) {
+    const prerollFrames = this.params.continuous ? 1 : DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES;
+    if (!this.drainHandler && this.bufferedBytes >= DISCORD_RAW_PCM_FRAME_BYTES * prerollFrames) {
       this.startPlayback();
     }
   }

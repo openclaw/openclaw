@@ -149,8 +149,20 @@ Register each capability inside `register(api)` alongside your existing
     provider's discovery default for the configured Talk agent and provider
     settings, excluding an explicit model; readiness and capabilities use the
     effective model overrides.
+    Consumers adding a new transport without changing existing model defaults
+    can pass `useProviderDefaultModel: true` to
+    `resolveConfiguredRealtimeVoiceProvider(...)`. This fills an absent model
+    from the selected provider's `defaultModel` before surface-specific
+    resolution; explicit configured models and request overrides still win.
     Optional `talk.catalog` inputs `provider` and `model` resolve capabilities
     for a specific realtime launch without changing saved configuration.
+    Gateway audio consumers such as Discord use
+    `resolveRealtimeVoiceProviderCapabilities(...)` from
+    `openclaw/plugin-sdk/realtime-voice` with the `gateway-relay` surface to
+    combine provider capabilities with the selected model's overrides.
+    Readiness and policy must use that same surface and model. For example,
+    GPT-Live owns agent delegation and interruption but does not support
+    host-enforced wake-name gating, even though GA OpenAI Realtime does.
 
     ```typescript
     api.registerRealtimeVoiceProvider({
@@ -187,6 +199,18 @@ Register each capability inside `register(api)` alongside your existing
     clients. Implement `handleBargeIn` when a transport can detect that a
     human is interrupting assistant playback and the provider supports
     truncating or clearing the active audio response.
+    Set `bridge.outputAudioMode: "continuous"` for streams without response
+    boundaries, such as GPT-Live. Hosts then play short audio immediately,
+    accept new audio after a provider clear, and leave interruption to the
+    provider. Omit `handleBargeIn` and report `supportsBargeIn: false` for this
+    mode; incoming audio already drives native interruption. Omission of
+    `outputAudioMode`, or `"response"`, retains response-based playback.
+
+    Set `bridge.pacesInputAudio: true` when the provider buffers incoming PCM
+    at its sample rate and supplies silence between microphone writes. This
+    prevents transports such as Discord from appending an extra silence burst
+    at each capture boundary. GPT-Live Gateway WebRTC and WebSocket bridges
+    share that input clock; closing the bridge stops it.
     When native audio events identify an item, pass that identity alongside
     PCM as `req.onAudio(audio, { itemId })`; omit
     metadata for transports without native item IDs. If supplied,
@@ -237,9 +261,12 @@ Register each capability inside `register(api)` alongside your existing
     The host may pass `sendUserMessage(text, { toolChoice })` while the
     response state is idle to force one named function for that response;
     later responses return to the session's configured tool choice.
-    Set `handlesInputAudioBargeIn` only when provider VAD confirms an
-    interruption by calling `onClearAudio("barge-in")`. Providers that omit
-    the flag use OpenClaw's local input-audio fallback detection.
+    Set `handlesInputAudioBargeIn` when the provider owns interruption from
+    incoming audio. Forward provider buffer-clear events through
+    `onClearAudio("barge-in")` when available; continuous providers can stop
+    speaking without a separate clear event. Hosts must not invent a local
+    interruption for those providers. Response-based providers that omit the
+    flag use OpenClaw's local input-audio fallback detection.
 
     A browser-session request's `clientControl: { owner: "gateway" }`
     records explicitly negotiated server-owned control. The request type
@@ -276,6 +303,13 @@ Register each capability inside `register(api)` alongside your existing
     observability. Tool-capable, unspecified, and tool-less nondelegating
     providers retain their existing transcript behavior. Without the hook,
     retain the existing delegation and acknowledgment policy.
+
+    `createRealtimeVoiceBridgeSession` forwards a host `runAgentConsult` to
+    provider-owned delegation bridges and binds it to the admitted provider
+    connection. The caller supplies its existing identity and tool-policy
+    owner; Discord uses the originating speaker's normal agent route and
+    permissions. Closure or connection replacement retires that callback's
+    authority rather than transferring it to the next speaker or connection.
 
     The host binds steering authority to the actual admitted backend attempt
     after harness policy preparation. Backing agent harnesses forward the

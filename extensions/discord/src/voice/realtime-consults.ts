@@ -9,6 +9,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   type RealtimeVoiceAgentConsultToolPolicy,
+  type RealtimeVoiceAgentConsultRunner,
   type RealtimeVoiceAgentControlResult,
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeSession,
@@ -72,7 +73,7 @@ export class DiscordRealtimeConsults {
       debounceMs: () => number | undefined;
       entry: VoiceSessionEntry;
       harness: RealtimeVoiceSessionHarness<AgentProxyConsultState>;
-      isAgentProxy: boolean;
+      isAgentProxy: () => boolean;
       isWakeNameRequired: () => boolean;
       playback: DiscordRealtimePlaybackPort;
       providerEpoch: () => number;
@@ -103,6 +104,32 @@ export class DiscordRealtimeConsults {
     this.talkback.close();
     this.talkback = this.createTalkbackQueue();
     this.clearProviderConsultState();
+  }
+
+  async runAgentConsult(
+    request: Parameters<RealtimeVoiceAgentConsultRunner>[0],
+  ): ReturnType<RealtimeVoiceAgentConsultRunner> {
+    request.signal?.throwIfAborted();
+    if (this.params.stopped()) {
+      throw new Error("Discord realtime speaker session is closed");
+    }
+    if (this.params.consultToolPolicy() === "none") {
+      return { text: "Agent delegation is disabled for this voice session." };
+    }
+    const context = this.params.turns.consumePendingSpeakerContext();
+    if (!context) {
+      throw new Error("No Discord speaker context available");
+    }
+    const text = await this.runAgentTurn({
+      context,
+      message: request.prompt,
+      signal: request.signal,
+    });
+    request.signal?.throwIfAborted();
+    if (this.params.stopped()) {
+      throw new Error("Discord realtime speaker session is closed");
+    }
+    return { text };
   }
 
   async handleToolCall(
@@ -227,14 +254,14 @@ export class DiscordRealtimeConsults {
     providerEpoch: number,
   ): Promise<void> {
     const usesRealtimeAgentHandoff = this.params.usesRealtimeAgentHandoff();
-    const usesFallbackTalkback = this.params.isAgentProxy && !usesRealtimeAgentHandoff;
+    const usesFallbackTalkback = this.params.isAgentProxy() && !usesRealtimeAgentHandoff;
     // Claim fallback talkback context before active-run control awaits. Concurrent
     // final transcripts can otherwise resume out of order and swap owner flags.
     const fallbackSpeakerContext = usesFallbackTalkback
       ? (forcedSpeakerContext ?? this.params.turns.consumePendingSpeakerContext())
       : undefined;
     const pendingForcedConsult =
-      this.params.isAgentProxy && usesRealtimeAgentHandoff
+      this.params.isAgentProxy() && usesRealtimeAgentHandoff
         ? this.prepareForcedAgentProxyConsult(acceptedText, forcedSpeakerContext)
         : undefined;
     let control: Awaited<ReturnType<typeof maybeControlDiscordVoiceAgentRun>> | undefined;
@@ -265,7 +292,7 @@ export class DiscordRealtimeConsults {
       }
       return;
     }
-    if (!this.params.isAgentProxy) {
+    if (!this.params.isAgentProxy()) {
       return;
     }
     if (usesRealtimeAgentHandoff) {
@@ -335,6 +362,7 @@ export class DiscordRealtimeConsults {
   private async runAgentTurn(params: {
     context?: DiscordRealtimeSpeakerContext;
     message: string;
+    signal?: AbortSignal;
   }): Promise<string> {
     const context = params.context;
     if (!context) {
@@ -345,6 +373,7 @@ export class DiscordRealtimeConsults {
       message: params.message,
       toolsAllow: this.params.consultToolsAllow(),
       userId: context.userId,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   }
 

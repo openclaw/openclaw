@@ -45,7 +45,8 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       },
     });
     expect(harness.bridge.isConnected()).toBe(true);
-    expect(harness.bridge.handlesInputAudioBargeIn).toBe(false);
+    expect(harness.bridge.handlesInputAudioBargeIn).toBe(true);
+    expect(harness.bridge.outputAudioMode).toBe("continuous");
     expect(harness.onReady).toHaveBeenCalledOnce();
 
     void harness.bridge.close();
@@ -63,10 +64,12 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     const suppressedResult = sentEvents(harness.socket).at(-1);
     const audio = Buffer.from([0, 1, 2, 3]);
     harness.bridge.sendAudio(audio);
-    expect(sentEvents(harness.socket)).toContainEqual({
-      type: "session.input_audio.append",
-      audio: audio.toString("base64"),
-    });
+    await vi.waitFor(() =>
+      expect(sentEvents(harness.socket)).toContainEqual({
+        type: "session.input_audio.append",
+        audio: Buffer.concat([audio, Buffer.alloc(956)]).toString("base64"),
+      }),
+    );
     harness.socket.serverEvent({
       type: "session.output_audio.delta",
       delta: audio.toString("base64"),
@@ -174,6 +177,38 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       delegation_id: null,
       content: "Unspoken background.",
     });
+  });
+
+  it("keeps the public input clock running through silence and stops before transcript drain", async () => {
+    const harness = createHarness({ model: "gpt-live-1", autoStart: false });
+    const connecting = harness.bridge.connect();
+    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+    const capture = Buffer.alloc(960, 1);
+    harness.bridge.sendAudio(capture);
+    const readAudio = () =>
+      sentEvents(harness.socket)
+        .filter((event) => event.type === "session.input_audio.append")
+        .map((event) => Buffer.from(String(event.audio), "base64"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      harness.socket.serverEvent({ type: "session.started", session: {} });
+      await connecting;
+      expect(harness.bridge.pacesInputAudio).toBe(true);
+      expect(readAudio()).toEqual([capture]);
+      await vi.advanceTimersByTimeAsync(40);
+      expect(readAudio()).toEqual([capture, Buffer.alloc(960), Buffer.alloc(960)]);
+      const closing = harness.bridge.close();
+      const sentBeforeClose = harness.socket.sent.length;
+      harness.bridge.sendAudio(capture);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(harness.socket.sent).toHaveLength(sentBeforeClose);
+      harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
+      await closing;
+    } finally {
+      harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
+      await harness.bridge.close();
+      vi.useRealTimers();
+    }
   });
 
   it("classifies the retained public user request before consuming snapshots", async () => {
@@ -678,6 +713,11 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       type: "output_audio_buffer.cleared",
     });
     expect(harness.onClearAudio).toHaveBeenCalledExactlyOnceWith("barge-in");
+    harness.socket.serverEvent({
+      type: "output_audio.delta",
+      audio: Buffer.from([5, 6, 7, 8]).toString("base64"),
+    });
+    expect(harness.onAudio).toHaveBeenLastCalledWith(Buffer.from([5, 6, 7, 8]));
     expect(harness.onTranscript).toHaveBeenNthCalledWith(1, "user", "hello", false);
     expect(harness.onTranscript).toHaveBeenNthCalledWith(2, "user", "hello there", true);
     expect(harness.onToolCall).toHaveBeenCalledWith({

@@ -1,3 +1,4 @@
+import { resolveConfiguredRealtimeVoiceProvider } from "openclaw/plugin-sdk/realtime-voice";
 // Openai tests cover realtime voice provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -85,6 +86,27 @@ describe("OpenAI realtime voice provider routing", () => {
       supportsToolCalls: true,
       supportsVideoFrames: true,
     });
+  });
+
+  it.each([
+    { name: "fresh", config: {} },
+    { name: "existing", config: { voice: "cedar", interruptResponseOnInputAudio: false } },
+    { name: "explicit Live", config: { model: "gpt-live-1", voice: "marin" } },
+  ])("preserves provider defaults for $name Discord relay configuration", ({ config }) => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const resolved = resolveConfiguredRealtimeVoiceProvider({
+      providers: [provider],
+      configuredProviderId: provider.id,
+      providerConfigs: { openai: { apiKey: "test-api-key-platform", ...config } },
+      cfg: {},
+      surface: "gateway-relay",
+      autoRespondToAudio: true,
+      useProviderDefaultModel: true,
+    });
+    expect(resolved.providerConfig.model).toBe(config.model ?? provider.defaultModel);
+    if (config.voice) {
+      expect(resolved.providerConfig.voice).toBe(config.voice);
+    }
   });
 
   it("admits opaque realtime models without publishing them", () => {
@@ -196,6 +218,9 @@ describe("OpenAI realtime voice provider routing", () => {
     ).toMatchObject({
       handlesAgentConsult: true,
       supportsToolCalls: false,
+      supportsBargeIn: false,
+      handlesInputAudioBargeIn: true,
+      supportsActivationNameGating: false,
       voices,
       voiceSelectionPolicy: "allowlist-default",
     });
