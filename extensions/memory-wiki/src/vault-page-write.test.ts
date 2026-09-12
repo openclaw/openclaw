@@ -10,7 +10,14 @@ function fakeVault(write: () => Promise<void>): {
   remove: ReturnType<typeof vi.fn>;
 } {
   const remove = vi.fn(async () => {});
-  return { vault: { write: vi.fn(write), remove } as unknown as FakeVault, remove };
+  return {
+    vault: {
+      write: vi.fn(write),
+      remove,
+      stat: vi.fn().mockResolvedValue(null),
+    } as unknown as FakeVault,
+    remove,
+  };
 }
 
 describe("writeGuardedVaultPage", () => {
