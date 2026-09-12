@@ -48,6 +48,7 @@ import {
 import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -121,6 +122,7 @@ function createPublicModelsListProjector(params: {
   preserveUnknownAvailability?: boolean;
   apiKeyCapabilities?: ApiKeyProviderCapabilities;
 }) {
+  const catalogResolver = createThinkingCatalogResolver(params.thinkingCatalog);
   // Route rows retain identity across reads; keep display/thinking work outside the hot overlay.
   const prepared = new WeakMap<ModelCatalogEntry, ModelsListEntryWithCapabilities>();
   return (
@@ -157,6 +159,7 @@ function createPublicModelsListProjector(params: {
               model: entry.id,
               agentRuntime: selectedRuntime?.id ?? "openclaw",
               modelCatalog: params.thinkingCatalog,
+              catalogResolver,
               configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
               thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
             });

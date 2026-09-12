@@ -10,6 +10,8 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 }));
 
 const {
+  createThinkingCatalogResolver,
+  resolveThinkingProfile,
   listThinkingLevelLabels,
   listThinkingLevelOptions,
   listThinkingLevels,
@@ -75,6 +77,40 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
     expect(normalizeThinkLevel("ultrathink")).toBe("high");
   });
+});
+
+describe("prepared thinking catalog identity", () => {
+  it.each([
+    { provider: " demo ", model: " Mixed ", expected: ["high"] },
+    { provider: "demo", model: "demo/Mixed", expected: ["high"] },
+    { provider: "demo", model: "mixed", expected: ["off", "minimal", "low", "medium", "high"] },
+    { provider: "demo-cli", model: "Mixed", expected: ["off", "minimal", "low", "medium", "high"] },
+    { provider: "demo", model: "DEMO/Mixed", expected: ["off"] },
+  ])(
+    "preserves first-match and case rules for $provider/$model",
+    ({ provider, model, expected }) => {
+      const catalog = [
+        {
+          provider: " DEMO ",
+          id: "demo/Mixed",
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null, low: null, medium: null },
+        },
+        { provider: "demo", id: "Mixed", reasoning: false },
+        { provider: "demo", id: "DEMO/Mixed", reasoning: false },
+      ];
+      const catalogResolver = createThinkingCatalogResolver(catalog);
+      for (const prepared of [undefined, catalogResolver]) {
+        const profile = resolveThinkingProfile({
+          provider,
+          model,
+          catalog,
+          catalogResolver: prepared,
+        });
+        expect(profile.levels.map(({ id }) => id)).toEqual(expected);
+      }
+    },
+  );
 });
 
 describe("listThinkingLevels", () => {
