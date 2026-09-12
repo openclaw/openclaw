@@ -102,6 +102,8 @@ export async function persistSessionUsageUpdate(params: {
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   promptTokens?: number;
   isHeartbeat?: boolean;
+  /** Marks a completed user-facing reply as new session activity. */
+  touchActivity?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   /** Compaction invalidates native continuity with its accounting commit. */
   clearCliSessionBinding?: boolean;
@@ -204,6 +206,7 @@ export async function persistSessionUsageUpdate(params: {
             ...(resolvedContextTokens !== undefined
               ? { contextTokens: resolvedContextTokens }
               : {}),
+            ...(params.touchActivity ? { lastActivityAt: updatedAt } : {}),
             systemPromptReport: preserveUserFacingRunState
               ? entry.systemPromptReport
               : (params.systemPromptReport ?? entry.systemPromptReport),

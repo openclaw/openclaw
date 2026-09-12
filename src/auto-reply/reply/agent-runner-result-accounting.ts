@@ -315,6 +315,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     contextTokensSource,
     contextBudgetStatus:
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
+    touchActivity: !isHeartbeat,
     systemPromptReport: runResult.meta?.systemPromptReport,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
