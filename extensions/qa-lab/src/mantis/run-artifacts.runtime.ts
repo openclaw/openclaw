@@ -111,8 +111,9 @@ async function rollbackMantisStableOutput(params: {
   installed: readonly string[];
   outputRoot: MantisOutputRoot;
   staging: MantisRunStaging;
-}): Promise<unknown[]> {
+}): Promise<{ errors: unknown[]; retainedBackupEntries: string[] }> {
   const rollbackErrors: unknown[] = [];
+  const retainedBackupEntries: string[] = [];
   for (const entry of params.installed.toReversed()) {
     try {
       await removeMantisOutputTree(params.outputRoot, entry);
@@ -127,25 +128,34 @@ async function rollbackMantisStableOutput(params: {
       });
     } catch (error) {
       rollbackErrors.push(error);
+      retainedBackupEntries.push(entry);
     }
   }
-  for (const transient of [params.staging.relative, params.backupRelative]) {
+  const transientPaths = [params.staging.relative];
+  if (retainedBackupEntries.length === 0) {
+    transientPaths.push(params.backupRelative);
+  }
+  for (const transient of transientPaths) {
     try {
       await removeMantisOutputTree(params.outputRoot, transient);
     } catch (error) {
       rollbackErrors.push(error);
     }
   }
-  return rollbackErrors;
+  return { errors: rollbackErrors, retainedBackupEntries };
 }
 
 function createMantisStableRollbackError(
   publicationError: unknown,
   rollbackErrors: readonly unknown[],
+  retainedBackupEntries: readonly string[],
 ): AggregateError {
+  const retained = retainedBackupEntries.length
+    ? ` Unrestored backups were retained under .mantis-previous-* (${retainedBackupEntries.join(", ")}).`
+    : "";
   return new AggregateError(
     [publicationError, ...rollbackErrors],
-    "Mantis stable artifact publication failed and rollback failed",
+    `Mantis stable artifact publication failed and rollback failed.${retained}`,
     { cause: publicationError },
   );
 }
@@ -185,15 +195,15 @@ export async function publishMantisRunOutput(params: {
       await params.outputRoot.remove("error.txt");
     }
   } catch (error) {
-    const rollbackErrors = await rollbackMantisStableOutput({
+    const rollback = await rollbackMantisStableOutput({
       backedUp,
       backupRelative,
       installed,
       outputRoot: params.outputRoot,
       staging: params.staging,
     });
-    if (rollbackErrors.length > 0) {
-      throw createMantisStableRollbackError(error, rollbackErrors);
+    if (rollback.errors.length > 0) {
+      throw createMantisStableRollbackError(error, rollback.errors, rollback.retainedBackupEntries);
     }
     throw error;
   }
