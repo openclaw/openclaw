@@ -8,11 +8,11 @@ import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateStateSchemaVersions,
 } from "./update-candidate-state.js";
+import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 let root: string;

@@ -14,7 +14,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import {
   copyUpdateCandidatePlugins,
   prepareUpdateCandidatePlugins,
