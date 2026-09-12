@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runGit, type GitResult } from "../agents/worktrees/git.js";
 import {
   loadSessionDiffBranchMetadata,
@@ -12,6 +12,7 @@ import {
 } from "./session-diff-revisions.js";
 
 vi.mock("../agents/worktrees/git.js", () => ({ runGit: vi.fn() }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function gitResult(stdout: string, code = 0): GitResult {
   return {
@@ -122,7 +123,7 @@ describe("branch base resolution", () => {
 
 describe("captured session history", () => {
   it("does not admit commits added after the checkout revision was captured", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-captured-history-"));
+    const root = tempDirs.make("openclaw-captured-history-");
     const execute = promisify(execFile);
     const git = async (...args: string[]) =>
       (
@@ -138,29 +139,25 @@ describe("captured session history", () => {
           ...args,
         ])
       ).stdout;
-    try {
-      await git("init", "-b", "main");
-      await fs.writeFile(path.join(root, "file.txt"), "base\n");
-      await git("add", "file.txt");
-      await git("commit", "-m", "base");
-      const base = (await git("rev-parse", "HEAD")).trim();
-      await git("checkout", "-b", "feature");
-      await fs.appendFile(path.join(root, "file.txt"), "captured\n");
-      await git("commit", "-am", "captured change");
-      const head = (await git("rev-parse", "HEAD")).trim();
-      await fs.appendFile(path.join(root, "file.txt"), "later\n");
-      await git("commit", "-am", "later change");
-      const metadata = await loadSessionDiffBranchMetadata({
-        root,
-        base,
-        head,
-        gitOut: async (_root, args) => git(...args),
-      });
-      expect(metadata.aheadCount).toBe(1);
-      expect(metadata.commits?.map((commit) => commit.subject)).toEqual(["captured change"]);
-      expect(metadata.mergeBase?.subject).toBe("base");
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    await git("init", "-b", "main");
+    await fs.writeFile(path.join(root, "file.txt"), "base\n");
+    await git("add", "file.txt");
+    await git("commit", "-m", "base");
+    const base = (await git("rev-parse", "HEAD")).trim();
+    await git("checkout", "-b", "feature");
+    await fs.appendFile(path.join(root, "file.txt"), "captured\n");
+    await git("commit", "-am", "captured change");
+    const head = (await git("rev-parse", "HEAD")).trim();
+    await fs.appendFile(path.join(root, "file.txt"), "later\n");
+    await git("commit", "-am", "later change");
+    const metadata = await loadSessionDiffBranchMetadata({
+      root,
+      base,
+      head,
+      gitOut: async (_root, args) => git(...args),
+    });
+    expect(metadata.aheadCount).toBe(1);
+    expect(metadata.commits?.map((commit) => commit.subject)).toEqual(["captured change"]);
+    expect(metadata.mergeBase?.subject).toBe("base");
   });
 });
