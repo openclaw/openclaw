@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -19,6 +18,7 @@ import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "./sqlite-snapshot-source.js";
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -35,15 +35,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 function createTempDatabasePath(): string {
   const tempDir = tempDirs.make("openclaw-sqlite-readonly-");
   return path.join(tempDir, "state.sqlite");
-}
-
-function workerPreloadEnv(preloadPath: string): Record<string, string> {
-  if (!process.versions.bun) {
-    return { NODE_OPTIONS: `--require=${preloadPath}` };
-  }
-  const preloadUrl = pathToFileURL(preloadPath).href;
-  const loader = Buffer.from(`import ${JSON.stringify(preloadUrl)};`).toString("base64");
-  return { BUN_OPTIONS: `--preload=data:text/javascript;base64,${loader}` };
 }
 
 async function expectPublicSnapshot(
@@ -568,7 +559,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
     const missingPath = path.join(tempDir, "missing.db");
 
-    await withEnvAsync(workerPreloadEnv(preloadPath), async () => {
+    await withEnvAsync(sqliteWorkerPreloadEnv(preloadPath), async () => {
       let message = "";
       try {
         await prepareSqliteReadOnlyLocation(missingPath);
