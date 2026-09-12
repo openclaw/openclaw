@@ -665,6 +665,32 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it.each([
+    ["deepseek", "deepseek-v4-flash", 1_000_000],
+    ["openai", "gpt-5.4-mini", 400_000],
+  ] as const)(
+    "resolves the bundled %s catalog window through the flush maintenance path",
+    async (provider, modelId, expectedWindow) => {
+      resetContextWindowCacheForTest();
+      const seenContextWindows: number[] = [];
+      registerMemoryCapability("third-party-memory", {
+        flushPlanResolver: (planParams: { contextWindowTokens: number }) => {
+          seenContextWindows.push(planParams.contextWindowTokens);
+          return createModifiedMemoryFlushPlan({ reserveTokensFloor: 1_000 });
+        },
+      });
+      const sessionEntry = createFlushSessionEntry({ totalTokens: 1_000 });
+
+      await runDefaultMemoryFlush(sessionEntry, {
+        modelContextTokens: undefined,
+        followupRun: createTestFollowupRun({ provider, model: modelId }),
+        defaultModel: `${provider}/${modelId}`,
+      });
+
+      expect(seenContextWindows).toContain(expectedWindow);
+    },
+  );
+
+  it.each([
     ["provider", 8_767, false, false],
     ["provider", 8_768, true, false],
     ["provider", 12_767, true, false],
