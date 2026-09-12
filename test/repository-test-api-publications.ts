@@ -107,7 +107,6 @@ const publications: Record<string, string | symbol> = {
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
   "src/logging/diagnostic.ts": Symbol.for("openclaw.diagnosticTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
-  "src/media-understanding/runner.ts": Symbol.for("openclaw.mediaUnderstandingRunnerTestApi"),
   "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
   "src/media/store.ts": Symbol.for("openclaw.mediaStoreTestApi"),
   "src/model-catalog/remote-overlay.ts": Symbol.for("openclaw.remoteModelCatalogOverlayTestApi"),

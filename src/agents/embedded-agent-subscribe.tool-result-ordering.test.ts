@@ -166,13 +166,13 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
   });
 
   it.each([
-    { outcome: "success", success: true, recorderFails: false },
-    { outcome: "failure", success: false, recorderFails: false },
-    { outcome: "success", success: true, recorderFails: true },
-    { outcome: "failure", success: false, recorderFails: true },
+    { outcome: "success", success: true, recorderFails: false, parentToolCallId: "outer-call" },
+    { outcome: "failure", success: false, recorderFails: false, parentToolCallId: "outer-call" },
+    { outcome: "success", success: true, recorderFails: true, parentToolCallId: undefined },
+    { outcome: "failure", success: false, recorderFails: true, parentToolCallId: undefined },
   ])(
     "preserves nested tool outcomes and capture order ($outcome, recorder fails: $recorderFails)",
-    async ({ success, recorderFails }) => {
+    async ({ success, recorderFails, parentToolCallId }) => {
       const order: string[] = [];
       const recordEvent = vi.fn<
         NonNullable<SubscribeEmbeddedAgentSessionParams["trajectoryRecorder"]>["recordEvent"]
@@ -182,9 +182,12 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
           throw new Error("Trajectory storage failed");
         }
       });
-      const { subscription } = createSubscribedSessionHarness({
+      const onAgentEvent =
+        vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onAgentEvent"]>>();
+      const { emit, subscription } = createSubscribedSessionHarness({
         runId: `run-nested-trajectory-${success}-${recorderFails}`,
         trajectoryRecorder: { recordEvent, flush: async () => {} },
+        onAgentEvent,
       });
       const result = { content: [{ type: "text", text: "Nested fixture" }] };
       const toolError = new Error("Nested fixture failed");
@@ -193,10 +196,22 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         const execution = subscription.runToolLifecycle({
           toolName: "read",
           toolCallId: "nested-call",
-          args: { path: "/tmp/nested-trajectory-fixture" },
+          parentToolCallId,
+          args: {
+            path: "/tmp/nested-trajectory-fixture",
+            parentToolCallId: "argument-value",
+          },
           execute: async (onImplementationStart) => {
             onImplementationStart();
             order.push("execute");
+            emit({
+              type: "tool_execution_update",
+              toolName: "read",
+              toolCallId: "nested-call",
+              args: {},
+              partialResult: { content: [{ type: "text", text: "Reading fixture" }] },
+            });
+            await subscription.waitForPendingEvents();
             if (!success) {
               throw toolError;
             }
@@ -209,13 +224,32 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
           await expect(execution).rejects.toBe(toolError);
         }
         expect(order).toEqual(["tool.call", "execute", "tool.result"]);
+        expect(
+          onAgentEvent.mock.calls
+            .map(([event]) => event)
+            .filter((event) => event.stream === "tool")
+            .map(({ data }) => ({
+              phase: data.phase,
+              toolCallId: data.toolCallId,
+              parentToolCallId: data.parentToolCallId,
+            })),
+        ).toEqual(
+          ["start", "update", "result"].map((phase) => ({
+            phase,
+            toolCallId: "nested-call",
+            parentToolCallId,
+          })),
+        );
         expect(recordEvent.mock.calls).toEqual([
           [
             "tool.call",
             {
               toolCallId: "nested-call",
               name: "read",
-              args: { path: "/tmp/nested-trajectory-fixture" },
+              args: {
+                path: "/tmp/nested-trajectory-fixture",
+                parentToolCallId: "argument-value",
+              },
             },
           ],
           [

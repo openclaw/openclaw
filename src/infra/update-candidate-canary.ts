@@ -48,6 +48,10 @@ type CanaryResult = {
   candidateSchemaVersions?: OpenClawSchemaVersions;
   doctorConfigWrites?: boolean;
   doctorConfigChanges?: UpdateDoctorConfigChange[];
+  listenerIsolation?: {
+    gateway: { host: "127.0.0.1"; port: number };
+    mcpAppSandbox: "disabled";
+  };
 } & (
   | { status: "ok" }
   | {
@@ -56,22 +60,22 @@ type CanaryResult = {
     }
 );
 
-async function waitBounded(
-  promise: Promise<unknown>,
+async function waitBounded<T>(
+  promise: Promise<T>,
   milliseconds: number,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<{ status: "completed"; value: T } | { status: "deadline" | "aborted" }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
   try {
-    await Promise.race([
-      promise,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, Math.max(0, milliseconds));
-        abort = resolve;
+    return await Promise.race([
+      promise.then((value) => ({ status: "completed" as const, value })),
+      new Promise<{ status: "deadline" | "aborted" }>((resolve) => {
+        timer = setTimeout(() => resolve({ status: "deadline" }), Math.max(0, milliseconds));
+        abort = () => resolve({ status: "aborted" });
         signal?.addEventListener("abort", abort, { once: true });
         if (signal?.aborted) {
-          resolve();
+          abort();
         }
       }),
     ]);
@@ -141,6 +145,7 @@ export async function validateUpdateCandidateCanary(params: {
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
   let doctorConfigWrites = false;
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
+  let listenerIsolation: CanaryResult["listenerIsolation"];
   let phase: CanaryPhase = "snapshot";
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
@@ -294,6 +299,10 @@ export async function validateUpdateCandidateCanary(params: {
     env = { ...rehearsal.env };
     const { port, stateDir: copiedStateDir } = rehearsal;
     const doctorResultOptions = { tmpdir: () => copiedStateDir };
+    listenerIsolation = {
+      gateway: { host: "127.0.0.1", port },
+      mcpAppSandbox: "disabled",
+    };
     const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
       {
         phase: "doctor",
@@ -340,14 +349,13 @@ export async function validateUpdateCandidateCanary(params: {
       const running = launch(command.entry ?? entry, command.args);
       let code: number | null = null;
       let doctorAdvisory: UpdateStepResult["advisory"];
+      let timedOut = false;
       try {
-        await waitBounded(
-          running.closed.then((value) => {
-            code = value;
-          }),
-          remaining(),
-          params.signal,
-        );
+        const outcome = await waitBounded(running.closed, remaining(), params.signal);
+        // Freeze the winning outcome before teardown can make a killed child
+        // emit a successful close event.
+        code = outcome.status === "completed" ? outcome.value : 1;
+        timedOut = outcome.status === "deadline";
       } finally {
         await terminateCanary(running.child, running.closed, deadline);
         if (doctorResultPath) {
@@ -379,6 +387,7 @@ export async function validateUpdateCandidateCanary(params: {
           }
         }
       }
+      params.signal?.throwIfAborted();
       if (code === 0 && phase === "plugins") {
         const inventory: unknown = running.outputExceeded()
           ? undefined
@@ -423,9 +432,7 @@ export async function validateUpdateCandidateCanary(params: {
       };
       steps.push(step);
       if (code !== 0 && !doctorAdvisory) {
-        throw new Error(
-          `Candidate ${phase} failed${running.hasExited() ? "" : " (deadline exceeded)"}`,
-        );
+        throw new Error(`Candidate ${phase} failed${timedOut ? " (deadline exceeded)" : ""}`);
       }
       params.onStep?.(step);
     }
@@ -495,6 +502,7 @@ export async function validateUpdateCandidateCanary(params: {
       candidateSchemaVersions,
       ...(doctorConfigWrites ? { doctorConfigWrites } : {}),
       ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
+      listenerIsolation,
       steps,
     };
   } catch (error) {
@@ -526,6 +534,7 @@ export async function validateUpdateCandidateCanary(params: {
       logTail,
       candidateSchemaVersions,
       ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
+      listenerIsolation,
       steps,
     };
   } finally {

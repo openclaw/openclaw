@@ -1482,8 +1482,108 @@ describe("openclaw agent database", () => {
     expect(registered?.sizeBytes).toBeGreaterThan(0);
   });
 
+  it.each([false, true])(
+    "upgrades v19 without rewriting history when retained archives exist: %s",
+    async (hasRetainedArchives) => {
+      const stateDir = createTempStateDir();
+      const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(`
+        DROP TABLE session_transcript_cold_archives;
+        PRAGMA user_version = 19;
+        UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:worker-1:history', 'window-1', '{"sessionId":"window-1","updatedAt":20}', 20);
+        INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+          VALUES ('window-1', 'agent:worker-1:history', 10, 20);
+        INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+          VALUES ('window-1', 7, '{ "type": "message", "text": "雪 🦞" }', 11);
+        INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
+          VALUES ('window-1', 'original-generation', 20);
+      `);
+      if (hasRetainedArchives) {
+        legacy
+          .prepare(`
+          INSERT INTO session_transcript_archives (
+            session_id, generation, session_key, reason, encoding, archive_blob,
+            archive_sha256, archive_name, created_at
+          ) VALUES ('deleted-window', 'old-generation', 'agent:worker-1:history',
+            'deleted', 'identity', ?, ?, 'deleted-window.jsonl', 10)
+        `)
+          .run(Buffer.from("{}\n"), "0".repeat(64));
+      } else {
+        legacy.exec("DROP TABLE session_transcript_archives;");
+      }
+      const eventsBefore = legacy.prepare("SELECT * FROM transcript_events").all();
+      const windowsBefore = legacy.prepare("SELECT * FROM session_windows").all();
+      const generationBefore = legacy.prepare("SELECT * FROM transcript_rewrite_watermarks").all();
+      const archivesBefore = hasRetainedArchives
+        ? legacy.prepare("SELECT * FROM session_transcript_archives").all()
+        : [];
+      legacy.close();
+
+      const migrated = await migrateAndOpenLegacyAgentDatabaseForTest(options);
+      const assertPreserved = (db: DatabaseSync) => {
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(20);
+        expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+          schema_version: 20,
+        });
+        expect(db.prepare("SELECT * FROM transcript_events").all()).toEqual(eventsBefore);
+        expect(db.prepare("SELECT * FROM session_windows").all()).toEqual(windowsBefore);
+        expect(db.prepare("SELECT * FROM transcript_rewrite_watermarks").all()).toEqual(
+          generationBefore,
+        );
+        expect(db.prepare("SELECT * FROM session_transcript_archives").all()).toEqual(
+          archivesBefore,
+        );
+        expect(db.prepare("SELECT * FROM session_transcript_cold_archives").all()).toEqual([]);
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      };
+      assertPreserved(migrated.db);
+      closeOpenClawAgentDatabaseByPath(databasePath);
+      assertPreserved(openOpenClawAgentDatabase(options).db);
+    },
+  );
+
+  it("rolls back the v20 table and both version markers if schema publication fails", async () => {
+    const stateDir = createTempStateDir();
+    const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      DROP TABLE session_transcript_cold_archives;
+      PRAGMA user_version = 19;
+      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
+      CREATE TRIGGER reject_schema_publication BEFORE UPDATE ON schema_meta
+      WHEN NEW.schema_version = 20
+      BEGIN SELECT RAISE(ABORT, 'test schema publication failure'); END;
+    `);
+    legacy.close();
+
+    await expect(migrateAndOpenLegacyAgentDatabaseForTest(options)).rejects.toThrow(
+      "test schema publication failure",
+    );
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readSqliteNumberPragma(after, "user_version")).toBe(19);
+      expect(after.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+        schema_version: 19,
+      });
+      expect(
+        after
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_transcript_cold_archives'")
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
   it("opens a v13 database that already contains additive board storage", async () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(19);
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(20);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeV13WorkerAgentDatabase(stateDir);
@@ -1709,7 +1809,7 @@ describe("openclaw agent database", () => {
   });
 
   it("keeps additive heartbeat repair while upgrading schema version 12", async () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(19);
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(20);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeV13WorkerAgentDatabase(stateDir);

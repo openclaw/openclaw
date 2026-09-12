@@ -1,4 +1,5 @@
 // System-agent prompts drive the OpenClaw conversation with typed-command output.
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentGreetingFacts } from "./greeting.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -242,7 +243,7 @@ export function parseSystemAgentAssistantPlanText(
     return null;
   }
   // Model output may wrap JSON in prose; extraction stays narrow and validation happens after.
-  const jsonText = extractFirstJsonObject(text);
+  const jsonText = extractBalancedJsonPrefix(text, { openers: ["{"] })?.json;
   if (!jsonText) {
     return null;
   }
@@ -266,41 +267,4 @@ export function parseSystemAgentAssistantPlanText(
     ...(command ? { command } : {}),
     ...(reply ? { reply } : {}),
   };
-}
-
-function extractFirstJsonObject(text: string): string | null {
-  // Planner output must be JSON, but this tolerates model wrappers before
-  // re-validating fields. A balanced scan (string-aware) keeps a trailing
-  // prose "}" or a second JSON object from corrupting the first.
-  const start = text.indexOf("{");
-  if (start < 0) {
-    return null;
-  }
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i += 1) {
-    const char = text[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, i + 1);
-      }
-    }
-  }
-  return null;
 }

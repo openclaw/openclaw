@@ -17,6 +17,11 @@
     }
   },
   "openclaw": {
+    "build": {
+      "workerEntries": [
+        "./src/store.worker.ts"
+      ]
+    },
     "extensions": [
       "./index.ts"
     ]

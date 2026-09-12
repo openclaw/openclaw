@@ -3,7 +3,11 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWriteTransaction,
+  resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseAsync,
+} from "../state/openclaw-agent-db.js";
 import { chunkItems } from "../utils/chunk-items.js";
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -28,6 +32,28 @@ type SessionCostUsageRollupRow = {
   updatedAt: number;
   valueJson: string;
 };
+
+function captureCacheDatabaseOptions(
+  inputOptions: Parameters<typeof runOpenClawAgentWriteTransaction>[1],
+) {
+  const options = { ...inputOptions, env: { ...(inputOptions.env ?? process.env) } };
+  return { ...options, path: resolveOpenClawAgentSqlitePath(options) };
+}
+
+function runCacheWriteTransaction<T>(
+  operation: Parameters<typeof runOpenClawAgentWriteTransaction<T>>[0],
+  inputOptions: Parameters<typeof runOpenClawAgentWriteTransaction>[1],
+  transactionOptions: Parameters<typeof runOpenClawAgentWriteTransaction>[2],
+): Promise<T> {
+  const options = captureCacheDatabaseOptions(inputOptions);
+  return withOpenClawAgentDatabaseAsync(options, (database) =>
+    runOpenClawAgentWriteTransaction(
+      operation,
+      { ...options, path: database.path },
+      transactionOptions,
+    ),
+  );
+}
 
 function readCacheDatabase<T>(
   agentId: string | undefined,
@@ -72,14 +98,15 @@ function readCacheValue(
   );
 }
 
-function deleteCacheValueIfUnchanged(params: {
+async function deleteCacheValueIfUnchanged(params: {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   databasePath?: string;
   scope: string;
   key: string;
   valueJson: string;
-}): void {
-  runOpenClawAgentWriteTransaction(
+}): Promise<void> {
+  await runCacheWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
       executeSqliteQuerySync(
@@ -93,6 +120,7 @@ function deleteCacheValueIfUnchanged(params: {
     },
     {
       agentId: normalizeAgentId(params.agentId),
+      env: params.env,
       ...(params.databasePath ? { path: params.databasePath } : {}),
     },
     { operationLabel: `session-cost-usage.${params.key}.delete` },
@@ -127,15 +155,15 @@ export function readSessionCostUsageRollupRows(
   );
 }
 
-export function writeSessionCostUsageRollup(params: {
+export async function writeSessionCostUsageRollup(params: {
   agentId?: string;
   databasePath?: string;
   rollupId: string;
   previousValueJson: string | null;
   valueJson: string;
   updatedAt: number;
-}): boolean {
-  return runOpenClawAgentWriteTransaction(
+}): Promise<boolean> {
+  return runCacheWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
       const currentValueJson =
@@ -182,14 +210,15 @@ export function writeSessionCostUsageRollup(params: {
   );
 }
 
-export function deleteSessionCostUsageRollupsExcept(params: {
+export async function deleteSessionCostUsageRollupsExcept(params: {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   databasePath?: string;
   liveKeys: ReadonlySet<string>;
   rows: readonly SessionCostUsageRollupRow[];
-}): void {
+}): Promise<void> {
   const existing = params.rows.filter((row) => !params.liveKeys.has(row.key));
-  runOpenClawAgentWriteTransaction(
+  await runCacheWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
       for (const row of existing) {
@@ -219,6 +248,7 @@ export function deleteSessionCostUsageRollupsExcept(params: {
     },
     {
       agentId: normalizeAgentId(params.agentId),
+      env: params.env,
       ...(params.databasePath ? { path: params.databasePath } : {}),
     },
     { operationLabel: "session-cost-usage.rollup.prune" },
@@ -249,29 +279,50 @@ function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | nul
   }
 }
 
-export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
-  const raw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
+export async function isSessionCostUsageRefreshRunning(
+  agentId?: string,
+  databasePath?: string,
+): Promise<boolean> {
+  const options = captureCacheDatabaseOptions({
+    agentId: normalizeAgentId(agentId),
+    path: databasePath,
+  });
+  const raw = readCacheValue(options.agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, options.path);
   const lock = parseRefreshLock(raw);
   if (lock && isPidAlive(lock.pid)) {
     return true;
   }
   if (raw !== null) {
-    deleteCacheValueIfUnchanged({
-      agentId,
-      databasePath,
+    await deleteCacheValueIfUnchanged({
+      agentId: options.agentId,
+      databasePath: options.path,
+      env: options.env,
       scope: LEGACY_CACHE_SCOPE,
       key: REFRESH_LOCK_KEY,
       valueJson: raw,
     });
+    const currentLock = parseRefreshLock(
+      readCacheValue(options.agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, options.path),
+    );
+    return currentLock !== null && isPidAlive(currentLock.pid);
   }
   return false;
 }
 
-export function acquireSessionCostUsageRefreshLock(
+export async function acquireSessionCostUsageRefreshLock(
   agentId?: string,
   databasePath?: string,
-): { acquired: boolean; release: () => void } {
-  const previousRaw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
+): Promise<{ acquired: boolean; release: () => Promise<void> }> {
+  const options = captureCacheDatabaseOptions({
+    agentId: normalizeAgentId(agentId),
+    path: databasePath,
+  });
+  const previousRaw = readCacheValue(
+    options.agentId,
+    LEGACY_CACHE_SCOPE,
+    REFRESH_LOCK_KEY,
+    options.path,
+  );
   const previousLock = parseRefreshLock(previousRaw);
   // Process liveness is resolved before BEGIN. The transaction only compares
   // the authoritative row and commits the prepared replacement synchronously.
@@ -282,7 +333,7 @@ export function acquireSessionCostUsageRefreshLock(
     ownerNonce: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
   };
   const lockJson = JSON.stringify(lock);
-  const acquired = runOpenClawAgentWriteTransaction(
+  const acquired = await runCacheWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
       const currentRaw =
@@ -321,19 +372,17 @@ export function acquireSessionCostUsageRefreshLock(
       );
       return true;
     },
-    {
-      agentId: normalizeAgentId(agentId),
-      ...(databasePath ? { path: databasePath } : {}),
-    },
+    options,
     { operationLabel: "session-cost-usage.refresh-lock.acquire" },
   );
   return {
     acquired,
-    release: () => {
+    release: async () => {
       if (acquired) {
-        deleteCacheValueIfUnchanged({
-          agentId,
-          databasePath,
+        await deleteCacheValueIfUnchanged({
+          agentId: options.agentId,
+          databasePath: options.path,
+          env: options.env,
           scope: LEGACY_CACHE_SCOPE,
           key: REFRESH_LOCK_KEY,
           valueJson: lockJson,

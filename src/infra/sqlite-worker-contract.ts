@@ -25,6 +25,7 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
+      existingIdentity?: string;
       input: Uint8Array;
     }
   | { type: "execute"; input: Uint8Array }

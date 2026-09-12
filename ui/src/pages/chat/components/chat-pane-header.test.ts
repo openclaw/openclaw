@@ -3,10 +3,6 @@ import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
-import type {
-  NativeGatewaysCapability,
-  NativeGatewaysSnapshot,
-} from "../../../app/native-gateways.runtime.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -22,11 +18,7 @@ import {
   mountChatPaneHeader,
   type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
-import {
-  canRevealSessionWorkspace,
-  renderChatPaneHeader,
-  resolveChatPaneParentSession,
-} from "./chat-pane-header.ts";
+import { canRevealSessionWorkspace, resolveChatPaneParentSession } from "./chat-pane-header.ts";
 import { renderChatPanePlacement } from "./chat-pane-placement.ts";
 import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
@@ -37,41 +29,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__");
 });
-
-function nativeGateways(snapshot: NativeGatewaysSnapshot): NativeGatewaysCapability {
-  return {
-    snapshot,
-    subscribe: () => () => undefined,
-    select: vi.fn(),
-    openWindow: vi.fn(),
-    setPrimary: vi.fn(),
-    reconnect: vi.fn(),
-    reconnectCancel: vi.fn(),
-    openSettings: vi.fn(),
-  };
-}
-
-const gatewaySnapshot: NativeGatewaysSnapshot = {
-  gateways: [
-    {
-      id: "primary",
-      name: "Local Gateway",
-      kind: "local",
-      isPrimary: true,
-      canPromote: false,
-      health: "ok",
-    },
-    {
-      id: "profile:studio",
-      name: "Studio",
-      kind: "remote",
-      isPrimary: false,
-      canPromote: true,
-      health: "unknown",
-    },
-  ],
-  currentId: "primary",
-};
 
 function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
   return mountChatPaneHeader(containers, patch);
@@ -126,106 +83,6 @@ function mountIntegratedPresenceHeader(params: {
 }
 
 describe("chat pane header", () => {
-  it("hides the gateway picker without capability and with one gateway", () => {
-    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    expect(mountHeader().container.querySelector(".chat-pane__gateway-menu")).toBeNull();
-    const one = nativeGateways({ gateways: [gatewaySnapshot.gateways[0]!], currentId: "primary" });
-    expect(
-      mountHeader({ nativeGateways: one }).container.querySelector(".chat-pane__gateway-menu"),
-    ).toBeNull();
-  });
-
-  it("renders gateway rows, primary tag, and current checkmark", () => {
-    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    const { container } = mountHeader({ nativeGateways: nativeGateways(gatewaySnapshot) });
-    const rows = container.querySelectorAll(".chat-pane__gateway-item");
-    expect(rows).toHaveLength(2);
-    expect(container.querySelectorAll(".chat-pane__gateway-menu-item")).toHaveLength(4);
-    expect(rows[0]?.textContent).toContain("Local Gateway");
-    expect(rows[0]?.textContent).toContain("primary");
-    expect(rows[0]?.querySelector(".chat-pane__gateway-check")).not.toBeNull();
-  });
-
-  it("selects normally and opens a new window on alt-click", () => {
-    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    const select = vi.fn();
-    const openWindow = vi.fn();
-    const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
-    const first = mountHeader({ nativeGateways: capability }).container.querySelectorAll(
-      ".chat-pane__gateway-item",
-    )[1];
-    first?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(select).toHaveBeenCalledWith("profile:studio");
-    const second = mountHeader({ nativeGateways: capability }).container.querySelectorAll(
-      ".chat-pane__gateway-item",
-    )[1];
-    second?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
-    expect(openWindow).toHaveBeenCalledWith("profile:studio");
-  });
-
-  it("opens a new window when alt-clicking the current gateway", () => {
-    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    const select = vi.fn();
-    const openWindow = vi.fn();
-    const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
-    const current = mountHeader({ nativeGateways: capability }).container.querySelector(
-      ".chat-pane__gateway-item",
-    );
-    current?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
-    expect(openWindow).toHaveBeenCalledWith("primary");
-    expect(select).not.toHaveBeenCalled();
-  });
-
-  it("re-renders gateway rows from a changed snapshot property", () => {
-    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    let current = gatewaySnapshot;
-    const capability = {
-      ...nativeGateways(gatewaySnapshot),
-      get snapshot() {
-        return current;
-      },
-    };
-    const mounted = mountHeader({ nativeGateways: capability, gatewaysSnapshot: current });
-    const next = {
-      ...gatewaySnapshot,
-      gateways: [
-        ...gatewaySnapshot.gateways,
-        {
-          id: "profile:backup",
-          name: "Backup",
-          kind: "remote" as const,
-          isPrimary: false,
-          canPromote: true,
-          health: "unknown" as const,
-        },
-      ],
-    };
-    current = next;
-    window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed", { detail: next }));
-
-    const props = { ...mounted.props, gatewaysSnapshot: capability.snapshot };
-    render(html`${renderChatPaneHeader(props)}`, mounted.container);
-
-    expect(mounted.container.querySelectorAll(".chat-pane__gateway-item")).toHaveLength(3);
-    expect(mounted.container.textContent).toContain("Backup");
-  });
-
-  it("disables set-primary when the viewed gateway cannot be promoted", () => {
-    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    const snapshot = {
-      ...gatewaySnapshot,
-      gateways: gatewaySnapshot.gateways.map((gateway) =>
-        Object.assign({}, gateway, { canPromote: false }),
-      ),
-      currentId: "profile:studio",
-    };
-    const { container } = mountHeader({ nativeGateways: nativeGateways(snapshot) });
-    const item = Array.from(container.querySelectorAll("wa-dropdown-item")).find((candidate) =>
-      candidate.textContent?.includes("Set as primary"),
-    );
-    expect(item?.hasAttribute("disabled")).toBe(true);
-  });
-
   it("renders and dispatches merged chrome actions for catalog sessions", () => {
     const drawerEvents: CustomEvent<ShellNavDrawerToggleDetail>[] = [];
     const paletteEvents: Event[] = [];

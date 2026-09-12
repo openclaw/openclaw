@@ -3,6 +3,28 @@ import Testing
 @testable import OpenClaw
 
 struct PortGuardianIsExpectedTests {
+    @Test(arguments: [
+        (19000, Int32(5252), true),
+        (18789, 4242, true),
+        (18789, 5252, false),
+        (18000, 4242, false),
+    ])
+    func `remote mode preserves tunnel port and exact managed local listener`(
+        port: Int,
+        pid: Int32,
+        expected: Bool)
+    {
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "/usr/local/bin/node /tmp/service/dist/index.js gateway",
+            port: port,
+            mode: .remote,
+            tunnelPort: 19000,
+            localGatewayPort: 18789,
+            pid: pid,
+            managedGatewayPID: 4242) == expected)
+    }
+
     @Test func `local mode preserves launchd node dist gateway command`() {
         let fullCommand = """
         /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/openclaw/dist/index.js gateway --port 18789 --bind loopback

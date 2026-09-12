@@ -56,6 +56,7 @@ type CompactRuntimeState = {
 
 type DiscordModelPickerRenderShellParams = {
   title: string;
+  refreshWarning?: string;
   detailLines: string[];
   rows: DiscordModelPickerRow[];
   footer?: string;
@@ -265,6 +266,9 @@ function buildRenderedShell(
   const containerComponents: Array<TextDisplay | Separator | DiscordModelPickerRow> = [
     new TextDisplay(`## ${params.title}`),
   ];
+  if (params.refreshWarning) {
+    containerComponents.push(new TextDisplay(params.refreshWarning));
+  }
   if (params.detailLines.length > 0) {
     containerComponents.push(new TextDisplay(params.detailLines.join("\n")));
   }
@@ -483,7 +487,7 @@ function buildModelRows(params: {
             }
             return option;
           }),
-          placeholder: "Select runtime",
+          placeholder: "Choose how to run this model",
         }),
       ]),
     );
@@ -693,6 +697,7 @@ export function renderDiscordModelPickerProvidersView(
       : `All ${page.totalItems} providers shown`;
   return buildRenderedShell({
     title: "Model Picker",
+    refreshWarning: params.data.refreshWarning,
     detailLines,
     rows,
     footer,
@@ -728,6 +733,7 @@ export function renderDiscordModelPickerModelsView(
 
     return buildRenderedShell({
       title: "Model Picker",
+      refreshWarning: params.data.refreshWarning,
       detailLines: [
         formatCurrentModelLine(params.currentModel),
         `Provider not found: ${normalizeProviderId(params.provider)}`,
@@ -787,17 +793,18 @@ export function renderDiscordModelPickerModelsView(
         : undefined,
     pendingRuntime: params.pendingRuntime,
   });
+  const selectedRuntimeLabel = choices?.find((choice) => choice.id === selectedRuntime)?.label;
   const pendingLine = !params.pendingModel
     ? "Select a model, then press Submit."
     : !supportsDiscordModelPickerRuntimeChoices()
       ? `Selected: ${params.pendingModel} (press Submit)`
       : choices === undefined
-        ? "Runtime availability is not confirmed. Reopen /model to try again."
+        ? "Could not confirm how to run this model. Open /models to try again."
         : choices.length === 0
-          ? "No runtime is available for the selected model. Choose another model."
-          : selectedRuntime
-            ? `Selected: ${params.pendingModel} · runtime ${selectedRuntime} (press Submit)`
-            : "Choose an available runtime for the selected model, then press Submit.";
+          ? "This model cannot run with your current connections. Choose another model."
+          : selectedRuntimeLabel
+            ? `Selected: ${params.pendingModel} · ${selectedRuntimeLabel} (press Submit)`
+            : "Choose how to run this model, then press Submit.";
 
   const detailLines = [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`];
   if (modelPage.totalPages > 1) {
@@ -808,6 +815,7 @@ export function renderDiscordModelPickerModelsView(
 
   return buildRenderedShell({
     title: "Model Picker",
+    refreshWarning: params.data.refreshWarning,
     detailLines,
     preRowText: pendingLine,
     rows,
@@ -900,6 +908,7 @@ export function renderDiscordModelPickerRecentsView(
 
   return buildRenderedShell({
     title: "Recents",
+    refreshWarning: params.data.refreshWarning,
     detailLines: [
       "Models you've previously selected appear here.",
       formatCurrentModelLine(params.currentModel),

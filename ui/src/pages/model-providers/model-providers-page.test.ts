@@ -183,7 +183,7 @@ describe("ModelProvidersPage agent scope", () => {
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
     deferNextAuthStatus();
-    void page.refresh({ force: true });
+    void page.refresh("forced");
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(2));
 
     source.publish({ ...snapshot, phase: "reconnecting" });

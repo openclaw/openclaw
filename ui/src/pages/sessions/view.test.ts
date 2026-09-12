@@ -377,6 +377,7 @@ describe("sessions view", () => {
           ],
           indexing: true,
           truncated: true,
+          archivedTranscriptsExcluded: 0,
         },
         onNavigateToChat,
       }),

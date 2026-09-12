@@ -496,6 +496,18 @@ export async function completeGatewayClose(
         }),
       ]);
     });
+    if (params.maintenance) {
+      clearInterval(params.maintenance.tickInterval);
+      clearInterval(params.maintenance.healthInterval);
+      clearInterval(params.maintenance.dedupeCleanup);
+      clearInterval(params.maintenance.worktreeCleanup);
+      params.maintenance.skillUsageCleanup();
+    }
+    await shutdownStep(
+      "session-cold-storage",
+      () => params.maintenance?.stopSessionColdStorageMaintenance(),
+      warnings,
+    );
     try {
       mediaCleanupStopResult = await params.stopMediaCleanup();
     } catch (err) {
@@ -525,13 +537,6 @@ export async function completeGatewayClose(
       clearInterval(timer);
     }
     params.nodePresenceTimers.clear();
-    if (params.maintenance) {
-      clearInterval(params.maintenance.tickInterval);
-      clearInterval(params.maintenance.healthInterval);
-      clearInterval(params.maintenance.dedupeCleanup);
-      clearInterval(params.maintenance.worktreeCleanup);
-      params.maintenance.skillUsageCleanup();
-    }
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
     }

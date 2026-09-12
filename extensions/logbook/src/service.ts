@@ -1,6 +1,4 @@
 // Logbook background service: snapshot capture loop, batch analysis, retention.
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type {
@@ -10,16 +8,14 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CARD_LOOKBACK_MS,
-  MAX_FRAMES_PER_CALL,
   parseCardsJson,
   parseObservationSegments,
-  pickKeyframeId,
   revisionWindow,
-  sampleFrames,
   selectBatchFrames,
   validateCardCoverage,
 } from "./analyze.js";
 import { parseModelRef, type LogbookConfig } from "./config.js";
+import { dayKeyFor } from "./day.js";
 import {
   buildAskPrompt,
   buildCardsCorrectionPrompt,
@@ -28,7 +24,7 @@ import {
   buildStandupPrompt,
   OBSERVATION_JSON_SCHEMA,
 } from "./prompts.js";
-import { dayKeyFor, LogbookStore } from "./store.js";
+import { LogbookStore } from "./store.js";
 import type { LogbookBatch, LogbookStatus } from "./types.js";
 
 const ANALYSIS_TICK_MS = 60 * 1000;
@@ -101,6 +97,7 @@ export class LogbookService {
       fullConfig: OpenClawConfig;
       logger: PluginLogger;
       dataDir: string;
+      workerModuleUrl: URL;
     },
   ) {}
 
@@ -109,7 +106,7 @@ export class LogbookService {
       throw new Error("Logbook service cannot be started again");
     }
     this.starting = this.trackOperation(async () => {
-      const store = await LogbookStore.open(this.deps.dataDir);
+      const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
       this.store = store;
       try {
         if (this.stopping) {
@@ -297,24 +294,13 @@ export class LogbookService {
         const buffer = Buffer.from(base64, "base64");
         const capturedAtMs = Date.now();
         const day = dayKeyFor(capturedAtMs);
-        const contentHash = createHash("sha256").update(buffer).digest("hex");
-        // Unchanged consecutive frames mean the user is idle (or away); they are
-        // stored for the filmstrip but excluded from analysis batches.
-        const idle = (await store.lastFrame())?.contentHash === contentHash;
-        const filePath = store.frameFilePath(day, capturedAtMs);
-        // Screen captures can contain secrets; keep them owner-only.
-        mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-        writeFileSync(filePath, buffer, { mode: 0o600 });
-        await store.insertFrame({
+        await store.captureFrame({
           capturedAtMs,
           day,
-          path: filePath,
           screenIndex: this.config.screenIndex,
           width: raw?.width,
           height: raw?.height,
-          byteSize: buffer.byteLength,
-          contentHash,
-          idle,
+          buffer,
         });
         this.lastCaptureAtMs = capturedAtMs;
         this.lastCaptureError = undefined;
@@ -489,11 +475,10 @@ export class LogbookService {
       `${vision.ref.provider}/${vision.ref.model}`,
     );
     try {
-      const frames = await store.batchFrames(batch.id);
-      const sampled = sampleFrames(frames, MAX_FRAMES_PER_CALL);
-      const images = sampled.map((frame) => ({
+      const sampled = await store.batchImages(batch.id);
+      const images = sampled.map(({ frame, buffer }) => ({
         type: "image" as const,
-        buffer: readFileSync(frame.path),
+        buffer,
         fileName: path.basename(frame.path),
         mime: "image/jpeg",
       }));
@@ -505,7 +490,7 @@ export class LogbookService {
           preferredProfile: vision.ref.preferredProfile,
           input: images,
           instructions: buildObservationInstructions({
-            frameTimes: sampled.map((frame) => frame.capturedAtMs),
+            frameTimes: sampled.map(({ frame }) => frame.capturedAtMs),
             startMs: batch.startMs,
             endMs: batch.endMs,
           }),
@@ -602,14 +587,9 @@ export class LogbookService {
     if (!parsed.ok) {
       throw new Error(`card synthesis failed validation: ${parsed.error}`);
     }
-    const windowFrames = (await store.framesInRange(window.startMs, window.endMs)).map((frame) => ({
-      id: frame.id,
-      capturedAtMs: frame.capturedAtMs,
-    }));
-    const drafts = parsed.drafts.map((draft) =>
-      Object.assign(draft, { keyframeId: pickKeyframeId(draft, windowFrames) }),
-    );
-    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, drafts);
+    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, parsed.drafts, {
+      selectKeyframes: true,
+    });
   }
 
   async standup(
@@ -681,9 +661,9 @@ export class LogbookService {
     return this.trackOperation(() => store.listDays());
   }
 
-  async frameById(id: number): ReturnType<LogbookStore["frameById"]> {
+  async framePayload(id: number): ReturnType<LogbookStore["framePayload"]> {
     const store = this.requireStore();
-    return this.trackOperation(() => store.frameById(id));
+    return this.trackOperation(() => store.framePayload(id));
   }
 
   async framesInRange(startMs: number, endMs: number): ReturnType<LogbookStore["framesInRange"]> {

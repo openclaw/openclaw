@@ -1,5 +1,6 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../shared/update-outcome.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
 import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
@@ -203,7 +204,14 @@ export function renderUpdateRunReport(
   if (run.downtimeMs != null) {
     lines.push(`Gateway downtime: ${formatDurationPrecise(run.downtimeMs)}.`);
   }
-  const nextAction = opts.nextAction ?? run.origin.nextAction;
+  const nextAction =
+    opts.nextAction ??
+    run.origin.nextAction ??
+    (run.status === "skipped" &&
+    run.reason &&
+    Object.hasOwn(UPDATE_INSTALL_SKIP_GUIDANCE, run.reason)
+      ? UPDATE_INSTALL_SKIP_GUIDANCE[run.reason]
+      : undefined);
   const lastRepairReason = run.repair.at(-1)?.reason;
   const repairStopReason =
     lastRepairReason === "requester-revoked" || lastRepairReason === "repair-requires-config-change"

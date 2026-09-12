@@ -179,8 +179,10 @@ export type MigrationMessages = {
   changes: string[];
   warnings: string[];
   notices?: string[];
-  /** The owner completed its required work and classified every warning as advisory. */
+  /** The owner classified every warning as advisory, including a source-preserving skip. */
   warningDisposition?: "recoverable";
+  /** An intentional non-outcome can carry advisory warnings without becoming a refusal. */
+  outcome?: "skipped";
   /** Every blocking warning is an ownership refusal confined to these agent databases. */
   refusedAgentDatabasePaths?: readonly string[];
 };

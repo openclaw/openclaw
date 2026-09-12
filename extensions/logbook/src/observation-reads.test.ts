@@ -9,40 +9,7 @@ import { buildAskPrompt } from "./prompts.js";
 import { LogbookService } from "./service.js";
 import { LogbookStore } from "./store.js";
 
-const reads = vi.hoisted(() => ({ rows: 0 }));
-
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
-      const db = actual.openNodeSqliteDatabase(...args);
-      const prepare = db.prepare.bind(db);
-      vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        if (!/\bfrom\s+"?observations\b/i.test(sql)) {
-          return statement;
-        }
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation((...bindings) => {
-          const rows = all(...bindings);
-          reads.rows += rows.length;
-          return rows;
-        });
-        const iterate = statement.iterate.bind(statement);
-        vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
-          for (const row of iterate(...bindings)) {
-            reads.rows++;
-            yield row;
-          }
-          return undefined;
-        });
-        return statement;
-      });
-      return db;
-    },
-  };
-});
+const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -50,13 +17,13 @@ afterEach(() => {
 });
 
 it.each([0, 199, 200, 201])(
-  "asks with the same latest observations while reading at most 200 of %i rows",
+  "asks with the same latest observations using a bounded read of %i rows",
   async (count) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-03T12:00:00"));
     const dataDir = mkdtempSync(path.join(tmpdir(), "logbook-observation-reads-"));
     const day = "2026-07-03";
-    const store = await LogbookStore.open(dataDir);
+    const store = await LogbookStore.open(dataDir, workerModuleUrl);
     const segments = Array.from({ length: count }, (_, index) => ({
       startMs: 1 + Math.floor(index / 3) * 1000,
       endMs: 1001 + Math.floor(index / 3) * 1000,
@@ -106,13 +73,14 @@ it.each([0, 199, 200, 201])(
     runtime.llm.complete = complete;
     const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false }), {
       dataDir,
+      workerModuleUrl,
       runtime,
       fullConfig: {},
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
     await service.start();
     try {
-      reads.rows = 0;
+      const observations = vi.spyOn(LogbookStore.prototype, "observationsInRange");
       expect(await service.ask(day, "What happened?")).toBe("Synthetic answer");
       expect(complete).toHaveBeenCalledTimes(1);
       expect(complete.mock.calls[0]?.[0].messages).toEqual([
@@ -128,7 +96,7 @@ it.each([0, 199, 200, 201])(
           }),
         },
       ]);
-      expect(reads.rows).toBe(Math.min(count, 200));
+      expect(observations).toHaveBeenCalledExactlyOnceWith(day, 0, Number.MAX_SAFE_INTEGER, 200);
     } finally {
       await Promise.resolve(service.stop());
       rmSync(dataDir, { recursive: true, force: true });

@@ -62,7 +62,7 @@ test/vitest/vitest.extension-misc-paths.mjs
 test/vitest/vitest.extension-msteams-paths.mjs
 test/vitest/vitest.extension-provider-paths.mjs
 test/vitest/vitest.extension-qa-paths.mjs
-test/vitest/vitest.extension-team-reports-paths.mjs
+test/vitest/vitest.extension-database-workers-paths.mjs
 test/vitest/vitest.extension-telegram-paths.mjs
 test/vitest/vitest.extension-voice-call-paths.mjs
 test/vitest/vitest.extension-whatsapp-paths.mjs

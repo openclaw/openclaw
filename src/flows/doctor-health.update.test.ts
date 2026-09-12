@@ -164,7 +164,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
         vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
         const receipt = (
           id: string,
-          outcome: "warning" | "refused",
+          outcome: "warning" | "skipped" | "refused",
         ): LegacyStateMigrationStepReceipt => ({
           id,
           phase: "final",
@@ -177,6 +177,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
           warnings: [`${id}: run openclaw doctor --fix`],
         });
         mocks.stateMigrationReceipts.push(receipt("preflight cleanup", "warning"));
+        mocks.stateMigrationReceipts.push(receipt("skipped audit recovery", "skipped"));
         const deferred = receipt("deferred cleanup", refused ? "refused" : "warning");
         const refusal = new DoctorStateMigrationRefusalError([deferred]);
         mocks.runContributions.mockImplementation(async (ctx) => {
@@ -208,6 +209,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
               ? undefined
               : [
                   "preflight cleanup: run openclaw doctor --fix",
+                  "skipped audit recovery: run openclaw doctor --fix",
                   "deferred cleanup: run openclaw doctor --fix",
                 ],
           );

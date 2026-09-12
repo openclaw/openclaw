@@ -423,6 +423,14 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
     if (control.authorPermission === 'error') process.exit(1);
     value = { permission: control.authorPermission };
+  } else if (endpoint.startsWith('repos/fixture/repo/commits/')) {
+    const oid = endpoint.slice('repos/fixture/repo/commits/'.length);
+    if (!/^[0-9a-f]{40}$/.test(oid)) throw new Error('Invalid synthetic commit identity');
+    const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid]).split('\\n');
+    value = {
+      commit: { author: { name, email } },
+      author: { login: control.metadata.author.login, type: 'User' },
+    };
   } else if (endpoint.startsWith('repos/fixture/repo/issues/42/comments')) {
     if (args.includes('POST')) {
       value = { html_url: 'https://example.invalid/pr/42#completion' };

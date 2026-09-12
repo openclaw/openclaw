@@ -3,11 +3,16 @@ import OpenClawKit
 
 enum DashboardGatewayTarget: Equatable, Hashable, Sendable {
     case primary
+    case local
     case profile(String)
 
     init?(bridgeID: String) {
         if bridgeID == "primary" {
             self = .primary
+            return
+        }
+        if bridgeID == "local" {
+            self = .local
             return
         }
         guard bridgeID.hasPrefix("profile:"), bridgeID.count > "profile:".count else { return nil }
@@ -18,6 +23,8 @@ enum DashboardGatewayTarget: Equatable, Hashable, Sendable {
         switch self {
         case .primary:
             "primary"
+        case .local:
+            "local"
         case let .profile(profileID):
             "profile:\(profileID)"
         }
@@ -77,7 +84,9 @@ enum DashboardGatewayCatalog {
         resolvedRemoteURL: URL?,
         resolvedRemoteHostLabel: String?,
         profiles: [MacGatewayCatalogProfile],
-        primaryHealth: DashboardGatewayHealth) -> [DashboardGatewayEntry]
+        primaryHealth: DashboardGatewayHealth,
+        hostsLocalGateway: Bool = false,
+        localHealth: DashboardGatewayHealth = .unknown) -> [DashboardGatewayEntry]
     {
         let canonicalPrimaryURL = mode == .remote
             ? (resolvedRemoteURL ?? primaryRemoteURL).flatMap {
@@ -115,7 +124,10 @@ enum DashboardGatewayCatalog {
                 canPromote: item.canPromote,
                 health: .unknown)
         }
-        return mode == .unconfigured ? saved : [primary] + saved
+        let local: [DashboardGatewayEntry] = mode == .remote && hostsLocalGateway ? [.init(
+            id: "local", name: "This Mac", kind: "local", isPrimary: false, canPromote: false, health: localHealth)] :
+            []
+        return mode == .unconfigured ? saved : [primary] + local + saved
     }
 
     @MainActor
@@ -149,7 +161,9 @@ enum DashboardGatewayCatalog {
                 sshTarget: state.remoteTarget,
                 resolvedHostLabel: connectivity.resolvedHostLabel),
             profiles: profiles,
-            primaryHealth: self.primaryHealth(for: ControlChannel.shared.state))
+            primaryHealth: self.primaryHealth(for: ControlChannel.shared.state),
+            hostsLocalGateway: state.hostsLocalGatewayWithRemotePrimary,
+            localHealth: GatewaysMainMenu.shared.localHealth)
     }
 }
 
