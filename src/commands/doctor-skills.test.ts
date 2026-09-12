@@ -1,14 +1,17 @@
 // Doctor skills tests cover skill install checks, status summaries, and repair guidance.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyInstallChecks } from "../cli/requirements-test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
+import * as skillStatus from "../skills/discovery/status.js";
 import type { GhConfigDiscoveryInput } from "../skills/lifecycle/gh-config-discovery.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   collectUnavailableAgentSkills,
   describeGhConfigDirHintFromDiscovery,
   disableUnavailableSkillsInConfig,
   formatUnavailableSkillDoctorLines,
+  maybeRepairSkillReadiness,
 } from "./doctor-skills.js";
 
 function createSkill(overrides: Partial<SkillStatusEntry>): SkillStatusEntry {
@@ -44,6 +47,39 @@ function createReport(skills: SkillStatusEntry[]): SkillStatusReport {
 }
 
 describe("doctor skills", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { mode: "automatic update", update: true, expectedEnabled: true },
+    { mode: "standalone repair", update: false, expectedEnabled: false },
+  ])("preserves enabled optional skills during $mode", async ({ update, expectedEnabled }) => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update ? "1" : undefined);
+    const unavailable = createSkill({
+      name: "optional-tool",
+      skillKey: "optional-tool",
+      eligible: false,
+      missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+    });
+    vi.spyOn(skillStatus, "buildWorkspaceSkillStatus").mockReturnValue(createReport([unavailable]));
+    const cfg: OpenClawConfig = {
+      skills: { entries: { "optional-tool": { enabled: true, env: { EXISTING: "1" } } } },
+    };
+    const prompter = createDoctorPrompter({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { repair: true, nonInteractive: true },
+    });
+
+    const next = await maybeRepairSkillReadiness({ cfg, prompter });
+
+    expect(next.skills?.entries?.["optional-tool"]).toEqual({
+      enabled: expectedEnabled,
+      env: { EXISTING: "1" },
+    });
+  });
+
   it("collects only unavailable skills that this agent is allowed to use", () => {
     const unavailable = createSkill({
       name: "missing-bin",
