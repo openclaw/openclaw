@@ -1,8 +1,6 @@
 {
   "id": "workboard",
-  "categories": [
-    "productivity"
-  ],
+  "categories": ["productivity"],
   "cliCommands": [
     {
       "name": "workboard",
@@ -20,9 +18,7 @@
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,
-    "onCommands": [
-      "workboard"
-    ]
+    "onCommands": ["workboard"]
   },
   "dashboard": {
     "dataBindings": [
