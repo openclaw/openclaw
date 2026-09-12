@@ -376,6 +376,14 @@ export type PreparedCliRunContext = {
   effectiveAuthProfileId?: string;
   /** Selected profile snapshot used only for terminal health settlement. */
   authProfileStore?: AuthProfileStore;
+  /**
+   * Subscription semantics of the credential selected at prepare time, captured
+   * before native-auth handling clears the profile id. Failover copy reads this
+   * so billing failures on oauth/token-backed CLI runs do not suggest topping up
+   * an API key the gateway never had. API-key-backed and unprofiled runs stay
+   * unset.
+   */
+  cliAuthMode?: "oauth" | "token";
   agentDir?: string;
   started: number;
   workspaceDir: string;

@@ -82,6 +82,7 @@ export async function executeCliProcess(params: {
     model: context.modelId,
     sessionId: runParams.sessionId,
     lane: runParams.lane,
+    ...(context.cliAuthMode ? { authMode: context.cliAuthMode } : {}),
   };
   const outputErrorContext = { ...failoverContext, runId: runParams.runId };
   // buildCliArgs emits this option only for an actual checkpointed resume.

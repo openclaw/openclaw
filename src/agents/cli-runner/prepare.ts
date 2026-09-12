@@ -69,6 +69,7 @@ import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-c
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { resolveSubscriptionAuthModeForProfiles } from "../auth-profiles/profile-list.js";
 import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
@@ -850,6 +851,16 @@ async function prepareCliRunContextWithinReadFence(
   ) {
     throw new Error("This saved sign-in is inactive. Test and activate it in Model Setup.");
   }
+  // Failover copy needs the selected credential's subscription semantics even
+  // when the native backend owns the credential itself and the profile id is
+  // cleared below. API-key profiles stay unset on purpose: their billing
+  // failures correctly keep the API-key wording.
+  const cliAuthMode = authStore
+    ? resolveSubscriptionAuthModeForProfiles({
+        store: authStore,
+        profileIds: [effectiveAuthProfileId],
+      })
+    : undefined;
   // Claude owns its native login and single-use refresh-token family. Never
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude
   // process validates and refreshes its own current login.
@@ -2236,6 +2247,7 @@ async function prepareCliRunContextWithinReadFence(
         bindQuestionAnswerAuthority,
         effectiveAuthProfileId,
         ...(authStore ? { authProfileStore: authStore } : {}),
+        ...(cliAuthMode ? { cliAuthMode } : {}),
         agentDir,
         started,
         workspaceDir,
@@ -2389,6 +2401,7 @@ async function prepareCliRunContextWithinReadFence(
       bindQuestionAnswerAuthority,
       effectiveAuthProfileId,
       ...(authStore ? { authProfileStore: authStore } : {}),
+      ...(cliAuthMode ? { cliAuthMode } : {}),
       agentDir,
       started,
       workspaceDir,
