@@ -58,13 +58,27 @@ function pluginDeclaresProviderPolicyRef(
   plugin: PluginManifestRecord,
   normalizedProviderId: string,
 ): boolean {
-  const matches = (provider: string) => normalizeProviderId(provider) === normalizedProviderId;
-  return Boolean(
-    normalizedProviderId &&
-    (plugin.providers.some(matches) ||
-      plugin.cliBackends.some(matches) ||
-      plugin.contracts?.embeddingProviders?.some(matches)),
-  );
+  if (!normalizedProviderId) {
+    return false;
+  }
+  for (const provider of plugin.providers) {
+    if (normalizeProviderId(provider) === normalizedProviderId) {
+      return true;
+    }
+  }
+  for (const provider of plugin.cliBackends) {
+    if (normalizeProviderId(provider) === normalizedProviderId) {
+      return true;
+    }
+  }
+  if (plugin.contracts?.embeddingProviders) {
+    for (const provider of plugin.contracts.embeddingProviders) {
+      if (normalizeProviderId(provider) === normalizedProviderId) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function pluginOwnsProviderPolicyRef(
@@ -79,7 +93,11 @@ function pluginOwnsProviderPolicyRef(
   if (!aliases) {
     return false;
   }
-  for (const [rawAlias, rawTarget] of Object.entries(aliases)) {
+  for (const rawAlias in aliases) {
+    if (!Object.hasOwn(aliases, rawAlias)) {
+      continue;
+    }
+    const rawTarget = aliases[rawAlias];
     if (
       typeof rawTarget === "string" &&
       normalizeProviderId(rawAlias) === normalizedProviderId &&

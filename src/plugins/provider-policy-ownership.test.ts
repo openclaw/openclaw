@@ -13,6 +13,8 @@ describe("provider policy declaration ownership", () => {
     ["orphan-alias", false],
     ["scoped-alias", false],
     ["empty-target", false],
+    ["inherited-alias", false],
+    ["hidden-alias", false],
     ["setup-only", false],
     ["setup-cli", false],
     [" ", true],
@@ -34,6 +36,11 @@ describe("provider policy declaration ownership", () => {
         "empty-target": " ",
         "": "fixture-text",
       },
+    });
+    Object.setPrototypeOf(owner.providerAuthAliases, { "inherited-alias": "fixture-text" });
+    Object.defineProperty(owner.providerAuthAliases, "hidden-alias", {
+      value: "fixture-text",
+      enumerable: false,
     });
 
     expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual(
