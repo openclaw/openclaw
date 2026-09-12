@@ -1,5 +1,6 @@
 // Shared CLI timeout parsers for millisecond flags and config-backed fallbacks.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { ExpectedCliError } from "./failure-output.js";
 
 /** Parse a positive millisecond timeout, returning undefined for absent or invalid input. */
 export function parseTimeoutMs(raw: unknown): number | undefined {
@@ -23,9 +24,8 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
 
 function invalidTimeout(value?: string): Error {
   const suffix = value ? ` Received: "${value}".` : "";
-  return new Error(
-    `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000.${suffix}`,
-  );
+  const message = `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000.${suffix}`;
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
 /** Parse a positive timeout or return the supplied fallback for missing values. */

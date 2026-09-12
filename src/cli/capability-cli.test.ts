@@ -10,6 +10,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
+import { ExpectedCliError } from "./failure-output.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
@@ -620,6 +621,7 @@ describe("capability cli", () => {
     mocks.loadConfig.mockReset().mockReturnValue({});
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
+    mocks.runtime.exit.mockClear();
     mocks.runtime.writeJson.mockClear();
     mocks.loadModelCatalog
       .mockReset()
@@ -3359,9 +3361,19 @@ describe("capability cli", () => {
         ["image describe-many", ["image", "describe-many", "--file", "photo.png"]],
         ["video generate", ["video", "generate", "--prompt", "clip"]],
       ] as const)("rejects %s before provider dispatch", async (_name, argv) => {
-        await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
+        const failure = runCap(command, ...argv, "--timeout-ms", raw);
+        const suffix = raw.trim() ? ` Received: "${raw.trim()}".` : "";
+        const message = `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000.${suffix}`;
 
-        expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+        await expect(failure).rejects.toBeInstanceOf(ExpectedCliError);
+        await expect(failure).rejects.toMatchObject({
+          message,
+          humanOutput: message,
+          machineOutput: message,
+        });
+        expect(mocks.runtime.error).not.toHaveBeenCalled();
+        expect(mocks.runtime.exit).not.toHaveBeenCalled();
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
         expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
         expect(mocks.generateImage).not.toHaveBeenCalled();
         expect(mocks.generateVideo).not.toHaveBeenCalled();

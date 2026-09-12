@@ -795,10 +795,21 @@ describe("gateway-cli coverage", () => {
 
   it("validates gateway discover timeout", async () => {
     discoverGatewayBeacons.mockClear();
-    await expectGatewayExit(["gateway", "discover", "--timeout", "0"]);
+    const failure = runGatewayCommand(["gateway", "discover", "--timeout", "0"]);
+    const message =
+      'Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "0".';
 
-    expect(runtimeErrors.join("\n")).toContain("gateway discover failed:");
+    await expect(failure).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(failure).rejects.toMatchObject({
+      message,
+      humanOutput: message,
+      machineOutput: message,
+    });
+    expect(runtimeErrors).toHaveLength(0);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(discoverGatewayBeacons).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("fails gateway call on invalid params JSON", async () => {
