@@ -676,16 +676,13 @@ describe("qa mock openai server", () => {
     expect(outputItem(preActionPayload).type).toBe("message");
     expect(outputText(preActionPayload)).toContain("Protocol note: acknowledged.");
 
-    const approvalBody = await expectOpenAiStreamingResponsesText(server, {
-      input: [
-        makeUserInput(
-          "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
-        ),
-        makeUserInput(
-          "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
-        ),
-      ],
-    });
+    const approvalBody = await readOpenAiPromptResponseText(
+      server,
+      "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
+      makeUserInput(
+        "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
+      ),
+    );
     expect(approvalBody).toContain('"name":"read"');
     expect(approvalBody).toContain('"arguments":"{\\"path\\":\\"QA_KICKOFF_TASK.md\\"}"');
 
@@ -1066,14 +1063,10 @@ describe("qa mock openai server", () => {
   it("serves Telegram visible and unsent failure directives", async () => {
     const server = await startMockServer();
     const visibleEvents = parseStreamingResponseEvents(
-      await expectOpenAiStreamingResponsesText(server, {
-        input: [makeUserInput("Telegram visible partial failure QA check")],
-      }),
+      await readOpenAiPromptResponseText(server, "Telegram visible partial failure QA check"),
     );
     const unsentEvents = parseStreamingResponseEvents(
-      await expectOpenAiStreamingResponsesText(server, {
-        input: [makeUserInput("Telegram unsent failure QA check")],
-      }),
+      await readOpenAiPromptResponseText(server, "Telegram unsent failure QA check"),
     );
 
     expect(visibleEvents.map((event) => event.type)).toEqual([
@@ -1694,12 +1687,11 @@ describe("qa mock openai server", () => {
   it("drives the Lobster Invaders write flow and memory recall responses", async () => {
     const server = await startMockServer();
 
-    const lobsterBody = await expectOpenAiStreamingResponsesText(server, {
-      input: [
-        makeUserInput("Please build Lobster Invaders after reading context."),
-        makeToolOutput("QA mission: read source and docs first."),
-      ],
-    });
+    const lobsterBody = await readOpenAiPromptResponseText(
+      server,
+      "Please build Lobster Invaders after reading context.",
+      makeToolOutput("QA mission: read source and docs first."),
+    );
     expect(lobsterBody).toContain('"name":"write"');
     expect(lobsterBody).toContain("lobster-invaders.html");
 
@@ -1722,13 +1714,10 @@ describe("qa mock openai server", () => {
   it("keeps remember prompts prose-only even when they mention repo cleanup", async () => {
     const server = await startMockServer();
 
-    const body = await expectOpenAiStreamingResponsesText(server, {
-      input: [
-        makeUserInput(
-          "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
-        ),
-      ],
-    });
+    const body = await readOpenAiPromptResponseText(
+      server,
+      "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+    );
     expect(body).toContain("Remembered ALPHA-7.");
     expect(body).not.toContain('"name":"read"');
   });
@@ -1850,14 +1839,13 @@ describe("qa mock openai server", () => {
     });
     expect(await third.text()).toContain('"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"');
 
-    const fourthBody = await expectOpenAiStreamingResponsesText(server, {
-      input: [
-        makeUserInput(prompt),
-        makeToolOutput(
-          "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt\n",
-        ),
-      ],
-    });
+    const fourthBody = await readOpenAiPromptResponseText(
+      server,
+      prompt,
+      makeToolOutput(
+        "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt\n",
+      ),
+    );
     expect(fourthBody).toContain('"name":"write"');
     expect(fourthBody).toContain("repo-contract-summary.txt");
 
@@ -2340,9 +2328,7 @@ describe("qa mock openai server", () => {
     const prompt =
       "Personal task followthrough check. Read PERSONAL_TASK_LEDGER.md and FOLLOWTHROUGH_NOTE.md first. Then write ./personal-task-status.txt and reply with three labeled lines: Pending, Blocked, Done.";
 
-    const firstBody = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(prompt)],
-    });
+    const firstBody = await readOpenAiPromptResponseText(server, prompt);
     expect(firstBody).toContain('"arguments":"{\\"path\\":\\"PERSONAL_TASK_LEDGER.md\\"}"');
     expect(firstBody).not.toContain("repo/package.json");
 
@@ -2439,9 +2425,7 @@ describe("qa mock openai server", () => {
   it("drives the compaction retry mutating tool parity flow", async () => {
     const server = await startMockServer();
 
-    const writePlanBody = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_COMPACTION_RETRY_PROMPT)],
-    });
+    const writePlanBody = await readOpenAiPromptResponseText(server, QA_COMPACTION_RETRY_PROMPT);
     expect(writePlanBody).toContain('"name":"write"');
     expect(writePlanBody).toContain("compaction-retry-summary.txt");
 
@@ -8038,9 +8022,7 @@ Update and merge these partial structured summaries.`,
   it("scripts a reasoning-only recovery sequence after a replay-safe read", async () => {
     const server = await startMockServer();
 
-    const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT)],
-    });
+    const toolPlan = await readOpenAiPromptResponseText(server, QA_REASONING_ONLY_RECOVERY_PROMPT);
     expect(toolPlan).toContain('"name":"read"');
     expect(toolPlan).toContain("QA_KICKOFF_TASK.md");
 
@@ -8137,9 +8119,7 @@ Update and merge these partial structured summaries.`,
     expect(outputItem(maxPayload, 1).type).toBe("message");
     expect(outputText(maxPayload, 1)).toBe("THINKING-MAX-OK");
 
-    const maxStream = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_THINKING_VISIBILITY_MAX_PROMPT)],
-    });
+    const maxStream = await readOpenAiPromptResponseText(server, QA_THINKING_VISIBILITY_MAX_PROMPT);
     expect(maxStream).toContain('"type":"response.output_text.delta"');
     expect(maxStream).toContain('"delta":"THINKING-MAX-OK"');
   });
@@ -8165,9 +8145,10 @@ Update and merge these partial structured summaries.`,
   it("keeps the reasoning-only side-effect path ready for no-auto-retry QA coverage", async () => {
     const server = await startMockServer();
 
-    const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_REASONING_ONLY_SIDE_EFFECT_PROMPT)],
-    });
+    const toolPlan = await readOpenAiPromptResponseText(
+      server,
+      QA_REASONING_ONLY_SIDE_EFFECT_PROMPT,
+    );
     expect(toolPlan).toContain('"name":"write"');
     expect(toolPlan).toContain("reasoning-only-side-effect.txt");
 
@@ -8190,9 +8171,7 @@ Update and merge these partial structured summaries.`,
   it("scripts an empty-response recovery sequence after a replay-safe read", async () => {
     const server = await startMockServer();
 
-    const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT)],
-    });
+    const toolPlan = await readOpenAiPromptResponseText(server, QA_EMPTY_RESPONSE_RECOVERY_PROMPT);
     expect(toolPlan).toContain('"name":"read"');
 
     const emptyPayload = await expectOpenAiNonStreamingResponsesJson<{
@@ -8226,9 +8205,7 @@ Update and merge these partial structured summaries.`,
   it("can keep emitting empty GPT turns when the single retry budget should exhaust", async () => {
     const server = await startMockServer();
 
-    await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT)],
-    });
+    await readOpenAiPromptResponseText(server, QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT);
 
     const firstEmpty = await expectOpenAiNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
