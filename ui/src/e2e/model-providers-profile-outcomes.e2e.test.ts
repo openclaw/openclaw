@@ -243,7 +243,12 @@ suite.define(() => {
             });
             return request?.params;
           })
-          .toEqual({ view: "configured", agentId: "writer", refresh: true });
+          .toEqual({
+            view: "configured",
+            agentId: "writer",
+            refresh: true,
+            includeDefaultModels: true,
+          });
         await expect
           .poll(async () =>
             (
