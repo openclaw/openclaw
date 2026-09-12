@@ -9,6 +9,51 @@ import {
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 
+it("preserves literal line-separator and paragraph-separator TEXT through verify and restore", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-u2028-"));
+  const sourcePath = path.join(root, "source.sqlite");
+  const outputPath = path.join(root, "dump");
+  const targetPath = path.join(root, "restored.sqlite");
+  const keys = ["ls", "ps", "ascii control"];
+  const values = ["lead\u2028tail", "a\u2029b", "plain"];
+  try {
+    const source = openOpenClawStateDatabase({ path: sourcePath });
+    source.db.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
+    const insert = source.db.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      insert.run(keys[index]!, values[index]!);
+    }
+    closeOpenClawStateDatabaseForTest();
+
+    await dumpGitBackupDatabase({
+      snapshotPath: sourcePath,
+      outputPath,
+      identity: { role: "global" },
+    });
+    const restored = await restoreGitBackupDirectory({
+      sourcePath: outputPath,
+      targetPath,
+      expectedIdentity: { role: "global" },
+    });
+    expect(restored.tables.every((table) => table.ok)).toBe(true);
+    const database = new DatabaseSync(targetPath, { readOnly: true });
+    try {
+      expect(database.prepare('SELECT "key", value FROM text_values ORDER BY "key"').all()).toEqual(
+        [
+          { key: keys[2], value: values[2] },
+          { key: keys[0], value: values[0] },
+          { key: keys[1], value: values[1] },
+        ],
+      );
+    } finally {
+      database.close();
+    }
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 it("preserves NUL-bearing TEXT, storage classes, and source key order", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));
   const sourcePath = path.join(root, "source.sqlite");

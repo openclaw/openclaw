@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
 import { finished } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -549,9 +549,7 @@ async function loadGitBackupTable(
      VALUES (${columns.map(() => "?").join(", ")})`,
   );
   const input = fsSync.createReadStream(inputPath);
-  const lines = createInterface({ input, crlfDelay: Infinity });
   const hash = createHash("sha256");
-  input.on("data", (chunk: Buffer) => hash.update(chunk));
   const pending: Array<ReturnType<typeof decodeSqliteValue>[]> = [];
   let pendingBytes = 0;
   let rows = 0;
@@ -574,23 +572,37 @@ async function loadGitBackupTable(
     pending.length = 0;
     pendingBytes = 0;
   };
+  // JSONL framing is LF-only: the encoder emits unescaped U+2028/U+2029 inside
+  // JSON strings, and a generic line reader would split the JSON value there.
+  const acceptLine = (line: string) => {
+    if (!line) {
+      return;
+    }
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    pending.push(columns.map((column) => decodeSqliteValue(parsed[column.name])));
+    pendingBytes += Buffer.byteLength(line);
+    rows += 1;
+    if (pendingBytes >= TABLE_BATCH_BYTES) {
+      flush();
+    }
+  };
+  let buffered = "";
+  const decoder = new StringDecoder("utf8");
   try {
-    for await (const line of lines) {
-      if (!line) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      pending.push(columns.map((column) => decodeSqliteValue(parsed[column.name])));
-      pendingBytes += Buffer.byteLength(line);
-      rows += 1;
-      if (pendingBytes >= TABLE_BATCH_BYTES) {
-        flush();
+    for await (const chunk of input) {
+      hash.update(chunk);
+      buffered += decoder.write(chunk);
+      let newlineIndex: number;
+      while ((newlineIndex = buffered.indexOf("\n")) !== -1) {
+        acceptLine(buffered.slice(0, newlineIndex));
+        buffered = buffered.slice(newlineIndex + 1);
       }
     }
+    buffered += decoder.end();
+    acceptLine(buffered);
     flush();
     return { rows, sha256: hash.digest("hex") };
   } finally {
-    lines.close();
     input.destroy();
     await finished(input).catch(() => undefined);
   }
