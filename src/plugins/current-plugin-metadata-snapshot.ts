@@ -11,7 +11,7 @@ import {
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
   getPluginMetadataSnapshotCache,
-  getPluginCache,
+  getScopedPluginCaches,
   invalidatePluginCacheMetadata,
   getProcessPluginCache,
   getScopedPluginCache,
@@ -195,7 +195,7 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
 
 /** Installation revokes operation facts even when it runs between metadata scopes. */
 function revokeCurrentPluginMetadataSnapshotScopes(): void {
-  const caches = new Set([getPluginCache()]);
+  const caches = new Set(getScopedPluginCaches());
   const runtimeCaches = new Set();
   for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
     if (scoped.immutableRuntimeGeneration) {

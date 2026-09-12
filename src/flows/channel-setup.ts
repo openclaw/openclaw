@@ -35,6 +35,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -234,6 +235,7 @@ export async function setupChannels(
     }
     return undefined;
   };
+  const setupCache = getPluginCache();
   const enableChannelPluginForSetup = async (channel: ChannelChoice) =>
     await withPluginLifecycleLease({}, async () => {
       const result = await enablePluginWithCapabilityConsent(next, channel, {
@@ -246,7 +248,7 @@ export async function setupChannels(
       next = result.config;
       if (result.enabled) {
         // Capture the reviewed runtime before another lifecycle operation replaces it.
-        await loadScopedChannelPlugin(channel);
+        await withPluginCache(setupCache, () => loadScopedChannelPlugin(channel));
       }
       return result;
     });
@@ -722,7 +724,9 @@ export async function setupChannels(
       const outcome = await runPluginInstallWithNavigation({ install, prompter, options });
       if (outcome.status !== "back" && outcome.value.installed) {
         next = outcome.value.cfg;
-        await loadScopedChannelPlugin(channel, outcome.value.pluginId ?? install.entry.pluginId);
+        await withPluginCache(setupCache, () =>
+          loadScopedChannelPlugin(channel, outcome.value.pluginId ?? install.entry.pluginId),
+        );
       }
       return outcome;
     });

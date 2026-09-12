@@ -1,6 +1,21 @@
 import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getPluginRuntimeGenerationRegistry,
+  withPluginRuntimeGenerationScope,
+} from "../plugins/runtime/generation-scope.js";
 import {
   fakeOverviewLoader,
   sharedVerifiedInferenceConfig,
@@ -13,6 +28,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
+import { ChatWizardHost } from "./chat-wizard-host.js";
 
 describe("SystemAgentChatEngine runtime", () => {
   it("hosts a channel setup wizard as chat turns", async () => {
@@ -670,6 +686,105 @@ describe("SystemAgentChatEngine runtime", () => {
 });
 
 describe("hosted channel post-write hooks", () => {
+  it("ChatWizardHost.startChannel owns plugin resources through deferred hooks without retiring Gateway boot", async () => {
+    await using bootCache = createPluginCache({ kind: "process" });
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    bindPluginMetadataSnapshotCache(metadataSnapshot, bootCache);
+    const pluginRegistry = createEmptyPluginRegistry();
+    const bootInstance = new PluginInstance("gateway-boot");
+    bootCache.instances.add(bootInstance);
+    const readBoot = bootInstance.wrap(() => "Gateway available");
+    const setupInstance = new PluginInstance("chat-channel-setup");
+    const events: string[] = [];
+    const caches: PluginCache[] = [];
+    const readSetup = setupInstance.wrap(() => "post-write complete");
+    setupInstance.lifecycle.onDispose(() => {
+      events.push("disposed");
+    });
+    const hookStarted = createDeferred();
+    const finishHook = createDeferred();
+    const observedScope = createDeferred<{
+      metadata: ReturnType<typeof getCurrentPluginMetadataSnapshot>;
+      registry: ReturnType<typeof getPluginRuntimeGenerationRegistry>;
+    }>();
+    const recordPhase = (phase: string) => {
+      events.push(phase);
+      caches.push(getPluginCache());
+    };
+    const hook = {
+      channel: "matrix",
+      accountId: "default",
+      run: async () => {
+        events.push("after-write");
+        hookStarted.resolve();
+        await finishHook.promise;
+        events.push(readSetup());
+      },
+    };
+    mocks.readSetupConfigFileSnapshot.mockImplementation(async () => {
+      recordPhase("read");
+      getPluginCache().instances.add(setupInstance);
+      observedScope.resolve({
+        metadata: getCurrentPluginMetadataSnapshot(),
+        registry: getPluginRuntimeGenerationRegistry(),
+      });
+      return { exists: true, valid: true, hash: "setup-base-hash", config: {}, sourceConfig: {} };
+    });
+    mocks.setupChannels.mockImplementation(
+      async (
+        _config: OpenClawConfig,
+        _runtime: unknown,
+        _prompter: WizardPrompter,
+        options: { onPostWriteHook?: (value: typeof hook) => void },
+      ) => {
+        recordPhase("setup");
+        options.onPostWriteHook?.(hook);
+        return { channels: { matrix: { enabled: true } } };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
+      recordPhase("write");
+      return hostedConfigFiles.write(config);
+    });
+    const host = new ChatWizardHost({
+      surface: "gateway",
+      beforePersistentApply: async () => {
+        recordPhase("authorize");
+      },
+    });
+    const running = withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () =>
+      host.startChannel("matrix"),
+    );
+
+    try {
+      await Promise.race([
+        hookStarted.promise,
+        running.then(() => {
+          throw new Error("chat setup completed before its post-write hook");
+        }),
+      ]);
+      expect(await observedScope.promise).toEqual({ metadata: undefined, registry: undefined });
+      expect(caches[0]).not.toBe(bootCache);
+      expect(caches.slice(0, 4).every((cache) => cache === caches[0])).toBe(true);
+      expect(events).toEqual(["read", "setup", "authorize", "write", "authorize", "after-write"]);
+      expect(readSetup()).toBe("post-write complete");
+      finishHook.resolve();
+      expect((await running).text).toContain("matrix is configured");
+      expect(events.slice(-2)).toEqual(["post-write complete", "disposed"]);
+      expect(() => readSetup()).toThrow("reloaded or disabled");
+      withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
+        expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+        expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
+        expect(readBoot()).toBe("Gateway available");
+      });
+    } finally {
+      finishHook.resolve();
+      await running;
+      await setupInstance.dispose();
+      host.dispose();
+    }
+  });
+
   it("runs collected channel hooks after writing config", async () => {
     const hook = { channel: "matrix", accountId: "default", run: vi.fn() };
     mocks.readSetupConfigFileSnapshot.mockResolvedValue({

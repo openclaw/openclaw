@@ -2,6 +2,8 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import {
@@ -1567,7 +1569,7 @@ describe("setupChannels workspace shadow exclusion", () => {
   });
 
   it(
-    "reinstalls the external plugin via catalog when a stale channel config " +
+    "setupChannels reinstalls the external plugin via catalog when a stale channel config " +
       "declares an already-installed plugin whose runtime cannot be loaded",
     async () => {
       // Regression: users who uninstalled an externalized channel plugin
@@ -1578,7 +1580,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
         cfg: { ...cfg, channels: { "external-chat": { token: "secret" } } },
       }));
-      const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
+
       const installedCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
         pluginId: "@vendor/external-chat-plugin",
         install: { npmSpec: "@vendor/external-chat-plugin" },
@@ -1594,8 +1596,14 @@ describe("setupChannels workspace shadow exclusion", () => {
       // resolve the plugin as expected.
       loadChannelSetupPluginRegistrySnapshotForChannel
         .mockReturnValueOnce(makePluginRegistry())
-        .mockReturnValue(
-          makePluginRegistry({
+        .mockImplementation(() => {
+          const instance = new PluginInstance("installed-channel");
+          getPluginCache().instances.add(instance);
+          const externalChatPlugin = makeExternalChatSetupPlugin({
+            configure,
+            configureInteractive: instance.wrap(configure),
+          });
+          return makePluginRegistry({
             channels: [
               {
                 pluginId: "@vendor/external-chat-plugin",
@@ -1603,8 +1611,8 @@ describe("setupChannels workspace shadow exclusion", () => {
                 plugin: externalChatPlugin,
               },
             ],
-          }),
-        );
+          });
+        });
       ensureChannelSetupPluginInstalled.mockResolvedValueOnce({
         cfg: {},
         installed: true,
@@ -1618,7 +1626,10 @@ describe("setupChannels workspace shadow exclusion", () => {
         .mockResolvedValueOnce("external-chat")
         .mockResolvedValueOnce("__done__");
 
-      await runChannelSetup({}, { note, select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
+      await using cache = createPluginCache();
+      await withPluginCache(cache, () =>
+        runChannelSetup({}, { note, select }, DEFERRED_CHANNEL_SETUP_OPTIONS),
+      );
 
       expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
       expectExternalCatalogInstallCall();

@@ -45,16 +45,18 @@ export interface PluginCache
   [Symbol.asyncDispose](): Promise<void>;
 }
 
+type PluginCacheScope = { cache: PluginCache; parent?: PluginCacheScope };
+
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
-  scope: AsyncLocalStorage<PluginCache>;
+  scope: AsyncLocalStorage<PluginCacheScope>;
   snapshotOwners: WeakMap<object, PluginCache>;
   retirements: Array<{
     cache: PluginCache;
     completion: Promise<PromiseSettledResult<PluginHostCleanupResult>>;
   }>;
 }>(Symbol.for("openclaw.pluginCache"), () => ({
-  scope: new AsyncLocalStorage<PluginCache>(),
+  scope: new AsyncLocalStorage<PluginCacheScope>(),
   snapshotOwners: new WeakMap(),
   retirements: [],
 }));
@@ -190,7 +192,16 @@ export function adoptProcessPluginCache(cache: PluginCache): void {
 }
 
 export function getScopedPluginCache(): PluginCache | undefined {
-  return state.scope.getStore();
+  return state.scope.getStore()?.cache;
+}
+
+/** Installation refreshes every enclosing operation, including callers outside metadata phases. */
+export function getScopedPluginCaches(): PluginCache[] {
+  const caches: PluginCache[] = [];
+  for (let scope = state.scope.getStore(); scope; scope = scope.parent) {
+    caches.push(scope.cache);
+  }
+  return caches;
 }
 
 export function getPluginCache(): PluginCache {
@@ -198,7 +209,7 @@ export function getPluginCache(): PluginCache {
 }
 
 export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
-  return state.scope.run(cache, run);
+  return state.scope.run({ cache, parent: state.scope.getStore() }, run);
 }
 
 export function runOutsidePluginCache<T>(run: () => T): T {
