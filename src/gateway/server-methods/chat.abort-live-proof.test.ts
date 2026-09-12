@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
@@ -31,6 +33,44 @@ const envKeys = [
 
 const REPLY_TEXT = "PR132123_COMMITTED_REPLY";
 const CONTEXT_ENGINE_ID = "pr132123-after-turn-gate";
+const ABORTED_PARTIAL_TEXT = "PR133170_STREAMED_BEFORE_ABORT";
+const AFTER_ABORT_TEXT = "PR133170_NOTICE_OBSERVED";
+const ABORTED_PARTIAL_NOTICE =
+  "An assistant message streamed before this abort could not be saved to the transcript and is missing from history. It cannot be recovered; the abort itself completed.";
+
+async function readRequestBody(request: AsyncIterable<unknown>): Promise<string> {
+  let body = "";
+  for await (const chunk of request) {
+    body += String(chunk);
+  }
+  return body;
+}
+
+function writeStreamingPartial(response: Parameters<typeof writeOpenAiResponsesText>[0]): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  response.flushHeaders();
+  const itemId = "pr133170-streaming-partial";
+  for (const event of [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "message", id: itemId, role: "assistant", status: "in_progress", content: [] },
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: ABORTED_PARTIAL_TEXT,
+    },
+  ]) {
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+}
 
 function assistantText(message: Record<string, unknown>): string {
   if (!Array.isArray(message.content)) {
@@ -63,6 +103,188 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("late abort real Gateway proof", () => {
+  it(
+    "surfaces a real Gateway append failure on the next turn",
+    { timeout: 90_000 },
+    async () => {
+      const envSnapshot = captureEnv([...envKeys]);
+      const partialVisible = createDeferred();
+      const releaseFirstResponse = createDeferred();
+      const requestBodies: string[] = [];
+      let providerServer: ReturnType<typeof createServer> | undefined;
+      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let lock: DatabaseSync | undefined;
+
+      try {
+        const tempHome = tempDirs.make("openclaw-pr133170-proof-");
+        const stateDir = path.join(tempHome, ".openclaw");
+        const workspaceDir = path.join(tempHome, "workspace");
+        const configPath = path.join(stateDir, "openclaw.json");
+        const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
+        await Promise.all([
+          fs.mkdir(workspaceDir, { recursive: true }),
+          fs.mkdir(bundledPluginsDir, { recursive: true }),
+          fs.mkdir(path.dirname(configPath), { recursive: true }),
+        ]);
+        for (const [key, value] of Object.entries({
+          HOME: tempHome,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_GATEWAY_TOKEN: "pr133170-proof-token",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        })) {
+          setTestEnvValue(key, value);
+        }
+
+        providerServer = createServer((request, response) => {
+          void (async () => {
+            requestBodies.push(await readRequestBody(request));
+            if (requestBodies.length === 1) {
+              writeStreamingPartial(response);
+              await releaseFirstResponse.promise;
+              response.end();
+              return;
+            }
+            writeOpenAiResponsesText(response, {
+              text: AFTER_ABORT_TEXT,
+              messageId: "pr133170-after-abort-message",
+              responseId: "pr133170-after-abort-response",
+            });
+          })().catch((error: unknown) => response.destroy(error as Error));
+        });
+        await new Promise<void>((resolve, reject) => {
+          providerServer?.once("error", reject);
+          providerServer?.listen(0, "127.0.0.1", resolve);
+        });
+        const providerAddress = providerServer.address();
+        if (!providerAddress || typeof providerAddress === "string") {
+          throw new Error("proof provider did not bind a loopback port");
+        }
+        const provider = buildMockOpenAiResponsesProvider(
+          `http://127.0.0.1:${providerAddress.port}/v1`,
+        );
+        const cfg = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              skipBootstrap: true,
+              model: { primary: provider.modelRef },
+              models: {
+                [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
+              },
+            },
+            entries: { main: { default: true } },
+          },
+          models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+          gateway: { auth: { mode: "token", token: "pr133170-proof-token" } },
+        };
+        const sessionKey = "agent:main:pr133170-abort-proof";
+        gateway = await startGatewayWithClient({
+          cfg,
+          configPath,
+          token: "pr133170-proof-token",
+          clientDisplayName: "pr133170-proof-gateway",
+          onEvent: (event) => {
+            if (event.event === "chat" && JSON.stringify(event.payload).includes(ABORTED_PARTIAL_TEXT)) {
+              partialVisible.resolve();
+            }
+          },
+        });
+
+        const started = await gateway.client.request<{ runId?: string; status?: string }>(
+          "chat.send",
+          {
+            sessionKey,
+            message: "Stream the abort proof marker.",
+            deliver: false,
+            idempotencyKey: "pr133170-proof-run",
+          },
+        );
+        expect(started).toMatchObject({ status: "started", runId: expect.any(String) });
+        await partialVisible.promise;
+
+        const loaded = loadSessionEntry(sessionKey);
+        if (!loaded.entry?.sessionId || !loaded.storePath) {
+          throw new Error("proof session did not persist its transcript identity");
+        }
+        lock = new DatabaseSync(loaded.storePath);
+        lock.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE;");
+        const abort = await gateway.client.request<{ aborted?: boolean; runIds?: string[] }>(
+          "chat.abort",
+          { sessionKey, runId: started.runId },
+          { timeoutMs: 30_000 },
+        );
+        lock.exec("ROLLBACK");
+        lock.close();
+        lock = undefined;
+        releaseFirstResponse.resolve();
+
+        const history = await gateway.client.request<{ messages?: unknown[] }>("chat.history", {
+          sessionKey,
+          limit: 20,
+        });
+        const after = await gateway.client.request<{ runId?: string; status?: string }>("chat.send", {
+          sessionKey,
+          message: "Acknowledge the persistence notice.",
+          deliver: false,
+          idempotencyKey: "pr133170-after-abort-run",
+        });
+        const terminal = await gateway.client.request<{ status?: string }>(
+          "agent.wait",
+          { runId: after.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
+        const nextPromptSawNotice = requestBodies.slice(1).some((body) =>
+          body.includes(ABORTED_PARTIAL_NOTICE),
+        );
+        const verdict = {
+          partialVisible: true,
+          abort,
+          partialMissingFromHistory: !JSON.stringify(history).includes(ABORTED_PARTIAL_TEXT),
+          nextPromptSawNotice,
+          terminalStatus: terminal.status,
+        };
+        console.info(`ABORT_PERSISTENCE_FAILURE_VERDICT ${JSON.stringify(verdict)}`);
+        expect(verdict).toMatchObject({
+          partialVisible: true,
+          abort: { aborted: true, runIds: [started.runId] },
+          partialMissingFromHistory: true,
+          nextPromptSawNotice: true,
+          terminalStatus: "ok",
+        });
+      } finally {
+        if (lock?.isTransaction) {
+          lock.exec("ROLLBACK");
+        }
+        lock?.close();
+        releaseFirstResponse.resolve();
+        if (gateway) {
+          await disconnectGatewayClient(gateway.client).catch(() => undefined);
+          await gateway.server.close().catch(() => undefined);
+        }
+        if (providerServer?.listening) {
+          await new Promise<void>((resolve) => {
+            providerServer?.close(() => resolve());
+            providerServer?.closeAllConnections();
+          });
+        }
+        envSnapshot.restore();
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+        clearSessionStoreCacheForTest();
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
+
   it(
     "rejects a late abort after the same run commits its final reply",
     { timeout: 90_000 },
