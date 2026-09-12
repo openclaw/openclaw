@@ -420,6 +420,7 @@ internal class WearViewModel(
   private var notificationOpenJob: Job? = null
   private var notificationRouteGeneration = 0L
   private var notificationTarget: WearConversationTarget? = null
+  private var notificationStopFailure: WearConversationFailure? = null
   private var retainedNotificationSession: WearSession? = null
 
   val state: StateFlow<WearUiState> = mutableState.asStateFlow()
@@ -465,10 +466,11 @@ internal class WearViewModel(
         mutableState.update { it.copy(realtimeMouthLevel = level) }
       }
     }
-    refresh()
+    loadSessions()
   }
 
   fun refresh() {
+    notificationStopFailure = null
     loadSessions()
   }
 
@@ -494,6 +496,7 @@ internal class WearViewModel(
 
   fun openNotification(target: WearConversationTarget) {
     notificationTarget = target
+    notificationStopFailure = null
     cancelLoad()
     cancelModelLoad()
     invalidateAgentPulse(clearSnapshot = true)
@@ -526,7 +529,8 @@ internal class WearViewModel(
           // Explicit navigation finishes the original Talk IO before selecting its
           // destination. Cancellation of an in-progress start owns remote cleanup.
           startingTalk?.join()
-          realtimeTalkClient.stop(mutableState.value.phoneNodeId)
+          // Replacement notifications share this wait; canonical discovery still validates their destination below.
+          realtimeTalkClient.stop(mutableState.value.phoneNodeId) { notificationTarget?.phoneNodeId }
           // Only the actual Stop owner releases navigation; UI state can be reset
           // while routing is uncertain. Rediscovery must then validate the target.
           notificationOpenJob = null
@@ -548,8 +552,12 @@ internal class WearViewModel(
             loadSessions()
             return@launch
           }
+          val failure = err.toWearConversationFailure()
+          notificationStopFailure = failure
+          // Discovery started by the failing transport cannot authorize this pending navigation.
+          cancelLoad()
           mutableState.update {
-            it.copy(loading = false, selectedSession = null, messages = emptyList(), selectedModelRef = null, streamText = null, activeRunId = null, pendingReply = null, replyTerminal = null, replyCompletion = null, replyAbort = null, talkBusy = false, talkStopping = false, realtimeTalk = WearRealtimeTalkSnapshot(), failure = err.toWearConversationFailure())
+            it.copy(loading = false, selectedSession = null, messages = emptyList(), selectedModelRef = null, streamText = null, activeRunId = null, pendingReply = null, replyTerminal = null, replyCompletion = null, replyAbort = null, talkBusy = false, talkStopping = false, realtimeTalk = WearRealtimeTalkSnapshot(), failure = failure)
           }
         } finally {
           if (notificationOpenJob === coroutineContext[Job]) notificationOpenJob = null
@@ -983,7 +991,7 @@ internal class WearViewModel(
             state
           }
         }
-        refresh()
+        loadSessions()
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
@@ -1089,7 +1097,7 @@ internal class WearViewModel(
             applyWearGatewayControlStatus(state, status, enabled)
           }
         }
-        refresh()
+        loadSessions()
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
@@ -1101,6 +1109,13 @@ internal class WearViewModel(
   }
 
   private fun loadSessions(expectedNodeId: String? = null) {
+    val failedStop = notificationStopFailure.takeIf { notificationTarget != null }
+    if (failedStop != null) {
+      // Keep the outcome through automatic rediscovery; explicit refresh permits canonical recovery.
+      cancelLoad()
+      mutableState.update { it.copy(loading = false, failure = failedStop) }
+      return
+    }
     val requestedNotification = notificationTarget
     sessionSearchJob?.cancel()
     invalidateAgentPulse(clearSnapshot = true)
@@ -1568,7 +1583,7 @@ internal class WearViewModel(
       }
 
       WearEventType.Resync -> {
-        refresh()
+        loadSessions()
       }
 
       WearEventType.Talk -> {
@@ -1705,7 +1720,7 @@ internal class WearViewModel(
         failure = wearConversationFailureForConnection(payload),
       )
     }
-    if (connected) refresh()
+    if (connected) loadSessions()
   }
 
   private fun handleChatEvent(inbound: WearInboundEvent) {
