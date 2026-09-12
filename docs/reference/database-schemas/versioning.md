@@ -38,6 +38,22 @@ already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
+Cron run receipts use the optional `cron_run_trigger_state_retirements` companion
+without changing state schema 17 or the released receipt table's shape. Its only
+column is `receipt_id`, a primary key referencing the existing receipt with
+`ON DELETE CASCADE`. A committed condition, script-payload, or shared-state edit
+creates a retirement row in the same transaction as the job edit. This includes
+an exact receipt already closed by an agent-owner edit but still awaiting run
+reconciliation. Normal completion and restart recovery preserve the replacement's
+state while retaining the old run's history. The first eligible edit creates the
+table; queued edits do not retire a future evaluation. Existing receipt pruning
+also deletes its retirement row.
+
+A missing table or row means no recorded retirement; earlier edits cannot be
+reconstructed from the final job definition. Older compatible readers ignore the
+companion but do not enforce this protection. Finish active runs before downgrading
+if their edited watcher state must be preserved.
+
 Worker preparation uses the same-version rule for the bare nullable
 `worker_environments.preparation_purpose TEXT` column in the shared state
 database. Shared state database startup repair adds it without changing state schema 17.

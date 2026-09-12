@@ -4,6 +4,7 @@ import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
 import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
@@ -962,6 +963,35 @@ describe("doctor health contributions", () => {
       "doctor:test-failure run failed: media migration required",
     ]);
     expect(mocks.note).toHaveBeenCalledBefore(laterRun);
+  });
+
+  it("stops after an optional contribution fails after writing config", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const ctx = createDoctorContext({ env: {} });
+    const failure = new ConfigWritePostCommitError({
+      configPath: ctx.configPath,
+      rollbackStatus: "not-restored",
+      cause: new Error("config path changed since last load"),
+    });
+
+    await expect(
+      runDoctorHealthContributionList(ctx, [
+        createDoctorHealthContribution({
+          id: "doctor:test-config-write",
+          label: "Test config write",
+          run: async () => {
+            throw failure;
+          },
+        }),
+        createDoctorHealthContribution({
+          id: "doctor:test-later",
+          label: "Test later",
+          run: laterRun,
+        }),
+      ]),
+    ).rejects.toBe(failure);
+
+    expect(laterRun).not.toHaveBeenCalled();
   });
 
   it("rejects a failed initial config write before later work runs", async () => {

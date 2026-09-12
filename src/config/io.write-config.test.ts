@@ -1783,9 +1783,15 @@ describe("config io write", () => {
         { baseSnapshot: snapshot, assertConfigPathForWrite },
       );
       await expect(pending).rejects.toThrow("config path changed since last load");
-      await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
-      await expect(pending).rejects.toHaveProperty("retryable", false);
-      await expect(pending).rejects.toBe(originalConflict);
+      const failure = await pending.catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath,
+        rollbackStatus: "restored",
+        cause: expect.any(ConfigMutationConflictError),
+      });
+      expect(failure).toHaveProperty("cause.retryable", false);
+      expect(requireRecord(failure, "post-commit config write error").cause).toBe(originalConflict);
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
       expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
@@ -4063,7 +4069,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const envKey = "OPENCLAW_TEST_RUNTIME_ROLLBACK_ENV";
       const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
-      const initialRaw = formatConfig(initialConfig);
+      const initialRaw = formatConfig(initialConfig).replace("{", "{ // retained rollback comment");
 
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, initialRaw, "utf-8");
@@ -4082,12 +4088,14 @@ describe("config io write", () => {
               },
             });
 
-            await expect(
-              writeConfigFile({
-                gateway: { mode: "local", port: 19001 },
-                env: { vars: { [envKey]: "written-env-value" } },
-              }),
-            ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+            await captureUpdateDoctorConfigWrites(configPath, async () => {
+              await expect(
+                writeConfigFile({
+                  gateway: { mode: "local", port: 19001 },
+                  env: { vars: { [envKey]: "written-env-value" } },
+                }),
+              ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+            });
 
             await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
             expect(process.env[envKey]).toBeUndefined();
@@ -4236,8 +4244,14 @@ describe("config io write", () => {
         },
       );
       await expect(pending).rejects.toThrow("config path changed since last load");
-      await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
-      await expect(pending).rejects.toHaveProperty("retryable", false);
+      const failure = await pending.catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath,
+        rollbackStatus: "restored",
+        cause: expect.any(ConfigMutationConflictError),
+      });
+      expect(failure).toHaveProperty("cause.retryable", false);
 
       expect(rollbackReadUsedInjectedFs).toBe(true);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
