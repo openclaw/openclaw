@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -127,8 +128,9 @@ internal fun wearVoiceLayout(
     horizontalPadding = if (fontScale > 1.1f) 4.dp else 6.dp,
     orbSize =
       when {
-        compactLargeText -> 68.dp
+        compactLargeText -> 48.dp
         compact -> 80.dp
+        fontScale > 1.1f -> 80.dp
         else -> 92.dp
       },
     contentHeight =
@@ -728,53 +730,55 @@ private fun VoicePage(
       modifier =
         Modifier
           .fillMaxSize()
-          .padding(top = 28.dp, bottom = 28.dp)
           .graphicsLayer {
             translationX = if (showSwipeHint) swipeHintOffset else 0f
           },
       rotaryScrollableBehavior = null,
     ) { mode ->
-      when (mode) {
-        VOICE_HOME_MODE -> {
-          VoiceHomeMode(
-            microphonePermissionRequired = microphonePermissionRequired,
-            microphoneSettingsRequired = microphoneSettingsRequired,
-            onMicrophoneRecovery = onMicrophoneRecovery,
-            realtimeTalk = realtimeTalk,
-            realtimeStopping = realtimeStopping,
-            speaking = speaking,
-            realtimeCapturing = realtimeCapturing,
-            realtimePlaying = realtimePlaying,
-            realtimeMouthLevel = realtimeMouthLevel,
-            realtimePlaybackFailed = realtimePlaybackFailed,
-            realtimeThinkingOverride = realtimeThinkingOverride,
-            realtimeElapsedSeconds = realtimeElapsedSeconds,
-            actionBusy = actionBusy,
-            inputEnabled = inputEnabled,
-            onTalk = onTalk,
-            onRealtimeTalk = onRealtimeTalk,
-            onStopSpeaking = onStopSpeaking,
-            onOpenThread = { selectMode(VOICE_THREAD_MODE) },
-          )
-        }
+      // Pad each page, not the pager clip: Thread retains its full upper touch target.
+      Box(modifier = Modifier.fillMaxSize().padding(vertical = 28.dp)) {
+        when (mode) {
+          VOICE_HOME_MODE -> {
+            VoiceHomeMode(
+              microphonePermissionRequired = microphonePermissionRequired,
+              microphoneSettingsRequired = microphoneSettingsRequired,
+              onMicrophoneRecovery = onMicrophoneRecovery,
+              realtimeTalk = realtimeTalk,
+              realtimeStopping = realtimeStopping,
+              speaking = speaking,
+              realtimeCapturing = realtimeCapturing,
+              realtimePlaying = realtimePlaying,
+              realtimeMouthLevel = realtimeMouthLevel,
+              realtimePlaybackFailed = realtimePlaybackFailed,
+              realtimeThinkingOverride = realtimeThinkingOverride,
+              realtimeElapsedSeconds = realtimeElapsedSeconds,
+              actionBusy = actionBusy,
+              inputEnabled = inputEnabled,
+              onTalk = onTalk,
+              onRealtimeTalk = onRealtimeTalk,
+              onStopSpeaking = onStopSpeaking,
+              onOpenThread = { selectMode(VOICE_THREAD_MODE) },
+            )
+          }
 
-        else -> {
-          ThreadVoiceMode(
-            conversation = realtimeTalk.conversation,
-            thinking =
-              !realtimeStopping && (realtimeThinkingOverride || realtimeTalk.status == WearRealtimeTalkStatus.THINKING),
-            realtimeActive = realtimeTalk.active || realtimeCapturing,
-            actionBusy = actionBusy,
-            inputEnabled = inputEnabled,
-            onType = onType,
-            onRealtimeTalk = {
-              if (microphonePermissionRequired && !realtimeTalk.active && !realtimeCapturing) {
-                selectMode(VOICE_HOME_MODE)
-              } else {
-                onRealtimeTalk()
-              }
-            },
-          )
+          else -> {
+            ThreadVoiceMode(
+              conversation = realtimeTalk.conversation,
+              thinking =
+                !realtimeStopping && (realtimeThinkingOverride || realtimeTalk.status == WearRealtimeTalkStatus.THINKING),
+              realtimeActive = realtimeTalk.active || realtimeCapturing,
+              actionBusy = actionBusy,
+              inputEnabled = inputEnabled,
+              onType = onType,
+              onRealtimeTalk = {
+                if (microphonePermissionRequired && !realtimeTalk.active && !realtimeCapturing) {
+                  selectMode(VOICE_HOME_MODE)
+                } else {
+                  onRealtimeTalk()
+                }
+              },
+            )
+          }
         }
       }
     }
@@ -868,6 +872,7 @@ private fun VoiceHomeMode(
     when {
       realtimeStopping -> stringResource(R.string.stopping)
       dictatePreview -> stringResource(R.string.listening)
+      recoverMicrophone -> stringResource(R.string.microphone_permission_required)
       label == null -> null
       realtimeActive -> "$label · ${formatVoiceElapsedTime(realtimeElapsedSeconds)}"
       else -> label
@@ -895,7 +900,10 @@ private fun VoiceHomeMode(
     modifier = Modifier.fillMaxSize(),
   ) {
     val layout = wearVoiceLayout(maxWidth = maxWidth, fontScale = fontScale)
-    val voiceControlOffset = if (fontScale > 1.1f) 20.dp else 16.dp
+    // Keep the localized action readable; its explanation uses the wider status area below.
+    val liveControlHeight = if (recoverMicrophone) layout.orbSize.coerceAtLeast(64.dp) else layout.orbSize
+    // Reserve up to three status lines without moving them into the lower round edge.
+    val voiceControlOffset = if (fontScale > 1.1f) (-8).dp else (-4).dp
     Row(
       modifier =
         Modifier
@@ -922,25 +930,12 @@ private fun VoiceHomeMode(
             .width(layout.orbSize)
             .height(layout.contentHeight),
       ) {
-        VoiceGestureLabel(
-          title = stringResource(R.string.double_tap),
-          detail = stringResource(R.string.thread),
-          accent = colors.voiceAccent,
-          onDoubleClick = onOpenThread,
-          onClickLabel = stringResource(R.string.open_thread),
-          verticalPadding = 0.dp,
-          modifier =
-            Modifier
-              .align(Alignment.TopCenter)
-              .fillMaxWidth()
-              .minimumInteractiveComponentSize(),
-        )
         Box(
           modifier =
             Modifier
               .align(Alignment.Center)
               .width(layout.orbSize)
-              .then(if (recoverMicrophone) Modifier else Modifier.height(layout.orbSize))
+              .height(liveControlHeight)
               .offset(y = voiceControlOffset)
               .combinedClickable(
                 // combinedClickable gates every gesture together; keep preview exclusive and fall back to Dictate.
@@ -957,25 +952,14 @@ private fun VoiceHomeMode(
           contentAlignment = Alignment.Center,
         ) {
           if (recoverMicrophone) {
-            Column(
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              Text(
-                text = stringResource(R.string.microphone_permission_required),
-                color = colors.danger,
-                textAlign = TextAlign.Center,
-                fontSize = 12.sp,
-                lineHeight = 14.sp,
-              )
-              Text(
-                text = stringResource(if (microphoneSettingsRequired) R.string.open_settings else R.string.retry),
-                color = colors.voiceAccent,
-                textAlign = TextAlign.Center,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-              )
-            }
+            Text(
+              text = stringResource(if (microphoneSettingsRequired) R.string.open_settings else R.string.retry),
+              color = colors.voiceAccent,
+              textAlign = TextAlign.Center,
+              fontSize = 12.sp,
+              lineHeight = 14.sp,
+              fontWeight = FontWeight.SemiBold,
+            )
           } else {
             WearTalkAvatar(
               state = avatarState,
@@ -986,22 +970,6 @@ private fun VoiceHomeMode(
               modifier = Modifier.fillMaxSize(),
             )
           }
-        }
-        statusText?.let { status ->
-          Text(
-            text = status,
-            color = colors.textMuted,
-            fontSize = 12.sp,
-            lineHeight = 12.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier =
-              Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(bottom = 1.dp),
-          )
         }
       }
       VoiceGestureLabel(
@@ -1014,6 +982,42 @@ private fun VoiceHomeMode(
           Modifier
             .offset(y = voiceControlOffset)
             .weight(1f),
+      )
+    }
+    val threadTop = if (fontScale > 1.1f) (-8).dp else (-16).dp
+    val orbTop = (maxHeight - liveControlHeight) / 2 + voiceControlOffset
+    val threadOverlap = (threadTop + 48.dp - orbTop).coerceAtLeast(0.dp)
+    VoiceGestureLabel(
+      title = stringResource(R.string.double_tap),
+      detail = stringResource(R.string.thread),
+      accent = colors.voiceAccent,
+      onDoubleClick = onOpenThread,
+      onClickLabel = stringResource(R.string.open_thread),
+      // Move the entire target above Talk while keeping the readable glyphs in place.
+      contentPadding = PaddingValues(top = threadOverlap * 2),
+      modifier =
+        Modifier
+          .align(Alignment.TopCenter)
+          .layout { measurable, constraints ->
+            val target = measurable.measure(constraints)
+            val top = minOf(threadTop.roundToPx(), orbTop.roundToPx() - target.height)
+            this.layout(target.width, target.height) { target.placeRelative(0, top) }
+          }.padding(horizontal = 28.dp)
+          .fillMaxWidth()
+          .minimumInteractiveComponentSize(),
+    )
+    statusText?.let { status ->
+      Text(
+        text = status,
+        color = if (recoverMicrophone) colors.danger else colors.textMuted,
+        fontSize = 12.sp,
+        lineHeight = 12.sp,
+        textAlign = TextAlign.Center,
+        modifier =
+          Modifier
+            .align(Alignment.BottomCenter)
+            .width((maxWidth - 56.dp).coerceAtMost(136.dp))
+            .padding(bottom = 1.dp),
       )
     }
   }
@@ -1029,7 +1033,7 @@ private fun VoiceGestureLabel(
   onClick: (() -> Unit)? = null,
   onDoubleClick: (() -> Unit)? = null,
   onClickLabel: String? = null,
-  verticalPadding: androidx.compose.ui.unit.Dp = 10.dp,
+  contentPadding: PaddingValues = PaddingValues(vertical = 10.dp),
 ) {
   val interactionModifier =
     when {
@@ -1068,7 +1072,7 @@ private fun VoiceGestureLabel(
           } else {
             Modifier
           },
-        ).padding(vertical = verticalPadding),
+        ).padding(contentPadding),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.Center,
   ) {

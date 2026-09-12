@@ -30,7 +30,7 @@ class WearLayoutTest {
     assertEquals(
       WearVoiceLayout(
         horizontalPadding = 4.dp,
-        orbSize = 68.dp,
+        orbSize = 48.dp,
         contentHeight = 132.dp,
       ),
       wearVoiceLayout(maxWidth = 192.dp, fontScale = 1.2f),
