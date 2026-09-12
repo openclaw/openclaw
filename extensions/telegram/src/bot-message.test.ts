@@ -1,5 +1,6 @@
 // Telegram tests cover bot message plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
@@ -205,8 +206,8 @@ describe("telegram bot message processor", () => {
   });
 
   it("keeps delivery settings on a held turn while the next turn uses new policy", async () => {
-    const held = Promise.withResolvers<void>();
-    const contextStarted = Promise.withResolvers<void>();
+    const held = createDeferred<void>();
+    const contextStarted = createDeferred<void>();
     const turnTelegramCfg = {
       dmPolicy: "open" as const,
       allowFrom: ["*"],
@@ -234,14 +235,7 @@ describe("telegram bot message processor", () => {
 
     const processMessage = createTelegramMessageProcessor({
       ...baseDeps,
-      account: {
-        accountId: "default",
-        enabled: true,
-        token: "",
-        tokenSource: "none",
-        tokenStatus: "missing",
-        config: turnTelegramCfg,
-      },
+      account: { accountId: "default" },
     });
     const first = processSampleMessage(processMessage, {
       cfg: turnCfg,
