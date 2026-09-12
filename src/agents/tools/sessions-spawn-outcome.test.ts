@@ -135,11 +135,13 @@ describe("sessions_spawn terminal effects", () => {
 
   it("keeps an internal argument exception out of heartbeat failure", async () => {
     const tool = createSessionsSpawnTool({ config, countActiveRuns: () => 0 });
+    // Valid thinking levels are now accepted on visible spawns, so an invalid
+    // level is the internal argument exception this contract is about.
     const error = await tool
       .execute("spawn", {
         task: "Prepare report",
         visible: true,
-        thinking: "low",
+        thinking: "not-a-thinking-level",
       })
       .catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(Error);

@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
+import { formatThinkingLevels } from "../../auto-reply/thinking.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
@@ -21,7 +22,13 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
-import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import {
+  buildConfiguredModelCatalog,
+  resolveDefaultModelForAgent,
+  resolveSubagentSpawnModelSelection,
+} from "../model-selection.js";
+import { readPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
 import {
@@ -31,9 +38,15 @@ import {
 import { deleteSubagentSessionForCleanup } from "../subagents/registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
-import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import {
+  resolveConfiguredSubagentRunTimeoutSeconds,
+  splitModelRef,
+} from "../subagents/spawn/subagent-spawn-plan.js";
+import { readRequesterThinkingLevel } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import { resolveSubagentThinkingOverride } from "../subagents/spawn/subagent-spawn-thinking.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
@@ -46,7 +59,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; no thread/thinking/lightContext or attachment staging.",
+        "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; thinking is supported with visible=true; no thread/lightContext or attachment staging.",
     }),
   ),
   group: Type.Optional(
@@ -62,6 +75,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
 
 export type VisibleSessionsSpawnDeps = {
   callGateway?: InProcessGatewayCaller;
+  readPreparedModelCatalog?: typeof readPreparedModelCatalog;
   registerRun?: typeof registerSubagentRun;
   countActiveRuns?: typeof countActiveRunsForSession;
 };
@@ -118,12 +132,13 @@ export async function maybeSpawnVisibleSession(params: {
     if (providedVisibleOnlyParams.length > 0) {
       throw new ToolInputError(
         `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}. ` +
-          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
     }
     return undefined;
   }
   const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
+  const thinkingOverrideRaw = readToolStringParam(params.raw, "thinking");
   const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   // A visible session starts one run; empty attachment fields request no staging.
@@ -133,11 +148,6 @@ export async function maybeSpawnVisibleSession(params: {
       "runtime",
       params.runtime === "subagent" ? undefined : params.runtime,
       'supports runtime="subagent" only',
-    ],
-    [
-      "thinking",
-      readToolStringParam(params.raw, "thinking"),
-      "thinking overrides are not wired to the sessions.create path",
     ],
     [
       "thread",
@@ -235,8 +245,69 @@ export async function maybeSpawnVisibleSession(params: {
   if (!targetPolicy.ok) {
     return { status: "forbidden", error: targetPolicy.error };
   }
-  const resolvedModel =
-    modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
+  const resolvedModel = resolveSubagentSpawnModelSelection({
+    cfg,
+    agentId: targetAgentId,
+    modelOverride,
+  });
+  const requesterAgentConfig = resolveAgentConfig(cfg, requesterAgentId);
+  const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+  // The active turn owns inherited effort; the stored row may describe a later turn.
+  const callerThinkingRaw =
+    params.options?.requesterThinkingLevel ??
+    readRequesterThinkingLevel({
+      cfg,
+      requesterInternalKey: requesterKey,
+      requesterAgentId,
+    });
+  const thinkingPlan = resolveSubagentThinkingOverride({
+    cfg,
+    requesterAgentConfig,
+    targetAgentConfig,
+    thinkingOverrideRaw,
+    callerThinkingRaw: thinkingOverrideRaw ? callerThinkingRaw : undefined,
+    // Keep omitted visible spawns compatible; configured subagent thinking is
+    // not an explicit request for this sessions.create call.
+    includeConfiguredSubagentThinking: false,
+  });
+  if (thinkingPlan.status === "error") {
+    const { provider, model } = splitModelRef(resolvedModel);
+    throw new ToolInputError(
+      `Invalid thinking level "${thinkingPlan.thinkingCandidateRaw}". Use one of: ${formatThinkingLevels(provider, model)}.`,
+    );
+  }
+  const inheritedThinkingLevel =
+    thinkingPlan.thinkingOverride === undefined
+      ? thinkingPlan.initialSessionPatch.thinkingLevel
+      : undefined;
+  const selectedModel = splitModelRef(splitTrailingAuthProfile(resolvedModel).model);
+  const selectedDefaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
+  const selectedThinkingCatalog = inheritedThinkingLevel
+    ? params.options?.readPreparedModelCatalog
+      ? await params.options.readPreparedModelCatalog({
+          config: cfg,
+          agentId: targetAgentId,
+          readOnly: true,
+        })
+      : params.options?.callGateway
+        ? buildConfiguredModelCatalog({ cfg })
+        : await readPreparedModelCatalog({
+            config: cfg,
+            agentId: targetAgentId,
+            readOnly: true,
+          })
+    : undefined;
+  const resolvedThinkingLevel = inheritedThinkingLevel
+    ? resolveCandidateThinkingLevel({
+        cfg,
+        provider: selectedModel.provider ?? selectedDefaults.provider,
+        modelId: selectedModel.model ?? selectedDefaults.model,
+        level: inheritedThinkingLevel,
+        catalog: selectedThinkingCatalog,
+        agentId: targetAgentId,
+        sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+      })
+    : thinkingPlan.initialSessionPatch.thinkingLevel;
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -333,6 +404,7 @@ export async function maybeSpawnVisibleSession(params: {
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModel,
+        ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
         task: buildSubagentTaskMessage({
           task: params.task,
           spawnMode: "session",
