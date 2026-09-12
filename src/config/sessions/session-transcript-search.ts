@@ -10,7 +10,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import { hasSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
@@ -68,12 +68,12 @@ export function searchSessionTranscripts(params: {
       runSqliteDeferredTransactionSync(
         database.db,
         () => {
-          const dirtySessions = listSessionsNeedingTranscriptIndexReconcile(database.db);
-          if (dirtySessions.length > 0) {
+          const hasDirtySessions = hasSessionsNeedingTranscriptIndexReconcile(database.db);
+          if (hasDirtySessions) {
             startSessionTranscriptIndexReconcile(databaseOptions);
           }
           const indexing =
-            dirtySessions.length > 0 || isSessionTranscriptIndexReconcileRunning(databaseOptions);
+            hasDirtySessions || isSessionTranscriptIndexReconcileRunning(databaseOptions);
           const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
