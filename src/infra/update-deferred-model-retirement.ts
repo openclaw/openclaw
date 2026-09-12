@@ -51,9 +51,14 @@ export function recordUpdateModelRetirement(
     },
     { env },
   );
+  // Completion must follow the package warnings in the bounded status history.
   recordUpdateRunStep(
     run.runId,
-    { step: `warning:${RETIREMENT_STEP}`, status: "completed", detail },
+    {
+      step: `warning:${RETIREMENT_STEP}${status === "deferred" ? ":deferred" : ""}`,
+      status: "completed",
+      detail,
+    },
     { env },
   );
 }

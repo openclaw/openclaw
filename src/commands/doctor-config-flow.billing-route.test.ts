@@ -10,6 +10,7 @@ import {
 } from "../flows/doctor-health-contribution-runners.config.js";
 import { createUpdatePostInstallDoctorResultPath } from "../infra/update-doctor-result.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
@@ -190,6 +191,17 @@ describe("Doctor deferred model retirement", () => {
             await runInitialConfigWriteHealth(swap);
             expect(swap.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
             expect(f.receipt()).toMatchObject({ status: "skipped" });
+            for (const [index, detail] of [
+              "Heartbeat billing route changed.",
+              "Subagent billing route changed.",
+              "Gateway is bound to loopback.",
+            ].entries()) {
+              recordUpdateRunStep(f.runId, {
+                step: `warning:openclaw doctor:${index + 1}`,
+                status: "completed",
+                detail,
+              });
+            }
 
             await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
               const converged = await prepareDoctorContext(f.configPath);
@@ -212,6 +224,13 @@ describe("Doctor deferred model retirement", () => {
               await runInitialConfigWriteHealth(converged);
               expect(f.receipt()).toMatchObject({ status: "completed" });
               expect(await fs.readFile(f.configPath, "utf8")).toContain("openai/gpt-5.6-luna");
+              const completedRun = getUpdateRun(f.runId);
+              if (!completedRun) {
+                throw new Error("Expected the update run after Doctor committed its repair.");
+              }
+              expect(renderUpdateRunReport(completedRun).lines).toContain(
+                "Warning: Deferred model retirement repair completed after plugin convergence.",
+              );
 
               f.defer();
               const repeated = await prepareDoctorContext(f.configPath);
