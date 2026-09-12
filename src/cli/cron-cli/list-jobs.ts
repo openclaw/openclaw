@@ -32,15 +32,22 @@ export function isUnknownCronGetMethodError(error: unknown): error is Error {
   );
 }
 
-/** Read every bounded Gateway page from one complete cron inventory revision. */
+/** Read every bounded Gateway page from one complete cron inventory revision, or a single page when offset/limit are provided. */
 export async function listCronJobsFromGateway(
   opts: GatewayRpcOpts,
-  filters: Pick<CronListPageOptions, "includeDisabled" | "agentId" | "query">,
+  filters: Pick<CronListPageOptions, "includeDisabled" | "agentId" | "query"> & {
+    offset?: number;
+    limit?: number;
+  },
   options: { allowLegacyUnversionedPagination?: boolean } = {},
 ): Promise<GatewayCronJobInventory> {
   let allowLegacyUnversionedPagination = options.allowLegacyUnversionedPagination === true;
+  const userOffset = filters.offset;
+  const userLimit = filters.limit;
+  const singlePage = userOffset !== undefined || userLimit !== undefined;
+
   for (let restart = 0; restart <= CRON_LIST_MAX_SNAPSHOT_RESTARTS; restart += 1) {
-    let offset = 0;
+    let offset = userOffset ?? 0;
     let snapshotRevision: string | undefined;
     let total: number | undefined;
     let pageMetadataMode: "canonical" | "legacy" | undefined;
@@ -52,7 +59,7 @@ export async function listCronJobsFromGateway(
     for (let pageNumber = 0; pageNumber < CRON_LIST_MAX_PAGES; pageNumber += 1) {
       const page = (await callGatewayFromCli("cron.list", opts, {
         ...filters,
-        limit: CRON_LIST_PAGE_SIZE,
+        limit: userLimit ?? CRON_LIST_PAGE_SIZE,
         offset,
       })) as GatewayCronListPage | null;
 
@@ -115,7 +122,67 @@ export async function listCronJobsFromGateway(
       }
 
       if (page.offset !== undefined && page.offset !== offset) {
-        throw new Error("cron.list returned an invalid inventory page");
+        // The Gateway clamps a requested offset above the filtered total down to
+        // `total` and returns an empty terminal page (hasMore=false). Accept that
+        // contract-defined terminal clamp; any other offset mismatch is invalid.
+        const isTerminalClamp =
+          page.hasMore === false &&
+          page.total !== undefined &&
+          page.offset === page.total;
+        if (!isTerminalClamp) {
+          throw new Error("cron.list returned an invalid inventory page");
+        }
+      }
+
+      if (singlePage) {
+        // Single-page mode returns the one validated page without walking the
+        // rest of the snapshot. Apply the same continuation and terminal
+        // invariants the multi-page path enforces, so an advertised cursor or
+        // terminal state cannot be internally inconsistent:
+        // - a continuation page must carry an advancing, exact nextOffset;
+        // - a terminal page must not advertise a nextOffset.
+        if (page.hasMore === true) {
+          if (
+            typeof page.nextOffset !== "number" ||
+            !Number.isSafeInteger(page.nextOffset) ||
+            page.nextOffset <= offset ||
+            (page.total !== undefined && page.nextOffset !== offset + page.jobs.length)
+          ) {
+            throw new Error("cron.list pagination did not advance while looking up automation");
+          }
+        } else if (page.nextOffset !== undefined && page.nextOffset !== null) {
+          throw new Error("cron.list returned an inconsistent terminal inventory page");
+        } else if (page.total !== undefined) {
+          // A canonical terminal page must cover the advertised inventory from
+          // its offset: offset + jobs.length must equal total. The Gateway
+          // clamps a requested offset beyond the end down to total and returns
+          // an empty terminal page, so a valid clamped page has offset === total
+          // and jobs.length === 0 — it satisfies the equality without a special
+          // case, and a page with rows beyond the advertised total is rejected.
+          if (
+            page.offset === undefined ||
+            page.offset + page.jobs.length !== page.total
+          ) {
+            throw new Error("cron.list returned an inconsistent terminal inventory page");
+          }
+        }
+        // Preserve the page's own metadata only when the
+        // Gateway actually supplied it: a legacy page has no `total`, so we must
+        // not fabricate one from the row count or fabricated totals would mislead
+        // scripts that compute completion from the advertised inventory size.
+        return {
+          jobs: page.jobs,
+          ...(page.deliveryPreviews ? { deliveryPreviews: page.deliveryPreviews } : {}),
+          ...(page.snapshotRevision !== undefined
+            ? { snapshotRevision: page.snapshotRevision }
+            : {}),
+          ...(page.total !== undefined ? { total: page.total } : {}),
+          ...(page.offset !== undefined ? { offset: page.offset } : { offset }),
+          ...(page.limit !== undefined ? { limit: page.limit } : {}),
+          ...(page.hasMore !== undefined
+            ? { hasMore: page.hasMore, nextOffset: page.nextOffset ?? null }
+            : {}),
+        };
       }
 
       if (!hasCanonicalMetadata && !allowLegacyUnversionedPagination) {

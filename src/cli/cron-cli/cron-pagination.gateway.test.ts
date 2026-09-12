@@ -223,6 +223,201 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     ).toHaveLength(2);
   });
 
+  it("returns a single bounded page when --limit is provided", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
+
+    await runCron(["list", "--json", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      total: number;
+      hasMore: boolean;
+      nextOffset: number | null;
+    };
+    expect(result.jobs).toHaveLength(50);
+    expect(expectDefined(result.jobs[0], "expected first job").id).toBe("job-000");
+    expect(result.total).toBe(201);
+    expect(result.hasMore).toBe(true);
+    expect(result.nextOffset).toBe(50);
+    // Single-page mode issues exactly one cron.list RPC regardless of the total.
+    expect(
+      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
+    ).toHaveLength(1);
+  });
+
+  it("offsets the single returned page when --offset is provided", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
+
+    await runCron(["list", "--json", "--offset", "150", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      offset: number;
+      total: number;
+    };
+    expect(result.jobs).toHaveLength(50);
+    expect(expectDefined(result.jobs[0], "expected first job").id).toBe("job-150");
+    expect(result.offset).toBe(150);
+    expect(result.total).toBe(201);
+    expect(
+      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
+    ).toHaveLength(1);
+  });
+
+  it("preserves an explicitly supplied zero offset as a single page", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
+
+    await runCron(["list", "--json", "--offset", "0", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      offset: number;
+      total: number;
+      hasMore: boolean;
+    };
+    // A zero offset still selects single-page mode: exactly one bounded page is
+    // returned instead of walking the full 201-job inventory.
+    expect(result.jobs).toHaveLength(50);
+    expect(expectDefined(result.jobs[0], "expected first job").id).toBe("job-000");
+    expect(result.offset).toBe(0);
+    expect(result.total).toBe(201);
+    expect(result.hasMore).toBe(true);
+    expect(
+      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
+    ).toHaveLength(1);
+  });
+
+  it("accepts a Gateway-clamped terminal offset for an empty single page", async () => {
+    installRealCronGateway(Array.from({ length: 3 }, (_, index) => createJob(index)));
+
+    // The real Gateway clamps a requested offset above the filtered total down
+    // to `total` and returns an empty terminal page. The CLI must accept that
+    // contract-defined clamp instead of rejecting it as an offset mismatch.
+    await runCron(["list", "--json", "--offset", "150", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      offset: number;
+      total: number;
+      hasMore: boolean;
+      nextOffset: number | null;
+    };
+    expect(result.jobs).toHaveLength(0);
+    expect(result.offset).toBe(3);
+    expect(result.total).toBe(3);
+    expect(result.hasMore).toBe(false);
+    expect(result.nextOffset).toBeNull();
+    expect(
+      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
+    ).toHaveLength(1);
+  });
+
+  it("rejects a single-page continuation page with a non-advancing cursor", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
+      transformListPage(page) {
+        const response = page as Record<string, unknown>;
+        // A malformed canonical page advertises hasMore=true but supplies no
+        // usable nextOffset; scripts must not stop early or repeat a page.
+        return {
+          ...response,
+          hasMore: true,
+          nextOffset: null,
+        };
+      },
+    });
+
+    await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
+  });
+
+  it("rejects a truncated canonical terminal single page that does not reach total", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
+      transformListPage(page) {
+        const response = page as Record<string, unknown>;
+        const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
+        const firstJob = responseJobs[0];
+        // A canonical terminal page advertises total=2 but returns only one job
+        // from offset 0; scripts must not treat a partial page as complete.
+        return {
+          ...response,
+          jobs: [firstJob],
+          total: 2,
+          hasMore: false,
+          nextOffset: null,
+        };
+      },
+    });
+
+    await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
+  });
+
+  it("rejects a canonical terminal single page whose rows exceed the advertised total", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
+      transformListPage(page) {
+        const response = page as Record<string, unknown>;
+        const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
+        // A malformed page claims offset === total (3) but still returns a job
+        // beyond the inventory; offset + jobs.length (4) must not equal total.
+        return {
+          ...response,
+          jobs: responseJobs.slice(0, 1),
+          offset: 3,
+          total: 3,
+          hasMore: false,
+          nextOffset: null,
+        };
+      },
+    });
+
+    await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
+  });
+
+  it("keeps a legacy single-page total unknown instead of fabricating one", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
+      transformListPage(page) {
+        const response = page as Record<string, unknown>;
+        // Protocol-v4 legacy page: jobs and cursor, but no total/snapshot/offset/limit.
+        return {
+          jobs: response.jobs,
+          hasMore: response.hasMore,
+          nextOffset: response.nextOffset,
+          deliveryPreviews: response.deliveryPreviews,
+        };
+      },
+    });
+    disableCronGetForProtocolV4Gateway();
+
+    await runCron(["list", "--json", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      total?: number;
+      hasMore: boolean;
+    };
+    expect(result.jobs).toHaveLength(50);
+    expect(result.hasMore).toBe(true);
+    // The legacy page advertises no total; the CLI must not invent a per-page
+    // row count as the inventory size.
+    expect(result.total).toBeUndefined();
+  });
+
+  it("rejects a non-numeric --limit", async () => {
+    installRealCronGateway([]);
+
+    await expect(runCron(["list", "--limit", "not-a-number"])).rejects.toThrow("exit 1");
+  });
+
+  it("rejects a --limit above 200", async () => {
+    installRealCronGateway([]);
+
+    await expect(runCron(["list", "--limit", "201"])).rejects.toThrow("exit 1");
+  });
+
+  it("rejects a non-numeric --offset", async () => {
+    installRealCronGateway([]);
+
+    await expect(runCron(["list", "--offset", "not-a-number"])).rejects.toThrow("exit 1");
+  });
+
   it("never combines Gateway pages from different cron snapshots", async () => {
     const original = Array.from({ length: 201 }, (_, index) => createJob(index));
     installRealCronGateway(original, {

@@ -354,6 +354,7 @@ Manual run and inspection:
 ```bash
 openclaw automations list
 openclaw automations list --agent ops
+openclaw automations list --offset 50 --limit 25
 openclaw automations get <job-id>
 openclaw automations get <job-id> --json
 openclaw automations show <job-id>
@@ -380,6 +381,12 @@ newest-first order, and `--offset <n>` advances through the result set using the
 page metadata returned by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
+
+By default `automations list` returns every matching automation across all bounded
+Gateway pages. Pass `--offset <n>` to skip the first `n` automations and
+`--limit <n>` (1-200) to cap the result to a single page; the JSON output then
+also includes `total`, `offset`, `limit`, `hasMore`, and `nextOffset` so scripts
+can walk the inventory manually instead of pulling it all at once.
 
 The human-readable Agent ID column shows the effective owner. JSON list rows preserve the declared `agentId` and include `effectiveAgentId`, which is `null` when ownership is unresolved.
 
