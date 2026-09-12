@@ -353,12 +353,12 @@ export async function getReplyFromConfig(
       }),
     };
   });
-  const agentSessionKey = initialAgentScope.agentSessionKey;
-  const agentId = initialAgentScope.agentId;
-  const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+  const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
   if (refusal) {
     return { text: `${refusal.reason}\n${refusal.repairHint}`, isError: true };
   }
+  const agentSessionKey = initialAgentScope.agentSessionKey;
+  const agentId = initialAgentScope.agentId;
   if (
     preparedReplyDispatchRuntime &&
     !publishedModelCatalogOwnerMatchesAgent(preparedReplyDispatchRuntime, agentId)
