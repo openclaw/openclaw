@@ -355,6 +355,26 @@ function cronPatchTouchesToolRuntime(patch: CronJobPatch): boolean {
   return patch.payload !== undefined || Object.hasOwn(patch, "trigger");
 }
 
+function isLegacyCreatorPromptUpdate(
+  job: CronJob,
+  patch: CronJobPatch,
+  callerScope: CronCallerScope | undefined,
+): boolean {
+  // A prompt edit keeps the legacy execution policy; it cannot establish new
+  // authority or transfer management to another session/account.
+  return (
+    callerScope?.sessionKey !== undefined &&
+    job.owner?.sessionKey === callerScope.sessionKey &&
+    job.owner?.accountId === callerScope.accountId &&
+    job.scheduledToolPolicy === undefined &&
+    job.payload.kind === "agentTurn" &&
+    patch.payload !== undefined &&
+    (patch.payload.kind === undefined || patch.payload.kind === "agentTurn") &&
+    Object.keys(patch).every((key) => key === "payload") &&
+    Object.keys(patch.payload).every((key) => key === "kind" || key === "message")
+  );
+}
+
 function assertCronDoesNotTargetAgentHarness(input: {
   agentId?: string | null;
   sessionTarget?: string | null;
@@ -1146,7 +1166,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       });
       if (
         touchesToolRuntime &&
-        requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope })
+        requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope }) &&
+        !isLegacyCreatorPromptUpdate(jobToUpdate, patch, callerScope)
       ) {
         throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
       }
