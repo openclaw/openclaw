@@ -5,10 +5,8 @@
  */
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import {
-  resolveThreadBindingSpawnPolicy,
-  supportsAutomaticThreadBindingSpawn,
-} from "../../channels/thread-bindings-policy.js";
+import { supportsThreadBindingSpawn } from "../../channels/conversation-resolution.js";
+import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
@@ -139,7 +137,7 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 }): SessionsSpawnThreadAvailability {
   const channel = opts?.agentChannel;
   const cfg = opts?.config;
-  if (!channel || !cfg || !supportsAutomaticThreadBindingSpawn(channel)) {
+  if (!channel || !cfg || !supportsThreadBindingSpawn(channel)) {
     return { subagent: false, acp: false };
   }
   const resolve = (kind: "subagent" | "acp") => {
@@ -204,7 +202,7 @@ function createSessionsSpawnToolSchema(params: {
           thread: Type.Optional(
             Type.Boolean({
               description:
-                'Bind new chat thread when supported; true defaults mode="session"; unavailable with visible=true.',
+                'Bind to the current conversation or a new thread, as supported by the channel; true defaults mode="session"; unavailable with visible=true.',
             }),
           ),
         }
