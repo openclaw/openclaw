@@ -143,11 +143,11 @@ The helper skips undefined source values and `__proto__`, `prototype`, and
 `constructor` keys at each level it merges. It does not recursively sanitize
 newly assigned subtrees.
 
-### Plugin state migration declarations
+### Bundled plugin state migration declarations
 
-Bundled plugins should list every migration under
-`doctorContract.stateMigrations` in `openclaw.plugin.json` and export the
-matching `stateMigrations` array from their doctor-contract artifact. Keep the
+Bundled official plugins declare `doctorContract.stateMigrations` in
+`openclaw.plugin.json` and export the matching `stateMigrations` array from
+their doctor-contract artifact. Keep the
 IDs, order, `doctorOnly` flags, and phases identical. Read-only Doctor planning
 uses candidate-bundled descriptors to record exact plugin owners without
 loading the plugin.
@@ -158,15 +158,19 @@ including manifests that contain descriptor arrays, until candidate validation
 binds those artifacts separately. The legacy value `true` continues to locate
 their dynamic contract for non-planning Doctor flows.
 
-Plan-based migrations can use
-`definePluginDoctorMigrationFromPlans(...)` from
-`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
-and plugin-state import behavior.
+Their private-local build mappings can use
+`definePluginDoctorMigrationFromPlans(...)` and
+`defineLegacyJsonStateMigration(...)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy,
+preview, and plugin-state import behavior.
 
-For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
-sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
-errors and invalid JSON reach Doctor's detection or migration warnings; the
-source remains untouched so the operator can fix it and retry.
+This private-local migration helper is not a supported third-party Plugin SDK
+contract. External plugins must use a documented public SDK subpath and must
+not import `openclaw/plugin-sdk/runtime-doctor-migrations`. For bundled
+single-file imports, missing sources (`ENOENT`) and values rejected by the
+plugin parser are treated as unavailable; other read errors and invalid JSON
+reach Doctor's detection or migration warnings, and the source remains
+untouched so the operator can fix it and retry.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
@@ -356,3 +360,177 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 `openclaw/plugin-sdk/media-local-roots`. The
 `openclaw/plugin-sdk/agent-media-payload` facade and its
 `buildAgentMediaPayload(...)` projection are deprecated.
+
+## Bounded legacy JSON imports
+
+Bundled official plugins use an internal bounded migration policy for legacy
+JSON sources. This is not a supported third-party Plugin SDK contract; external
+plugins must not import `openclaw/plugin-sdk/runtime-doctor-migrations` or rely
+on these limits.
+
+For the bundled Active Memory and Device Pair migrations, the first read is
+limited to 8 MiB and one recovery read is limited to 64 MiB. Sources that fit
+the recovery limit continue through parsing, plugin-state import, and archival.
+Sources above 64 MiB are not parsed or archived; Doctor warns and leaves the
+legacy source in place for manual recovery. The internal helper retains its
+historical no-limit behavior for existing callers.
+
+### Oversized legacy JSON recovery
+
+When Doctor reports that an Active Memory or Device Pair legacy source exceeds
+64 MiB, stop the Gateway (`openclaw gateway stop`) before editing the file and
+keep an untouched backup.
+The recovery below compacts only records that the production migration supports;
+it does not discard a supported disabled session toggle or subscriber. It also
+resolves a symlink before replacement, so the legacy path remains a symlink when
+one was already in use. Run the command for the affected plugin only.
+The examples require `jq` 1.7 or later.
+
+```sh
+set -eu
+state_dir="${OPENCLAW_STATE_DIR:?Set OPENCLAW_STATE_DIR to the OpenClaw state directory}"
+source="$state_dir/plugins/active-memory/session-toggles.json"
+backup="$source.oversized-backup"
+if ! target="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$source")"; then
+  echo "Cannot resolve legacy source: $source" >&2
+  exit 1
+fi
+if test -e "$backup"; then
+  echo "Refusing to overwrite existing backup: $backup" >&2
+  exit 1
+fi
+if ! cp -pL "$source" "$backup"; then
+  echo "Backup failed; source was not replaced: $source" >&2
+  exit 1
+fi
+if ! tmp="$(mktemp "$target.recovery.XXXXXX")"; then
+  echo "Cannot create recovery temporary file; source was not replaced: $source" >&2
+  exit 1
+fi
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+if ! jq -e '
+  {sessions: (
+    (.sessions // {})
+    | if type == "object" then
+        [to_entries[]
+         | select((.key | type) == "string" and (.key | length) > 0)
+         | select((.value | type) == "object" and .value.disabled == true)
+         | {key: .key, value: {
+             sessionKey: .key,
+             disabled: true,
+             updatedAt: (if (.value.updatedAt | type) == "number" and (.value.updatedAt | isfinite)
+                         then .value.updatedAt else (now * 1000 | floor) end)
+           }}]
+        | from_entries
+      else {} end
+  )}
+' "$source" > "$tmp"; then
+  echo "Compaction failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! size="$(wc -c < "$tmp")"; then
+  echo "Cannot measure recovery output; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if test "$size" -gt $((64 * 1024 * 1024)); then
+  echo "Recovery output is ${size} bytes; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! mv -f "$tmp" "$target"; then
+  echo "Replacement failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
+openclaw doctor --fix
+```
+
+For Device Pair, use the same backup, target, size-check, replacement, and
+Doctor steps, but replace the `jq` block with this one. It preserves every
+valid subscriber field used by Device Pair, normalizes the same optional fields
+as the production parser, and intentionally omits the obsolete request-id
+cache, which is not imported by the migration.
+
+Run this complete guarded block with `source="$state_dir/device-pair-notify.json"`.
+
+```sh
+set -eu
+state_dir="${OPENCLAW_STATE_DIR:?Set OPENCLAW_STATE_DIR to the OpenClaw state directory}"
+source="$state_dir/device-pair-notify.json"
+backup="$source.oversized-backup"
+if ! target="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$source")"; then
+  echo "Cannot resolve legacy source: $source" >&2
+  exit 1
+fi
+if test -e "$backup"; then
+  echo "Refusing to overwrite existing backup: $backup" >&2
+  exit 1
+fi
+if ! cp -pL "$source" "$backup"; then
+  echo "Backup failed; source was not replaced: $source" >&2
+  exit 1
+fi
+if ! tmp="$(mktemp "$target.recovery.XXXXXX")"; then
+  echo "Cannot create recovery temporary file; source was not replaced: $source" >&2
+  exit 1
+fi
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+if ! jq -e '
+  {subscribers: (
+    (.subscribers // [])
+    | if type == "array" then
+        [.[]
+         | select(type == "object")
+         | (if (.to | type) == "string" then (.to | gsub("^\\s+|\\s+$"; "")) else "" end) as $to
+         | select(($to | type) == "string" and ($to | length) > 0)
+         | {to: $to,
+            accountId: (if (.accountId | type) == "string"
+                        then (.accountId | gsub("^\\s+|\\s+$"; "") | if . == "" then null else . end)
+                        else null end),
+            messageThreadId: (if (.messageThreadId | type) == "string"
+                              then (.messageThreadId | gsub("^\\s+|\\s+$"; "") | if . == "" then null else . end)
+                              elif (.messageThreadId | type) == "number" and (.messageThreadId | isfinite)
+                              then (.messageThreadId | if . >= 0 then floor else ceil end)
+                              else null end),
+            mode: (if .mode == "once" then "once" else "persistent" end),
+            addedAtMs: (if (.addedAtMs | type) == "number" and (.addedAtMs | isfinite)
+                        then (.addedAtMs | if . >= 0 then floor else ceil end)
+                        else (now * 1000 | floor) end)}
+         | with_entries(select(.value != null))]
+      else [] end
+  )}
+' "$source" > "$tmp"; then
+  echo "Compaction failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! size="$(wc -c < "$tmp")"; then
+  echo "Cannot measure recovery output; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if test "$size" -gt $((64 * 1024 * 1024)); then
+  echo "Recovery output is ${size} bytes; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! mv -f "$tmp" "$target"; then
+  echo "Replacement failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
+openclaw doctor --fix
+```
+
+Both guarded blocks verify that the temporary file is at or below 64 MiB before
+`mv`, then rerun `openclaw doctor --fix`. Doctor imports the compact source and
+archives the original at `<source>.migrated`; retain the separate
+`.oversized-backup` until the imported entries have been checked. If any
+prerequisite fails or the compact file is still too large, the source and backup
+remain unchanged. Never delete the original or overwrite it before the size
+check.
+
+Use `phase: "after-session-repair"` when a migration needs canonical session
+ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
+them after session repair under SQLite maintenance ownership. The context
+provides bounded `readPluginStateEntriesInKeyRange` and
+`readSessionIdentityEvidenceBatch` reads, plus
+`deletePluginStateEntriesIfUnchanged` only during a fenced repair. Preserve
+unknown or ambiguous ownership. Delete only the observed raw rows; callbacks
+retained after maintenance ends cannot authorize later writes.
