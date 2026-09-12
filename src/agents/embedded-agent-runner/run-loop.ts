@@ -264,6 +264,7 @@ export async function runPreparedEmbeddedLoop(
     getRuntimeAuthOwnerId: () => preparedRuntime.snapshot().agentHarness.id,
     getApiKeyInfo,
     advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
+    hasRemainingAuthProfile: preparedRuntime.hasRemainingAuthProfile,
   });
   const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
   const contextEngineLogicalTurnLease =

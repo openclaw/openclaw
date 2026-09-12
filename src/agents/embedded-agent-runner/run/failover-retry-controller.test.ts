@@ -44,6 +44,7 @@ function createController(
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
   onRetryWait?: ControllerInput["runParams"]["onRetryWait"],
+  hasRemainingAuthProfile: ControllerInput["hasRemainingAuthProfile"] = () => false,
 ) {
   return createEmbeddedRunFailoverRetryController({
     runParams: {
@@ -63,6 +64,7 @@ function createController(
     getRuntimeAuthOwnerId: () => "embedded",
     getApiKeyInfo: () => null,
     advanceAuthProfile,
+    hasRemainingAuthProfile,
   });
 }
 
@@ -149,6 +151,51 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     } finally {
       dateNow.mockRestore();
     }
+  });
+
+  it.each([
+    ["a fallback model", { fallbackConfigured: true, remainingProfile: false }],
+    ["another auth profile", { fallbackConfigured: false, remainingProfile: true }],
+  ] as const)(
+    "fails over a header-only floor beyond the short window when %s is configured",
+    async (_label, route) => {
+      const controller = createController(
+        vi.fn(async () => false),
+        route.fallbackConfigured,
+        undefined,
+        undefined,
+        () => route.remainingProfile,
+      );
+      const onRetry = vi.fn();
+      await expect(
+        controller.maybeRetryTransient({
+          reason: "rate_limit",
+          // Anthropic subscription 429: no window wording, reset only in Retry-After.
+          message:
+            "HTTP 429: This request would exceed your account's rate limit. Please try again later.",
+          retryAfterMs: 129_786_000,
+          onRetry,
+        }),
+      ).resolves.toBe(false);
+      expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+      expect(onRetry).not.toHaveBeenCalled();
+      expect(controller.transientRetryCount).toBe(0);
+      expect(mocks.warn).toHaveBeenCalledWith(
+        expect.stringContaining("retry floor 129786000ms exceeds the short window"),
+      );
+    },
+  );
+
+  it("still honors a short header floor when an alternative is configured", async () => {
+    const controller = createController(
+      vi.fn(async () => false),
+      true,
+    );
+    await expect(
+      controller.maybeRetryTransient({ reason: "rate_limit", retryAfterMs: 60_000 }),
+    ).resolves.toBe(true);
+    expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(1);
+    expect(mocks.sleepWithAbort.mock.calls[0]?.[0]).toBe(60_000);
   });
 
   it.each([

@@ -539,6 +539,8 @@ export async function prepareEmbeddedRunRuntime(input: {
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
     advanceAttemptAuthProfile,
+    // Mirrors advanceAttemptAuthProfile's run-local exhaustion; cooldown filtering stays with the advance.
+    hasRemainingAuthProfile: () => authState.profileIndex + 1 < preparedAuthAttempts.length,
     maybeRefreshRuntimeAuthForAuthError: authController.maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer: authController.stopRuntimeAuthRefreshTimer,
     getApiKeyInfo: () => authState.apiKeyInfo,

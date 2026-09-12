@@ -12,7 +12,10 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
+import {
+  hasLongWindowRateLimitEvidence,
+  isLongWindowRetryAfterMs,
+} from "../../failover/retry-evidence.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -52,6 +55,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   getRuntimeAuthOwnerId: () => string;
   getApiKeyInfo: () => ResolvedProviderAuth | null;
   advanceAuthProfile: PreparedRuntime["advanceAttemptAuthProfile"];
+  hasRemainingAuthProfile: PreparedRuntime["hasRemainingAuthProfile"];
 }) {
   const {
     runParams: params,
@@ -230,6 +234,19 @@ export function createEmbeddedRunFailoverRetryController(input: {
       }
       const rateLimit = retry.reason === "rate_limit";
       if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+        return false;
+      }
+      // Subscription 429s carry the reset only in Retry-After: a floor past the short
+      // window with another profile or fallback configured would hold the turn for
+      // hours while that route idles. Without an alternative the floor is honored.
+      if (
+        rateLimit &&
+        isLongWindowRetryAfterMs(retry.retryAfterMs) &&
+        (fallbackConfigured || input.hasRemainingAuthProfile())
+      ) {
+        log.warn(
+          `rate-limit retry floor ${retry.retryAfterMs}ms exceeds the short window for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; failing over to the configured alternative`,
+        );
         return false;
       }
       rateLimitSeen ||= rateLimit;

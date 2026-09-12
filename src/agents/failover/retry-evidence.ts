@@ -123,6 +123,11 @@ export function resolveRetryAfterMs(
     : Math.ceil(Math.max(headerSeconds ?? 0, seconds ?? 0) * 1000);
 }
 
+/** A provider retry floor past the short-window ceiling, whichever channel carried it. */
+export function isLongWindowRetryAfterMs(retryAfterMs: number | undefined): boolean {
+  return retryAfterMs !== undefined && retryAfterMs > MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS * 1000;
+}
+
 /** Usage-window evidence is distinct from a temporary throttle's retry floor. */
 export function hasLongWindowRateLimitEvidence(message: string | undefined): boolean {
   return Boolean(
