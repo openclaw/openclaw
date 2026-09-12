@@ -2230,7 +2230,7 @@ src/cli/config-cli-path.ts	5
 src/cli/config-cli-runner.ts	3
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
-src/cli/config-set-input.ts	2
+src/cli/config-set-input.ts	1
 src/cli/connect-cli.ts	1
 src/cli/cron-cli/list-jobs.ts	4
 src/cli/cron-cli/register.cron-add.ts	1

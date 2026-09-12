@@ -33,6 +33,79 @@ function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
 }
 
 describe("config cli integration", () => {
+  it.each([
+    {
+      name: "empty inline batch",
+      args: ["gateway.port", "19001", "--batch-json="],
+      error: "Failed to parse --batch-json",
+    },
+    {
+      name: "whitespace inline batch",
+      args: ["gateway.port", "19001", "--batch-json", " \t"],
+      error: "Failed to parse --batch-json",
+    },
+    {
+      name: "empty batch file path",
+      args: ["gateway.port", "19001", "--batch-file="],
+      error: "--batch-file must not be empty",
+    },
+    {
+      name: "whitespace batch file path",
+      args: ["gateway.port", "19001", "--batch-file", " \t"],
+      error: "--batch-file must not be empty",
+    },
+    {
+      name: "positional input without batch options",
+      args: ["gateway.port", "19001"],
+      error: null,
+    },
+    {
+      name: "valid inline batch without positional input",
+      args: ["--batch-json", '[{"path":"gateway.port","value":19001}]'],
+      error: null,
+    },
+  ])("honors config set batch input selection for $name", async ({ args, error }) => {
+    const raw = '{"agents":{"entries":{"main":{}}},"gateway":{"port":18789}}\n';
+    await withConfigFileHarness(
+      "openclaw-config-cli-batch-presence-",
+      raw,
+      async ({ configPath }) => {
+        const command = runRegisteredConfigCommand([
+          "config",
+          "set",
+          ...args,
+          "--dry-run",
+          "--json",
+        ]);
+        if (error) {
+          await expect(command).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        } else {
+          await command;
+        }
+
+        expect(registeredRuntimeLogs).toHaveLength(1);
+        const result = JSON.parse(registeredRuntimeLogs[0] ?? "");
+        expect(result).toMatchObject({
+          ok: error === null,
+          operations: error === null ? 1 : 0,
+          configPath,
+          inputModes: error === null ? ["json"] : [],
+        });
+        if (error) {
+          expect(result.errors).toEqual([
+            { kind: "schema", message: expect.stringContaining(error) },
+          ]);
+          expect(registeredRuntimeErrors).toHaveLength(1);
+          expect(registeredRuntimeErrors[0]).toContain(error);
+        } else {
+          expect(result.errors ?? []).toEqual([]);
+          expect(registeredRuntimeErrors).toEqual([]);
+        }
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      },
+    );
+  });
+
   it("renders actionable paths for real dotted model-key validation failures", async () => {
     const configForAlias = (alias: string | number) => ({
       agents: {
