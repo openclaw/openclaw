@@ -418,6 +418,7 @@ describe("searchSessionTranscripts", () => {
     const pending = () => listSessionsNeedingTranscriptIndexReconcile(db);
 
     expect(pending()).toEqual([]);
+    expect(search("indexed").indexing).toBe(false);
 
     executeSqliteQuerySync(
       db,
@@ -427,6 +428,8 @@ describe("searchSessionTranscripts", () => {
         .where("session_id", "=", "session-1"),
     );
     expect(pending()).toEqual(["session-1"]);
+    expect(search("indexed").indexing).toBe(true);
+    await waitForSearchReconcile("indexed");
 
     executeSqliteQuerySync(
       db,
@@ -436,12 +439,15 @@ describe("searchSessionTranscripts", () => {
         .where("session_id", "=", "session-1"),
     );
     expect(pending()).toEqual(["session-1"]);
+    expect(search("indexed").indexing).toBe(true);
+    await waitForSearchReconcile("indexed");
 
     executeSqliteQuerySync(
       db,
       kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"),
     );
     expect(pending()).toEqual(["session-1"]);
+    expect(search("indexed").indexing).toBe(true);
   });
 
   it("sweeps orphaned index rows during reconcile", async () => {
