@@ -6,6 +6,7 @@ import { FailoverError } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
+import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 // This file deliberately runs the real `runWithModelFallback`. The committed-work
@@ -169,7 +170,7 @@ describe("runEmbeddedAgentEntry cyber failover against the real fallback runner"
       const runCandidate = async (
         provider: string,
         model: string,
-        options: { authProfileFailurePolicy?: "local" | "local_transient" },
+        options: { authProfileFailurePolicy?: AuthProfileFailurePolicy },
       ) => {
         authFailurePolicies.push(options.authProfileFailurePolicy);
         if (model === "gpt-daybreak-blue-latest") {
